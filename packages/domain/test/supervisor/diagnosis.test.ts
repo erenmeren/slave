@@ -17,6 +17,7 @@ describe('readFailure -- the diagnosis table (spec §3)', () => {
     requiredPermissions: [],
     requiredRole: 'backend',
     failureClass: null,
+    rejectedByReview: false,
   } as const
 
   it('reads the system failing, not the worker, off the infrastructure markers', () => {
@@ -108,6 +109,17 @@ describe('readFailure -- the diagnosis table (spec §3)', () => {
     for (const reason of ['the review rejected the change', 'rejected: the tests do not cover it']) {
       expect(readFailure({ ...base, reason }), reason).toEqual({ reading: 'rejected', deniedKind: null })
     }
+  })
+
+  // H9 F10: the rejection is a fact off the row, and the newest one -- it wins whatever the
+  // reviewer's words happen to contain, and over a refusal an earlier attempt met.
+  it('reads a review rejection as rejected off the row, whatever its reason says', () => {
+    for (const reason of ['the retry endpoint returns 500 on an empty body', 'spawn a worker per queue instead', 'it goes in circles']) {
+      expect(readFailure({ ...base, reason, rejectedByReview: true }), reason).toEqual({ reading: 'rejected', deniedKind: null })
+    }
+    expect(
+      readFailure({ ...base, reason: 'one defect', rejectedByReview: true, deniedKinds: ['network_fetch'], requiredRole: 'research' }),
+    ).toEqual({ reading: 'rejected', deniedKind: null })
   })
 
   it('reads anything else, and a failure with no reason at all, as unknown', () => {

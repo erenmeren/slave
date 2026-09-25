@@ -107,6 +107,12 @@ function questionFacts(question: SupervisorQuestion, world: SupervisorWorld): Si
  *  exactly what it always said. */
 function failureSentence(task: SupervisorTask): string {
   if (task.latestFailure === null) return ''
+  // H9 F10: a rejection is not a run failing, and saying "the last run failed" about it sent the
+  // reader (and the model) to an older attempt's story. The reviewer's reason is the fact.
+  if (task.latestFailure.rejectedByReview) {
+    const attempts = `${String(task.attempt)} attempt${task.attempt === 1 ? '' : 's'}`
+    return ` Review rejected after ${attempts}: ${boundReason(task.latestFailure.reason)}.`
+  }
   return ` The last run failed: ${boundReason(task.latestFailure.reason)}.`
 }
 
@@ -128,7 +134,10 @@ function taskFacts(task: SupervisorTask): Situation['facts'] {
     // three fields rather than nested, and the refused kinds are ONE string. A reader splits it on
     // the comma; a kind can never contain one (`PERMISSION_KINDS`).
     latestFailureReason: task.latestFailure === null ? null : boundReason(task.latestFailure.reason),
-    latestFailureKind: task.latestFailure?.runKind ?? null,
+    // H9 F10: `review_rejected` rather than the reviewing run's kind -- a rejection is a verdict,
+    // and `review` alone would read as a reviewer that broke.
+    latestFailureKind:
+      task.latestFailure === null ? null : task.latestFailure.rejectedByReview ? 'review_rejected' : task.latestFailure.runKind,
     latestFailureAt: task.latestFailure?.at ?? null,
     deniedKinds: task.deniedKinds.join(','),
     failureCount: task.failureCount,

@@ -87,6 +87,8 @@ export function taskFailure(overrides: Partial<TaskFailure> = {}): TaskFailure {
     // H4b: the process ran, which is what every failure in this file means unless it says
     // otherwise -- a test about a run the model never saw sets this itself.
     failureClass: null,
+    // H9 F10: a run failing, not a reviewer saying no -- a test about a rejection says so.
+    rejectedByReview: false,
     ...overrides,
   }
 }

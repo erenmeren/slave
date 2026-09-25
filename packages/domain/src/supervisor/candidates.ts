@@ -76,6 +76,8 @@ function subjectTask(situation: Situation, world: SupervisorWorld): SupervisorTa
 function readTaskFailure(task: SupervisorTask): FailureDiagnosis {
   return readFailure({
     reason: task.latestFailure?.reason ?? null,
+    // H9 F10: a review's rejection is read as `rejected` off the row, whatever the reviewer wrote.
+    rejectedByReview: task.latestFailure?.rejectedByReview ?? false,
     deniedKinds: task.deniedKinds,
     // See above: the world does not carry the column. `[]` is also the honest state of every task
     // planned before it existed.

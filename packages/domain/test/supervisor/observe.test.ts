@@ -230,6 +230,31 @@ describe('observe -- task_failed', () => {
     )
   })
 
+  // H9 F10: the last attempt passed verify and a reviewer said no. The summary tells THAT story --
+  // not "the last run failed", which sent the reader to an older attempt's timeout.
+  it('says the review rejected it, after how many attempts and why, when the rejection is newest', () => {
+    const w = world({
+      tasks: [
+        task({
+          status: 'failed',
+          dependents: 2,
+          attempt: 3,
+          maxAttempts: 3,
+          latestFailure: taskFailure({
+            runKind: 'review',
+            reason: 'the retry endpoint returns 500 on an empty body',
+            rejectedByReview: true,
+          }),
+        }),
+      ],
+    })
+    const situation = observe(w)[0]
+    expect(situation?.summary).toBe(
+      'Task "Add the thing" failed and 2 task(s) depend on it. Review rejected after 3 attempts: the retry endpoint returns 500 on an empty body.',
+    )
+    expect(situation?.facts).toMatchObject({ latestFailureKind: 'review_rejected', latestFailureReason: 'the retry endpoint returns 500 on an empty body' })
+  })
+
   it('bounds the reason it puts in the summary -- a failure may carry a whole stderr dump', () => {
     const reason = 'x'.repeat(FAILURE_REASON_MAX_CHARS + 500)
     const w = world({

@@ -34,8 +34,10 @@ export interface FailureDiagnosis {
  *  `AnswerEligibility`'s own reason: control asks the same question of a task row, and a shape it
  *  can build from one is what keeps the two sides running one rule instead of two that drift. */
 export interface FailureFacts {
-  /** The newest `run.failed` reason on the task, or null for a task that has never failed. */
+  /** The newest failure's reason on the task, or null for a task that has never failed. */
   readonly reason: string | null
+  /** H9 F10: the newest failure is a review's rejection (`TaskFailure.rejectedByReview`). */
+  readonly rejectedByReview: boolean
   /** The distinct kinds `run.tool_denied` recorded across the task's runs. */
   readonly deniedKinds: readonly string[]
   /** What the PLAN said this task needs (R5, `Task.requiredPermissions`). Empty until Task 5
@@ -115,6 +117,11 @@ function deniedKindFor(input: FailureFacts): string | null {
  * describes.
  */
 export function readFailure(input: FailureFacts): FailureDiagnosis {
+  // H9 F10: a reviewer's verdict on finished work is a FACT off the row, and the newest one. It
+  // wins over everything below, `denied_tool` included: a refusal recorded on an earlier attempt
+  // did not stop this one -- this one got as far as a review and was judged. Before this the
+  // rejection never reached here at all, and the diagnosis was an older run's story.
+  if (input.rejectedByReview) return { reading: 'rejected', deniedKind: null }
   const reason = input.reason ?? ''
   const deniedKind = deniedKindFor(input)
   if (deniedKind !== null) return { reading: 'denied_tool', deniedKind }

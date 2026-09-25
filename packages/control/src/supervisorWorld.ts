@@ -412,8 +412,15 @@ async function loadLatestGuardrails(
 }
 
 /**
- * The newest `run.failed` per task (E R2) -- WHY the work stopped, which is what a remedy is chosen
+ * The newest failure per task (E R2) -- WHY the work stopped, which is what a remedy is chosen
  * from rather than guessed at.
+ *
+ * H9 F10: the newest of `run.failed` AND `task.review_rejected`, one `DISTINCT ON` over both. A
+ * rejection is a run that finished, passed verify and was judged wrong -- not a `run.failed` -- so
+ * reading only the failures diagnosed a task whose LAST attempt was rejected from an older
+ * attempt's timeout. The rejection's `runId` is the review run, so the join below reads `review` as
+ * its kind, and the reason is the reviewer's own (`payload.reason`, the same key `run.failed`
+ * uses).
  *
  * The `DISTINCT ON` idiom {@link loadLatestGuardrails} uses, over the same log, ordered by `seq`
  * for the same reason: `ts` is a wall clock two appends can share, `seq` is the order they actually
@@ -452,6 +459,7 @@ async function loadLatestFailures(
       readonly ts: Date
       readonly slaveId: string | null
       readonly failureClass: FailureClass | null
+      readonly type: string
     }[]
   >`
     SELECT DISTINCT ON (e."taskId")
@@ -460,12 +468,13 @@ async function loadLatestFailures(
            r.kind::text AS "runKind",
            e.ts AS ts,
            e."slaveId" AS "slaveId",
-           r."failureClass"::text AS "failureClass"
+           r."failureClass"::text AS "failureClass",
+           e.type::text AS type
     FROM "ExecutionEvent" e
     JOIN "SlaveRun" r ON r.id = e."runId"
     WHERE e."workspaceId" = ${workspaceId}
       AND e."taskId" = ANY(${[...taskIds]}::text[])
-      AND e.type::text = 'run.failed'
+      AND e.type::text IN ('run.failed', 'task.review_rejected')
     ORDER BY e."taskId", e.seq DESC
   `
   return new Map(
@@ -483,6 +492,8 @@ async function loadLatestFailures(
                 // H9b R1: off the same joined row as `kind` -- the run says whether the platform
                 // failed it, and the reading `infrastructure` is then a fact rather than a match.
                 failureClass: row.failureClass,
+                // H9 F10: which of the two rows this is -- a fact, never read off the reason.
+                rejectedByReview: row.type === 'task.review_rejected',
               },
             ] as const,
           ],

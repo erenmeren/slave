@@ -20,13 +20,30 @@ import type { SituationKind } from './situations.js'
 export type TaskStatusName = TaskStatus
 
 /**
- * R2: the newest `run.failed` on a task, among the task's runs -- what a stuck-task remedy is
- * chosen FROM rather than guessed at (Task 3). `at` is epoch ms, the world's own convention.
+ * R2: the newest failure on a task -- what a stuck-task remedy is chosen FROM rather than guessed
+ * at (Task 3). `at` is epoch ms, the world's own convention.
+ *
+ * H9 F10: the newest of TWO kinds of row, not one. A `run.failed` is a run that broke; a
+ * `task.review_rejected` is a run that finished, passed verify and was judged wrong by a reviewer
+ * ({@link rejectedByReview}). Reading `run.failed` alone, a task whose last attempt was rejected
+ * for one named defect was diagnosed from an OLDER attempt's timeout -- offered the "went round in
+ * circles" steer, and escalated with a story that was not the one that failed it.
  */
 export interface TaskFailure {
+  /** The kind of run the row names: for a rejection, the `review` run that judged the work. */
   readonly runKind: 'implementation' | 'review' | 'planning'
+  /** The run's recorded reason -- for a rejection, the REVIEWER's reason, which is the steer. */
   readonly reason: string
   readonly at: number
+  /**
+   * H9 F10: this failure is a review REJECTING the work, not a run failing.
+   *
+   * LOADER CONTRACT: true exactly when the newest of the task's {`run.failed`,
+   * `task.review_rejected`} events (by `seq`) is the rejection. `readFailure` reads it as
+   * `rejected` before anything else: a reviewer's verdict on finished work is the newest fact, and
+   * a refusal or a timeout on an earlier attempt is not why this one stopped.
+   */
+  readonly rejectedByReview: boolean
   /**
    * WHO ran it -- the `slaveId` of the run that failed, or null when the event did not record one
    * (fix round 1, Important 1).
@@ -126,8 +143,8 @@ export interface SupervisorTask {
    *  through `Workspace.runbookId`, so `observe` can append it to a `task_failed` summary without
    *  knowing what a runbook is. */
   readonly stageEscalation: string | null
-  /** R2: the newest `run.failed` among this task's runs, or null for a task that has never
-   *  failed. What a `task_failed`/`task_blocked_human` remedy is chosen from (Task 3's
+  /** R2: the newest failure among this task's runs -- a `run.failed` or (F10) a review's
+   *  rejection -- or null for a task that has never failed. What a `task_failed`/`task_blocked_human` remedy is chosen from (Task 3's
    *  `retry_task`/`escalate_to_human` split) rather than guessed at. */
   readonly latestFailure: TaskFailure | null
   /** R2: the distinct `capability` values of `run.tool_denied` events across this task's runs --

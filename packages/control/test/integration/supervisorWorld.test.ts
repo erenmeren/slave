@@ -1707,8 +1707,75 @@ describe('loadSupervisorWorld -- the failure facts (E R2/R3)', () => {
       // H9b R1: the row names no class (a seeded failure, as every one before the column), so the
       // reading is the sentence's.
       failureClass: null,
+      rejectedByReview: false,
     })
     expect(taskIn(world, taskId)?.retries).toBe(1)
+  })
+
+  /** H9 F10: a review that judged the attempt and said no -- the row `review.ts` writes. */
+  async function reviewRejected(
+    fixture: Fixture,
+    input: { readonly taskId: string; readonly slaveId: string; readonly reason: string; readonly attempt: number },
+  ): Promise<{ readonly runId: string; readonly at: number }> {
+    const run = await prisma.slaveRun.create({
+      data: { taskId: input.taskId, slaveId: input.slaveId, kind: 'review', status: 'succeeded' },
+    })
+    const event = await appendEvent({
+      type: 'task.review_rejected',
+      workspaceId: fixture.workspaceId,
+      taskId: input.taskId,
+      runId: run.id,
+      actor: 'system',
+      payload: { reason: input.reason, attempt: input.attempt },
+    })
+    return { runId: run.id, at: new Date(event.ts).getTime() }
+  }
+
+  // H9 F10, the 13:56 UTC task: an early attempt timed out, the LAST one passed verify and a
+  // reviewer rejected it for one named defect. The newest failure is the rejection.
+  it('carries a review rejection newer than the last failed run as the latest failure, with the reviewer\'s reason', async (): Promise<void> => {
+    const fixture = await seed()
+    const alex = await worker(fixture, 'Alex')
+    const quinn = await worker(fixture, 'Quinn')
+    const taskId = await makeTask(fixture, { title: 'the pages', status: 'failed' })
+    await prisma.task.update({ where: { id: taskId }, data: { attempt: 3, maxAttempts: 3 } })
+    const waiting = await makeTask(fixture, { title: 'the launch', status: 'ready' })
+    await prisma.taskDependency.create({ data: { taskId: waiting, dependsOnTaskId: taskId } })
+    await failedRun(fixture, { taskId, slaveId: alex, kind: 'implementation', reason: 'guardrail run_timeout tripped' })
+    const rejection = await reviewRejected(fixture, { taskId, slaveId: quinn, reason: 'the 404 page is not wired to the router', attempt: 3 })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+
+    expect(taskIn(world, taskId)?.latestFailure).toEqual({
+      runKind: 'review',
+      reason: 'the 404 page is not wired to the router',
+      at: rejection.at,
+      slaveId: null,
+      failureClass: null,
+      rejectedByReview: true,
+    })
+    // And the Supervisor tells the rejection's story, not the older timeout's.
+    const failedSituation = observe(world).find((one) => one.kind === 'task_failed' && one.subjectId === taskId)
+    expect(failedSituation?.summary).toBe(
+      'Task "the pages" failed and 1 task(s) depend on it. Review rejected after 3 attempts: the 404 page is not wired to the router.',
+    )
+  })
+
+  it('carries a failed run newer than the last rejection as the latest failure, not the rejection', async (): Promise<void> => {
+    const fixture = await seed()
+    const alex = await worker(fixture, 'Alex')
+    const quinn = await worker(fixture, 'Quinn')
+    const taskId = await makeTask(fixture, { title: 'the pages', status: 'failed' })
+    await reviewRejected(fixture, { taskId, slaveId: quinn, reason: 'the 404 page is not wired to the router', attempt: 2 })
+    await failedRun(fixture, { taskId, slaveId: alex, kind: 'implementation', reason: 'guardrail run_timeout tripped' })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+
+    expect(taskIn(world, taskId)?.latestFailure).toMatchObject({
+      runKind: 'implementation',
+      reason: 'guardrail run_timeout tripped',
+      rejectedByReview: false,
+    })
   })
 
   // H4b: the fact is read off the RUN, not off the sentence -- a reason no marker matches still
