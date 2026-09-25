@@ -1,6 +1,7 @@
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   NON_TERMINAL_RUN_STATUSES,
+  type FailureClass,
   type GuardrailLimits,
   type RunStatus,
   type WorkspaceStats,
@@ -173,21 +174,7 @@ export async function workspaceStats(
   // not a break: three real failures with a platform failure between them are still three real
   // failures in a row. `IS DISTINCT FROM`, not `<>`: a failed row written before the column
   // existed has no class, counts as the worker's, and `<>` would drop it with the NULL.
-  const concludedRuns = await client.$queryRaw<{ readonly status: RunStatus }[]>`
-    SELECT r.status::text AS status
-    FROM "SlaveRun" r
-    JOIN "Slave" a ON a.id = r."slaveId"
-    JOIN "Team" tm ON tm.id = a."teamId"
-    WHERE tm."workspaceId" = ${workspaceId}
-      AND r.status::text = ANY(${[...CONCLUDED_RUN_STATUSES]}::text[])
-      AND r."failureClass" IS DISTINCT FROM 'platform'
-      AND (
-        ${workspace.haltClearedAt}::timestamp IS NULL
-        OR COALESCE(r."terminalAt", r."startedAt") > ${workspace.haltClearedAt}::timestamp
-      )
-    ORDER BY COALESCE(r."terminalAt", r."startedAt") DESC, r."startedAt" DESC
-    LIMIT ${workspace.consecutiveFailureLimit + 1}::int
-  `
+  const concludedRuns = await streakHead(client, workspaceId, workspace)
 
   let consecutiveFailures = 0
   for (const run of concludedRuns) {
@@ -224,4 +211,96 @@ export async function workspaceStats(
     spend,
     haltedReason: workspace.haltedReason,
   }
+}
+
+/**
+ * The head of the failure streak: the workspace's most recently concluded runs, newest first,
+ * bounded at `consecutiveFailureLimit + 1` -- the ONE reading of which runs the circuit breaker
+ * counts, shared by {@link workspaceStats} (how many) and {@link breakerCountedFailures} (which,
+ * and why). Two copies of this query would be two breakers that could disagree about one halt.
+ */
+async function streakHead(
+  client: Prisma.TransactionClient,
+  workspaceId: string,
+  workspace: { readonly haltClearedAt: Date | null; readonly consecutiveFailureLimit: number },
+): Promise<readonly { readonly id: string; readonly status: RunStatus }[]> {
+  return client.$queryRaw<{ readonly id: string; readonly status: RunStatus }[]>`
+    SELECT r.id AS id, r.status::text AS status
+    FROM "SlaveRun" r
+    JOIN "Slave" a ON a.id = r."slaveId"
+    JOIN "Team" tm ON tm.id = a."teamId"
+    WHERE tm."workspaceId" = ${workspaceId}
+      AND r.status::text = ANY(${[...CONCLUDED_RUN_STATUSES]}::text[])
+      AND r."failureClass" IS DISTINCT FROM 'platform'
+      AND (
+        ${workspace.haltClearedAt}::timestamp IS NULL
+        OR COALESCE(r."terminalAt", r."startedAt") > ${workspace.haltClearedAt}::timestamp
+      )
+    ORDER BY COALESCE(r."terminalAt", r."startedAt") DESC, r."startedAt" DESC
+    LIMIT ${workspace.consecutiveFailureLimit + 1}::int
+  `
+}
+
+/** One failed run the circuit breaker counted, as a person has to be told about it (H9c). */
+export interface CountedFailure {
+  readonly runId: string
+  readonly runKind: 'implementation' | 'review' | 'planning'
+  /** The task the run worked on; null for a planning run, which has none. */
+  readonly taskTitle: string | null
+  /** The newest `run.failed` reason the run recorded, or null when it recorded none. */
+  readonly reason: string | null
+  readonly failureClass: FailureClass | null
+}
+
+/**
+ * The failed runs at the head of the streak, newest first -- exactly the ones
+ * `stats.consecutiveFailures` counted, with the reason each one recorded (H9c).
+ *
+ * What a circuit-breaker escalation is written from: "three failed runs" sends a person to the run
+ * log, and the three reasons are the whole of what they went there for. Also what an approval of
+ * that escalation re-reads (F5b): a breaker whose every counted failure was the platform's is
+ * lifted by the approval itself.
+ */
+export async function breakerCountedFailures(
+  workspaceId: string,
+  client: Prisma.TransactionClient = prisma,
+): Promise<readonly CountedFailure[]> {
+  const workspace = await client.workspace.findUniqueOrThrow({
+    where: { id: workspaceId },
+    select: { haltClearedAt: true, consecutiveFailureLimit: true },
+  })
+  const head = await streakHead(client, workspaceId, workspace)
+  const counted: string[] = []
+  for (const run of head) {
+    if (run.status !== 'failed') break
+    counted.push(run.id)
+  }
+  if (counted.length === 0) return []
+  const runs = await client.slaveRun.findMany({
+    where: { id: { in: counted } },
+    select: { id: true, kind: true, failureClass: true, task: { select: { title: true } } },
+  })
+  const events = await client.executionEvent.findMany({
+    where: { runId: { in: counted }, type: 'run_failed' },
+    orderBy: { seq: 'desc' },
+    select: { runId: true, payload: true },
+  })
+  const reasonOf = (runId: string): string | null => {
+    const payload = events.find((event) => event.runId === runId)?.payload
+    const reason = payload !== null && typeof payload === 'object' && !Array.isArray(payload) ? payload['reason'] : undefined
+    return typeof reason === 'string' ? reason : null
+  }
+  return counted.flatMap((runId) => {
+    const run = runs.find((one) => one.id === runId)
+    if (run === undefined) return []
+    return [
+      {
+        runId,
+        runKind: run.kind,
+        taskTitle: run.task?.title ?? null,
+        reason: reasonOf(runId),
+        failureClass: run.failureClass,
+      },
+    ]
+  })
 }

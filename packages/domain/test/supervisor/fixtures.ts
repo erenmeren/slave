@@ -220,6 +220,8 @@ export function world(overrides: Partial<SupervisorWorld> = {}): SupervisorWorld
     // R4: no halt has ever been cleared here, so the once-an-hour rule only ever decides in a test
     // that says when the last clear was.
     haltClearedAt: null,
+    // H9c: no breaker halt, so nothing it counted.
+    breakerFailures: [],
     budgetExhausted: false,
     tasks: [],
     slaves: [],

@@ -15,6 +15,7 @@ import {
   draftSchema,
   neutraliseMarkers,
   promotionFor,
+  readsAsPlatform,
   situationSchema,
   type Action,
   type Candidate,
@@ -45,6 +46,7 @@ import type { Principal } from './principal.js'
 import { refusalText, type ControlRefusal } from './refusal.js'
 import { adoptRunbook } from './runbook.js'
 import { MODEL_ID_PATTERN, MODEL_SHAPE_DETAIL } from './staffing.js'
+import { breakerCountedFailures, workspaceStats } from './stats.js'
 import { appendPlannerNote } from './supervisorUploads.js'
 import { cancelTask, failTask } from './task.js'
 import { retryTask, unblockTask } from './unblock.js'
@@ -722,9 +724,42 @@ async function carryOut(
       return ok('applied')
     }
     case 'escalate_to_human':
+      // H9c (F5b): a person saying yes to a BREAKER escalation lifts the halt when there is no
+      // runaway to answer -- every failure the breaker counted was the platform's. Anything else
+      // is still a question only the person can act on, and the summary says how.
+      if (origin === 'human' && decision.situation.kind === 'workspace_halted' && decision.situation.facts['reason'] === 'circuit_breaker') {
+        return liftPlatformBreakerHalt(decision.workspaceId)
+      }
+      return ok('none')
     case 'no_action':
       return ok('none')
   }
+}
+
+/**
+ * H9c (F5b): an approved breaker escalation clears the halt when every failure the breaker still
+ * counts reads as the PLATFORM's (`readsAsPlatform`: the row's `failureClass`, or an infrastructure
+ * marker on a row written before the column could say so).
+ *
+ * Re-read at approval time, never taken off the situation's facts: a proposal can be approved long
+ * after it was made, and by then a real failure may have joined the streak -- or the halt may be
+ * gone, in which case there is nothing to lift. A STORED halt that is not the breaker's (an
+ * emergency stop pressed since) is never touched: `clear_halt`'s own rule. The once-an-hour bound
+ * is not applied: it bounds the Supervisor's OWN clears, and this one is a person's, exactly as
+ * their `clear-halt` is.
+ *
+ * A breaker with a worker's failure in it is left standing and the approval reaches nothing
+ * (`'none'`): the summary the person approved already named the command that clears it.
+ */
+async function liftPlatformBreakerHalt(workspaceId: string): Promise<Result<Reach, ControlRefusal>> {
+  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { haltedReason: true } })
+  if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
+  if (workspace.haltedReason !== null && workspace.haltedReason !== 'circuit_breaker') return ok('none')
+  const counted = await breakerCountedFailures(workspaceId)
+  const snapshot = await workspaceStats(workspaceId)
+  const tripped = snapshot.stats.consecutiveFailures >= snapshot.limits.consecutiveFailureLimit
+  if (!tripped || counted.length === 0 || !counted.every(readsAsPlatform)) return ok('none')
+  return reached(await clearHalt(workspaceId))
 }
 
 /** `unknown` rather than `void` because the mailbox verbs return what they wrote: what `carryOut`

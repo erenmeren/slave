@@ -44,7 +44,7 @@ import { staleCandidateCount } from './memory.js'
 import { stillPendingQuestion, waitingSenderRunIds } from './messaging.js'
 import { planningCountSince } from './planningCount.js'
 import { workspaceDefaultProvider } from './runtime.js'
-import { workspaceStats, type WorkspaceStatsSnapshot } from './stats.js'
+import { breakerCountedFailures, workspaceStats, type WorkspaceStatsSnapshot } from './stats.js'
 
 /**
  * Why the Supervisor should consider this workspace stopped, or `null` (spec erratum E7).
@@ -1235,6 +1235,10 @@ export async function loadSupervisorWorld(
       // is also the more HONEST reading: the halt the Supervisor sees is then literally the halt
       // `decide()` acted on this tick, not a second one taken after the pass moved work.
       const snapshot = opts.stats ?? (await workspaceStats(workspaceId, tx))
+      const halted = haltOf(snapshot)
+      // H9c: the failures a breaker halt counted, read only when it IS the halt -- the one reader
+      // (`observe`'s `workspace_halted` summary) says nothing about them under any other.
+      const breakerFailures = halted?.reason === 'circuit_breaker' ? await breakerCountedFailures(workspaceId, tx) : []
 
       // Plan erratum E6: the stage escalations, resolved ONCE for the board rather than per task.
       const escalationByStage = new Map(
@@ -1333,10 +1337,11 @@ export async function loadSupervisorWorld(
         now: now.getTime(),
         goal: workspace.goal,
         goalVersion: workspace.goalVersion,
-        halted: haltOf(snapshot),
+        halted,
         // R4: the stamp the once-an-hour rule reads -- epoch ms, like every other time in the
         // world. Null on a project whose halt has never been cleared, by anybody.
         haltClearedAt: workspace.haltClearedAt?.getTime() ?? null,
+        breakerFailures,
         // The same comparison `evaluateGuardrails` makes, on the same total: an UNBUDGETED
         // workspace (`budgetUsd` null) is never exhausted, however much it has spent. Kept as its
         // own field rather than folded into `halted` because the two answer different questions --

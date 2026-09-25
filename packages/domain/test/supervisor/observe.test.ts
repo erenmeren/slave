@@ -495,6 +495,53 @@ describe('observe -- workspace_halted', () => {
   it('stays silent while the workspace runs', () => {
     expect(observe(world({ halted: null }))).toEqual([])
   })
+
+  // H9c: a breaker escalation names what the breaker counted -- each failed run by its task and its
+  // own reason -- and then exactly what a person can do about it.
+  it('names the three failed runs a breaker halt counted, and the command that clears it', () => {
+    const situation = observe(
+      world({
+        halted: { reason: 'circuit_breaker' },
+        breakerFailures: [
+          { runId: 'r-3', runKind: 'implementation', taskTitle: 'Add the thing', reason: 'guardrail run_timeout tripped', failureClass: 'worker' },
+          { runId: 'r-2', runKind: 'review', taskTitle: 'Add the thing', reason: null, failureClass: null },
+          { runId: 'r-1', runKind: 'planning', taskTitle: null, reason: 'the plan did not parse', failureClass: 'worker' },
+        ],
+      }),
+    )[0]
+    expect(situation?.summary).toBe(
+      'Scheduling is halted: circuit_breaker. The breaker counted 3 failed runs -- "Add the thing": guardrail run_timeout tripped; ' +
+        '"Add the thing": no reason was recorded; a planning run: the plan did not parse. Approving this changes nothing by itself: ' +
+        'deal with what the failures name (retry or fix the task), then run `npm run orchestrator -- clear-halt --workspace ws-1`.',
+    )
+    expect(situation?.facts).toMatchObject({ reason: 'circuit_breaker', countedFailures: 3, platformOnly: false })
+  })
+
+  it('says approving clears the halt when every counted failure was the platform\'s (F5b)', () => {
+    const situation = observe(
+      world({
+        halted: { reason: 'circuit_breaker' },
+        breakerFailures: [
+          { runId: 'r-3', runKind: 'implementation', taskTitle: 'Add the thing', reason: 'api_error: rate limit', failureClass: 'worker' },
+          { runId: 'r-2', runKind: 'implementation', taskTitle: 'Add the thing', reason: 'anything', failureClass: 'platform' },
+          { runId: 'r-1', runKind: 'implementation', taskTitle: 'Add the thing', reason: 'spawn claude ENOENT', failureClass: null },
+        ],
+      }),
+    )[0]
+    expect(situation?.summary).toContain('Every one of them was the platform failing, not the work: approving this clears the halt.')
+    expect(situation?.facts).toMatchObject({ countedFailures: 3, platformOnly: true })
+  })
+
+  it('names no counted failures for a halt that is not the breaker\'s', () => {
+    const situation = observe(
+      world({
+        halted: { reason: 'budget_exhausted' },
+        breakerFailures: [{ runId: 'r-1', runKind: 'implementation', taskTitle: 'Add the thing', reason: 'x', failureClass: 'worker' }],
+      }),
+    )[0]
+    expect(situation?.summary).toBe('Scheduling is halted: budget_exhausted.')
+    expect(situation?.facts).toMatchObject({ countedFailures: 0, platformOnly: false })
+  })
 })
 
 describe('observe -- ordering', () => {

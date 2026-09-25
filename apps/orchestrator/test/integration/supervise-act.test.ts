@@ -405,3 +405,57 @@ describe('the self-running project, end to end under act', () => {
     )
   })
 })
+
+/**
+ * H9c: the two guardrails that stop a run going nowhere are not halts. A run cancelled for
+ * `run_timeout` or `behavioural_loop` concludes `failed` with the stream ended under it (the pump's
+ * own sentence for a cancelled stream); when that was the task's last attempt the task is `failed`,
+ * and under `act` the Supervisor's retry -- E's `lost` remedy, with its steer -- is APPLIED by one
+ * rules-only pass, with nobody asked.
+ */
+describe('a timed-out or looping task comes back on its own under act (H9c)', () => {
+  beforeEach(reset)
+
+  async function seedLost(guardrail: 'run_timeout' | 'behavioural_loop'): Promise<{ readonly workspaceId: string; readonly taskId: string }> {
+    const workspace = await prisma.workspace.create({
+      data: { name: 'Gatehouse', repoPath: '/tmp/gatehouse', verifyCommands: ['npm test'], setupCommands: [], supervisorAutonomy: 'act' },
+    })
+    const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Build' } })
+    const person = await prisma.person.create({ data: { name: 'Ash' } })
+    const slave = await prisma.slave.create({ data: { teamId: team.id, personId: person.id, role: 'backend', runtimeRoles: ['backend'] } })
+    const task = await prisma.task.create({
+      data: { workspaceId: workspace.id, title: 'Join the wings', description: 'x', status: 'failed', requiredRole: 'backend', attempt: 3, maxAttempts: 3 },
+    })
+    const roof = await prisma.task.create({
+      data: { workspaceId: workspace.id, title: 'Finish the roof', description: 'x', status: 'backlog', requiredRole: 'backend', maxAttempts: 3 },
+    })
+    await prisma.taskDependency.create({ data: { taskId: roof.id, dependsOnTaskId: task.id } })
+    const at = ago(PASS_1, 60_000)
+    const run = await prisma.slaveRun.create({
+      data: { taskId: task.id, slaveId: slave.id, kind: 'implementation', status: 'failed', failureClass: 'worker', startedAt: ago(at, 30 * 60_000), terminalAt: at },
+    })
+    const event = (type: 'guardrail_tripped' | 'run_failed', payload: Record<string, string>, ts: Date) =>
+      prisma.executionEvent.create({ data: { workspaceId: workspace.id, taskId: task.id, slaveId: slave.id, runId: run.id, type, actor: 'system', payload, ts } })
+    await event('guardrail_tripped', { guardrail, detail: 'cancelling this run' }, ago(at, 1_000))
+    await event('run_failed', { reason: "the run's output stream ended without a terminal result" }, at)
+    return { workspaceId: workspace.id, taskId: task.id }
+  }
+
+  for (const guardrail of ['run_timeout', 'behavioural_loop'] as const) {
+    it(`applies the steered retry after ${guardrail} with nobody asked`, async () => {
+      const fixture = await seedLost(guardrail)
+
+      const report = await supervise({ workspaceId: fixture.workspaceId, now: () => PASS_1 })
+
+      expect(report).toMatchObject({ decided: 1, applied: 1, proposed: 0, rulesOnly: true })
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+      expect(task.status).toBe('rework')
+      expect(task.retries).toBe(1)
+      expect(task.lastRejectionReason).toContain('went round in circles')
+      const rows = await decisions(fixture.workspaceId)
+      expect(rows.map((row) => [(row.situation as { kind?: string }).kind, (row.action as { kind?: string }).kind, row.status])).toEqual([
+        ['task_failed', 'retry_task', 'applied'],
+      ])
+    })
+  }
+})

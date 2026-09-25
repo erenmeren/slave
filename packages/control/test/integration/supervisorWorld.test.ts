@@ -944,6 +944,72 @@ describe('workspaceStats', () => {
     await run('failed', at(20))
     expect((await workspaceStats(fixture.workspaceId)).stats.consecutiveFailures).toBe(2)
   })
+
+  // H9c: the breaker escalation names what the breaker counted. The world carries exactly the
+  // streak `consecutiveFailures` counts -- newest first, a platform failure left out, the run that
+  // ended the streak not in it -- each with its task and its own recorded reason.
+  it('carries the failures a breaker halt counted, newest first, each with its task and reason', async (): Promise<void> => {
+    const fixture = await seed()
+    const slave = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+    const taskId = await makeTask(fixture, { title: 'the pages', status: 'running' })
+    const at = (minutesAgo: number): Date => new Date(NOW.getTime() - minutesAgo * 60_000)
+    const run = async (
+      status: 'failed' | 'succeeded',
+      terminalAt: Date,
+      options: { readonly reason?: string; readonly platform?: boolean; readonly kind?: 'implementation' | 'planning' } = {},
+    ): Promise<string> => {
+      const kind = options.kind ?? 'implementation'
+      const row = await prisma.slaveRun.create({
+        data: {
+          slaveId: slave.id,
+          ...(kind === 'planning' ? {} : { taskId }),
+          status,
+          kind,
+          startedAt: terminalAt,
+          terminalAt,
+          failureClass: status === 'failed' ? (options.platform === true ? 'platform' : 'worker') : null,
+        },
+      })
+      if (options.reason !== undefined) {
+        await prisma.executionEvent.create({
+          data: {
+            workspaceId: fixture.workspaceId,
+            ...(kind === 'planning' ? {} : { taskId }),
+            runId: row.id,
+            type: 'run_failed',
+            actor: 'system',
+            payload: { reason: options.reason },
+            ts: terminalAt,
+          },
+        })
+      }
+      return row.id
+    }
+
+    await run('succeeded', at(60))
+    const first = await run('failed', at(50), { reason: 'the plan did not parse', kind: 'planning' })
+    await run('failed', at(40), { reason: 'spawn claude ENOENT', platform: true })
+    const second = await run('failed', at(30))
+    const third = await run('failed', at(20), { reason: 'guardrail run_timeout tripped' })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.halted).toEqual({ reason: 'circuit_breaker' })
+    expect(world.breakerFailures).toEqual([
+      { runId: third, runKind: 'implementation', taskTitle: 'the pages', reason: 'guardrail run_timeout tripped', failureClass: 'worker' },
+      { runId: second, runKind: 'implementation', taskTitle: 'the pages', reason: null, failureClass: 'worker' },
+      { runId: first, runKind: 'planning', taskTitle: null, reason: 'the plan did not parse', failureClass: 'worker' },
+    ])
+    const halted = observe(world).find((one) => one.kind === 'workspace_halted')
+    expect(halted?.summary).toContain('The breaker counted 3 failed runs -- "the pages": guardrail run_timeout tripped;')
+  })
+
+  it('carries no counted failures when the halt is not the breaker', async (): Promise<void> => {
+    const fixture = await seed()
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { haltedReason: 'emergency stop', haltedAt: NOW } })
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.halted).toEqual({ reason: 'emergency stop' })
+    expect(world.breakerFailures).toEqual([])
+  })
 })
 
 describe('workspaceSpend', () => {

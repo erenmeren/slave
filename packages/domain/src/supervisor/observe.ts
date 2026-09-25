@@ -8,6 +8,7 @@ import { PLANNING_RETRY_CAP } from '../planning/constants.js'
 import { recommendRunbooks } from '../runbook/recommend.js'
 import { TERMINAL } from '../task/state.js'
 import { isStaffableTask } from './candidates.js'
+import { readsAsPlatform } from './diagnosis.js'
 import {
   boundReason,
   COOLDOWN_BY_KIND,
@@ -21,7 +22,7 @@ import {
   WAITING_STALE_MS,
 } from './constants.js'
 import { SITUATION_KINDS, type Situation, type SituationKind } from './situations.js'
-import type { SupervisorQuestion, SupervisorSlave, SupervisorTask, SupervisorWorld } from './world.js'
+import type { BreakerFailure, SupervisorQuestion, SupervisorSlave, SupervisorTask, SupervisorWorld } from './world.js'
 
 /**
  * Does anyone in this workspace hold `role` as a RUNTIME role (M37 section 5)?
@@ -99,6 +100,39 @@ function questionFacts(question: SupervisorQuestion, world: SupervisorWorld): Si
     holders: question.holders.length,
     waitingMs: world.now - question.createdAt,
   }
+}
+
+/** The guardrail name a derived circuit-breaker halt carries (`haltOf`, packages/control). */
+const BREAKER_GUARDRAIL = 'circuit_breaker'
+
+/** H9c (F5b): the breaker counted something, and every one of it was the platform failing. */
+function platformOnly(counted: readonly BreakerFailure[]): boolean {
+  return counted.length > 0 && counted.every(readsAsPlatform)
+}
+
+/**
+ * H9c: what a breaker halt's escalation says -- the failed runs it counted, each by its task and
+ * its own reason, and then exactly what a person can do about it. "3 consecutive failed runs" sent
+ * a person to the run log; the three reasons are the whole of what they went there for.
+ *
+ * Two endings, decided by the rows (F5b): when every counted failure was the platform's, approving
+ * the escalation lifts the halt (`carryOut`'s `escalate_to_human` arm); otherwise the approval
+ * changes nothing on its own, and the sentence names the command that does.
+ */
+function breakerSentence(counted: readonly BreakerFailure[], workspaceId: string): string {
+  if (counted.length === 0) return ''
+  const lines = counted.map((failure) => {
+    const subject = failure.taskTitle === null ? `a ${failure.runKind} run` : `"${failure.taskTitle}"`
+    return `${subject}: ${failure.reason === null ? 'no reason was recorded' : boundReason(failure.reason)}`
+  })
+  const heading = ` The breaker counted ${String(counted.length)} failed run${counted.length === 1 ? '' : 's'} -- ${lines.join('; ')}.`
+  if (platformOnly(counted)) {
+    return `${heading} Every one of them was the platform failing, not the work: approving this clears the halt.`
+  }
+  return (
+    `${heading} Approving this changes nothing by itself: deal with what the failures name (retry or fix the task), ` +
+    `then run \`npm run orchestrator -- clear-halt --workspace ${workspaceId}\`.`
+  )
 }
 
 /** R3: what broke last, as a sentence appended to a stuck task's summary -- so the escalation a
@@ -571,11 +605,19 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
   }
 
   if (world.halted !== null) {
+    const counted = world.halted.reason === BREAKER_GUARDRAIL ? world.breakerFailures : []
     add({
       kind: 'workspace_halted',
       subjectId: world.workspaceId,
-      summary: `Scheduling is halted: ${world.halted.reason}.`,
-      facts: { reason: world.halted.reason, budgetExhausted: world.budgetExhausted },
+      summary: `Scheduling is halted: ${world.halted.reason}.${breakerSentence(counted, world.workspaceId)}`,
+      facts: {
+        reason: world.halted.reason,
+        budgetExhausted: world.budgetExhausted,
+        // H9c: what the breaker counted and whether all of it was the platform's -- the fact an
+        // approval of this escalation acts on (F5b), carried so the row says what was decided on.
+        countedFailures: counted.length,
+        platformOnly: platformOnly(counted),
+      },
     })
   }
 

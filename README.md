@@ -900,6 +900,17 @@ Out of that come three actions the rules did not have before:
   task has not failed since, and the next tick schedules the work again. A budget halt and an
   emergency stop are never cleared this way — the first is money and the second is a person.
 
+When the breaker halts a project and nothing has answered it yet, the escalation you are shown
+names **each failed run it counted** — the task and the reason that run recorded — rather than
+"three consecutive failures". If every one of them was the platform failing rather than the work (a
+provider refusal, a crashed daemon, a runtime that would not start), **approving that escalation
+clears the halt**. Otherwise approving it changes nothing by itself, and the card says so: deal with
+what the failures name, then run `npm run orchestrator -- clear-halt --workspace <id>`.
+
+A task whose last attempt was **rejected by review** is diagnosed from the rejection, not from an
+older run's failure: the summary reads "Review rejected after N attempts: <the reviewer's reason>",
+and the retry carries that reason to the worker.
+
 **What a task is allowed to touch.** The planner writes a task's `needs` — `network_fetch`,
 `run_commands` — beside its capabilities, and the dispatch adds them to that run's permissions for
 **implementation runs only** (a review judges, it does not fetch). So a research task can reach the

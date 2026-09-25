@@ -71,6 +71,21 @@ export interface TaskFailure {
   readonly failureClass: FailureClass | null
 }
 
+/**
+ * H9c: one failed run the circuit breaker COUNTED -- what a breaker escalation has to name so a
+ * person is not sent to the run log to find out what "three consecutive failed runs" were.
+ */
+export interface BreakerFailure {
+  readonly runId: string
+  readonly runKind: 'implementation' | 'review' | 'planning'
+  /** The task the run worked on; null for a planning run, which has none. */
+  readonly taskTitle: string | null
+  /** The newest `run.failed` reason the run recorded, or null when it recorded none. */
+  readonly reason: string | null
+  /** `SlaveRun.failureClass`; null for a row written before the column, which reads as `worker`. */
+  readonly failureClass: FailureClass | null
+}
+
 /** A task, flattened to the facts a situation predicate actually reads. */
 export interface SupervisorTask {
   readonly id: string
@@ -472,6 +487,15 @@ export interface SupervisorWorld {
    * after it was made) and the two must be reading one fact.
    */
   readonly haltClearedAt: number | null
+  /**
+   * H9c: the failed runs the circuit breaker counted, newest first -- what the `workspace_halted`
+   * summary names, and what decides whether approving its escalation lifts the halt (F5b).
+   *
+   * LOADER CONTRACT: `breakerCountedFailures` (packages/control) -- the SAME streak
+   * `stats.consecutiveFailures` counts -- and EMPTY unless {@link halted} is the derived
+   * `circuit_breaker`.
+   */
+  readonly breakerFailures: readonly BreakerFailure[]
   readonly budgetExhausted: boolean
   /**
    * H4a: does this project have a runtime at all? EXACTLY ONE `ProviderConfiguration` row, which is
