@@ -13,6 +13,7 @@ import type { SlaveRuntimeAdapter, ProviderCapabilities, RunHandle, StartRunInpu
 import type { Checkpoint } from '../claude/checkpoint.js'
 import { cursorFlags, cursorPreflightGate } from './flags.js'
 import { cursorHooksPath, writeCursorHooksFile } from './hooks.js'
+import { cursorWorkerEnv, prepareCursorWorkerHome, realHomeDir } from './home.js'
 import { parseCursorLine } from './stream.js'
 
 /**
@@ -83,6 +84,12 @@ export interface CursorAdapterOptions {
    * optional because a deployment with nothing brokered needs none of it.
    */
   readonly brokerCliPath?: string
+  /**
+   * H9 F9: the operator's real home, which every worker home mirrors minus its plugin and skill
+   * roots (`cursor/home.ts`). Real usage: omitted, and the daemon's own `HOME` is used. Tests point
+   * it at a fixture directory so a spawn never reads the machine's real home.
+   */
+  readonly realHome?: string
 }
 
 const DEFAULT_KILL_GRACE_MS = 5_000
@@ -131,6 +138,7 @@ export class CursorAdapter implements SlaveRuntimeAdapter {
   private readonly extraArgs: readonly string[]
   private readonly killGraceMs: number
   private readonly brokerCliPath: string | undefined
+  private readonly realHome: string | undefined
   private readonly runs = new Map<RunId, CursorRunState>()
 
   constructor(options: CursorAdapterOptions) {
@@ -139,6 +147,7 @@ export class CursorAdapter implements SlaveRuntimeAdapter {
     this.extraArgs = options.extraArgs ?? []
     this.killGraceMs = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS
     this.brokerCliPath = options.brokerCliPath
+    this.realHome = options.realHome
   }
 
   /**
@@ -182,7 +191,7 @@ export class CursorAdapter implements SlaveRuntimeAdapter {
       runId: input.runId,
       args,
       cwd: input.worktreePath,
-      env: buildChildEnv({
+      env: this.workerEnv(input.runDir, {
         gitIdentity: input.gitIdentity,
         pauseFlagPath: input.pauseFlagPath,
         permissionsFilePath: input.permissionsFilePath,
@@ -263,7 +272,9 @@ export class CursorAdapter implements SlaveRuntimeAdapter {
       runId,
       args,
       cwd: checkpoint.worktreePath,
-      env: buildChildEnv({
+      // The worker home is rebuilt in the SAME `runDir` the first spawn used -- derived exactly as
+      // the permissions file below is, from the one field guaranteed to live there on this provider.
+      env: this.workerEnv(dirname(checkpoint.pauseFlagPath), {
         gitIdentity: { name: checkpoint.gitAuthorName, email: checkpoint.gitAuthorEmail },
         pauseFlagPath: checkpoint.pauseFlagPath,
         // Re-derived, not carried on `checkpoint` -- see `ClaudeCodeAdapter.resume`'s identical
@@ -304,6 +315,18 @@ export class CursorAdapter implements SlaveRuntimeAdapter {
    * fails here instead of silently. Wrapped so the failure names the run and this adapter: a bare
    * `cursorPreflightGate` message would not say which of two runtimes produced it.
    */
+  /**
+   * `buildChildEnv`'s allow list, with the worker's own `HOME` laid over it (H9 F9, `cursor/home.ts`):
+   * a worker run must not load the person's own Cursor/Claude plugins and skills, which run a
+   * development process of their own inside the task. Laid OVER, not merged under: the allow list
+   * carries the daemon's `HOME`, and that is exactly the value this replaces.
+   */
+  private workerEnv(runDir: string, input: Parameters<typeof buildChildEnv>[0]): NodeJS.ProcessEnv {
+    const realHome = this.realHome ?? realHomeDir()
+    const workerHome = prepareCursorWorkerHome({ runDir, realHome })
+    return { ...buildChildEnv(input), ...cursorWorkerEnv({ workerHome, realHome, parentEnv: process.env }) }
+  }
+
   private async runPreflightGate(gatePath: string, runId: RunId): Promise<void> {
     if (!isAbsolute(gatePath)) {
       throw new Error(`CursorAdapter: gatePath must be absolute, got ${JSON.stringify(gatePath)}`)

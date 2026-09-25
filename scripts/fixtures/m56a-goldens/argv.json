@@ -8,7 +8,9 @@
     "bypassPermissions",
     "--settings",
     "/tmp/m56a-golden/settings.json",
-    "--include-hook-events"
+    "--include-hook-events",
+    "--setting-sources",
+    "project,local"
   ],
   "cursorPlain": [
     "--print",

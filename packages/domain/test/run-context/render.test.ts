@@ -4,6 +4,7 @@ import { parseSlaveAsk } from '../../src/messaging/ask.js'
 import type { Section, SectionKind, SectionSource } from '../../src/run-context/sections.js'
 import { REPLAN_INSTRUCTIONS } from '../../src/planning/delta.js'
 import {
+  IMPLEMENTATION_WORK_RULES,
   MARKERS,
   PLANNING_GRAPH_INSTRUCTIONS,
   REVIEW_VERDICT_INSTRUCTIONS,
@@ -45,7 +46,7 @@ describe('renderRunContext', () => {
       section('inbox', 'pending question from Riley', { kind: 'inbox', messageIds: ['m1'] }),
     ]
     const { prompt, manifest } = renderRunContext('implementation', sections)
-    expect(prompt).toBe('You are Maya.\n\npending question from Riley\n\nTask: do the thing\n\nrejected: missing tests')
+    expect(prompt).toBe(`You are Maya.\n\npending question from Riley\n\nTask: do the thing\n\nrejected: missing tests\n\n${IMPLEMENTATION_WORK_RULES}`)
     expect(manifest).toEqual({
       kind: 'implementation',
       sections: [
@@ -63,7 +64,7 @@ describe('renderRunContext', () => {
       section('task', 'Task: do the thing', { kind: 'task', taskId: 't1', sha256: TASK_SHA }),
     ]
     const { prompt, manifest } = renderRunContext('implementation', sections)
-    expect(prompt).toBe('Task: do the thing')
+    expect(prompt).toBe(`Task: do the thing\n\n${IMPLEMENTATION_WORK_RULES}`)
     expect(manifest.sections).toEqual([{ kind: 'task', taskId: 't1', sha256: TASK_SHA }])
   })
 
@@ -223,16 +224,27 @@ describe('renderRunContext', () => {
     )
   })
 
-  it('does not append instructions for an implementation run', () => {
+  // H9 F9: an implementation run ends with its working rules -- do the task itself, no planning
+  // and no helpers of its own -- and with nothing else.
+  it('appends the working rules, and only them, after an implementation run\'s sections', () => {
     const sections: Section[] = [section('task', 'Task: do the thing', { kind: 'task', taskId: 't1', sha256: TASK_SHA })]
     const { prompt } = renderRunContext('implementation', sections)
-    expect(prompt).toBe('Task: do the thing')
+    expect(prompt).toBe(`Task: do the thing\n\n${IMPLEMENTATION_WORK_RULES}`)
+    expect(IMPLEMENTATION_WORK_RULES).toMatch(/do the task itself/)
+    expect(IMPLEMENTATION_WORK_RULES).toMatch(/Do not brainstorm, write a plan,\nor hand parts of it to helpers or subtasks of your own/)
+    // H9 F6: the worker is told its own question tool is refused, and where to ask instead.
+    expect(IMPLEMENTATION_WORK_RULES).toMatch(/a tool that asks the user a question is refused/)
+    expect(IMPLEMENTATION_WORK_RULES).toMatch(/ask through the protocol above/)
+    // The fake CLI routes on these literals; a work run's trailer must carry none of them.
+    for (const literal of ['"verdict"', 'verdict', 'task graph', 'candidateIndex', '"sources"']) {
+      expect(IMPLEMENTATION_WORK_RULES).not.toContain(literal)
+    }
   })
 
   it('leaves raw <slave-ask>/<slave-answer> markers untouched inside a section\'s own text', () => {
     const sections: Section[] = [section('ask_protocol', 'Wrap your ask in <slave-ask>{...}</slave-ask>.', { kind: 'ask_protocol' })]
     const { prompt } = renderRunContext('implementation', sections)
-    expect(prompt).toBe('Wrap your ask in <slave-ask>{...}</slave-ask>.')
+    expect(prompt).toBe(`Wrap your ask in <slave-ask>{...}</slave-ask>.\n\n${IMPLEMENTATION_WORK_RULES}`)
   })
 })
 
@@ -374,7 +386,7 @@ describe('M48 section order', () => {
       { kind: 'memory', text: 'WHAT THE ORGANISATION KNOWS', source: { kind: 'memory', memoryIds: ['m1'], capped: false } },
       { kind: 'task', text: 'TASK', source: { kind: 'task', taskId: 't1', sha256: 'abc' } },
     ])
-    expect(prompt).toBe('TASK\n\nWHAT THE ORGANISATION KNOWS\n\nREJECTION')
+    expect(prompt).toBe(`TASK\n\nWHAT THE ORGANISATION KNOWS\n\nREJECTION\n\n${IMPLEMENTATION_WORK_RULES}`)
     expect(manifest.sections.map((source) => source.kind)).toEqual(['task', 'memory', 'rejection'])
   })
 

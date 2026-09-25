@@ -132,6 +132,8 @@ describe('the Claude Code row (R3)', () => {
       '--permission-mode',
       'bypassPermissions',
       '--include-hook-events',
+      '--setting-sources',
+      'project,local',
     ])
     expect(manifest.invocation.neverPass).toEqual(['--no-session-persistence', '--fork-session'])
     expect(manifest.invocation.cwd).toBe('worktree')

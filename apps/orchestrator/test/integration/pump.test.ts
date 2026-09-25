@@ -1708,6 +1708,104 @@ describe('pumpRun', () => {
      * matrix denial as a fresh failure, via the very `nonMatrixDeniedToolUseIds` filter this file's
      * other tests just proved.
      */
+    /**
+     * H9 F6 (measured 2026-09-21, 12:02 UTC): a headless Cursor worker called its own `askQuestion`
+     * tool, `cursor-agent --print` refused it (`result.rejected`), the refused id reached
+     * `deniedToolUseIds`, and the pump failed the whole run for it -- a retry and an attempt spent
+     * on a worker whose only act was to ask. A refused question is excused now, like a matrix
+     * refusal, and the worker's prompt tells it to ask through `<slave-ask>` instead.
+     */
+    const cursorSpawn = {
+      settingsPath: '/tmp/slaveofai-cursor-ask/.cursor/hooks.json',
+      pauseFlagPath: '/tmp/slaveofai-cursor-ask/pause.flag',
+      hookPath: '/opt/slaveofai/cursor-shell-gate.sh',
+      gitIdentity: { name: 'Alex', email: 'alex@example.com' },
+      provider: 'cursor' as const,
+    }
+
+    it('H9 F6: a Cursor worker whose askQuestion call was refused still concludes on its own merits -- succeeded, no guardrail.tripped, no run.failed, not read as a pause', async (): Promise<void> => {
+      // `pause_requested`, as in the matrix case above: a refused question must not be the
+      // "denied" evidence that turns a clean Cursor finish into a pause either.
+      await prisma.slaveRun.update({ where: { id: ids.runId }, data: { status: 'pause_requested', worktreePath: '/tmp' } })
+
+      const outcome = await pumpRun({
+        ...ids,
+        spawn: cursorSpawn,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-cursor-ask' },
+          { kind: 'tool_call', toolName: 'askQuestion', toolUseId: 'q1', summary: 'askQuestion', argsHash: testArgsHash('askQuestion') },
+          { kind: 'permission_denied', toolName: 'askQuestion', toolUseId: 'q1' },
+          { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['q1'] } },
+        ]),
+      })
+
+      expect(outcome).not.toBeNull()
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('succeeded')
+      expect(run.pausedAtStep).toBeNull()
+      const types = await eventTypesFor(ids.runId)
+      expect(types).toContain('run.succeeded')
+      expect(types).not.toContain('run.failed')
+      expect(types).not.toContain('run.paused')
+      expect(types).not.toContain('guardrail.tripped')
+      await expect(prisma.checkpoint.findUnique({ where: { runId: ids.runId } })).resolves.toBeNull()
+    })
+
+    it("H9 F6 negative control: the excuse is keyed on the RUN's provider -- Cursor's tool name refused on a Claude run still fails it, as any unexplained denial does", async (): Promise<void> => {
+      await pumpRun({
+        ...ids,
+        spawn: { ...cursorSpawn, provider: 'claude_code' },
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-claude-ask' },
+          { kind: 'permission_denied', toolName: 'askQuestion', toolUseId: 'q1' },
+          { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['q1'] } },
+        ]),
+      })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('failed')
+      expect(await eventTypesFor(ids.runId)).toContain('guardrail.tripped')
+    })
+
+    it('H9 F6 negative control: a refused question excuses only itself -- a second, ordinary denial on the same Cursor run still fails it', async (): Promise<void> => {
+      await pumpRun({
+        ...ids,
+        spawn: cursorSpawn,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-cursor-ask-2' },
+          { kind: 'permission_denied', toolName: 'askQuestion', toolUseId: 'q1' },
+          { kind: 'permission_denied', toolName: 'shell', toolUseId: 'c2' },
+          { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['q1', 'c2'] } },
+        ]),
+      })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('failed')
+      const failed = await prisma.executionEvent.findFirstOrThrow({ where: { runId: ids.runId, type: 'run_failed' } })
+      expect((failed.payload as { reason: string }).reason).toContain('1 tool call(s) were denied: c2')
+    })
+
+    it("H9 F6: a resumed pump excuses a question the run asked before its pause, read back from the run's own run.tool_call events", async (): Promise<void> => {
+      await appendEvent({
+        type: 'run.tool_call',
+        workspaceId: ids.workspaceId,
+        taskId: ids.taskId,
+        slaveId: ids.slaveId,
+        runId: ids.runId,
+        actor: 'slave',
+        payload: { name: 'askQuestion', summary: 'askQuestion', toolUseId: 'q_old' },
+      })
+      await pumpRun({
+        ...ids,
+        resumed: true,
+        spawn: cursorSpawn,
+        events: fromArray([
+          { kind: 'session_started', sessionId: 's-cursor-ask-resumed' },
+          { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['q_old'] } },
+        ]),
+      })
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(run.status).toBe('succeeded')
+    })
+
     it('B1: a resumed pump seeds matrixDeniedToolUseIds from the run\'s own prior run.tool_denied events, so the resumed CLI\'s echo of an already-survived matrix denial does not re-fail the run', async (): Promise<void> => {
       // Seed a REAL prior `run.tool_denied` event through the house append path (`appendEvent`,
       // `@slave-of-ai/events`'s only write path to the event log) -- exactly what a first pump on

@@ -81,7 +81,7 @@ recap-based continuation the ADR describes for that rung exists in prose and in 
 |---|---|---|
 | Binary | `claude` | `cursor-agent` |
 | Binary override | `SLAVEOFAI_CLAUDE_BIN` `SLAVEOFAI_CLAUDE_ARGS` | `SLAVEOFAI_CURSOR_BIN` `SLAVEOFAI_CURSOR_ARGS` |
-| Headless flags | `--output-format` `stream-json` `--verbose` `--permission-mode` `bypassPermissions` `--include-hook-events` | `--print` `--output-format` `stream-json` `--trust` `--force` |
+| Headless flags | `--output-format` `stream-json` `--verbose` `--permission-mode` `bypassPermissions` `--include-hook-events` `--setting-sources` `project,local` | `--print` `--output-format` `stream-json` `--trust` `--force` |
 | Prompt | `flag` | `positional` |
 | Never pass | `--no-session-persistence` `--fork-session` | `-w` `--worktree` `--stream-partial-output` `--yolo` `--plan` `--mode` |
 | Model discovery | `configured` (11 entries) | `listed` (`models`) |
