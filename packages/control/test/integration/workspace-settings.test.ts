@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '@slave-of-ai/db/client'
 import { refusalText } from '../../src/refusal.js'
-import { setWorkspaceBudget, setWorkspaceIntegration, setWorkspaceProvider } from '../../src/workspace.js'
+import { setWorkspaceBudget, setWorkspaceIntegration, setWorkspaceLimits, setWorkspaceProvider } from '../../src/workspace.js'
 import { workspaceDefaultProvider } from '../../src/runtime.js'
 
 // A real directory, not a placeholder (M23 G3): runFilePaths' statSync preflight refuses a repo path that does not exist, and a reboot clears /tmp -- the trap emergency.test.ts fell into at ce48adc.
@@ -226,6 +226,81 @@ describe('the workspace settings verbs', () => {
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error.kind).toBe('workspace_not_found')
       expect(await prisma.executionEvent.count({ where: { type: 'workspace_settings_changed' } })).toBe(0)
+    })
+  })
+
+  /**
+   * H9 F8: the three dispatch limits had defaults and no writer, so a project whose runs need more
+   * than thirty minutes could only be helped by a hand edit of the database.
+   */
+  describe('setWorkspaceLimits', () => {
+    const events = (): Promise<unknown[]> =>
+      prisma.executionEvent
+        .findMany({ where: { workspaceId: fixture.workspace.id, type: 'workspace_settings_changed' }, orderBy: { seq: 'asc' } })
+        .then((rows) => rows.map((row) => row.payload))
+
+    it('writes each limit and records one settings_changed per limit that moved', async (): Promise<void> => {
+      const result = await setWorkspaceLimits(fixture.workspace.id, { runTimeoutMs: 60 * 60_000, maxConcurrentRuns: 5, maxAttempts: 4 })
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value.moved).toEqual([
+        { field: 'runTimeoutMs', from: 1_800_000, to: 3_600_000 },
+        { field: 'maxConcurrentRuns', from: 3, to: 5 },
+        { field: 'maxAttempts', from: 3, to: 4 },
+      ])
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })
+      expect([workspace.runTimeoutMs, workspace.maxConcurrentRuns, workspace.maxAttempts]).toEqual([3_600_000, 5, 4])
+      expect(await events()).toEqual(result.value.moved)
+    })
+
+    it('writes and says nothing for a limit the patch leaves out or restates', async (): Promise<void> => {
+      const result = await setWorkspaceLimits(fixture.workspace.id, { maxConcurrentRuns: 3, maxAttempts: 2 })
+
+      expect(result.ok && result.value.moved).toEqual([{ field: 'maxAttempts', from: 3, to: 2 }])
+      expect(await events()).toEqual([{ field: 'maxAttempts', from: 3, to: 2 }])
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })).runTimeoutMs).toBe(1_800_000)
+    })
+
+    it('accepts both ends of every bound', async (): Promise<void> => {
+      expect((await setWorkspaceLimits(fixture.workspace.id, { runTimeoutMs: 5 * 60_000, maxConcurrentRuns: 1, maxAttempts: 1 })).ok).toBe(true)
+      expect((await setWorkspaceLimits(fixture.workspace.id, { runTimeoutMs: 180 * 60_000, maxConcurrentRuns: 10, maxAttempts: 10 })).ok).toBe(true)
+    })
+
+    it.each([
+      ['a timeout under five minutes', { runTimeoutMs: 4 * 60_000 }, 'a run timeout must be a whole number of minutes from 5 to 180'],
+      ['a timeout over three hours', { runTimeoutMs: 181 * 60_000 }, 'a run timeout must be a whole number of minutes from 5 to 180'],
+      ['a timeout that is not whole minutes', { runTimeoutMs: 90_000 * 7 }, 'a run timeout must be a whole number of minutes from 5 to 180'],
+      ['no runs at all', { maxConcurrentRuns: 0 }, 'runs at once must be a whole number from 1 to 10'],
+      ['eleven runs', { maxConcurrentRuns: 11 }, 'runs at once must be a whole number from 1 to 10'],
+      ['zero attempts', { maxAttempts: 0 }, 'attempts per task must be a whole number from 1 to 10'],
+      ['a fractional attempt', { maxAttempts: 2.5 }, 'attempts per task must be a whole number from 1 to 10'],
+    ])('refuses %s, writing nothing', async (_label, patch, sentence): Promise<void> => {
+      const result = await setWorkspaceLimits(fixture.workspace.id, patch)
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.error.kind).toBe('invalid_limit')
+        expect(refusalText(result.error)).toBe(sentence)
+      }
+      expect(await events()).toEqual([])
+    })
+
+    it('writes neither limit when one of two is out of range', async (): Promise<void> => {
+      const result = await setWorkspaceLimits(fixture.workspace.id, { maxConcurrentRuns: 6, maxAttempts: 99 })
+
+      expect(result.ok).toBe(false)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })).maxConcurrentRuns).toBe(3)
+      expect(await events()).toEqual([])
+    })
+
+    it('does not refuse a halted workspace, and refuses an unknown one', async (): Promise<void> => {
+      await prisma.workspace.update({ where: { id: fixture.workspace.id }, data: { haltedReason: 'emergency stop by meren', haltedAt: new Date() } })
+      expect((await setWorkspaceLimits(fixture.workspace.id, { runTimeoutMs: 60 * 60_000 })).ok).toBe(true)
+
+      const missing = await setWorkspaceLimits('00000000-0000-0000-0000-000000000000', { maxAttempts: 2 })
+      expect(missing.ok).toBe(false)
+      if (!missing.ok) expect(missing.error.kind).toBe('workspace_not_found')
     })
   })
 

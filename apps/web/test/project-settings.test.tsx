@@ -174,11 +174,62 @@ describe('RuntimePanel', () => {
     expect((screen.getByTestId('runtime-auto-merge') as HTMLInputElement).checked).toBe(false)
   })
 
-  it('shows the three limits read-only, in the sidebar\'s old format', () => {
+  it('shows the three limits in editable fields, the timeout in minutes', () => {
     render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} autoMerge={false} autonomy="propose" />)
-    expect(screen.getByTestId('runtime-concurrency').textContent).toBe('3')
-    expect(screen.getByTestId('runtime-timeout').textContent).toBe('30m')
-    expect(screen.getByTestId('runtime-attempts').textContent).toBe('5')
+    expect((screen.getByTestId('runtime-concurrency') as HTMLInputElement).value).toBe('3')
+    expect((screen.getByTestId('runtime-timeout') as HTMLInputElement).value).toBe('30')
+    expect((screen.getByTestId('runtime-attempts') as HTMLInputElement).value).toBe('5')
+  })
+
+  // H9 F8: until this the limits were read-only and nothing anywhere could write them.
+  it('PATCHes the limits, the timeout converted from minutes to the column s milliseconds', async (): Promise<void> => {
+    render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} autoMerge={false} autonomy="propose" />)
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('run timeout in minutes'), { target: { value: '60' } })
+      fireEvent.change(screen.getByLabelText('runs at once'), { target: { value: '4' } })
+      fireEvent.click(screen.getByTestId('runtime-limits-submit'))
+    })
+
+    expect(sendControl).toHaveBeenCalledWith('/api/w/w1/limits', {
+      method: 'PATCH',
+      body: { runTimeoutMs: 3_600_000, maxConcurrentRuns: 4, maxAttempts: 5 },
+    })
+    expect(refresh).toHaveBeenCalled()
+  })
+
+  it.each([
+    ['run timeout in minutes', '181', 'a run timeout must be a whole number of minutes from 5 to 180'],
+    ['run timeout in minutes', '', 'a run timeout must be a whole number of minutes from 5 to 180'],
+    ['runs at once', '11', 'runs at once must be a whole number from 1 to 10'],
+    ['attempts per task', '0', 'attempts per task must be a whole number from 1 to 10'],
+  ])('refuses %s = "%s" before sending anything, with the domain s rule', async (label, value, sentence): Promise<void> => {
+    render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} autoMerge={false} autonomy="propose" />)
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText(label), { target: { value } })
+      // `submit` on the form rather than a click on the button: jsdom would stop a click at the
+      // browser's own `min`/`max`/`required` check, and the point here is the panel's own refusal.
+      fireEvent.submit(screen.getByTestId('runtime-limits'))
+    })
+
+    expect(sendControl).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toBe(sentence)
+    expect((screen.getByLabelText(label) as HTMLInputElement).value).toBe(value)
+  })
+
+  it('a refused limits write keeps what was typed and shows the refusal verbatim', async (): Promise<void> => {
+    vi.mocked(sendControl).mockResolvedValueOnce('project w1 is archived')
+    render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} autoMerge={false} autonomy="propose" />)
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('attempts per task'), { target: { value: '7' } })
+      fireEvent.click(screen.getByTestId('runtime-limits-submit'))
+    })
+
+    expect(screen.getByRole('alert').textContent).toBe('project w1 is archived')
+    expect((screen.getByLabelText('attempts per task') as HTMLInputElement).value).toBe('7')
+    expect(refresh).not.toHaveBeenCalled()
   })
 })
 
@@ -292,12 +343,12 @@ describe('ProjectSettingsClient', () => {
     expect(screen.getByTestId('runbook-name').textContent).toBe('Feature delivery')
   })
 
-  it("shows the three limits read-only in the sidebar's old format", () => {
+  it('shows the three limits in the runtime section, ready to edit', () => {
     render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} initialSection="runtime" />)
-    expect(screen.getByTestId('runtime-concurrency').textContent).toBe('3')
-    expect(screen.getByTestId('runtime-timeout').textContent).toBe('30m')
-    expect(screen.getByTestId('runtime-attempts').textContent).toBe('5')
-    expect(screen.getByText(/not editable here yet/)).toBeTruthy()
+    expect((screen.getByTestId('runtime-concurrency') as HTMLInputElement).value).toBe('3')
+    expect((screen.getByTestId('runtime-timeout') as HTMLInputElement).value).toBe('30')
+    expect((screen.getByTestId('runtime-attempts') as HTMLInputElement).value).toBe('5')
+    expect(screen.queryByText(/not editable here yet/)).toBeNull()
   })
 
   it('scopes the permission matrix to this workspace', () => {

@@ -11,8 +11,10 @@ import {
   ATTACHMENT_KIND_BY_EXTENSION,
   BROKER_REFUSAL_LABEL,
   EXTERNAL_SOURCE_LABEL,
+  WORKSPACE_LIMIT_RULE,
   type BrokerRefusalReason,
   type ExternalSource,
+  type WorkspaceLimitField,
 } from '@slave-of-ai/domain'
 import { sectors } from '@slave-of-ai/simulation'
 import { plural } from './plural.js'
@@ -261,6 +263,11 @@ export type ControlRefusal =
   | { readonly kind: 'invalid_model'; readonly detail?: string }
   /** A budget was set to something that is neither a non-negative number nor `null` (M13 §6.1). */
   | { readonly kind: 'invalid_budget' }
+  /** H9 F8: a dispatch limit set outside `WORKSPACE_LIMIT_BOUNDS`, or to something that is not a
+   *  whole number (of minutes, for the timeout). `field` names which, so the sentence can say the
+   *  rule for that one limit -- the domain's own text, the one the Runtime panel shows before it
+   *  sends anything. */
+  | { readonly kind: 'invalid_limit'; readonly field: WorkspaceLimitField }
   /** A model was set (or cleared) with no provider to match it, or vice versa (M12 Task 7). */
   | { readonly kind: 'model_without_provider' }
   /** `provider` named a string that is not a member of `ProviderKind` (M12 Task 7). */
@@ -747,6 +754,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return refusal.detail ?? 'a model must be a non-empty text'
     case 'invalid_budget':
       return 'a budget must be a non-negative amount or absent'
+    case 'invalid_limit':
+      return WORKSPACE_LIMIT_RULE[refusal.field]
     case 'model_without_provider':
       return 'a model must name the provider that runs it'
     case 'invalid_provider':

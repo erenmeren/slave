@@ -3,7 +3,7 @@
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import type { ProviderKind } from '@slave-of-ai/control'
-import { formatTimeout } from '../../lib/format'
+import { isWorkspaceLimitAllowed, WORKSPACE_LIMIT_BOUNDS, WORKSPACE_LIMIT_RULE, type WorkspaceLimitField } from '@slave-of-ai/domain'
 import { sendControl } from '../../lib/postControl'
 import { ProviderSelect } from '../ProviderSelect'
 import { FieldLabel, INPUT_SHELL, TextField } from '../ui/FormControls'
@@ -13,8 +13,8 @@ import { Button } from '../ui/Button'
 /**
  * The Settings tab's runtime panel (M24 §4, moved off the Overview card of the same shape): the
  * workspace's runtime and its spend ceiling, beside `GoalPanel`, plus the three dispatch limits
- * (concurrency, run timeout, attempts) shown read-only underneath -- the sidebar's old format,
- * now that Task 2 removed the sidebar row that used to carry them.
+ * (run timeout, runs at once, attempts) underneath. H9 F8 made those editable: until then they were
+ * shown read-only and nothing anywhere could write them.
  *
  * No optimistic state: every control on this page follows M11's rule that the server's next
  * snapshot is what changes what is rendered. `router.refresh()` after a successful mutation is
@@ -24,7 +24,7 @@ import { Button } from '../ui/Button'
  *
  * A 409 keeps whatever the operator typed, so a refused write is correctable rather than lost.
  *
- * E R7/R1 add the project's two switches under the read-only limits -- auto-merge and the
+ * E R7/R1 add the project's two switches under the limits -- auto-merge and the
  * Supervisor's autonomy -- the only editable settings on this panel that are not a text field, and
  * the two whose value is a whole policy rather than a figure.
  *
@@ -152,17 +152,18 @@ export function RuntimePanel({
           </Button>
         </form>
 
-        <dl data-testid="runtime-limits" className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-[6px] border-t border-line pt-3 font-mono text-[10.5px]">
-          <dt className="text-text-faint">concurrency</dt>
-          <dd data-testid="runtime-concurrency" className="text-text-1">{limits.maxConcurrentRuns}</dd>
-          <dt className="text-text-faint">run timeout</dt>
-          <dd data-testid="runtime-timeout" className="text-text-1">{formatTimeout(limits.runTimeoutMs)}</dd>
-          <dt className="text-text-faint">attempts</dt>
-          <dd data-testid="runtime-attempts" className="text-text-1">{limits.maxAttempts}</dd>
-        </dl>
-        <p className="font-mono text-[10px] text-text-3">set in the workspace record; not editable here yet</p>
+        <LimitsForm
+          // Keyed on the SAVED figures, the `ProjectSettingsClient` idiom for the provider/budget
+          // pair: a successful write refreshes the route, the key moves, and the drafts reseed from
+          // what the server now holds. A refused write moves nothing, so what was typed stays.
+          key={`${String(limits.runTimeoutMs)}|${String(limits.maxConcurrentRuns)}|${String(limits.maxAttempts)}`}
+          limits={limits}
+          pending={pending}
+          onSave={(patch) => void submit(`/api/w/${workspaceId}/limits`, patch, 'PATCH')}
+          onRefuse={setErrorText}
+        />
 
-        {/* E R7/R1 §4: the two switches, editable, under the limits that are not. Checkboxes rather
+        {/* E R7/R1 §4: the two switches, under the limits. Checkboxes rather
           * than a form with a button -- there is nothing to type, so the flip IS the instruction --
           * and NO local state behind them, this panel's own rule: the server's next snapshot is
           * what moves them, which is exactly why a refused write leaves the box where the project
@@ -218,5 +219,101 @@ export function RuntimePanel({
         )}
       </div>
     </Panel>
+  )
+}
+
+type Limits = { readonly maxConcurrentRuns: number; readonly runTimeoutMs: number; readonly maxAttempts: number }
+
+/** The order a refusal is looked for in -- the order the fields are drawn. An emptied field is
+ *  `Number('')`, `0`, which every bound refuses, so an empty box is answered by its own rule. */
+const LIMIT_FIELDS: readonly WorkspaceLimitField[] = ['runTimeoutMs', 'maxConcurrentRuns', 'maxAttempts']
+
+/**
+ * The three dispatch limits as one form (H9 F8): the timeout in MINUTES, the unit a person thinks
+ * in and the one `set-limits --run-timeout-min` takes, converted to the column's milliseconds here.
+ *
+ * Checked before anything is sent, against the domain's own bounds and in the domain's own words --
+ * the sentence `setWorkspaceLimits` would answer with, so a figure out of range reads the same
+ * whether the panel caught it or the route did. `required` keeps an emptied field from taking the
+ * budget field's third road in the browser, and `LIMIT_FIELDS` says what an empty box is answered with.
+ *
+ * All three go in every save. The verb writes and records only what MOVED, so re-sending the two
+ * nobody touched costs nothing and says nothing.
+ */
+function LimitsForm({
+  limits,
+  pending,
+  onSave,
+  onRefuse,
+}: {
+  readonly limits: Limits
+  readonly pending: boolean
+  readonly onSave: (patch: Limits) => void
+  readonly onRefuse: (text: string) => void
+}): React.JSX.Element {
+  const [timeoutMin, setTimeoutMin] = useState(String(limits.runTimeoutMs / 60_000))
+  const [concurrent, setConcurrent] = useState(String(limits.maxConcurrentRuns))
+  const [attempts, setAttempts] = useState(String(limits.maxAttempts))
+
+  const field = (
+    label: string,
+    testId: string,
+    ariaLabel: string,
+    value: string,
+    onChange: (next: string) => void,
+    bounds: { readonly min: number; readonly max: number },
+  ): React.JSX.Element => (
+    <TextField
+      label={label}
+      inputProps={
+        {
+          type: 'number',
+          step: '1',
+          min: bounds.min,
+          max: bounds.max,
+          required: true,
+          'data-testid': testId,
+          'aria-label': ariaLabel,
+          value,
+          onChange: (event: React.ChangeEvent<HTMLInputElement>) => onChange(event.target.value),
+          disabled: pending,
+          className: 'w-20',
+        } as React.InputHTMLAttributes<HTMLInputElement>
+      }
+    />
+  )
+
+  return (
+    <form
+      data-testid="runtime-limits"
+      className="mt-2 flex flex-wrap items-end gap-2 border-t border-line pt-3"
+      onSubmit={(event) => {
+        event.preventDefault()
+        const patch: Limits = {
+          runTimeoutMs: Number(timeoutMin) * 60_000,
+          maxConcurrentRuns: Number(concurrent),
+          maxAttempts: Number(attempts),
+        }
+        const refused = LIMIT_FIELDS.find((name) => !isWorkspaceLimitAllowed(name, patch[name]))
+        if (refused !== undefined) {
+          onRefuse(WORKSPACE_LIMIT_RULE[refused])
+          return
+        }
+        onSave(patch)
+      }}
+    >
+      {field('run timeout (min)', 'runtime-timeout', 'run timeout in minutes', timeoutMin, setTimeoutMin, {
+        min: WORKSPACE_LIMIT_BOUNDS.runTimeoutMs.min / 60_000,
+        max: WORKSPACE_LIMIT_BOUNDS.runTimeoutMs.max / 60_000,
+      })}
+      {field('runs at once', 'runtime-concurrency', 'runs at once', concurrent, setConcurrent, WORKSPACE_LIMIT_BOUNDS.maxConcurrentRuns)}
+      {field('attempts', 'runtime-attempts', 'attempts per task', attempts, setAttempts, WORKSPACE_LIMIT_BOUNDS.maxAttempts)}
+      <Button variant="primary" size="sm" type="submit" data-testid="runtime-limits-submit" disabled={pending}>
+        set limits
+      </Button>
+      <p className="w-full font-mono text-[10px] text-text-3">
+        a longer timeout reaches a run already working; attempts reach tasks planned from now on
+      </p>
+    </form>
   )
 }

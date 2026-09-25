@@ -468,6 +468,10 @@ export const executionEventSchema = z.discriminatedUnion('type', [
      * The same verb again (`setSupervisorSettings`), so the same event: a person reading "what
      * changed about this project" gets one stream, and `null` on either end is a real value
      * (the installation default, which is what an unset column means).
+     *
+     * H9 F8 adds the three dispatch limits `setWorkspaceLimits` is the first writer of --
+     * `runTimeoutMs` (milliseconds on both ends, the column's own unit), `maxConcurrentRuns` and
+     * `maxAttempts` -- one event per limit that moved, on the terms every field above set.
      */
     payload: z.object({
       field: z.enum([
@@ -479,6 +483,9 @@ export const executionEventSchema = z.discriminatedUnion('type', [
         'supervisorProvider',
         'supervisorModel',
         'autoMerge',
+        'runTimeoutMs',
+        'maxConcurrentRuns',
+        'maxAttempts',
       ]),
       from: z.union([z.string(), z.number(), z.boolean(), z.null()]),
       to: z.union([z.string(), z.number(), z.boolean(), z.null()]),

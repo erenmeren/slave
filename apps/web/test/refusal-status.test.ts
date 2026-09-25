@@ -68,6 +68,8 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   invalid_name: true,
   invalid_model: true,
   invalid_budget: true,
+  // H9 F8: a limit out of its bounds. Not `_not_found`, so 409 -- the project is there and the figure is not one it may hold.
+  invalid_limit: true,
   model_without_provider: true,
   invalid_provider: true,
   unmeasurable_budget: true,

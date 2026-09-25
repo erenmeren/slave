@@ -118,6 +118,19 @@ path — and stay unstamped, still blocking their dependents, until you run `con
 each of them once. `set-auto-merge --on` prints how many such tasks the project has, so you know
 what is still waiting.
 
+A project starts with three dispatch limits: a run may work for 30 minutes, the project runs 3 at
+once, and a task gets 3 attempts. When the work needs more room than that — a build that takes
+three-quarters of an hour is not a stuck run — move them:
+
+```bash
+npm run orchestrator -- set-limits --workspace <id> --run-timeout-min 60 [--max-concurrent-runs <n>] [--max-attempts <n>]
+```
+
+or from Project Settings → runtime. The bounds are 5–180 minutes, 1–10 runs and 1–10 attempts, and
+a figure outside them is refused with nothing written. A raised timeout reaches a run that is
+already working; attempts reach tasks planned from now on, while a task already on the board keeps
+the ceiling it was planned with.
+
 Staff it and give the team something to do:
 
 ```bash
@@ -231,7 +244,7 @@ that left a main path went.
 | **Activity** `/w/<id>/activity` | Two views at one URL: `?view=digest` (simple mode's tab) is one section per day of plain sentences; the bare route (developer mode's) is the whole river — every event, live, filterable by kind, slave and task, with the deleted Overview's **Recent changes** under it; the filters live in the URL. Events made from the UI name the user who made them. |
 | ~~**Organization**~~ `/w/<id>/organization` | Redirects to **Team** (query preserved), which is this page's content: who is on this project, what each of them can DO, and the sentence that says why they are here — beside what the project still needs, who could cover it and the offers waiting for your answer, and the advice each worker's own profile gives about who to consult. |
 | **Knowledge** `/w/<id>/knowledge` | What this project has learnt, one row per piece, with the sentence that says where each came from — filters for kind, scope, status and title that live in the URL, and the chain (what this replaced, what replaced it, what it summarises) folded inside each row. Verify a claim a worker made, correct a memory (the old wording is kept and marked replaced), or withdraw one with a reason — nothing is ever deleted. |
-| **Settings** `/w/<id>/settings` | This project's goal, its runtime (provider, budget, and the read-only concurrency/timeout/attempts limits), its own slave permissions, its emergency stop, and its danger zone to archive/restore the project. |
+| **Settings** `/w/<id>/settings` | This project's goal, its runtime (provider, budget, and the concurrency/timeout/attempts limits), its own slave permissions, its emergency stop, and its danger zone to archive/restore the project. |
 | **People** `/workforce` | Everyone who works here. In simple mode the page IS the People table, with **Hire from catalogue** in the header opening the catalog in a sheet and a row click opening the person in one; developer mode shows four tabs — **People**, **Catalog**, **Skills & runbooks** and **Evidence**; Departments and Runbooks are segments inside the first and third, and all six `?tab=` values still work. **People**: every slave, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete with its history and a model chosen from the provider's own list inline; **+ New slave** adds one to the catalog and, optionally, to a project. **Departments**: add, rename or delete a project's department and see who is on it. **Catalog**: every slave template as one searchable catalog — filter by division, capability, skill or where it came from, and click a row for its specialist profile: who it is, what it is for, what it must never do and where all of that came from, with any field customisable in place and the raw Markdown a run is given under `Advanced ▾` — beside the companies and their department templates, with the log of catalog imports under the tab's own `Advanced ▾`. **Skills**: the skill catalog and its assignments. `/slaves` and `/skills` still work — they redirect here. |
 | **Simulations** `/sim` | Company simulation runs (M29): create one from a catalog company — a trade company on synthetic data, decided by the rules provider, no repository and no model call; step it by day, run it to a horizon, pause, halt, add customer demand or a supplier delay; the simulated company's cash and the real model cost are two separate panels; metrics are computed from the run's own journal; clone a run under another policy, let the daemon auto-run it, compare two runs side by side (no verdict); adopt a software run's organisation into a company-less project (M33). |
 | **Analytics** `/analytics` | Spend and throughput, for every project or for one (`?workspace=`). The all-project view is also a section on **Home**, in developer mode; a project's own view is one click from it. |
@@ -969,6 +982,7 @@ npm run orchestrator -- set-supervisor --workspace <id> (--enable | --disable)
 npm run orchestrator -- set-supervisor --workspace <id> (--profile-file <path> | --clear-profile)
 npm run orchestrator -- set-supervisor --workspace <id> --autonomy (propose | act)
 npm run orchestrator -- set-auto-merge --workspace <id> (--on | --off)
+npm run orchestrator -- set-limits --workspace <id> [--run-timeout-min <n>] [--max-concurrent-runs <n>] [--max-attempts <n>]
 ```
 
 `supervise` is the one command that spends on a model call by hand; the daemon's own pass does the
