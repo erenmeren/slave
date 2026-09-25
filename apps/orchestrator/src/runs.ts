@@ -1,4 +1,38 @@
+import { randomUUID } from 'node:crypto'
+import { isAlive } from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
+
+/**
+ * H9b (F2): THIS process's name on the runs it owns -- `SlaveRun.ownerInstance`.
+ *
+ * `<pid>/<uuid>`: the pid is what lets another process ask whether the owner is still alive, and
+ * the uuid is what tells this process from an earlier one that had the same pid. In a container
+ * the daemon gets the same pid on every restart, so a pid alone would make a restarted daemon read
+ * every run its predecessor left behind as its own -- the exact runs nobody is reading.
+ *
+ * Minted once, at module load: one process, one owner, however many projects it serves.
+ */
+export const OWNER_INSTANCE = `${String(process.pid)}/${randomUUID()}`
+
+/**
+ * Whether the process that owns a run is GONE (H9b, F2) -- so the run, live child or not, has
+ * nobody reading its output and nobody to conclude it.
+ *
+ * `false` whenever there is no evidence: a row written before the column existed (`null`), or a
+ * token this process cannot parse. `false` for this process's own token. For anybody else's, the
+ * owner is gone when its pid is dead -- or when its pid is THIS process's, which can only mean the
+ * owner was an earlier process that had this pid (the uuid differs, or the token would be ours).
+ * A live pid that is not ours is read as a live owner: the one-shot CLI `tick` and `resume-run`
+ * pump their own runs beside the daemon, and killing theirs would be the second-slave hazard the
+ * claim columns exist to prevent. Same-host, like every pid in this table.
+ */
+export function ownerGone(ownerInstance: string | null): boolean {
+  if (ownerInstance === null || ownerInstance === OWNER_INSTANCE) return false
+  const pid = Number(ownerInstance.split('/')[0])
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  if (pid === process.pid) return true
+  return !isAlive(pid)
+}
 
 /**
  * The one place this process inserts a `SlaveRun` row (M27 final review, controller ruling R15).
@@ -41,7 +75,9 @@ export async function createRunUnlessArchived(
     // A workspace that vanished between the caller's read and this one is as unstartable as an
     // archived one, and for the same reason: there is nothing to run in.
     if (workspace === undefined || workspace.archivedAt !== null) return null
-    const run = await tx.slaveRun.create({ data })
+    // `ownerInstance` here, in the one insert, so there is no dispatch path that forgets it -- and
+    // so a row that dies before its pid is ever recorded still names who was about to spawn it.
+    const run = await tx.slaveRun.create({ data: { ...data, ownerInstance: OWNER_INSTANCE } })
     return { id: run.id }
   })
 }

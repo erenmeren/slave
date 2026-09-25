@@ -90,6 +90,26 @@ async function eventTypesFor(workspaceId: string): Promise<readonly DomainEventT
 const hoursAgo = (n: number): Date => new Date(Date.now() - n * 60 * 60 * 1000)
 const secondsAgo = (n: number): Date => new Date(Date.now() - n * 1000)
 
+/**
+ * H9b (F11b): a run seeded with a `startedAt` in the past is a run the sweep has been WATCHING all
+ * that time -- its observed working time is its wall-clock working time, and the last pass saw it a
+ * second ago. The timeout reads the observed figure now, and these cases were written about a run
+ * that really had been working; the cases that are about a gap the sweep did NOT see (a sleep, a
+ * restart) seed `observedWorkingMs` themselves.
+ */
+function observedSince(data: { readonly startedAt?: Date; readonly pausedMs?: number; readonly pausedAt?: Date }): {
+  observedWorkingMs?: number
+  observedAt?: Date
+} {
+  if (data.startedAt === undefined) return {}
+  const now = Date.now()
+  const openPause = data.pausedAt === undefined ? 0 : now - data.pausedAt.getTime()
+  return {
+    observedWorkingMs: Math.max(0, now - data.startedAt.getTime() - (data.pausedMs ?? 0) - openPause),
+    observedAt: new Date(now - 1_000),
+  }
+}
+
 describe('sweep and reconcileOrphans', () => {
   let fixture: Fixture
   let deps: SweepDeps
@@ -120,6 +140,7 @@ describe('sweep and reconcileOrphans', () => {
         ...(data.pausedMs === undefined ? {} : { pausedMs: data.pausedMs }),
         ...(data.pausedAt === undefined ? {} : { pausedAt: data.pausedAt }),
         ...(data.worktreePath === undefined ? {} : { worktreePath: data.worktreePath }),
+        ...observedSince(data),
       },
     })
 
@@ -439,6 +460,11 @@ describe('sweep and reconcileOrphans', () => {
       breakerSteered: [],
       breakerConstrained: [],
       breakerStopped: [],
+      // H9b: the reconciliation arms, in the same exhaustive list for the same reason.
+      stoppingConcluded: [],
+      stoppingKilled: [],
+      ownerGone: [],
+      staleMerges: [],
     })
     expect(cancelled).toEqual([])
     expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
@@ -542,6 +568,11 @@ describe('sweep and reconcileOrphans', () => {
       breakerSteered: [],
       breakerConstrained: [],
       breakerStopped: [],
+      // H9b: the reconciliation arms, in the same exhaustive list for the same reason.
+      stoppingConcluded: [],
+      stoppingKilled: [],
+      ownerGone: [],
+      staleMerges: [],
     })
     expect(cancelled).toEqual([])
     expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
@@ -622,6 +653,11 @@ describe('sweep and reconcileOrphans', () => {
       breakerSteered: [],
       breakerConstrained: [],
       breakerStopped: [],
+      // H9b: the reconciliation arms, in the same exhaustive list for the same reason.
+      stoppingConcluded: [],
+      stoppingKilled: [],
+      ownerGone: [],
+      staleMerges: [],
     })
   })
 
@@ -703,6 +739,11 @@ describe('sweep and reconcileOrphans', () => {
       breakerSteered: [],
       breakerConstrained: [],
       breakerStopped: [],
+      // H9b: the reconciliation arms, in the same exhaustive list for the same reason.
+      stoppingConcluded: [],
+      stoppingKilled: [],
+      ownerGone: [],
+      staleMerges: [],
     })
     expect(cancelled).toEqual([])
   })
@@ -996,6 +1037,7 @@ describe('the breaker beat (M51 R2)', () => {
         ...(data.toolCallCap === undefined ? {} : { toolCallCap: data.toolCallCap }),
         ...(data.startedAt === undefined ? {} : { startedAt: data.startedAt }),
         ...(data.pausedAt === undefined ? {} : { pausedAt: data.pausedAt }),
+        ...observedSince(data),
         ...(data.breakerLevel === undefined ? {} : { breakerLevel: data.breakerLevel }),
         ...(data.breakerTrips === undefined ? {} : { breakerTrips: data.breakerTrips }),
         ...(data.breakerSteers === undefined ? {} : { breakerSteers: data.breakerSteers }),

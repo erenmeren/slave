@@ -222,7 +222,13 @@ export async function startWorkspaceLoop(deps: WorkspaceLoopDeps): Promise<Works
         swept.strandedClaims.length > 0 ||
         swept.breakerSteered.length > 0 ||
         swept.breakerConstrained.length > 0 ||
-        swept.breakerStopped.length > 0
+        swept.breakerStopped.length > 0 ||
+        // H9b: the reconciliation arms, for the same reason -- a pass whose only act was concluding
+        // a run nobody owned must leave a line an operator (and the restart-chaos gate) can find.
+        swept.stoppingConcluded.length > 0 ||
+        swept.stoppingKilled.length > 0 ||
+        swept.ownerGone.length > 0 ||
+        swept.staleMerges.length > 0
       ) {
         process.stdout.write(`${JSON.stringify({ sweep: swept })}\n`)
       }

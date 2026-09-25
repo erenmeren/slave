@@ -6,6 +6,7 @@ import {
   recordRunEvidence,
   refusalText,
   requestResume,
+  signalRun,
   type WorktreeProbe,
 } from '@slave-of-ai/control'
 import { prisma as db } from '@slave-of-ai/db/client'
@@ -27,6 +28,8 @@ import { appendEvent } from '@slave-of-ai/events'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
 import type { AdapterRegistry, ProviderKind } from '@slave-of-ai/providers'
 import { resolveAdapter } from './provider.js'
+import { ownerGone } from './runs.js'
+import { releaseTaskAfterFailure } from './taskRelease.js'
 
 export interface SweepDeps {
   readonly workspaceId: WorkspaceId
@@ -62,6 +65,16 @@ export interface SweepReport {
   readonly breakerSteered: readonly RunId[]
   readonly breakerConstrained: readonly RunId[]
   readonly breakerStopped: readonly RunId[]
+  /** H9b R2 (F1): `stopping` runs whose process is gone, concluded the way their cancel meant. */
+  readonly stoppingConcluded: readonly RunId[]
+  /** H9b R2 (F1): `stopping` runs whose process outlived {@link STOPPING_KILL_GRACE_MS}, killed by
+   *  pid on this pass and concluded on a later one. */
+  readonly stoppingKilled: readonly RunId[]
+  /** H9b R3 (F2): runs whose owning process is gone (`SlaveRun.ownerInstance`), killed if their
+   *  child was still alive and concluded as platform failures. */
+  readonly ownerGone: readonly RunId[]
+  /** H9b R5: `merging` tasks whose merge claim outlived every merge this workspace allows. */
+  readonly staleMerges: readonly string[]
 }
 
 /**
@@ -78,13 +91,60 @@ export interface SweepReport {
 const ORPHANABLE: readonly RunStatus[] = NON_TERMINAL_RUN_STATUSES.filter((status: RunStatus) => status !== 'paused')
 
 /**
- * The statuses the per-tick sweep may act on. `stopping` is excluded here but not above: a run
- * already being cancelled must not be cancelled again on the next tick, or a run that takes a
- * moment to die is re-announced once per second, forever, into an append-only log — the hazard
- * §3.2 spends three paragraphs on for the halt command. The orphan pass still fails it if its
- * process is gone, which is how a run that never finished dying is eventually concluded.
+ * The statuses the per-tick sweep's guardrails may act on. `stopping` is excluded here but not
+ * above: a run already being cancelled must not be cancelled again on the next tick, or a run that
+ * takes a moment to die is re-announced once per second, forever, into an append-only log — the
+ * hazard §3.2 spends three paragraphs on for the halt command.
+ *
+ * `stopping` is still SWEPT (H9b R2, F1) -- by its own arm, {@link sweepStopping}, which never
+ * cancels anything: it concludes a `stopping` run whose process is gone and kills one whose process
+ * outlived {@link STOPPING_KILL_GRACE_MS}. Until H9b only the startup orphan pass reached it, and on
+ * 2026-09-21 a run whose cancel had failed sat `stopping`, its task `running`, until an operator
+ * cancelled it by hand.
  */
 const SWEEPABLE: readonly RunStatus[] = ORPHANABLE.filter((status: RunStatus) => status !== 'stopping')
+
+/**
+ * How long a `stopping` run's process may outlive the cancel that put it there before the sweep
+ * kills it by pid (H9b R2, F1).
+ *
+ * A minute. The adapter's own cancel escalates to SIGKILL after `KILL_GRACE_MS` (two seconds), so
+ * a process still alive a minute later was never signalled at all -- the cancel failed ("no run
+ * found": the adapter registry that held the child belonged to a daemon that is gone), or it was
+ * claimed by a process that died before it could signal. Measured from the first pass THIS process
+ * saw the run `stopping` ({@link firstSeenStopping}): a restart restarts the clock, which costs one
+ * minute and never kills a process early.
+ */
+export const STOPPING_KILL_GRACE_MS = 60_000
+
+/**
+ * How long a run whose owner is gone (H9b R3, F2) may keep running after THIS process first saw it
+ * so, before it is killed and concluded.
+ *
+ * Short, because the evidence is not circumstantial: the owner token is a different process's, and
+ * that process is dead. The grace is only there so a pass cannot act on a single reading -- the
+ * owner check and the child check are two syscalls, and a run that is concluding right now in a
+ * process that is exiting right now concludes itself in far less than this.
+ */
+export const OWNER_GONE_GRACE_MS = 10_000
+
+/**
+ * When THIS process first saw each run in the shape the two graces above measure. In memory for
+ * {@link lastSweepAt}'s reason: the question is about this process's own observation, and a restart
+ * that forgets it only waits one grace longer. Bounded the way {@link worktreeFingerprints} is.
+ */
+const firstSeenStopping = new Map<string, number>()
+const firstSeenOwnerGone = new Map<string, number>()
+const FIRST_SEEN_MEMORY_MAX = 500
+
+/** Records the first sighting of `runId` in `memory` and returns how long ago that was. */
+function seenFor(memory: Map<string, number>, runId: string, now: number): number {
+  const first = memory.get(runId)
+  if (first !== undefined) return now - first
+  if (memory.size >= FIRST_SEEN_MEMORY_MAX) memory.clear()
+  memory.set(runId, now)
+  return 0
+}
 
 /** The mirror of {@link NON_TERMINAL_RUN_STATUSES}: a run in one of these will never be concluded
  *  again, so a task still pointing at one is pointing at nothing. */
@@ -220,6 +280,8 @@ export function hasTickRun(workspaceId: WorkspaceId): boolean {
 export function resetTickObservation(): void {
   tickedWorkspaces.clear()
   lastSweepAt.clear()
+  firstSeenStopping.clear()
+  firstSeenOwnerGone.clear()
 }
 
 /**
@@ -287,6 +349,14 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
     // Pid-liveness semantics (EPERM=alive, null/<=0=dead) live with the shared implementation in
     // packages/providers/src/runtime/process.ts.
     if (isAlive(run.pid)) continue
+
+    // H9b R2 (F1): a `stopping` run was being cancelled, and its conclusion is the cancel's -- an
+    // operator's stop ends `stopped` with the task `blocked`, a guardrail's ends `failed` with the
+    // task back in `rework` -- not an orphan's. The per-tick sweep concludes it the same way.
+    if (run.status === 'stopping') {
+      if (await concludeStoppingRun(deps, run)) failed += 1
+      continue
+    }
 
     const now = new Date()
     await db.slaveRun.update({
@@ -514,13 +584,18 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
   const workspace = await db.workspace.findUniqueOrThrow({ where: { id: deps.workspaceId } })
   // `slave: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
   // `Task` row, and the timeout/tool-cap guardrails below must still reach it.
+  //
+  // `stopping` too (H9b R2): it has an arm of its own below, and every other arm skips it.
   const runs = await db.slaveRun.findMany({
-    where: { status: { in: [...SWEEPABLE] }, slave: { team: { workspaceId: deps.workspaceId } } },
+    where: { status: { in: [...SWEEPABLE, 'stopping'] }, slave: { team: { workspaceId: deps.workspaceId } } },
   })
 
   const timedOut: RunId[] = []
   const overToolCap: RunId[] = []
   const deadPids: RunId[] = []
+  const stoppingConcluded: RunId[] = []
+  const stoppingKilled: RunId[] = []
+  const ownerGoneRuns: RunId[] = []
   const breakerMoves: Record<BreakerMove, RunId[]> = {
     breakerSteered: [],
     breakerConstrained: [],
@@ -546,6 +621,32 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
   await reissueDroppedResumes(deps)
 
   for (const run of runs) {
+    const livePump = deps.livePumpRunIds?.has(run.id) === true
+
+    if (run.status === 'stopping') {
+      const outcome = await sweepStopping(deps, run, livePump)
+      if (outcome === 'concluded') stoppingConcluded.push(brandRunId(run.id))
+      if (outcome === 'killed') stoppingKilled.push(brandRunId(run.id))
+      continue
+    }
+    firstSeenStopping.delete(run.id)
+
+    // H9b R3 (F2): a run whose OWNER is gone -- the daemon that spawned it was killed, the one-shot
+    // `tick` that spawned it crashed -- has nobody reading its output and nobody to conclude it. A
+    // live child is killed and the run concluded as the platform's failure, after a short grace;
+    // one with no child yet (the owner died between the insert and the spawn) is concluded the same
+    // way. Before this a live orphan sat `working` until its child exited on its own -- up to the
+    // whole run timeout -- and its output went nowhere. A run a pump in THIS process holds is ours
+    // whatever its row says.
+    if (!livePump && ownerGone(run.ownerInstance)) {
+      if (seenFor(firstSeenOwnerGone, run.id, Date.now()) < OWNER_GONE_GRACE_MS) continue
+      firstSeenOwnerGone.delete(run.id)
+      killByPid(run.pid)
+      if (await concludeDeadRun(deps, run, 'owner_gone')) ownerGoneRuns.push(brandRunId(run.id))
+      continue
+    }
+    firstSeenOwnerGone.delete(run.id)
+
     // The pid, not liveness, is what tells a dead run from one that is mid-spawn: Task 13 records
     // the pid only after the adapter has returned a live handle, so a null pid here is a run about
     // to start and no other case. Discriminating on it is what makes §3.3's dead-pid rule
@@ -554,22 +655,34 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
 
     if (!isAlive(run.pid)) {
       // A live pump owns this run's conclusion; the dead pid just means the child finished.
-      if (deps.livePumpRunIds?.has(run.id) === true) continue
+      if (livePump) continue
       deadPids.push(brandRunId(run.id))
-      await concludeDeadRun(deps, run)
+      await concludeDeadRun(deps, run, 'dead_pid')
       continue
     }
 
-    // WORKING time, not wall-clock time (H8): the spans this run sat `paused` are subtracted --
-    // the ones already closed into `pausedMs` by each resume claim, and the one still open on a
-    // row the sweep reaches with `pausedAt` set. `paused` itself is not in `SWEEPABLE`, so the
-    // open-span term is for a claimed row the pump has not yet moved on; the closed sum is for
-    // the resumed run, which is the one that used to die here. On 2026-09-21 three runs that had
-    // worked for four minutes were cancelled together on resume, because they had sat four hours
-    // behind a halt and `startedAt` was the only clock this line read.
+    // OBSERVED working time (H9b, F11b), not wall-clock time. Each pass adds the gap since the
+    // previous one that saw this run live, capped at one breaker beat -- so a host that slept for
+    // fifteen hours, or a daemon that was frozen or dead, adds a minute at most rather than the
+    // whole gap. On 2026-09-22 the host slept from 14:54 to 06:17 and the pass that woke timed out
+    // three runs whose workers had done nothing wrong. Persisted on the row (`observedWorkingMs`),
+    // so a restart neither resets a run's allowance nor charges it for the downtime.
+    //
+    // Never past the H8 WORKING time -- wall clock less the spans the run sat `paused`, the ones
+    // closed into `pausedMs` by each resume claim and the one still open on a row the sweep
+    // reaches with `pausedAt` set -- which is what keeps paused time out: a resumed run's first
+    // pass measures from the last pass before its pause, and that whole gap is paused time.
     const now = Date.now()
     const openPauseMs = run.pausedAt === null ? 0 : Math.max(0, now - run.pausedAt.getTime())
-    const workingMs = now - run.startedAt.getTime() - run.pausedMs - openPauseMs
+    const wallWorkingMs = Math.max(0, now - run.startedAt.getTime() - run.pausedMs - openPauseMs)
+    const observedFrom = (run.observedAt ?? run.startedAt).getTime()
+    const step = Math.min(Math.max(0, now - observedFrom), BREAKER_BEAT_MS)
+    // Clamped to the column: an INTEGER of milliseconds is twenty-four days, far past any limit.
+    const workingMs = Math.min(run.observedWorkingMs + step, wallWorkingMs, OBSERVED_MS_MAX)
+    await db.slaveRun.updateMany({
+      where: { id: run.id, endedAt: null },
+      data: { observedWorkingMs: workingMs, observedAt: new Date(now) },
+    })
     const timedOutNow = workingMs > workspace.runTimeoutMs
     // M51 R3: the run's OWN cap when the breaker wrote one, the workspace's otherwise -- one
     // comparison and one new column, and the breach it produces is the EXISTING `tool_call_ceiling`.
@@ -663,6 +776,9 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
       await adapter.cancel(brandRunId(run.id))
     } catch (error) {
       cancelError = error
+      // H9b R2 (F1): the adapter holds no handle for a run another process spawned, and its cancel
+      // then fails with "no run found" -- but the pid is on the row, which is what it is for.
+      killAfterFailedCancel(run.pid)
     }
 
     await appendEvent({
@@ -678,7 +794,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
           `cancelling this run: ${breaches.join('; ')}` +
           (cancelError === null
             ? ''
-            : ` -- AND THE CANCEL FAILED (${String(cancelError)}): the process may still be running.`),
+            : ` -- AND THE CANCEL FAILED (${String(cancelError)}): the process was killed by pid instead, and the sweep concludes the run once it is gone.`),
       },
     })
   }
@@ -686,9 +802,23 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
   // After the dead-pid arm, deliberately: that arm concludes runs and releases their tasks itself,
   // and running this first would look at claims it is about to make current.
   const strandedClaims = await reconcileStrandedClaims(deps, workspace)
+  const staleMerges = await reconcileStaleMerges(deps, workspace)
 
-  return { timedOut, overToolCap, deadPids, strandedClaims, ...breakerMoves }
+  return {
+    timedOut,
+    overToolCap,
+    deadPids,
+    strandedClaims,
+    ...breakerMoves,
+    stoppingConcluded,
+    stoppingKilled,
+    ownerGone: ownerGoneRuns,
+    staleMerges,
+  }
 }
+
+/** `observedWorkingMs`' ceiling: the largest value its INTEGER column holds. */
+const OBSERVED_MS_MAX = 2_147_483_647
 
 /** Which rung a beat climbed -- the three `SweepReport` keys, so the push site cannot misspell one. */
 type BreakerMove = 'breakerSteered' | 'breakerConstrained' | 'breakerStopped'
@@ -878,6 +1008,7 @@ async function beatBreaker(
     readonly breakerSteers: number
     readonly breakerBeatAt: Date | null
     readonly breakerQuietBeats: number
+    readonly pid: number | null
   },
 ): Promise<BreakerMove | null> {
   // `working` and nothing else (fix round 1, Critical 2). `SWEEPABLE` also holds `starting`,
@@ -1041,6 +1172,7 @@ async function stopForBehaviour(
     readonly taskId: string | null
     readonly slaveId: string
     readonly provider: string | null
+    readonly pid: number | null
   },
   trip: string,
   detail: string,
@@ -1066,6 +1198,7 @@ async function stopForBehaviour(
     await adapter.cancel(brandRunId(run.id))
   } catch (error) {
     cancelError = error
+    killAfterFailedCancel(run.pid)
   }
 
   await appendEvent({
@@ -1081,7 +1214,7 @@ async function stopForBehaviour(
         `cancelling this run: it is going in circles (${trip}, ${detail})` +
         (cancelError === null
           ? ''
-          : ` -- AND THE CANCEL FAILED (${String(cancelError)}): the process may still be running.`),
+          : ` -- AND THE CANCEL FAILED (${String(cancelError)}): the process was killed by pid instead, and the sweep concludes the run once it is gone.`),
     },
   })
   return true
@@ -1166,9 +1299,33 @@ async function loadBreakerWindow(runId: string): Promise<readonly WindowRow[]> {
 }
 
 /**
- * Concludes a run whose process is gone, from inside a running daemon (spec §3.3).
+ * The adapter's cancel failed -- most often because the run was spawned by another process and
+ * this one's adapter registry has no handle for it. SIGKILL by pid, because the polite signal was
+ * the cancel's to send and a run the sweep has claimed into `stopping` is not coming back.
+ */
+function killAfterFailedCancel(pid: number | null): void {
+  killByPid(pid)
+}
+
+/**
+ * SIGKILL a run's process by the pid on its row, if it is alive -- and never THIS process's own pid.
+ * A run's child is never the daemon itself, so a row naming it is bad data (or a test using its own
+ * pid as "a process that is alive"), and signalling it would take the sweep down with the run.
+ */
+function killByPid(pid: number | null): void {
+  if (pid === null || pid === process.pid || !isAlive(pid)) return
+  signalRun(pid, 'SIGKILL')
+}
+
+/** Why {@link concludeDeadRun} is concluding a run -- the `run.failed` reason is the only difference. */
+type DeadRunCause = 'dead_pid' | 'owner_gone'
+
+/**
+ * Concludes a run whose process is gone, from inside a running daemon (spec §3.3), or whose owning
+ * process is (H9b R3) -- the child killed a moment ago, or never spawned at all.
  *
  * Guarded the same way the cancel path is: if the pump got there first, its terminal row stands.
+ * Returns whether THIS call concluded it.
  */
 async function concludeDeadRun(
   deps: SweepDeps,
@@ -1178,8 +1335,10 @@ async function concludeDeadRun(
     readonly slaveId: string
     readonly pid: number | null
     readonly kind: 'implementation' | 'review' | 'planning'
+    readonly ownerInstance: string | null
   },
-): Promise<void> {
+  cause: DeadRunCause,
+): Promise<boolean> {
   const now = new Date()
   // H9b R1 (F4): `platform`, for `reconcileOrphans`' reason. No live pump in this process owns the
   // run, so the process that was reading it is gone -- a daemon that died, or one that was killed
@@ -1188,7 +1347,7 @@ async function concludeDeadRun(
     where: { id: run.id, status: { in: [...SWEEPABLE] } },
     data: { status: 'failed', terminalAt: now, endedAt: now, failureClass: 'platform' },
   })
-  if (concluded.count === 0) return
+  if (concluded.count === 0) return false
 
   // A `planning` run (M8b) has no task to release. A `review` run gets ONLY its claim back and
   // leaves the task in `reviewing` -- see `reconcileOrphans`' own release for why `rework` would be
@@ -1207,11 +1366,196 @@ async function concludeDeadRun(
     slaveId: run.slaveId,
     runId: run.id,
     actor: 'system',
-    payload: { reason: `the run's process (pid ${run.pid}) is gone but the run never concluded` },
+    payload: {
+      reason:
+        cause === 'dead_pid'
+          ? `the run's process (pid ${String(run.pid)}) is gone but the run never concluded`
+          : `the process that owned this run (${String(run.ownerInstance)}) is gone, so nothing was reading it` +
+            (run.pid === null ? ' and it never spawned' : `: its child (pid ${String(run.pid)}) was killed`),
+    },
   })
 
   // M53 R5(a), the sixth and last write site: the same recovery as `reconcileOrphans`', from inside
   // a running daemon rather than at startup. Inside the `concluded.count === 0` guard above, so a
   // run a live pump concluded first is recorded by that pump, with no recovery counted against it.
   await recordRunEvidence(run.id, { recoveredBySweep: true })
+  return true
+}
+
+/**
+ * One pass over one `stopping` run (H9b R2, F1): conclude it if its process is gone, kill it if
+ * its process outlived {@link STOPPING_KILL_GRACE_MS}, and otherwise leave it to the cancel that is
+ * in flight. Never cancels anything itself and never announces a second `guardrail.tripped` -- the
+ * cancel was announced once, by whoever claimed the run.
+ *
+ * A run a pump in THIS process holds is concluded by that pump: its stream ends when the child
+ * does, and the pump's own `stopping` arm writes the conclusion. The kill after the grace still
+ * applies to it -- a pump cannot end a stream whose child will not die.
+ */
+async function sweepStopping(
+  deps: SweepDeps,
+  run: StoppingRun,
+  livePump: boolean,
+): Promise<'concluded' | 'killed' | null> {
+  const now = Date.now()
+  if (run.pid !== null && isAlive(run.pid)) {
+    if (seenFor(firstSeenStopping, run.id, now) < STOPPING_KILL_GRACE_MS) return null
+    // Once per grace, not once per tick: a process that ignores SIGKILL is in the kernel's hands,
+    // and re-signalling it every second says nothing new.
+    firstSeenStopping.set(run.id, now)
+    killByPid(run.pid)
+    console.warn(
+      `[sweep] run ${run.id} has been stopping for over ${String(STOPPING_KILL_GRACE_MS / 1000)}s with its process ` +
+        `(pid ${String(run.pid)}) still alive; killed it by pid`,
+    )
+    return 'killed'
+  }
+  firstSeenStopping.delete(run.id)
+  if (livePump) return null
+  return (await concludeStoppingRun(deps, run)) ? 'concluded' : null
+}
+
+/** The row {@link concludeStoppingRun} reads: the sweep's and the orphan pass's own shape. */
+interface StoppingRun {
+  readonly id: string
+  readonly taskId: string | null
+  readonly slaveId: string
+  readonly pid: number | null
+  readonly kind: 'implementation' | 'review' | 'planning'
+  readonly stopRequestedAt: Date | null
+  readonly stopRequestedBy: string | null
+  readonly failureClass: 'worker' | 'platform' | null
+}
+
+/**
+ * Concludes a `stopping` run whose process is gone, THE WAY ITS CANCEL MEANT (H9b R2, F1).
+ *
+ * Two cancels claim `stopping`, and the pump already tells them apart by `stopRequestedAt`
+ * (gate-fix B review round 1, Critical 2):
+ *
+ * - **An operator's stop** (`requestStop`, which alone writes `stopRequestedAt`): the run ends
+ *   `stopped` and its task `blocked` -- exactly `requestStop`'s own conclusion, which the process
+ *   that claimed it never reached. Not a failure of anybody's, so no class and no attempt.
+ * - **A guardrail's** (the run timeout, the tool-call ceiling, the behavioural breaker's stop): the
+ *   run ends `failed` -- the pump's own conclusion for a guardrail kill -- and its task is released
+ *   the way `verifyConcludedRun` releases any failed run. The class is whatever the claim wrote: a
+ *   timeout decided after a clock jump was already marked `platform` there (F11a), and every other
+ *   guardrail is the worker's breach, whoever ended up concluding it.
+ *
+ * Status-conditioned like every other conclusion, so a pump or `requestStop` that got there first
+ * keeps its row and its announcement. Returns whether THIS call concluded the run.
+ */
+async function concludeStoppingRun(deps: SweepDeps, run: StoppingRun): Promise<boolean> {
+  const now = new Date()
+  const operatorStop = run.stopRequestedAt !== null
+  const concluded = await db.slaveRun.updateMany({
+    where: { id: run.id, status: 'stopping', endedAt: null },
+    data: { status: operatorStop ? 'stopped' : 'failed', terminalAt: now, endedAt: now },
+  })
+  if (concluded.count === 0) return false
+
+  const gone = run.pid === null ? 'it never had a process' : `its process (pid ${String(run.pid)}) is gone`
+  if (operatorStop) {
+    // `requestStop`'s own release: `blocked`, because a cancel stops a task for good.
+    if (run.taskId !== null) {
+      await db.task.updateMany({
+        where: { id: run.taskId, activeRunId: run.id },
+        data: { status: 'blocked', activeRunId: null },
+      })
+    }
+    await appendEvent({
+      type: 'run.stopped',
+      workspaceId: deps.workspaceId,
+      taskId: run.taskId,
+      slaveId: run.slaveId,
+      runId: run.id,
+      actor: 'system',
+      payload: {
+        reason: `cancelled by ${run.stopRequestedBy ?? 'an operator'}; concluded by the sweep because ${gone}`,
+      },
+    })
+  } else {
+    await appendEvent({
+      type: 'run.failed',
+      workspaceId: deps.workspaceId,
+      taskId: run.taskId,
+      slaveId: run.slaveId,
+      runId: run.id,
+      actor: 'system',
+      payload: { reason: `a guardrail was stopping this run and ${gone}; concluded by the sweep` },
+    })
+    await releaseStoppedTask(deps, run)
+  }
+  await recordRunEvidence(run.id, { recoveredBySweep: true })
+  return true
+}
+
+/**
+ * `verifyConcludedRun`'s release of a FAILED run, for the one conclusion the sweep writes itself.
+ * Restated rather than called because `verify.ts` reaches the tick through `planning.ts` and
+ * `review.ts`, and the tick imports this module -- a cycle whose first victim would be the
+ * module-level status lists above.
+ */
+async function releaseStoppedTask(deps: SweepDeps, run: StoppingRun): Promise<void> {
+  if (run.taskId === null) return
+  if (run.kind === 'review') {
+    // The claim and only the claim, for `verifyConcludedRun`'s reason: a review's own retry cap
+    // judges its failures, not the task's attempt budget.
+    await db.task.updateMany({ where: { id: run.taskId, activeRunId: run.id }, data: { activeRunId: null } })
+    return
+  }
+  const task = await db.task.findUnique({ where: { id: run.taskId } })
+  if (task === null) return
+  const release = await releaseTaskAfterFailure(task, run.id, 'rework', { platform: run.failureClass === 'platform' })
+  if (release.exhausted) {
+    await appendEvent({
+      type: 'task.failed',
+      workspaceId: deps.workspaceId,
+      taskId: task.id,
+      actor: 'system',
+      payload: { reason: `implementation run failed after ${String(release.attempt)} attempt(s)` },
+    })
+  }
+}
+
+/**
+ * Releases a `merging` task whose merge claim has outlived every merge this workspace allows
+ * (H9b R5).
+ *
+ * The merge pass claims and merges inside one call (`runMergePass`), and refuses to start a second
+ * merge while ANY claim is standing -- so a claim left by a process that died mid-merge blocked
+ * every merge in the workspace until the next daemon's startup pass released it. A daemon that
+ * keeps running never got that pass: the one-shot CLI `tick` runs the merge pass too, and a crash
+ * there left its claim to a daemon that would never look.
+ *
+ * The grace is the implementation kind's {@link strandedClaimGraceMs}: a merge runs the workspace's
+ * verify commands, each allowed `runTimeoutMs`, which is exactly the allowance that one already
+ * computes. In THIS process no merge is in flight while the sweep runs -- the daemon's tick awaits
+ * its merge pass before the sweep starts -- so the grace is only ever for another process's.
+ * Released exactly as `reconcileOrphans` releases one: `rework`, the claim cleared, no attempt, and
+ * `task.merge_failed` saying why.
+ */
+async function reconcileStaleMerges(deps: SweepDeps, workspace: StrandedClaimGraceWorkspace): Promise<readonly string[]> {
+  const cutoff = new Date(Date.now() - strandedClaimGraceMs('implementation', workspace))
+  const stale = await db.task.findMany({
+    where: { workspaceId: deps.workspaceId, status: 'merging', mergeClaimedAt: { lt: cutoff } },
+    select: { id: true, mergeClaimedAt: true },
+  })
+  const released: string[] = []
+  for (const task of stale) {
+    const write = await db.task.updateMany({
+      where: { id: task.id, status: 'merging', mergeClaimedAt: task.mergeClaimedAt },
+      data: { status: 'rework', mergeClaimedAt: null, lastRejectionReason: 'merge interrupted' },
+    })
+    if (write.count === 0) continue
+    released.push(task.id)
+    await appendEvent({
+      type: 'task.merge_failed',
+      workspaceId: deps.workspaceId,
+      taskId: task.id,
+      actor: 'system',
+      payload: { reason: 'merge interrupted' },
+    })
+  }
+  return released
 }

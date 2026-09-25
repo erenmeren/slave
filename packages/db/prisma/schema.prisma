@@ -1199,6 +1199,23 @@ model SlaveRun {
   /// `runTimeoutMs` bounds WORKING time: on 2026-09-21 three runs that had worked for four minutes
   /// were killed on resume because `startedAt` was four hours old.
   pausedMs          Int           @default(0)
+  /// H9b (F11b): the working time the sweep has OBSERVED this run spend -- the sum of the gaps
+  /// between the passes that saw it live, each gap capped at `BREAKER_BEAT_MS` and the total never
+  /// past the wall-clock working time (`startedAt` less `pausedMs`). `runTimeoutMs` is measured
+  /// against this and not against the wall clock: on 2026-09-22 the host slept for fifteen hours
+  /// and the sweep that woke timed out three runs whose workers had done nothing wrong. Persisted
+  /// so a daemon restart does not hand a run a fresh allowance.
+  observedWorkingMs Int           @default(0)
+  /// H9b (F11b): when the sweep last added to {@link observedWorkingMs}; null until the first pass
+  /// that saw the run live, which measures from `startedAt`.
+  observedAt        DateTime?
+  /// H9b (F2): which PROCESS owns this run -- `<pid>/<uuid>`, minted once per process
+  /// (`runs.ts`'s `OWNER_INSTANCE`) and written when the row is created and again when a resume
+  /// spawns it. A live run whose owner is neither this process nor a live one has nobody reading
+  /// its output, and the sweep kills and concludes it (`platform`). The uuid is what tells a
+  /// restarted daemon that happens to get the same pid -- the usual case in a container -- from the
+  /// one that spawned the run. Null on every run recorded before H9b, which the arm leaves alone.
+  ownerInstance     String?
   /// Stop intent (M5 gate-fix B): `requestStop` writes both columns in the same conditioned
   /// update that claims `status: stopping`, before it kills the child -- so a run's stream ending
   /// with no terminal result can tell an operator's stop (this record present) from the guardrail
