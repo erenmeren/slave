@@ -185,9 +185,20 @@ describe('platform failures (H9b R1)', () => {
   })
 
   describe('a timeout decided after a clock jump (F11a)', () => {
-    /** A run whose process is alive -- this test process's own pid -- and past its time. */
-    const overdue = (): Promise<{ readonly taskId: string; readonly runId: string }> =>
-      taskHeldBy(fixture, { pid: process.pid, startedAt: minutesAgo(16 * 60) })
+    /**
+     * A run whose process is alive -- this test process's own pid -- and a second short of its limit
+     * when the sweep last saw it, sixteen hours ago. The timeout reads OBSERVED working time since
+     * H9b (F11b), so a sleep alone can no longer time a run out: what is left of F11a is the run the
+     * sleep caught just short of its limit, whose next beat carries it over on the pass that wakes.
+     */
+    const overdue = async (): Promise<{ readonly taskId: string; readonly runId: string }> => {
+      const held = await taskHeldBy(fixture, { pid: process.pid, startedAt: minutesAgo(16 * 60) })
+      await prisma.slaveRun.update({
+        where: { id: held.runId },
+        data: { observedWorkingMs: 59_000, observedAt: minutesAgo(16 * 60 - 1) },
+      })
+      return held
+    }
 
     it('marks the timeout platform when the previous pass was more than five beats ago', async (): Promise<void> => {
       const { runId } = await overdue()

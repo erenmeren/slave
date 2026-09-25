@@ -542,9 +542,14 @@ async function concludeFailedResume(
   // Conditioned on `resuming`: if `executeResume` threw after already moving the run past that
   // status (e.g. inside `verifyConcludedRun`, once the pump had already written a terminal row),
   // that row's status is the true outcome and must not be overwritten with `failed`.
+  //
+  // H9b: `platform`. A resume that cannot spawn never reached the model -- the checkpoint is
+  // unreadable, the runtime is gone, the adapter refused -- which is H4b's spawn failure in a
+  // resume's clothes, and nothing the worker did. The breaker leaves it out of its streak; the
+  // attempt still counts, below.
   const concluded = await prisma.slaveRun.updateMany({
     where: { id: run.id, status: 'resuming' },
-    data: { status: 'failed', terminalAt: now, endedAt: now },
+    data: { status: 'failed', terminalAt: now, endedAt: now, failureClass: 'platform' },
   })
   if (concluded.count === 0) return
 
@@ -554,6 +559,10 @@ async function concludeFailedResume(
   //
   // As of M13 the release COUNTS (Decision 4): a resume that cannot spawn is an attempted run that
   // failed, and a task whose resume can never spawn was otherwise re-dispatched every tick forever.
+  // H9b keeps that even though the run is `platform` (above), for `failToStart`'s own reason: a
+  // spawn failure is a STATE -- a missing binary, an unreadable checkpoint -- that recurs on the
+  // next tick, so the attempt is what bounds it. The class keeps it out of the breaker's streak
+  // and tells the Supervisor it was infrastructure; the attempt keeps it from looping.
   //
   // For an `implementation` run. A `review` run's task gets its CLAIM back and nothing else -- no
   // status change, no attempt (M41 Task 3b fix round 1, the second of the two `releaseTaskAfterFailure`

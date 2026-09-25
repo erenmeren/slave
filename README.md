@@ -60,7 +60,9 @@ docker compose --profile app logs -f orchestrator
 ```
 
 Plain `docker compose up -d` still starts Postgres alone. Do not run the daemon on the host and in
-the container at once: two schedulers on one database pick up the same tasks.
+the container at once: two schedulers on one database pick up the same tasks. The second one to
+start refuses to (it holds a Postgres advisory lock per database -- see
+[When the daemon stops](#when-the-daemon-stops)).
 
 ## Attach your repository
 
@@ -1194,6 +1196,52 @@ its broker channel now live under `$XDG_STATE_HOME/slaveofai/runs/<run id>` (`~/
 that is unset), 0700, because a slave that can edit the repository could otherwise delete the file
 that governs it. Directories left under `~/.local/state/slaveofai/runs` by older versions belong to
 runs that are over and are safe to delete; nothing in the product removes them yet.
+
+## When the daemon stops
+
+The daemon can be stopped at any moment -- a deploy, a crash, a laptop lid -- and the board must
+carry on by itself when the next one starts. Every unfinished record therefore has an OWNER: a pass
+that finishes it when the process that was finishing it is gone. Nothing waits for a person, and
+nothing the daemon did to itself costs a task an attempt or a project a halt: a run concluded for
+the platform's reasons is `failureClass = platform`, which the circuit breaker, the attempt count and
+the planning and review caps all leave out.
+
+**One daemon per database.** The daemon takes a Postgres session advisory lock
+(`pg_try_advisory_lock`) on a connection of its own before it serves anything, and a second daemon on
+the same database exits non-zero saying another one holds it. The lock dies with the session, so a
+daemon killed with `SIGKILL` frees it at once. (This also means two `daemon --workspace <id>`
+processes can no longer share a database; one daemon serves every project.)
+
+**Stopping.** The first `SIGTERM`/`SIGINT` drains: the tick in flight finishes and every live run is
+waited for. The second forces: every run this daemon was pumping is ended as a platform failure, its
+worker process and every other child of the daemon is killed, the tasks go back to `rework`, then it
+exits (each database step is bounded to three seconds; a third signal exits at once). A daemon that
+is killed outright leaves its workers running with nobody reading them; every run names the process
+that owns it (`SlaveRun.ownerInstance`), and the next daemon's sweep kills and concludes the runs
+whose owner is gone after ten seconds.
+
+**The run timeout is working time the daemon saw.** Each sweep adds the gap since it last saw a run
+working, capped at one breaker beat (a minute), and never more than the run's wall-clock time less
+the time it sat paused. A host that sleeps for a night costs a run one minute, not its whole allowance.
+
+**Who owns what.** Every non-terminal run status against the task status it can hold, the pass that
+owns it, and what that pass does when the process that was finishing it is gone (the passes are in
+`apps/orchestrator/src/sweep.ts` unless named):
+
+| Run | Task | Owner while its process lives | When the owning process is gone |
+|---|---|---|---|
+| `starting`, no pid | `running` (implementation), `reviewing` (review), none (planning) | the dispatch that inserted it | startup orphan pass: `failed`, platform, task to `rework` (a review keeps `reviewing`, claim released); in a running daemon the sweep does the same once `ownerInstance` names a dead process (10 s grace) |
+| `starting` / `working` / `resuming`, live pid | same | the pump; the sweep's timeout, tool-call ceiling and breaker | owner gone: the sweep kills the child and concludes `failed`, platform, task released as above (10 s grace) |
+| `starting` / `working` / `resuming` / `pause_requested`, dead pid | same | the pump, if one lives in this process | the sweep (every tick) or the startup pass: `failed`, platform, task released; the scheduler retries at once, no attempt spent |
+| `pause_requested`, live pid | same | the pump: the pause lands on the next tool call | owner gone: killed and concluded as above; otherwise the run timeout bounds it |
+| `stopping` (an operator's stop, `stopRequestedAt` set) | same | `requestStop` / the pump | the sweep (every tick) or the startup pass: `stopped`, task `blocked`, `run.stopped` |
+| `stopping` (a guardrail's stop) | same | the pump concludes it `failed` | the sweep or the startup pass: `failed` with the class the guardrail wrote, task released through the normal failed-run release (attempt charged unless platform) |
+| `stopping`, pid still alive past 60 s | same | the cancel in flight | the sweep kills it by pid, then concludes it on a later pass; a cancel that fails ("no run found") kills by pid at once |
+| `paused` (any reason, any kind) | `running`, `reviewing`, `waiting`, none | nobody needs its process -- pausing killed it | never failed by any pass. A resume intent is claimed by the tick (`resumeRequestedRuns`, every kind); a breaker steer is delivered or re-issued by the sweep (`deliverBreakerSteers`, `reissueDroppedResumes`, 30 s); an answer is delivered by `deliverAnswers`; a person's pause waits for a person |
+| `resuming`, resume failed to spawn | `running` / `reviewing` | the tick that claimed it | `concludeFailedResume`: `failed`, platform (no breaker count), attempt charged -- a spawn failure recurs, so the attempt bounds it |
+| terminal, task still claimed | any status with `activeRunId` set | the conclusion chain (verify, review) | `reconcileStrandedClaims`: after 30 s (review) or 30 s + the verify window (implementation), the claim is released and an implementation task goes to `rework` |
+| none | `merging`, `mergeClaimedAt` set | the merge pass that claimed it | startup pass: `rework`, "merge interrupted"; in a running daemon the sweep does the same once the claim outlives the verify window |
+| none | `merging`, no claim | the merge pass, one task per tick | -- (nothing is in flight) |
 
 ## Tests and CI
 

@@ -12,6 +12,7 @@ import { appendEvent } from '@slave-of-ai/events'
 import { runTokenHash, type AdapterRegistry } from '@slave-of-ai/providers'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
+import { OWNER_INSTANCE } from './runs.js'
 import { verifyConcludedRun } from './verify.js'
 
 export interface ExecuteResumeOptions {
@@ -154,6 +155,9 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
     // legacy checkpoint that recorded none must not erase whatever the original dispatch wrote.
     data: {
       pid: handle.pid,
+      // H9b (F2): the process that spawned this child owns it now -- not the one that started the
+      // run, which may be a daemon long since gone.
+      ownerInstance: OWNER_INSTANCE,
       pauseReason: null,
       pausedAtStep: null,
       ...(checkpoint.model !== null ? { model: checkpoint.model } : {}),
