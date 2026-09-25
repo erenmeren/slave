@@ -8,6 +8,7 @@ import { Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   ANSWER_BLOCK_OPEN,
   ASK_BLOCK_OPEN,
+  IMPLEMENTATION_WORK_RULES,
   PLANNING_GRAPH_INSTRUCTIONS,
   PROFILE_MAX_CHARS,
   REPLAN_INSTRUCTIONS,
@@ -207,7 +208,8 @@ describe('buildRunContext', () => {
       expect(prompt).toContain('Maya')
       expect(prompt).toContain('writing-plans')
       expect(prompt).toContain('plans things')
-      expect(prompt.endsWith('Task: Add the thing\n\nmake it work')).toBe(true)
+      // The task is the last SECTION; the implementation work rules (H9 F9) are the fixed text after it.
+      expect(prompt.endsWith(`Task: Add the thing\n\nmake it work\n\n${IMPLEMENTATION_WORK_RULES}`)).toBe(true)
       expect(prompt.indexOf('You are Alex.')).toBeLessThan(prompt.indexOf('Maya'))
       expect(prompt.indexOf('Maya')).toBeLessThan(prompt.indexOf('writing-plans'))
       expect(manifest.sections.map((section) => section.kind)).toEqual([
@@ -233,7 +235,7 @@ describe('buildRunContext', () => {
       const { prompt, manifest } = await buildImplementation(fixture)
 
       expect(manifest.sections.some((section) => section.kind === 'profile')).toBe(false)
-      expect(prompt).toBe('Task: Add the thing\n\nmake it work')
+      expect(prompt).toBe(`Task: Add the thing\n\nmake it work\n\n${IMPLEMENTATION_WORK_RULES}`)
     })
 
     it('refuses a profile longer than the cap rather than dispatching it', async () => {

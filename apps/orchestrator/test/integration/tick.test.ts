@@ -9,6 +9,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import {
   ANSWER_BLOCK_OPEN,
   ASK_BLOCK_OPEN,
+  IMPLEMENTATION_WORK_RULES,
   runId as brandRunId,
   workspaceId as brandWorkspaceId,
   runContextManifestSchema,
@@ -401,7 +402,8 @@ describe('tick', () => {
 
       // The fixture's slave is the only one in this workspace, so there is no roster to offer and
       // no ask protocol to teach -- an offer the system would refuse anyway is not made.
-      expect(recorder.starts[0]?.prompt).toBe('Task: Add the thing\n\nmake it work')
+      // The task, then the fixed implementation work rules (H9 F9/F6) -- and nothing else.
+      expect(recorder.starts[0]?.prompt).toBe(`Task: Add the thing\n\nmake it work\n\n${IMPLEMENTATION_WORK_RULES}`)
     })
 
     it('teaches an implementation run the ask envelope, and names the peers it may address (final review)', async (): Promise<void> => {
@@ -416,7 +418,7 @@ describe('tick', () => {
       expect(prompt).toContain('Maya')
       expect(prompt).toContain('product')
       // The task is still the last thing the slave reads.
-      expect(prompt.endsWith('Task: Add the thing\n\nmake it work')).toBe(true)
+      expect(prompt.endsWith(`Task: Add the thing\n\nmake it work\n\n${IMPLEMENTATION_WORK_RULES}`)).toBe(true)
     })
 
     it('does not carry a question that has already been answered', async (): Promise<void> => {

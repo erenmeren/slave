@@ -115,6 +115,10 @@ export const CLAUDE_CODE_MANIFEST: ProviderCapabilityManifest = {
       '--permission-mode',
       'bypassPermissions',
       '--include-hook-events',
+      // H9 F9: the person's own `~/.claude/settings.json` -- their plugins and user skills -- is
+      // not loaded into a worker (`claude/flags.ts`).
+      '--setting-sources',
+      'project,local',
     ],
     promptDelivery: 'flag',
     // ADR 0001 §3: the first makes resume impossible, the second mints a new session id on resume.

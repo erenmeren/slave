@@ -21,6 +21,19 @@ import { preflightGate as runPreflight } from '../runtime/gate-preflight.js'
  * `--no-session-persistence` and `--fork-session` are never included:
  * ADR 0001 §3 records that the former makes resume impossible and the
  * latter mints a new session id on resume.
+ *
+ * `--setting-sources project,local` (H9 F9) leaves out exactly one source: the person's own
+ * `~/.claude/settings.json`. That file is where their `enabledPlugins` live -- on the machine this
+ * was written on, Superpowers among them -- and a worker that loads a plugin which manages
+ * PROCESS (brainstorm, plan, dispatch helpers of its own, run its own reviews) spends its task
+ * doing this system's job a second time, inside the task. Read out of `claude 2.1.282` itself (no
+ * model call): plugin sync and the user skill directory are both gated on the `userSettings` source
+ * being enabled, so dropping it drops the person's plugins and `~/.claude/skills` together. What it
+ * keeps: the project and local settings of the repository being worked on (a project that ships
+ * its own `.claude/skills` still gets them, and so do the skills this system injects there), the
+ * `--settings` file below (flag settings are a source of their own, never subject to this list),
+ * and the CLI's login, which is not a setting at all. `--safe-mode` would also drop plugins, but
+ * it disables hooks too -- and the pause gate IS a hook.
  */
 export function claudeFlags(input: { readonly settingsPath: string }): readonly string[] {
   if (!isAbsolute(input.settingsPath)) {
@@ -37,6 +50,8 @@ export function claudeFlags(input: { readonly settingsPath: string }): readonly 
     '--settings',
     input.settingsPath,
     '--include-hook-events',
+    '--setting-sources',
+    'project,local',
   ]
 }
 

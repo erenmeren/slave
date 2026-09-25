@@ -99,6 +99,26 @@ export const PLANNING_GRAPH_INSTRUCTIONS = [
 ].join('\n')
 
 /**
+ * The implementation kind's working rules (H9 F9) -- the one fixed text an implementation run
+ * ends with, as the verdict and graph instructions end the other two kinds.
+ *
+ * Why it exists: a Cursor worker loaded the person's own process plugin, brainstormed, planned,
+ * dispatched seven helpers of its own and ran its own review rounds inside one task -- three
+ * 30-minute timeouts, two edits in 59 tool calls. The adapters now spawn workers without the
+ * person's plugins (`@slave-of-ai/providers`' `cursor/home.ts` and `claude/flags.ts`); this is the
+ * same rule said to the model, for whatever a vendor loads that no spawn flag reaches.
+ *
+ * Must never contain the fake CLI's routing literals (`"verdict"`, `"task graph"`,
+ * `"candidateIndex"`, `"sources"`): every implementation prompt carries it, and a fixture that
+ * keyed on one would route a work run to the wrong arm.
+ */
+export const IMPLEMENTATION_WORK_RULES = [
+  'How to work: do the task itself, directly, in this repository. Do not brainstorm, write a plan,',
+  'or hand parts of it to helpers or subtasks of your own -- this team already planned the work,',
+  'and a reviewer checks it after you. Commit your work before you finish.',
+].join('\n')
+
+/**
  * The one place a run's prompt text is assembled (M37 §1, "one builder"). Pure: no DB, no
  * filesystem, no `process.env` -- the orchestrator gathers `Section`s and calls this; everything
  * about ORDER and OMISSION lives here so it is testable without a database.
@@ -109,7 +129,8 @@ export const PLANNING_GRAPH_INSTRUCTIONS = [
  * profile" and "no pending inbox" are the ordinary shape of most runs, not a blank paragraph. The
  * review and planning kinds append their fixed instruction text ({@link REVIEW_VERDICT_INSTRUCTIONS},
  * {@link PLANNING_GRAPH_INSTRUCTIONS}, or `REPLAN_INSTRUCTIONS` when the planning run carries a
- * `replan` section) after their sections; that text is not itself a section and carries no manifest
+ * `replan` section) after their sections, and the implementation kind appends
+ * {@link IMPLEMENTATION_WORK_RULES}; that text is not itself a section and carries no manifest
  * entry -- it is fixed and static, not something a debugger needs a provenance record for.
  */
 export function renderRunContext(
@@ -140,10 +161,10 @@ export function renderRunContext(
         ? replanning
           ? REPLAN_INSTRUCTIONS
           : PLANNING_GRAPH_INSTRUCTIONS
-        : null
+        : IMPLEMENTATION_WORK_RULES
 
   const parts = present.map((section) => section.text)
-  const prompt = (trailer === null ? parts : [...parts, trailer]).join('\n\n')
+  const prompt = [...parts, trailer].join('\n\n')
 
   const manifest: Manifest = {
     kind,

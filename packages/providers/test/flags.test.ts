@@ -37,6 +37,20 @@ describe('claudeFlags', () => {
     expect(flags).not.toContain('--fork-session')
   })
 
+  // H9 F9: a worker must not load the person's own plugins and user skills, which live in the
+  // `user` setting source. The project's own sources stay: the skills this system injects into
+  // `<worktree>/.claude/skills` are a PROJECT source, and dropping it would drop them too.
+  it("loads only the project's own setting sources, never the person's user settings", () => {
+    const flags = claudeFlags({ settingsPath: '/abs/s.json' })
+    const at = flags.indexOf('--setting-sources')
+    expect(at).toBeGreaterThanOrEqual(0)
+    expect(flags[at + 1]).toBe('project,local')
+    expect(flags[at + 1]?.split(',')).not.toContain('user')
+    expect(flags.filter((flag) => flag === '--setting-sources')).toHaveLength(1)
+    // `--safe-mode` would drop plugins too, and the pause gate with them: it disables hooks.
+    expect(flags).not.toContain('--safe-mode')
+  })
+
   it('refuses a relative settings path', () => {
     expect(() => claudeFlags({ settingsPath: 'rel/s.json' })).toThrow(/absolute/)
   })
