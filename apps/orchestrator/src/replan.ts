@@ -79,8 +79,9 @@ export interface ReplanVerdict {
    * The workspace's RECORDED halt (`Workspace.haltedReason`), or `null`. `tick` returns before
    * `dispatchPlanning` while one stands, so a re-plan that is otherwise due does not start.
    *
-   * Only the recorded halt: the guardrails that stop scheduling without writing the column
-   * (concurrency, the budget, the circuit breaker) are re-evaluated by `decide()` on every tick from
+   * Only the recorded halt: the guardrails that stop scheduling without writing the column (the
+   * budget, the circuit breaker -- and a full workspace, which since H9c is a wait rather than a
+   * halt but still holds the planning run back) are re-evaluated by `decide()` on every tick from
    * a world this read does not load, and claiming to know about them here would be a promise this
    * function cannot keep.
    */

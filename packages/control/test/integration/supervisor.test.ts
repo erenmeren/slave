@@ -29,6 +29,7 @@ import { workspaceSpend } from '../../src/spend.js'
 import { releasePerson } from '../../src/persons.js'
 import { refusalText } from '../../src/refusal.js'
 import { syncRunbooks } from '../../src/runbook.js'
+import { workspaceStats } from '../../src/stats.js'
 import {
   applyDecision,
   approveDecision,
@@ -2761,6 +2762,69 @@ describe('applyDecision -- the diagnosed remedies (E R3/R4)', () => {
 
     expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
     expect((await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })).haltedReason).toBeNull()
+  })
+  /** H9c: one concluded failed run the breaker counts, with the reason its `run.failed` recorded. */
+  const countedFailure = async (reason: string, minutesAgo: number): Promise<void> => {
+    const at = new Date(Date.now() - minutesAgo * 60_000)
+    const run = await prisma.slaveRun.create({
+      data: { taskId: f.taskId, slaveId: f.slaveId, kind: 'implementation', status: 'failed', startedAt: at, terminalAt: at, failureClass: 'worker' },
+    })
+    await prisma.executionEvent.create({
+      data: { workspaceId: f.workspaceId, taskId: f.taskId, runId: run.id, type: 'run_failed', actor: 'system', payload: { reason }, ts: at },
+    })
+  }
+
+  /** H9c: the escalation a breaker halt raises, as the rules record it -- a proposal a person approves. */
+  const escalation = async (): Promise<{ readonly id: string }> =>
+    record(f, { kind: 'escalate_to_human', summary: 'the breaker stopped this project' }, 'escalated', {
+      subjectId: f.workspaceId,
+      situation: haltedSituation(f.workspaceId),
+    })
+
+  // H9c (F5b), the 12:10 UTC case: three rate-limit refusals recorded before H9b R1 could class them
+  // `platform` tripped the breaker, and approving the escalation lifted nothing. Now it does.
+  it('approving a breaker escalation clears the halt when every counted failure was the platform\'s', async () => {
+    await countedFailure('api_error: rate limit reached for the account', 30)
+    await countedFailure('api_error: overloaded', 20)
+    await countedFailure("the run's process (pid 4242) is gone but the run never concluded", 10)
+    expect((await workspaceStats(f.workspaceId)).stats.consecutiveFailures).toBe(3)
+    const decision = await escalation()
+
+    expect((await approveDecision(decision.id, { userId: f.userId })).ok).toBe(true)
+
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })
+    expect(workspace.haltClearedAt).not.toBeNull()
+    expect((await workspaceStats(f.workspaceId)).stats.consecutiveFailures).toBe(0)
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe('approved')
+    const [applied] = await eventsOfType('supervisor_applied')
+    expect(applied?.payload).toMatchObject({ decisionId: decision.id, action: { kind: 'escalate_to_human' } })
+  })
+
+  it('approving a breaker escalation with a worker\'s failure in it changes nothing, and the halt stands', async () => {
+    await countedFailure('api_error: rate limit reached for the account', 30)
+    await countedFailure('the worker concluded the task could not be done', 20)
+    await countedFailure('api_error: overloaded', 10)
+    const decision = await escalation()
+
+    expect((await approveDecision(decision.id, { userId: f.userId })).ok).toBe(true)
+
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })).haltClearedAt).toBeNull()
+    expect((await workspaceStats(f.workspaceId)).stats.consecutiveFailures).toBe(3)
+    expect(await eventsOfType('supervisor_applied')).toHaveLength(0)
+  })
+
+  it('approving a breaker escalation never lifts an emergency stop pressed since', async () => {
+    await countedFailure('api_error: rate limit reached for the account', 30)
+    await countedFailure('api_error: overloaded', 20)
+    await countedFailure('api_error: overloaded', 10)
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { haltedReason: 'emergency stop by Sam', haltedAt: new Date() } })
+    const decision = await escalation()
+
+    expect((await approveDecision(decision.id, { userId: f.userId })).ok).toBe(true)
+
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })
+    expect(workspace.haltedReason).toBe('emergency stop by Sam')
+    expect(workspace.haltClearedAt).toBeNull()
   })
 })
 

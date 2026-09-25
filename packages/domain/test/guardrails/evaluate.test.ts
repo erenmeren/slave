@@ -20,11 +20,12 @@ describe('evaluateGuardrails', () => {
     expect(evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, CALM)).toEqual([])
   })
 
-  it('halts scheduling when the concurrency limit is reached', () => {
+  // H9c: reported, never a halt -- a project at its run cap is busy, not stuck.
+  it('reports the concurrency limit being reached without halting scheduling', () => {
     const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, activeRuns: 3 })
     expect(breaches).toHaveLength(1)
     expect(breaches[0]?.guardrail).toBe('concurrency')
-    expect(breaches[0]?.haltsScheduling).toBe(true)
+    expect(breaches[0]?.haltsScheduling).toBe(false)
   })
 
   it('warns at 80% of budget without halting', () => {
@@ -116,11 +117,26 @@ describe('evaluateGuardrails', () => {
     ])
   })
 
-  it('halts scheduling when the global concurrency limit is reached', () => {
+  it('reports the global concurrency limit being reached without halting scheduling', () => {
     const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, globalActiveRuns: 6 })
     expect(breaches).toHaveLength(1)
     expect(breaches[0]?.guardrail).toBe('global_concurrency')
-    expect(breaches[0]?.haltsScheduling).toBe(true)
+    expect(breaches[0]?.haltsScheduling).toBe(false)
+  })
+
+  it('halts on exactly three kinds: the stop, the money and the breaker', () => {
+    const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, {
+      activeRuns: 5,
+      globalActiveRuns: 6,
+      spentUsd: 25,
+      consecutiveFailures: 4,
+      emergencyStopped: true,
+    })
+    expect(breaches.filter((b) => b.haltsScheduling).map((b) => b.guardrail)).toEqual([
+      'emergency_stop',
+      'budget_exhausted',
+      'circuit_breaker',
+    ])
   })
 
   it('does not breach global concurrency just below the limit', () => {
@@ -145,17 +161,16 @@ describe('evaluateGuardrails', () => {
 })
 
 /**
- * H8 (fix round 1, I1). `decide()` reports only the FIRST halting breach, and `concurrency` sorts
- * ahead of `budget_exhausted` -- so a full workspace over budget halts as `concurrency`, and a
- * tick deciding by the halt's name alone would resume a run into an empty purse. The answer has
- * to come from the whole list.
+ * H8 (fix round 1, I1). `decide()` reports only the FIRST halting breach -- before H9c a full
+ * workspace over budget halted as `concurrency`, and a tick deciding by the halt's name alone would
+ * resume a run into an empty purse. The answer has to come from the whole list.
  */
 describe('breachRefusingResume (H8)', () => {
   it('names the two halts that refuse even a resume, and no others', () => {
     expect([...HALTS_THAT_REFUSE_A_RESUME].toSorted()).toEqual(['budget_exhausted', 'emergency_stop'])
   })
 
-  it('finds the exhausted budget behind a concurrency halt that sorts ahead of it', () => {
+  it('finds the exhausted budget behind a concurrency breach that sorts ahead of it', () => {
     const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, activeRuns: 3, spentUsd: 20 })
     expect(breaches[0]?.guardrail).toBe('concurrency')
     expect(breachRefusingResume(breaches)?.guardrail).toBe('budget_exhausted')
@@ -166,7 +181,7 @@ describe('breachRefusingResume (H8)', () => {
     expect(breachRefusingResume(breaches)?.guardrail).toBe('emergency_stop')
   })
 
-  it('lets a resume through a concurrency halt, a circuit-breaker halt and a budget warning', () => {
+  it('lets a resume through a full workspace, a circuit-breaker halt and a budget warning', () => {
     for (const stats of [
       { ...CALM, activeRuns: 3 },
       { ...CALM, globalActiveRuns: 6 },

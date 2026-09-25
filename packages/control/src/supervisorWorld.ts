@@ -44,21 +44,7 @@ import { staleCandidateCount } from './memory.js'
 import { stillPendingQuestion, waitingSenderRunIds } from './messaging.js'
 import { planningCountSince } from './planningCount.js'
 import { workspaceDefaultProvider } from './runtime.js'
-import { workspaceStats, type WorkspaceStatsSnapshot } from './stats.js'
-
-/**
- * The guardrail breaches that mean "this workspace is STUCK" to the Supervisor (spec erratum E7).
- *
- * `evaluateGuardrails` halts scheduling on five kinds, and two of them -- `concurrency` and
- * `global_concurrency` -- are normal operation: a workspace at its run cap is busy, not stuck, and
- * raising a `workspace_halted` escalation about it would put a proposal in front of a human every
- * time three runs were in flight, while freezing every routine action for the duration. The other
- * three are real stops that nothing inside the workspace will clear on its own.
- *
- * Order matters: this list is used as a FILTER over `evaluateGuardrails`' output, which is already
- * ordered, and the first surviving breach is the reason reported.
- */
-const HALTING_GUARDRAILS: readonly string[] = ['emergency_stop', 'budget_exhausted', 'circuit_breaker']
+import { breakerCountedFailures, workspaceStats, type WorkspaceStatsSnapshot } from './stats.js'
 
 /**
  * Why the Supervisor should consider this workspace stopped, or `null` (spec erratum E7).
@@ -73,9 +59,12 @@ const HALTING_GUARDRAILS: readonly string[] = ['emergency_stop', 'budget_exhaust
  */
 function haltOf(snapshot: WorkspaceStatsSnapshot): { readonly reason: string } | null {
   if (snapshot.haltedReason !== null) return { reason: snapshot.haltedReason }
-  const breach = evaluateGuardrails(snapshot.limits, snapshot.stats).find((candidate) =>
-    HALTING_GUARDRAILS.includes(candidate.guardrail),
-  )
+  // `haltsScheduling`, the scheduler's own rule, rather than a list of this file's (spec erratum
+  // E7, H9c): a workspace at its run cap is busy, not stuck, and until H9c `decide()` halted on it
+  // while this loader filtered it back out by name -- two readings of one question. Now neither
+  // calls it a halt: `concurrency` and `global_concurrency` do not halt scheduling, so no
+  // `workspace_halted` is ever raised about a full project and nothing is frozen for one.
+  const breach = evaluateGuardrails(snapshot.limits, snapshot.stats).find((candidate) => candidate.haltsScheduling)
   return breach === undefined ? null : { reason: breach.guardrail }
 }
 
@@ -423,8 +412,15 @@ async function loadLatestGuardrails(
 }
 
 /**
- * The newest `run.failed` per task (E R2) -- WHY the work stopped, which is what a remedy is chosen
+ * The newest failure per task (E R2) -- WHY the work stopped, which is what a remedy is chosen
  * from rather than guessed at.
+ *
+ * H9 F10: the newest of `run.failed` AND `task.review_rejected`, one `DISTINCT ON` over both. A
+ * rejection is a run that finished, passed verify and was judged wrong -- not a `run.failed` -- so
+ * reading only the failures diagnosed a task whose LAST attempt was rejected from an older
+ * attempt's timeout. The rejection's `runId` is the review run, so the join below reads `review` as
+ * its kind, and the reason is the reviewer's own (`payload.reason`, the same key `run.failed`
+ * uses).
  *
  * The `DISTINCT ON` idiom {@link loadLatestGuardrails} uses, over the same log, ordered by `seq`
  * for the same reason: `ts` is a wall clock two appends can share, `seq` is the order they actually
@@ -463,6 +459,7 @@ async function loadLatestFailures(
       readonly ts: Date
       readonly slaveId: string | null
       readonly failureClass: FailureClass | null
+      readonly type: string
     }[]
   >`
     SELECT DISTINCT ON (e."taskId")
@@ -471,12 +468,13 @@ async function loadLatestFailures(
            r.kind::text AS "runKind",
            e.ts AS ts,
            e."slaveId" AS "slaveId",
-           r."failureClass"::text AS "failureClass"
+           r."failureClass"::text AS "failureClass",
+           e.type::text AS type
     FROM "ExecutionEvent" e
     JOIN "SlaveRun" r ON r.id = e."runId"
     WHERE e."workspaceId" = ${workspaceId}
       AND e."taskId" = ANY(${[...taskIds]}::text[])
-      AND e.type::text = 'run.failed'
+      AND e.type::text IN ('run.failed', 'task.review_rejected')
     ORDER BY e."taskId", e.seq DESC
   `
   return new Map(
@@ -494,6 +492,8 @@ async function loadLatestFailures(
                 // H9b R1: off the same joined row as `kind` -- the run says whether the platform
                 // failed it, and the reading `infrastructure` is then a fact rather than a match.
                 failureClass: row.failureClass,
+                // H9 F10: which of the two rows this is -- a fact, never read off the reason.
+                rejectedByReview: row.type === 'task.review_rejected',
               },
             ] as const,
           ],
@@ -1235,6 +1235,10 @@ export async function loadSupervisorWorld(
       // is also the more HONEST reading: the halt the Supervisor sees is then literally the halt
       // `decide()` acted on this tick, not a second one taken after the pass moved work.
       const snapshot = opts.stats ?? (await workspaceStats(workspaceId, tx))
+      const halted = haltOf(snapshot)
+      // H9c: the failures a breaker halt counted, read only when it IS the halt -- the one reader
+      // (`observe`'s `workspace_halted` summary) says nothing about them under any other.
+      const breakerFailures = halted?.reason === 'circuit_breaker' ? await breakerCountedFailures(workspaceId, tx) : []
 
       // Plan erratum E6: the stage escalations, resolved ONCE for the board rather than per task.
       const escalationByStage = new Map(
@@ -1333,10 +1337,11 @@ export async function loadSupervisorWorld(
         now: now.getTime(),
         goal: workspace.goal,
         goalVersion: workspace.goalVersion,
-        halted: haltOf(snapshot),
+        halted,
         // R4: the stamp the once-an-hour rule reads -- epoch ms, like every other time in the
         // world. Null on a project whose halt has never been cleared, by anybody.
         haltClearedAt: workspace.haltClearedAt?.getTime() ?? null,
+        breakerFailures,
         // The same comparison `evaluateGuardrails` makes, on the same total: an UNBUDGETED
         // workspace (`budgetUsd` null) is never exhausted, however much it has spent. Kept as its
         // own field rather than folded into `halted` because the two answer different questions --

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { NETWORK_ROLES, readFailure } from '../../src/supervisor/diagnosis.js'
+import { NETWORK_ROLES, readFailure, readsAsPlatform } from '../../src/supervisor/diagnosis.js'
 
 /**
  * Spec §3, one `it` per row of the table plus the row that is not in it (`unknown`).
@@ -17,6 +17,7 @@ describe('readFailure -- the diagnosis table (spec §3)', () => {
     requiredPermissions: [],
     requiredRole: 'backend',
     failureClass: null,
+    rejectedByReview: false,
   } as const
 
   it('reads the system failing, not the worker, off the infrastructure markers', () => {
@@ -110,6 +111,17 @@ describe('readFailure -- the diagnosis table (spec §3)', () => {
     }
   })
 
+  // H9 F10: the rejection is a fact off the row, and the newest one -- it wins whatever the
+  // reviewer's words happen to contain, and over a refusal an earlier attempt met.
+  it('reads a review rejection as rejected off the row, whatever its reason says', () => {
+    for (const reason of ['the retry endpoint returns 500 on an empty body', 'spawn a worker per queue instead', 'it goes in circles']) {
+      expect(readFailure({ ...base, reason, rejectedByReview: true }), reason).toEqual({ reading: 'rejected', deniedKind: null })
+    }
+    expect(
+      readFailure({ ...base, reason: 'one defect', rejectedByReview: true, deniedKinds: ['network_fetch'], requiredRole: 'research' }),
+    ).toEqual({ reading: 'rejected', deniedKind: null })
+  })
+
   it('reads anything else, and a failure with no reason at all, as unknown', () => {
     expect(readFailure(base)).toEqual({ reading: 'unknown', deniedKind: null })
     expect(readFailure({ ...base, reason: 'the worker concluded the task could not be done' })).toEqual({
@@ -147,5 +159,17 @@ describe('readFailure -- the diagnosis table (spec §3)', () => {
   it('reads a role however it was capitalised -- requiredRole is free text an operator typed', () => {
     const reading = readFailure({ ...base, reason: 'the run ended', deniedKinds: ['network_fetch'], requiredRole: 'Research' })
     expect(reading).toEqual({ reading: 'denied_tool', deniedKind: 'network_fetch' })
+  })
+})
+
+// H9c (F5b): the question an approved breaker escalation asks of every failure it counted.
+describe('readsAsPlatform', () => {
+  it('reads the row first, then an infrastructure marker on a row that predates the column', () => {
+    expect(readsAsPlatform({ reason: 'the worker concluded the task could not be done', failureClass: 'platform' })).toBe(true)
+    expect(readsAsPlatform({ reason: 'api_error: rate limit reached', failureClass: 'worker' })).toBe(true)
+    expect(readsAsPlatform({ reason: "the run's process (pid 12) is gone but the run never concluded", failureClass: 'worker' })).toBe(true)
+    expect(readsAsPlatform({ reason: 'the run working this task was orphaned by a restart', failureClass: null })).toBe(true)
+    expect(readsAsPlatform({ reason: 'the worker concluded the task could not be done', failureClass: 'worker' })).toBe(false)
+    expect(readsAsPlatform({ reason: null, failureClass: null })).toBe(false)
   })
 })

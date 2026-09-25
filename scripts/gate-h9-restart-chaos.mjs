@@ -11,7 +11,7 @@
 //   SLAVEOFAI_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" \
 //   SLAVEOFAI_REQUIRE_FAKE_CLI=1 \
 //   npm run gate:h9-restart-chaos -- [--kills 4] [--seed 1] [--signals alternate|term|kill] \
-//                                    [--known-gaps H9-F1,H9-F2] [--skip-control]
+//                                    [--known-gaps H9-F2,H9-F3] [--skip-control]
 //
 // NEVER A MODEL CALL. Every daemon is spawned with SLAVEOFAI_CLAUDE_BIN=node and
 // SLAVEOFAI_CLAUDE_ARGS="<fake-claude.mjs> --fixture slow-work --plan-fixture plan-graph-diamond ...",
@@ -177,9 +177,8 @@ const ASSERTION_KEYS = [
   'control-faster',
 ]
 const KNOWN_GAP_ASSERTIONS = {
-  /** H9c: a full workspace writes `guardrail.tripped { concurrency }` on every tick it is full,
-   *  once per daemon lifetime -- and a restart is a new lifetime. */
-  'H9-F1': 'no-concurrency-halt',
+  // H9-F1 (a full workspace announced as a `concurrency` halt, once per daemon lifetime) was closed
+  // by H9c: a full workspace is a wait, not a halt, and `no-concurrency-halt` is strict again.
   /** A restart-orphaned run is a `failed` row like any other to the failure streak, so three kills
    *  trip the circuit breaker; and `haltAnnounced` is in memory, so every daemon after that
    *  announces the same halt again. */
@@ -890,7 +889,11 @@ try {
     const byKind = new Map()
     for (const event of tripped) byKind.set(event.payload.guardrail, (byKind.get(event.payload.guardrail) ?? 0) + 1)
     const kinds = [...byKind.entries()].map(([kind, count]) => `${kind}x${String(count)}`).join(' ') || '<none>'
-    check('no-concurrency-halt', (byKind.get('concurrency') ?? 0) === 0, `guardrail.tripped by kind: ${kinds}`)
+    check(
+      'no-concurrency-halt',
+      (byKind.get('concurrency') ?? 0) + (byKind.get('global_concurrency') ?? 0) === 0,
+      `guardrail.tripped by kind: ${kinds}`,
+    )
     check('one-circuit-breaker', (byKind.get('circuit_breaker') ?? 0) <= 1, `circuit_breaker announced ${String(byKind.get('circuit_breaker') ?? 0)} time(s)`)
     const decisions = await prisma.supervisorDecision.findMany({ where: { workspaceId: phase.workspaceId }, orderBy: { createdAt: 'asc' } })
     const pending = decisions.filter((decision) => decision.status === 'pending')

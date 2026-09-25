@@ -944,6 +944,72 @@ describe('workspaceStats', () => {
     await run('failed', at(20))
     expect((await workspaceStats(fixture.workspaceId)).stats.consecutiveFailures).toBe(2)
   })
+
+  // H9c: the breaker escalation names what the breaker counted. The world carries exactly the
+  // streak `consecutiveFailures` counts -- newest first, a platform failure left out, the run that
+  // ended the streak not in it -- each with its task and its own recorded reason.
+  it('carries the failures a breaker halt counted, newest first, each with its task and reason', async (): Promise<void> => {
+    const fixture = await seed()
+    const slave = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+    const taskId = await makeTask(fixture, { title: 'the pages', status: 'running' })
+    const at = (minutesAgo: number): Date => new Date(NOW.getTime() - minutesAgo * 60_000)
+    const run = async (
+      status: 'failed' | 'succeeded',
+      terminalAt: Date,
+      options: { readonly reason?: string; readonly platform?: boolean; readonly kind?: 'implementation' | 'planning' } = {},
+    ): Promise<string> => {
+      const kind = options.kind ?? 'implementation'
+      const row = await prisma.slaveRun.create({
+        data: {
+          slaveId: slave.id,
+          ...(kind === 'planning' ? {} : { taskId }),
+          status,
+          kind,
+          startedAt: terminalAt,
+          terminalAt,
+          failureClass: status === 'failed' ? (options.platform === true ? 'platform' : 'worker') : null,
+        },
+      })
+      if (options.reason !== undefined) {
+        await prisma.executionEvent.create({
+          data: {
+            workspaceId: fixture.workspaceId,
+            ...(kind === 'planning' ? {} : { taskId }),
+            runId: row.id,
+            type: 'run_failed',
+            actor: 'system',
+            payload: { reason: options.reason },
+            ts: terminalAt,
+          },
+        })
+      }
+      return row.id
+    }
+
+    await run('succeeded', at(60))
+    const first = await run('failed', at(50), { reason: 'the plan did not parse', kind: 'planning' })
+    await run('failed', at(40), { reason: 'spawn claude ENOENT', platform: true })
+    const second = await run('failed', at(30))
+    const third = await run('failed', at(20), { reason: 'guardrail run_timeout tripped' })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.halted).toEqual({ reason: 'circuit_breaker' })
+    expect(world.breakerFailures).toEqual([
+      { runId: third, runKind: 'implementation', taskTitle: 'the pages', reason: 'guardrail run_timeout tripped', failureClass: 'worker' },
+      { runId: second, runKind: 'implementation', taskTitle: 'the pages', reason: null, failureClass: 'worker' },
+      { runId: first, runKind: 'planning', taskTitle: null, reason: 'the plan did not parse', failureClass: 'worker' },
+    ])
+    const halted = observe(world).find((one) => one.kind === 'workspace_halted')
+    expect(halted?.summary).toContain('The breaker counted 3 failed runs -- "the pages": guardrail run_timeout tripped;')
+  })
+
+  it('carries no counted failures when the halt is not the breaker', async (): Promise<void> => {
+    const fixture = await seed()
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { haltedReason: 'emergency stop', haltedAt: NOW } })
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.halted).toEqual({ reason: 'emergency stop' })
+    expect(world.breakerFailures).toEqual([])
+  })
 })
 
 describe('workspaceSpend', () => {
@@ -1707,8 +1773,75 @@ describe('loadSupervisorWorld -- the failure facts (E R2/R3)', () => {
       // H9b R1: the row names no class (a seeded failure, as every one before the column), so the
       // reading is the sentence's.
       failureClass: null,
+      rejectedByReview: false,
     })
     expect(taskIn(world, taskId)?.retries).toBe(1)
+  })
+
+  /** H9 F10: a review that judged the attempt and said no -- the row `review.ts` writes. */
+  async function reviewRejected(
+    fixture: Fixture,
+    input: { readonly taskId: string; readonly slaveId: string; readonly reason: string; readonly attempt: number },
+  ): Promise<{ readonly runId: string; readonly at: number }> {
+    const run = await prisma.slaveRun.create({
+      data: { taskId: input.taskId, slaveId: input.slaveId, kind: 'review', status: 'succeeded' },
+    })
+    const event = await appendEvent({
+      type: 'task.review_rejected',
+      workspaceId: fixture.workspaceId,
+      taskId: input.taskId,
+      runId: run.id,
+      actor: 'system',
+      payload: { reason: input.reason, attempt: input.attempt },
+    })
+    return { runId: run.id, at: new Date(event.ts).getTime() }
+  }
+
+  // H9 F10, the 13:56 UTC task: an early attempt timed out, the LAST one passed verify and a
+  // reviewer rejected it for one named defect. The newest failure is the rejection.
+  it('carries a review rejection newer than the last failed run as the latest failure, with the reviewer\'s reason', async (): Promise<void> => {
+    const fixture = await seed()
+    const alex = await worker(fixture, 'Alex')
+    const quinn = await worker(fixture, 'Quinn')
+    const taskId = await makeTask(fixture, { title: 'the pages', status: 'failed' })
+    await prisma.task.update({ where: { id: taskId }, data: { attempt: 3, maxAttempts: 3 } })
+    const waiting = await makeTask(fixture, { title: 'the launch', status: 'ready' })
+    await prisma.taskDependency.create({ data: { taskId: waiting, dependsOnTaskId: taskId } })
+    await failedRun(fixture, { taskId, slaveId: alex, kind: 'implementation', reason: 'guardrail run_timeout tripped' })
+    const rejection = await reviewRejected(fixture, { taskId, slaveId: quinn, reason: 'the 404 page is not wired to the router', attempt: 3 })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+
+    expect(taskIn(world, taskId)?.latestFailure).toEqual({
+      runKind: 'review',
+      reason: 'the 404 page is not wired to the router',
+      at: rejection.at,
+      slaveId: null,
+      failureClass: null,
+      rejectedByReview: true,
+    })
+    // And the Supervisor tells the rejection's story, not the older timeout's.
+    const failedSituation = observe(world).find((one) => one.kind === 'task_failed' && one.subjectId === taskId)
+    expect(failedSituation?.summary).toBe(
+      'Task "the pages" failed and 1 task(s) depend on it. Review rejected after 3 attempts: the 404 page is not wired to the router.',
+    )
+  })
+
+  it('carries a failed run newer than the last rejection as the latest failure, not the rejection', async (): Promise<void> => {
+    const fixture = await seed()
+    const alex = await worker(fixture, 'Alex')
+    const quinn = await worker(fixture, 'Quinn')
+    const taskId = await makeTask(fixture, { title: 'the pages', status: 'failed' })
+    await reviewRejected(fixture, { taskId, slaveId: quinn, reason: 'the 404 page is not wired to the router', attempt: 2 })
+    await failedRun(fixture, { taskId, slaveId: alex, kind: 'implementation', reason: 'guardrail run_timeout tripped' })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+
+    expect(taskIn(world, taskId)?.latestFailure).toMatchObject({
+      runKind: 'implementation',
+      reason: 'guardrail run_timeout tripped',
+      rejectedByReview: false,
+    })
   })
 
   // H4b: the fact is read off the RUN, not off the sentence -- a reason no marker matches still

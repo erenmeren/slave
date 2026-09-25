@@ -34,8 +34,10 @@ export interface FailureDiagnosis {
  *  `AnswerEligibility`'s own reason: control asks the same question of a task row, and a shape it
  *  can build from one is what keeps the two sides running one rule instead of two that drift. */
 export interface FailureFacts {
-  /** The newest `run.failed` reason on the task, or null for a task that has never failed. */
+  /** The newest failure's reason on the task, or null for a task that has never failed. */
   readonly reason: string | null
+  /** H9 F10: the newest failure is a review's rejection (`TaskFailure.rejectedByReview`). */
+  readonly rejectedByReview: boolean
   /** The distinct kinds `run.tool_denied` recorded across the task's runs. */
   readonly deniedKinds: readonly string[]
   /** What the PLAN said this task needs (R5, `Task.requiredPermissions`). Empty until Task 5
@@ -61,8 +63,14 @@ export interface FailureFacts {
  *
  * None of them says anything about the work, which is exactly why the remedy is the same run
  * again: nothing was decided, so nothing has to be changed.
+ *
+ * H9c adds the three H9b R1 made platform failures by row, for the rows written BEFORE the column
+ * could say so: a provider's `api_error` (F5), and the two sentences the orphan reconciliation
+ * writes for a run whose daemon died under it (F4). A failure recorded before 2026-09-25 carries
+ * `failureClass: 'worker'` from the migration's backfill, and its sentence is all that is left.
  */
-const INFRASTRUCTURE = /maxBuffer|could not be read|spawn|ENOENT|EACCES|adapter|provider|no valid verdict/iu
+const INFRASTRUCTURE =
+  /maxBuffer|could not be read|spawn|ENOENT|EACCES|adapter|provider|no valid verdict|api_error|orphaned by a restart|is gone but the run never concluded/iu
 
 /** The reasons that mean the worker is LOST: the two guardrails that stop a run going nowhere, the
  *  words the breaker uses for it, and the stream ending with nothing concluded. */
@@ -115,6 +123,11 @@ function deniedKindFor(input: FailureFacts): string | null {
  * describes.
  */
 export function readFailure(input: FailureFacts): FailureDiagnosis {
+  // H9 F10: a reviewer's verdict on finished work is a FACT off the row, and the newest one. It
+  // wins over everything below, `denied_tool` included: a refusal recorded on an earlier attempt
+  // did not stop this one -- this one got as far as a review and was judged. Before this the
+  // rejection never reached here at all, and the diagnosis was an older run's story.
+  if (input.rejectedByReview) return { reading: 'rejected', deniedKind: null }
   const reason = input.reason ?? ''
   const deniedKind = deniedKindFor(input)
   if (deniedKind !== null) return { reading: 'denied_tool', deniedKind }
@@ -131,4 +144,16 @@ export function readFailure(input: FailureFacts): FailureDiagnosis {
   if (input.deniedKinds.length === 0 && LOST.test(reason)) return { reading: 'lost', deniedKind: null }
   if (REJECTED.test(reason)) return { reading: 'rejected', deniedKind: null }
   return { reading: 'unknown', deniedKind: null }
+}
+
+/**
+ * H9c (F5b): was this failure the PLATFORM's -- by the row (`failureClass: 'platform'`) or, for a
+ * row written before the column could say so, by an infrastructure marker in its reason?
+ *
+ * The question an approval of a breaker escalation asks of every failure the breaker counted: a
+ * breaker tripped by nothing but the platform failing is not a runaway anybody has to answer, so a
+ * person saying yes to the escalation is the whole of the remedy.
+ */
+export function readsAsPlatform(failure: { readonly reason: string | null; readonly failureClass: FailureClass | null }): boolean {
+  return failure.failureClass === 'platform' || INFRASTRUCTURE.test(failure.reason ?? '')
 }

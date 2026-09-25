@@ -230,6 +230,31 @@ describe('observe -- task_failed', () => {
     )
   })
 
+  // H9 F10: the last attempt passed verify and a reviewer said no. The summary tells THAT story --
+  // not "the last run failed", which sent the reader to an older attempt's timeout.
+  it('says the review rejected it, after how many attempts and why, when the rejection is newest', () => {
+    const w = world({
+      tasks: [
+        task({
+          status: 'failed',
+          dependents: 2,
+          attempt: 3,
+          maxAttempts: 3,
+          latestFailure: taskFailure({
+            runKind: 'review',
+            reason: 'the retry endpoint returns 500 on an empty body',
+            rejectedByReview: true,
+          }),
+        }),
+      ],
+    })
+    const situation = observe(w)[0]
+    expect(situation?.summary).toBe(
+      'Task "Add the thing" failed and 2 task(s) depend on it. Review rejected after 3 attempts: the retry endpoint returns 500 on an empty body.',
+    )
+    expect(situation?.facts).toMatchObject({ latestFailureKind: 'review_rejected', latestFailureReason: 'the retry endpoint returns 500 on an empty body' })
+  })
+
   it('bounds the reason it puts in the summary -- a failure may carry a whole stderr dump', () => {
     const reason = 'x'.repeat(FAILURE_REASON_MAX_CHARS + 500)
     const w = world({
@@ -469,6 +494,53 @@ describe('observe -- workspace_halted', () => {
 
   it('stays silent while the workspace runs', () => {
     expect(observe(world({ halted: null }))).toEqual([])
+  })
+
+  // H9c: a breaker escalation names what the breaker counted -- each failed run by its task and its
+  // own reason -- and then exactly what a person can do about it.
+  it('names the three failed runs a breaker halt counted, and the command that clears it', () => {
+    const situation = observe(
+      world({
+        halted: { reason: 'circuit_breaker' },
+        breakerFailures: [
+          { runId: 'r-3', runKind: 'implementation', taskTitle: 'Add the thing', reason: 'guardrail run_timeout tripped', failureClass: 'worker' },
+          { runId: 'r-2', runKind: 'review', taskTitle: 'Add the thing', reason: null, failureClass: null },
+          { runId: 'r-1', runKind: 'planning', taskTitle: null, reason: 'the plan did not parse', failureClass: 'worker' },
+        ],
+      }),
+    )[0]
+    expect(situation?.summary).toBe(
+      'Scheduling is halted: circuit_breaker. The breaker counted 3 failed runs -- "Add the thing": guardrail run_timeout tripped; ' +
+        '"Add the thing": no reason was recorded; a planning run: the plan did not parse. Approving this changes nothing by itself: ' +
+        'deal with what the failures name (retry or fix the task), then run `npm run orchestrator -- clear-halt --workspace ws-1`.',
+    )
+    expect(situation?.facts).toMatchObject({ reason: 'circuit_breaker', countedFailures: 3, platformOnly: false })
+  })
+
+  it('says approving clears the halt when every counted failure was the platform\'s (F5b)', () => {
+    const situation = observe(
+      world({
+        halted: { reason: 'circuit_breaker' },
+        breakerFailures: [
+          { runId: 'r-3', runKind: 'implementation', taskTitle: 'Add the thing', reason: 'api_error: rate limit', failureClass: 'worker' },
+          { runId: 'r-2', runKind: 'implementation', taskTitle: 'Add the thing', reason: 'anything', failureClass: 'platform' },
+          { runId: 'r-1', runKind: 'implementation', taskTitle: 'Add the thing', reason: 'spawn claude ENOENT', failureClass: null },
+        ],
+      }),
+    )[0]
+    expect(situation?.summary).toContain('Every one of them was the platform failing, not the work: approving this clears the halt.')
+    expect(situation?.facts).toMatchObject({ countedFailures: 3, platformOnly: true })
+  })
+
+  it('names no counted failures for a halt that is not the breaker\'s', () => {
+    const situation = observe(
+      world({
+        halted: { reason: 'budget_exhausted' },
+        breakerFailures: [{ runId: 'r-1', runKind: 'implementation', taskTitle: 'Add the thing', reason: 'x', failureClass: 'worker' }],
+      }),
+    )[0]
+    expect(situation?.summary).toBe('Scheduling is halted: budget_exhausted.')
+    expect(situation?.facts).toMatchObject({ countedFailures: 0, platformOnly: false })
   })
 })
 

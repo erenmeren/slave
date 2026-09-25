@@ -292,6 +292,22 @@ describe('candidates -- task_failed remedies (R3)', () => {
     expect(action?.kind === 'retry_task' && action.reason.startsWith('steer: ')).toBe(true)
   })
 
+  // H9 F10: the newest failure is the reviewer's no, not an older run's timeout. The retry carries
+  // the REVIEW's reason as its steer, never the "went round in circles" one.
+  it('retries a review rejection with the reviewer\'s reason as the steer, once', () => {
+    const rejection = taskFailure({ runKind: 'review', reason: 'the retry endpoint returns 500 on an empty body', rejectedByReview: true })
+    const first = world({ tasks: [failed({ latestFailure: rejection, retries: 0 })] })
+    const offers = failedOffers(first)
+    expect(kinds(offers)).toEqual(['retry_task', 'escalate_to_human', 'no_action'])
+    const action = offers[0]?.action
+    expect(action?.kind === 'retry_task' && action.reason).toBe(
+      'The review rejected the last attempt: the retry endpoint returns 500 on an empty body.',
+    )
+
+    const second = world({ tasks: [failed({ latestFailure: rejection, retries: 1 })] })
+    expect(kinds(failedOffers(second))).toEqual(['escalate_to_human', 'no_action'])
+  })
+
   it('retries a failure it cannot read ONCE, and does not retry it a second time', () => {
     const unreadable = taskFailure({ reason: 'the worker gave up' })
     const first = world({ tasks: [failed({ latestFailure: unreadable, retries: 0 })] })

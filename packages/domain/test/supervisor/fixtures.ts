@@ -87,6 +87,8 @@ export function taskFailure(overrides: Partial<TaskFailure> = {}): TaskFailure {
     // H4b: the process ran, which is what every failure in this file means unless it says
     // otherwise -- a test about a run the model never saw sets this itself.
     failureClass: null,
+    // H9 F10: a run failing, not a reviewer saying no -- a test about a rejection says so.
+    rejectedByReview: false,
     ...overrides,
   }
 }
@@ -218,6 +220,8 @@ export function world(overrides: Partial<SupervisorWorld> = {}): SupervisorWorld
     // R4: no halt has ever been cleared here, so the once-an-hour rule only ever decides in a test
     // that says when the last clear was.
     haltClearedAt: null,
+    // H9c: no breaker halt, so nothing it counted.
+    breakerFailures: [],
     budgetExhausted: false,
     tasks: [],
     slaves: [],

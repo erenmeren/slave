@@ -133,6 +133,12 @@ a figure outside them is refused with nothing written. A raised timeout reaches 
 already working; attempts reach tasks planned from now on, while a task already on the board keeps
 the ceiling it was planned with.
 
+A project at its runs-at-once limit is **waiting, not halted**: the daemon starts nothing new that
+tick — no task, no planning run, no review — and carries on with everything else (answers, resumes,
+merges, the Supervisor). Nothing is announced and nobody is asked; the tick's JSON line, when one is
+printed, says `"waitingOn":"concurrency"` rather than `"halted"`. The next run to finish frees the
+slot. The same holds for the installation-wide cap of 6 runs.
+
 Staff it and give the team something to do:
 
 ```bash
@@ -870,7 +876,7 @@ nothing is scheduled while a project is halted — which is what makes them safe
 where hiring somebody would not be. A spent budget and an emergency stop propose everything, as
 they always have: the money is gone, or a person has their hand on the switch. "Halted" here means
 an emergency stop, a spent budget or a tripped circuit breaker; a project merely at its concurrency
-cap is busy, not stuck, and nothing is frozen for it.
+cap is busy, not stuck — it is not a halt at all, only a wait — and nothing is frozen for it.
 
 **A remedy is chosen from the failure, not guessed.** When a task fails, the Supervisor reads *why*
 before it picks anything: the reason the run recorded, the operations that run was refused, how
@@ -895,6 +901,17 @@ Out of that come three actions the rules did not have before:
   once an hour. "Answered" is exact: a retry was applied to the task the breaker counted, and that
   task has not failed since, and the next tick schedules the work again. A budget halt and an
   emergency stop are never cleared this way — the first is money and the second is a person.
+
+When the breaker halts a project and nothing has answered it yet, the escalation you are shown
+names **each failed run it counted** — the task and the reason that run recorded — rather than
+"three consecutive failures". If every one of them was the platform failing rather than the work (a
+provider refusal, a crashed daemon, a runtime that would not start), **approving that escalation
+clears the halt**. Otherwise approving it changes nothing by itself, and the card says so: deal with
+what the failures name, then run `npm run orchestrator -- clear-halt --workspace <id>`.
+
+A task whose last attempt was **rejected by review** is diagnosed from the rejection, not from an
+older run's failure: the summary reads "Review rejected after N attempts: <the reviewer's reason>",
+and the retry carries that reason to the worker.
 
 **What a task is allowed to touch.** The planner writes a task's `needs` — `network_fetch`,
 `run_commands` — beside its capabilities, and the dispatch adds them to that run's permissions for
