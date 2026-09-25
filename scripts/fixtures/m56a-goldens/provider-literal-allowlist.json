@@ -39,6 +39,10 @@
     {
       "path": "scripts/gate-m31b-software-sector.mjs",
       "why": "the same two assertions (:536, :580)"
+    },
+    {
+      "path": "packages/control/src/supervisorChatTick.ts",
+      "why": "R7 of the Supervisor chat: only Claude Code has a read-only tool mode to open an attached image with -- a fact about the vendor, not the installation default, which is why the literal is spelt out (the comment above the line says so)"
     }
   ],
   "mustStillMatch": [

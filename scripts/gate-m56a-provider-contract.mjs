@@ -1234,10 +1234,14 @@ try {
   console.log('\n=== stage 12: nothing else moved')
 
   console.log(`  SITUATION_KINDS: ${SITUATION_KINDS.length}; ACTION_KINDS: ${ACTION_KINDS.length}; LANE_BY_TYPE: ${Object.keys(LANE_BY_TYPE).length}`)
-  if (SITUATION_KINDS.length !== 17) await fail(`stage 12: SITUATION_KINDS is ${SITUATION_KINDS.length}, expected seventeen`)
-  if (ACTION_KINDS.length !== 17) await fail(`stage 12: ACTION_KINDS is ${ACTION_KINDS.length}, expected seventeen`)
-  if (Object.keys(LANE_BY_TYPE).length !== 61) {
-    await fail(`stage 12: LANE_BY_TYPE holds ${Object.keys(LANE_BY_TYPE).length} event types, expected 61 -- this milestone adds none`)
+  // The counts as they stand on main, not as M56a left them (17 / 17 / 61): later milestones (E's
+  // remedies, H4a's `planning_stalled`, the chat's lanes) grew all three, and this stage's claim is
+  // that the provider contract moved none of them -- so the figures follow main and a provider
+  // change that bumps one still fails here.
+  if (SITUATION_KINDS.length !== 19) await fail(`stage 12: SITUATION_KINDS is ${SITUATION_KINDS.length}, expected nineteen`)
+  if (ACTION_KINDS.length !== 24) await fail(`stage 12: ACTION_KINDS is ${ACTION_KINDS.length}, expected twenty-four`)
+  if (Object.keys(LANE_BY_TYPE).length !== 62) {
+    await fail(`stage 12: LANE_BY_TYPE holds ${Object.keys(LANE_BY_TYPE).length} event types, expected 62 -- a provider change adds none`)
   }
 
   const enumRows = await prisma.$queryRaw`SELECT unnest(enum_range(NULL::"ProviderKind"))::text AS value`
