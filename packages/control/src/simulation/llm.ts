@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { prisma } from '@slave-of-ai/db/client'
-import { err, ok, type Result } from '@slave-of-ai/domain'
+import { err, ok, type ProviderKind, type Result } from '@slave-of-ai/domain'
 import {
   CompositeDecisionProvider, LlmDecisionProvider, buildDecisionPrompt, parseEnvelopes,
   type ActionEnvelope,
@@ -87,11 +87,10 @@ export type ModelDecider = (input: {
  * a provider a stored column names that this record does not hold (a row written by a future
  * version) fails that ONE turn with `no_decider_for_provider`, never the pass.
  *
- * Spelt with the two literals rather than `Record<ProviderKind, …>` for the boundary test's
- * reason: this file may not import the providers package, and the two names are the Postgres
- * enum's own.
+ * Keyed by the domain's `ProviderKind`, never a spelt-out copy of the union: this file may not
+ * import the providers package, and the domain holds the one union literal (gate m56a stage 1).
  */
-export type DeciderRegistry = Readonly<Record<'claude_code' | 'cursor', ModelDecider>>
+export type DeciderRegistry = Readonly<Record<ProviderKind, ModelDecider>>
 
 export type PrepareOutcome =
   /** Nothing to decide: the same three watermark checks `autoStepDue` makes under its lock, plus
