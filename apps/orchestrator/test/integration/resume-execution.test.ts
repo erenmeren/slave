@@ -389,6 +389,9 @@ describe('executing a resume intent from the daemon', () => {
 
       const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
       expect(run.status).toBe('failed')
+      // H9b: a resume that cannot spawn never reached the model -- the platform's failure, left out
+      // of the breaker's streak. The attempt below still counts, for `failToStart`'s reason.
+      expect(run.failureClass).toBe('platform')
 
       const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
       // The whole point of Decision 4: no path re-dispatches a paid run without counting it.
