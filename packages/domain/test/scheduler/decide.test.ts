@@ -163,6 +163,23 @@ describe('decide', () => {
     expect(commands).toEqual([{ kind: 'halt', reason: 'budget_exhausted' }])
   })
 
+  // H9c: a full workspace is "no room this tick", never a halt -- nothing is announced, nobody is
+  // asked, and the tick's other passes go ahead.
+  it('waits rather than halts when the workspace is at its run cap', () => {
+    const full = { activeRuns: 3, globalActiveRuns: 3, spentUsd: 0, consecutiveFailures: 0, emergencyStopped: false }
+    expect(decide(world({ tasks: [task('TASK-1')], stats: full }))).toEqual([{ kind: 'wait', on: 'concurrency' }])
+  })
+
+  it('waits rather than halts when the machine is at its global run cap', () => {
+    const full = { activeRuns: 0, globalActiveRuns: 6, spentUsd: 0, consecutiveFailures: 0, emergencyStopped: false }
+    expect(decide(world({ tasks: [task('TASK-1')], stats: full }))).toEqual([{ kind: 'wait', on: 'concurrency' }])
+  })
+
+  it('halts on a real halt behind a full workspace, and names the halt rather than the wait', () => {
+    const both = { activeRuns: 3, globalActiveRuns: 3, spentUsd: 0, consecutiveFailures: 3, emergencyStopped: false }
+    expect(decide(world({ tasks: [task('TASK-1')], stats: both }))).toEqual([{ kind: 'halt', reason: 'circuit_breaker' }])
+  })
+
   it('clamps the slot budget to the global remainder even with per-workspace room to spare', () => {
     const commands = decide(
       world({

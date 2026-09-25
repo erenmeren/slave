@@ -20,6 +20,7 @@ import {
   taskId as brandTaskId,
   slaveId as brandSlaveId,
   type GuardrailKind,
+  type WaitReason,
   type SlaveId,
   type RunId,
   type TaskId,
@@ -91,6 +92,13 @@ export interface TickDeps {
 export interface TickReport {
   readonly started: readonly RunId[]
   readonly halted: string | null
+  /**
+   * H9c: what this tick had no room for -- `'concurrency'` when the workspace (or the machine) is
+   * at its run cap, `null` otherwise. NOT a halt: a full project is busy, not stuck, so it writes
+   * no `guardrail.tripped`, raises no `workspace_halted`, and every pass that starts no new run
+   * still goes ahead. `halted` wins when both hold -- a real halt is the news.
+   */
+  readonly waitingOn: WaitReason | null
   readonly skippedNoRole: number
   /** Roles the board is waiting on that no seat carries (`LoadedWorld.unservedRoles`). Empty on a
    *  healthy board; anything here is work that cannot be given to anybody, which is otherwise
@@ -280,6 +288,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
     return {
       started: [],
       halted: null,
+      waitingOn: null,
       skippedNoRole: 0,
       unservedRoles: [],
       planningStarted: null,
@@ -299,6 +308,10 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   // breach, and two readers below need every one of them -- the halt branch's resume rule (H8 fix
   // round 1, I1) and the budget warning. `evaluateGuardrails` is pure and cheap.
   const breaches = evaluateGuardrails(world.limits, world.stats)
+  // H9c: a full workspace is `wait`, never `halt` -- it takes the ordinary branch below, where the
+  // answer, resume, merge and Supervisor passes run as on any other tick and only the passes that
+  // would start a NEW run (implementation, planning, review) are skipped.
+  const waitingOn = commands.find((command) => command.kind === 'wait')?.on ?? null
 
   const halt = commands.find((command) => command.kind === 'halt')
   if (halt !== undefined) {
@@ -323,11 +336,10 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
     // `HALTS_THAT_REFUSE_A_RESUME`): the claim is what decides ownership and it is claimed once,
     // so this is the ONE resume pass of a halted tick -- the ordinary pass below is never reached
     // on this branch. Decided from the WHOLE breach list and not from `halt.reason` (fix round 1,
-    // I1): `decide()` names only the first halting breach, and `concurrency` sorts ahead of
-    // `budget_exhausted`, so a full workspace that is also over budget halts as `concurrency`.
-    // The answer delivery rides under the same rule (fix round 1, M3): a run waiting for an answer
-    // is `paused` and holds a slot, and once it held the last one the answer that would have woken
-    // it was never delivered -- the same deadlock, one pass earlier.
+    // I1): `decide()` names only the first halting breach, and the one that refuses a resume need
+    // not be it. The answer delivery rides under the same rule (fix round 1, M3): a run waiting
+    // for an answer is `paused`, and under a breaker halt the answer that would wake it must still
+    // be delivered.
     if (breachRefusingResume(breaches) === null) {
       await deliverAnswers(deps.workspaceId)
       await resumeRequestedRuns(deps)
@@ -343,6 +355,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
     return {
       started: [],
       halted: halt.reason,
+      waitingOn: null,
       skippedNoRole,
       unservedRoles,
       planningStarted: null,
@@ -399,9 +412,12 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   // `dispatchReviews` (task-scoped) has nothing to do with either way -- the order only matters
   // for `TickReport`'s own field order (spec: planning, then reviews) and for reading one tick's
   // JSON line top to bottom the way the pipeline actually runs.
-  const planningStarted = await dispatchPlanning(deps)
+  //
+  // H9c: both start a run, so neither goes out into a slot `decide()` just said is not there -- the
+  // same rule the halt branch used to apply to a full workspace, without the halt.
+  const planningStarted = waitingOn === null ? await dispatchPlanning(deps) : null
 
-  const reviewsStarted = await dispatchReviews(deps)
+  const reviewsStarted = waitingOn === null ? await dispatchReviews(deps) : []
 
   // After the review pass, not before: a task cannot reach `merging` until a review approves it,
   // so nothing this call would find can exist before `dispatchReviews` has had its chance to
@@ -414,7 +430,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   // a merge landed above all remove situations it would otherwise have decided about.
   const supervisor = await superviseQuietly(deps, statsSnapshot)
 
-  return { started, halted: null, skippedNoRole, unservedRoles, planningStarted, reviewsStarted, skipped: null, supervisor }
+  return { started, halted: null, waitingOn, skippedNoRole, unservedRoles, planningStarted, reviewsStarted, skipped: null, supervisor }
 }
 
 /**
@@ -458,9 +474,9 @@ async function superviseQuietly(deps: TickDeps, stats?: WorkspaceStatsSnapshot):
  * Called from BOTH branches of the tick, once each (H8): the ordinary pass below the halt, and
  * the halt branch itself unless a breach in `HALTS_THAT_REFUSE_A_RESUME` (the domain's set) is
  * standing. A resume continues a run that is already counted -- the parked run holds its slot and
- * sits in the streak exactly as it did -- so a concurrency or circuit-breaker halt has no reason
- * to block it, and until this it did, which deadlocked: the parked runs caused the halt, and the
- * halt blocked their resume. Under an emergency stop the intent is left untouched -- visible,
+ * sits in the streak exactly as it did -- so a circuit-breaker halt has no reason to block it, and
+ * neither had a full workspace while that was still a halt (before H9c). Until this, both did,
+ * which deadlocked: the parked runs caused the halt, and the halt blocked their resume. Under an emergency stop the intent is left untouched -- visible,
  * unconsumed, and waiting for the operator who clears the halt -- rather than refused, because the
  * request was legitimate when it was made, and a halt raised by a gate failure or an unverifiable
  * workspace must not relaunch a slave whose gate may still be broken. An exhausted budget refuses

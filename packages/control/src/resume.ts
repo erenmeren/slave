@@ -87,7 +87,7 @@ export async function requestResume(
 
   // The other halt that refuses even a resume (H8 fix round 1, I1): the SAME set the tick's halt
   // branch decides by, read from the whole breach list -- `decide()` names only the first halting
-  // breach, and `concurrency` sorts ahead of `budget_exhausted`. Refused here rather than only at
+  // breach, and the one that refuses a resume need not be it. Refused here rather than only at
   // the daemon, for the durable halt's own reason above: an intent recorded now would be carried
   // out the moment somebody raised the budget, by a tick that cannot know it was asked against an
   // empty purse. The set's other member, `emergency_stop`, is the check above -- the durable

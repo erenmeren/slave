@@ -43,9 +43,22 @@ export interface World {
   readonly stats: WorkspaceStats
 }
 
+/**
+ * H9c: what a tick with no room is waiting ON. One member today -- the per-workspace cap and the
+ * global one are the same wait to anybody reading it (a run somewhere has to conclude) -- and a
+ * union rather than a boolean so a second kind of "not now" has somewhere to go.
+ */
+export type WaitReason = 'concurrency'
+
 export type Command =
   | { readonly kind: 'start_run'; readonly taskId: TaskId; readonly slaveId: SlaveId }
   | { readonly kind: 'halt'; readonly reason: string }
+  /**
+   * H9c: no room this tick. Not a halt -- nothing is announced, nobody is asked, and every pass
+   * that starts no new run (answers, resumes, merges, the Supervisor) goes ahead. Returned alone,
+   * like `halt`, and never beside a `start_run`: a tick that can start something has room.
+   */
+  | { readonly kind: 'wait'; readonly on: WaitReason }
 
 const STARTABLE: readonly TaskStatus[] = ['ready', 'rework']
 
@@ -59,6 +72,15 @@ export function decide(world: World): readonly Command[] {
     return [{ kind: 'halt', reason: halting.guardrail }]
   }
 
+  let slots = Math.min(
+    world.limits.maxConcurrentRuns - world.stats.activeRuns,
+    world.limits.maxGlobalConcurrentRuns - world.stats.globalActiveRuns,
+  )
+  // H9c: a full workspace (or a full machine) waits; it does not halt. Said out loud rather than
+  // left as an empty list, because the tick must not start a planning or review run into the slot
+  // that is not there either, and an empty list also means "nothing to do".
+  if (slots <= 0) return [{ kind: 'wait', on: 'concurrency' }]
+
   const candidates = world.tasks
     .filter((t) => STARTABLE.includes(t.status) && t.dependenciesDone && t.backingOff !== true)
     .toSorted((a, b) => (b.priority - a.priority) || a.id.localeCompare(b.id))
@@ -67,10 +89,6 @@ export function decide(world: World): readonly Command[] {
     world.slaves.filter((a) => !a.busy).map((a) => [a.id, a]),
   )
 
-  let slots = Math.min(
-    world.limits.maxConcurrentRuns - world.stats.activeRuns,
-    world.limits.maxGlobalConcurrentRuns - world.stats.globalActiveRuns,
-  )
   const commands: Command[] = []
 
   for (const candidate of candidates) {

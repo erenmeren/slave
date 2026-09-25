@@ -47,20 +47,6 @@ import { workspaceDefaultProvider } from './runtime.js'
 import { workspaceStats, type WorkspaceStatsSnapshot } from './stats.js'
 
 /**
- * The guardrail breaches that mean "this workspace is STUCK" to the Supervisor (spec erratum E7).
- *
- * `evaluateGuardrails` halts scheduling on five kinds, and two of them -- `concurrency` and
- * `global_concurrency` -- are normal operation: a workspace at its run cap is busy, not stuck, and
- * raising a `workspace_halted` escalation about it would put a proposal in front of a human every
- * time three runs were in flight, while freezing every routine action for the duration. The other
- * three are real stops that nothing inside the workspace will clear on its own.
- *
- * Order matters: this list is used as a FILTER over `evaluateGuardrails`' output, which is already
- * ordered, and the first surviving breach is the reason reported.
- */
-const HALTING_GUARDRAILS: readonly string[] = ['emergency_stop', 'budget_exhausted', 'circuit_breaker']
-
-/**
  * Why the Supervisor should consider this workspace stopped, or `null` (spec erratum E7).
  *
  * The durable column wins when it is set, because it carries a REASON a human wrote or a gate
@@ -73,9 +59,12 @@ const HALTING_GUARDRAILS: readonly string[] = ['emergency_stop', 'budget_exhaust
  */
 function haltOf(snapshot: WorkspaceStatsSnapshot): { readonly reason: string } | null {
   if (snapshot.haltedReason !== null) return { reason: snapshot.haltedReason }
-  const breach = evaluateGuardrails(snapshot.limits, snapshot.stats).find((candidate) =>
-    HALTING_GUARDRAILS.includes(candidate.guardrail),
-  )
+  // `haltsScheduling`, the scheduler's own rule, rather than a list of this file's (spec erratum
+  // E7, H9c): a workspace at its run cap is busy, not stuck, and until H9c `decide()` halted on it
+  // while this loader filtered it back out by name -- two readings of one question. Now neither
+  // calls it a halt: `concurrency` and `global_concurrency` do not halt scheduling, so no
+  // `workspace_halted` is ever raised about a full project and nothing is frozen for one.
+  const breach = evaluateGuardrails(snapshot.limits, snapshot.stats).find((candidate) => candidate.haltsScheduling)
   return breach === undefined ? null : { reason: breach.guardrail }
 }
 

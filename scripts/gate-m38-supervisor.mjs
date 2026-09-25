@@ -1076,6 +1076,26 @@ try {
       'again with that operation in its own permission snapshot -- and not one of those five things waited for a person',
   )
 
+  // H9c: a full workspace is a WAIT, never a halt. Across every daemon this gate ran: no pass line
+  // said it halted on a concurrency kind, and no `guardrail.tripped` row named one.
+  const concurrencyKinds = ['concurrency', 'global_concurrency']
+  const concurrencyHaltLines = daemons.flatMap((state) =>
+    state.output.split('\n').filter((line) => concurrencyKinds.some((kind) => line.includes(`"halted":"${kind}"`))),
+  )
+  const concurrencyTrips = (
+    await prisma.executionEvent.findMany({ where: { workspaceId: { in: [workspaceId, actWorkspaceId].filter((id) => id !== null) }, type: 'guardrail_tripped' } })
+  ).filter((row) => concurrencyKinds.includes(row.payload?.guardrail))
+  console.log(
+    `H9c: ${String(concurrencyHaltLines.length)} pass line(s) halted on concurrency, ` +
+      `${String(concurrencyTrips.length)} concurrency guardrail.tripped row(s)`,
+  )
+  if (concurrencyHaltLines.length > 0 || concurrencyTrips.length > 0) {
+    await fail(
+      `a full workspace was treated as a halt: ${JSON.stringify(concurrencyHaltLines.slice(0, 3))} ` +
+        `${JSON.stringify(concurrencyTrips.map((row) => row.payload))}`,
+    )
+  }
+
   console.log(
     'PASS: the Supervisor watched a real workspace through a real daemon -- proposed the staffing it could not do by itself and ' +
       'waited for a human, took the one routine action it is trusted with and signed it as the machine, escalated a workspace ' +

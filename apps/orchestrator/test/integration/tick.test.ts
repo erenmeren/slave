@@ -705,8 +705,9 @@ describe('tick', () => {
    * stopped; the new daemon counted them as active, halted on `concurrency`, and the halt branch
    * returned before the resume pass -- so the person's own resume request sat for four hours
    * behind a halt the parked runs themselves caused. A resume continues a run that is ALREADY
-   * counted and starts nothing, so a concurrency or streak halt must not stand in its way. Only a
-   * person's stop and an empty purse refuse even a resume.
+   * counted and starts nothing, so a streak halt must not stand in its way -- and since H9c a full
+   * workspace is not a halt at all, only a wait. Only a person's stop and an empty purse refuse even
+   * a resume.
    */
   describe('a paused run resumes under a halt that does not refuse it (H8)', () => {
     const fakeAdapter = (fixtureName: string): ClaudeCodeAdapter =>
@@ -739,11 +740,11 @@ describe('tick', () => {
       })
     }
 
-    it('resumes the run under the concurrency halt its own parked seat causes, and starts nothing', async (): Promise<void> => {
+    it('resumes the run whose own parked seat fills the workspace, and starts nothing', async (): Promise<void> => {
       const runId = await pauseARun()
-      // `paused` is non-terminal, so the parked run holds the workspace's only slot and `decide()`
-      // halts on `concurrency` -- the deadlock: the run cannot resume until the halt lifts, and
-      // the halt cannot lift until the run resumes.
+      // `paused` is non-terminal, so the parked run holds the workspace's only slot. Before H9c
+      // `decide()` halted on `concurrency` here -- the deadlock: the run could not resume until the
+      // halt lifted, and the halt could not lift until the run resumed. Now it is a wait.
       await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { maxConcurrentRuns: 1 } })
       await anotherReadyTask()
       expect((await requestResume(runId, 'carry on', 'web')).ok).toBe(true)
@@ -751,8 +752,10 @@ describe('tick', () => {
       const report = await tick({ ...deps, registry: singleAdapterRegistry(fakeAdapter('env-echo')) })
       await drainPumps()
 
-      expect(report.halted).toBe('concurrency')
+      expect(report.halted).toBeNull()
+      expect(report.waitingOn).toBe('concurrency')
       expect(report.started).toEqual([])
+      expect(await eventTypesFor(fixture.workspaceId)).not.toContain('guardrail.tripped')
       const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
       // `env-echo` runs to a clean end: the resume was claimed, spawned and pumped by this tick.
       expect(after.status).toBe('succeeded')
@@ -760,7 +763,7 @@ describe('tick', () => {
       expect(await prisma.executionEvent.count({ where: { runId, type: 'run_resumed' } })).toBe(1)
     }, 60_000)
 
-    it('asks once: the halted tick consumes the claim, and the tick after it finds nothing to resume', async (): Promise<void> => {
+    it('asks once: the full tick consumes the claim, and the tick after it finds nothing to resume', async (): Promise<void> => {
       const runId = await pauseARun()
       await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { maxConcurrentRuns: 1 } })
       expect((await requestResume(runId, 'carry on', 'web')).ok).toBe(true)
@@ -808,20 +811,20 @@ describe('tick', () => {
       expect(await prisma.executionEvent.count({ where: { runId, type: 'run_resumed' } })).toBe(0)
     }, 60_000)
 
-    it('leaves the intent waiting under an exhausted budget that a concurrency halt masks (fix round 1, I1)', async (): Promise<void> => {
+    it('leaves the intent waiting under an exhausted budget behind a full workspace (fix round 1, I1)', async (): Promise<void> => {
       const runId = await pauseARun()
       expect((await requestResume(runId, 'carry on', 'web')).ok).toBe(true)
-      // Both at once: the parked run holds the only slot AND has spent past the budget. `decide()`
-      // reports the FIRST halting breach, and `concurrency` sorts ahead of `budget_exhausted` --
-      // so the halt reads `concurrency`, and a tick deciding by that name alone would resume a
-      // run into an empty purse.
+      // Both at once: the parked run holds the only slot AND has spent past the budget. Before H9c
+      // the halt read `concurrency` (it sorts first), and a tick deciding by that name alone would
+      // resume a run into an empty purse. Since H9c a full workspace is not a halt, so the halt is
+      // the budget's own -- and the resume is refused either way.
       await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { maxConcurrentRuns: 1 } })
       await prisma.slaveRun.update({ where: { id: runId }, data: { costUsd: 999 } })
 
       const report = await tick({ ...deps, registry: singleAdapterRegistry(fakeAdapter('env-echo')) })
       await drainPumps()
 
-      expect(report.halted).toBe('concurrency')
+      expect(report.halted).toBe('budget_exhausted')
       const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
       expect(after.status).toBe('paused')
       expect(after.resumeRequestedAt).not.toBeNull()
@@ -837,8 +840,9 @@ describe('tick', () => {
 
     /**
      * Fix round 1, M3. `deliverAnswers` deadlocked the same way: a run waiting for an answer is
-     * `paused`, so it holds a slot; once it holds the last one the halt returned before the
-     * delivery pass, and the answer that would have woken it was never delivered.
+     * `paused`, so it holds a slot; once it held the last one the (pre-H9c) concurrency halt
+     * returned before the delivery pass, and the answer that would have woken it was never
+     * delivered.
      */
     describe('an answer is delivered under the same rule', () => {
       /** A run parked by the ask path, holding this workspace's task, with a question sent and an
@@ -897,16 +901,17 @@ describe('tick', () => {
         return { runId: run.id, answerId: answer.id }
       }
 
-      it('wakes the waiting run under the concurrency halt its own seat causes', async (): Promise<void> => {
+      it('wakes the waiting run whose own seat fills the workspace', async (): Promise<void> => {
         const { runId, answerId } = await waitingRunWithAnAnswer()
-        // The waiting run holds the only slot, and a second ready task proves the halt is real.
+        // The waiting run holds the only slot, and a second ready task proves the wait is real.
         await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { maxConcurrentRuns: 1 } })
         await anotherReadyTask()
 
         const report = await tick({ ...deps, registry: singleAdapterRegistry(fakeAdapter('env-echo')) })
         await drainPumps()
 
-        expect(report.halted).toBe('concurrency')
+        expect(report.halted).toBeNull()
+        expect(report.waitingOn).toBe('concurrency')
         expect(report.started).toEqual([])
         // The intent was recorded by the delivery pass and claimed by the resume pass of the same
         // tick: the run is no longer parked, and the answer is stamped delivered.
@@ -1173,10 +1178,14 @@ describe('tick', () => {
 
       const report = await tick(deps)
 
-      // `decide()` HAS halted scheduling -- and the Supervisor deliberately disagrees: a workspace
-      // at its run cap is busy, not stuck. Escalating that would put a proposal in front of a human
-      // every time the machine was working, and freeze every routine action while it did.
-      expect(report.halted).toBe('concurrency')
+      // A workspace at its run cap is busy, not stuck (H9c): `decide()` waits rather than halts, and
+      // the Supervisor agrees. Escalating that would put a proposal in front of a human every time
+      // the machine was working, and freeze every routine action while it did.
+      expect(report.halted).toBeNull()
+      expect(report.waitingOn).toBe('concurrency')
+      // The review-cap park above wrote its own `guardrail.tripped`; none is about the full workspace.
+      const trips = await prisma.executionEvent.findMany({ where: { workspaceId: fixture.workspaceId, type: 'guardrail_tripped' } })
+      expect(trips.map((row) => (row.payload as { guardrail: string }).guardrail)).not.toContain('concurrency')
       const rows = await prisma.supervisorDecision.findMany({ where: { workspaceId: fixture.workspaceId } })
       expect(rows.map((row) => row.situationKind)).toEqual(['review_cap_blocked'])
       expect(rows[0]).toMatchObject({ tier: 'applied', status: 'applied' })

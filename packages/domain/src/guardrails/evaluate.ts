@@ -36,6 +36,16 @@ export interface GuardrailBreach {
    */
   readonly guardrail: GuardrailKind
   readonly detail: string
+  /**
+   * Whether this breach STOPS the project: `decide()` returns `halt` on the first one, the tick
+   * announces it with `guardrail.tripped`, and the Supervisor raises `workspace_halted` about it.
+   *
+   * H9c: `concurrency` and `global_concurrency` are breaches that do NOT halt. A project at its run
+   * cap is busy, not stuck -- the next run to conclude frees the slot and nothing anybody decides
+   * would free it sooner -- so `decide()` reads them as "no room this tick" (`wait`), and they
+   * never reach a person as a halt. They are still REPORTED here, because a reader asking "is
+   * anything at a limit" (the budget warning, the resume rule) wants the whole list.
+   */
   readonly haltsScheduling: boolean
 }
 
@@ -73,7 +83,8 @@ export function evaluateGuardrails(
     breaches.push({
       guardrail: 'concurrency',
       detail: `${stats.activeRuns} active runs at limit ${limits.maxConcurrentRuns}.`,
-      haltsScheduling: true,
+      // H9c: no room, not a halt -- see `haltsScheduling`.
+      haltsScheduling: false,
     })
   }
 
@@ -81,7 +92,7 @@ export function evaluateGuardrails(
     breaches.push({
       guardrail: 'global_concurrency',
       detail: `${stats.globalActiveRuns} active runs across all workspaces at the global limit ${limits.maxGlobalConcurrentRuns}.`,
-      haltsScheduling: true,
+      haltsScheduling: false,
     })
   }
 
@@ -132,12 +143,13 @@ export function evaluateGuardrails(
 /**
  * The halts under which even a RESUME is refused (H8).
  *
- * A resume continues a run that is already counted and starts nothing, so the halts that exist to
- * stop NEW work -- `concurrency`, `global_concurrency`, `circuit_breaker` -- must not stand in its
- * way. They used to: on 2026-09-21 three runs parked by the breaker held every slot of their
+ * A resume continues a run that is already counted and starts nothing, so a halt that exists to
+ * stop NEW work -- `circuit_breaker` -- must not stand in its way, and neither may a full
+ * workspace. They used to: on 2026-09-21 three runs parked by the breaker held every slot of their
  * workspace, `decide()` halted on `concurrency`, the tick's halt branch returned before its resume
  * pass, and the person's own resume request sat for four hours behind a halt the parked runs
- * themselves caused. The two here are different in kind: an emergency stop is a person saying
+ * themselves caused. (Since H9c a full workspace is not a halt at all -- `haltsScheduling` -- so
+ * that tick now runs its ordinary resume pass.) The two here are different in kind: an emergency stop is a person saying
  * nothing may move, and an empty purse cannot pay for the continuation either.
  *
  * ONE set, read by both sides: the tick decides whether its halt branch resumes by it, and
@@ -154,10 +166,10 @@ export const HALTS_THAT_REFUSE_A_RESUME: ReadonlySet<GuardrailKind> = new Set<Gu
  * The first breach that refuses a resume, or `null` -- decided from the WHOLE list (H8 fix round
  * 1, I1).
  *
- * `decide()` reports only the first halting breach, and {@link evaluateGuardrails} lists
- * `concurrency` ahead of `budget_exhausted`: a full workspace that is also over budget halts as
- * `concurrency`, and a caller judging by that name alone would resume a run into an empty purse.
- * So the question is asked of every breach, not of the halt's name.
+ * `decide()` reports only the first halting breach, and a caller judging by that name alone would
+ * miss a refusing breach listed behind it (before H9c, a full workspace over budget halted as
+ * `concurrency` and resumed a run into an empty purse). So the question is asked of every breach,
+ * not of the halt's name.
  */
 export function breachRefusingResume(breaches: readonly GuardrailBreach[]): GuardrailBreach | null {
   return breaches.find((breach) => HALTS_THAT_REFUSE_A_RESUME.has(breach.guardrail)) ?? null
