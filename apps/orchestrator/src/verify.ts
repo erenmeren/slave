@@ -16,6 +16,8 @@ import { concludePlanning } from './planning.js'
 import { concludeReview } from './review.js'
 import { describeOutcome, runShellCommand } from './shell.js'
 import { releaseTaskAfterFailure } from './taskRelease.js'
+import { emailLocalPart, taskKeyFor } from './tick.js'
+import { commitUncommittedWork } from './wipCommit.js'
 
 /**
  * Four outcomes, named rather than encoded in the nullability of two other fields.
@@ -321,7 +323,10 @@ export async function stageGatesFor(
 export async function verifyConcludedRun(runId: RunId): Promise<void> {
   const run = await prisma.slaveRun.findUnique({
     where: { id: runId },
-    include: { task: { include: { workspace: true } }, slave: { select: { personId: true } } },
+    include: {
+      task: { include: { workspace: true } },
+      slave: { select: { id: true, personId: true, person: { select: { name: true } } } },
+    },
   })
   if (run === null) return
 
@@ -419,6 +424,26 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
       `[verify] run ${run.id} succeeded but has no ${run.worktreePath === null ? 'worktree' : 'branch'} recorded: not verifying`,
     )
     return
+  }
+
+  // H9 F7 (a): the work a worker forgot to commit is committed for it, under its own identity,
+  // BEFORE verify and review -- review judges `base...branch`, i.e. commits, and a tree full of
+  // uncommitted work reads there as an empty diff (`wipCommit.ts`). The identity is the one the
+  // run's own process committed under (`tick.ts`'s dispatch). Never fatal: a tree this cannot
+  // commit is judged exactly as it would have been without it, and the reason is logged.
+  const wip = await commitUncommittedWork({
+    worktreePath: run.worktreePath,
+    branch: task.branch,
+    taskKey: taskKeyFor(task.id),
+    identity: {
+      name: run.slave.person.name,
+      email: `${emailLocalPart({ id: run.slave.id, name: run.slave.person.name })}@slaveofai.local`,
+    },
+  })
+  if (wip.kind === 'committed') {
+    console.warn(`[verify] run ${run.id} left uncommitted work; committed it on the worker's behalf as ${wip.sha.slice(0, 12)} (${wip.message})`)
+  } else if (wip.kind !== 'clean') {
+    console.warn(`[verify] run ${run.id} left uncommitted work that could not be committed for it (${wip.kind}): ${wip.reason}`)
   }
 
   // M49 R2(a), here and not in `advance` (plan erratum E1): this is the one place a SUCCEEDED

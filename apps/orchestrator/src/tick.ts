@@ -159,7 +159,7 @@ export async function drainPumps(): Promise<void> {
  * apart and is not silent — it surfaces as a `WorktreeExistsError` whose branch does not match,
  * which is escalated rather than adopted.
  */
-const taskKeyFor = (id: string): string => `T-${id.slice(0, 8)}`
+export const taskKeyFor = (id: string): string => `T-${id.slice(0, 8)}`
 
 /** Title to branch-safe slug. Bounded, because the whole thing becomes a git ref. */
 function slugify(title: string): string {
