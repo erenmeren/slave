@@ -585,6 +585,22 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('settings-to').textContent).toBe('on')
   })
 
+  // H9 F8: the three dispatch limits. The timeout rides in milliseconds and reads in minutes.
+  it('workspace.settings_changed names a moved limit, the timeout in minutes', () => {
+    const Card = ACTIVITY_CARDS['workspace.settings_changed']
+    render(<Card event={baseEvent('workspace.settings_changed', { field: 'runTimeoutMs', from: 1_800_000, to: 3_600_000 })} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('run timeout')
+    expect(screen.getByTestId('settings-from').textContent).toBe('30m')
+    expect(screen.getByTestId('settings-to').textContent).toBe('60m')
+  })
+
+  it('workspace.settings_changed says attempts per task as a plain figure', () => {
+    const Card = ACTIVITY_CARDS['workspace.settings_changed']
+    render(<Card event={baseEvent('workspace.settings_changed', { field: 'maxAttempts', from: 3, to: 5 })} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('attempts per task')
+    expect(screen.getByTestId('settings-to').textContent).toBe('5')
+  })
+
   // M38 t5: the five `supervisor.*` cards, replacing Task 1's honest placeholders. Each says what
   // its own payload carries and nothing it does not -- the panel is where a decision's full
   // rationale lives; the timeline's job is to make a decision findable and its shape readable.

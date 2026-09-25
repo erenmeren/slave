@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { PUT as providerPUT } from '../../src/app/api/w/[workspaceId]/provider/route.js'
 import { PUT as budgetPUT } from '../../src/app/api/w/[workspaceId]/budget/route.js'
 import { PUT as integrationPUT } from '../../src/app/api/w/[workspaceId]/integration/route.js'
+import { PATCH as limitsPATCH } from '../../src/app/api/w/[workspaceId]/limits/route.js'
 import { PATCH as supervisorPATCH } from '../../src/app/api/w/[workspaceId]/supervisor/settings/route.js'
 
 interface Fixture {
@@ -166,6 +167,50 @@ describe('the workspace settings routes', () => {
     it('404s for an unknown workspace', async (): Promise<void> => {
       const response = await integrationPUT(jsonRequest({ autoMerge: true }), params('00000000-0000-0000-0000-000000000000'))
       expect(response.status).toBe(404)
+    })
+  })
+
+  /** H9 F8: the three dispatch limits the Runtime panel now edits. The bounds are the verb's; the
+   *  route's own business is the JS type and the archived guard. */
+  describe('PATCH /api/w/[workspaceId]/limits', () => {
+    const stored = async (workspaceId: string): Promise<readonly number[]> => {
+      const row = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
+      return [row.runTimeoutMs, row.maxConcurrentRuns, row.maxAttempts]
+    }
+
+    it('writes any of the three and records who moved them', async (): Promise<void> => {
+      const response = await limitsPATCH(patchRequest({ runTimeoutMs: 3_600_000, maxAttempts: 5 }), params(fixture.workspaceId))
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ ok: true })
+      expect(await stored(fixture.workspaceId)).toEqual([3_600_000, 3, 5])
+      const events = await prisma.executionEvent.findMany({ where: { workspaceId: fixture.workspaceId, type: 'workspace_settings_changed' }, orderBy: { seq: 'asc' } })
+      expect(events.map((event) => event.payload)).toEqual([
+        { field: 'runTimeoutMs', from: 1_800_000, to: 3_600_000 },
+        { field: 'maxAttempts', from: 3, to: 5 },
+      ])
+    })
+
+    it('409s a figure out of range with the verb s sentence, writing nothing', async (): Promise<void> => {
+      const response = await limitsPATCH(patchRequest({ maxConcurrentRuns: 4, runTimeoutMs: 181 * 60_000 }), params(fixture.workspaceId))
+
+      expect(response.status).toBe(409)
+      expect(((await response.json()) as { error: string }).error).toBe('a run timeout must be a whole number of minutes from 5 to 180')
+      expect(await stored(fixture.workspaceId)).toEqual([1_800_000, 3, 3])
+    })
+
+    it('400s a limit of the wrong JS type and an unparseable body', async (): Promise<void> => {
+      expect((await limitsPATCH(patchRequest({ maxAttempts: '5' }), params(fixture.workspaceId))).status).toBe(400)
+      expect((await limitsPATCH(malformedRequest(), params(fixture.workspaceId))).status).toBe(400)
+    })
+
+    it('409s an archived project and 404s an unknown one', async (): Promise<void> => {
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { archivedAt: new Date() } })
+      expect((await limitsPATCH(patchRequest({ maxAttempts: 5 }), params(fixture.workspaceId))).status).toBe(409)
+      expect(await stored(fixture.workspaceId)).toEqual([1_800_000, 3, 3])
+
+      const missing = await limitsPATCH(patchRequest({ maxAttempts: 5 }), params('00000000-0000-0000-0000-000000000000'))
+      expect(missing.status).toBe(404)
     })
   })
 

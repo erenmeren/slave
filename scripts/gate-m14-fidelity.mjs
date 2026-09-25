@@ -1033,8 +1033,10 @@ try {
   await waitVisible(page.getByTestId('perm-caption'), "the project Settings tab's permission matrix caption")
   await gotoReliably(`${baseUrl}/w/${workspaceId}/settings?section=runtime`)
   await waitVisible(page.getByTestId('runtime-limits'), "the project Settings tab's runtime limits")
-  await assertComputed('project-settings', '[data-testid="runtime-timeout"]', 'font-size', '10.5px')
-  console.log('stage 2a: the project Settings tab carries perm-caption and a 10.5px mono runtime-timeout figure')
+  // H9 F8: the figure became an editable field, so it is measured as one -- the same `text-sm`
+  // input shell the budget field beside it wears, not the 10.5px mono read-out it replaced.
+  await assertComputed('project-settings', '[data-testid="runtime-timeout"]', 'font-size', '14px')
+  console.log('stage 2a: the project Settings tab carries perm-caption and a 14px runtime-timeout field')
 
   // M58 R22: People is one row per person -- Name, Persona, Departments, Skills, Where they
   // work, and the open control. Asserted TWICE and deliberately: `getComputedStyle` resolves
