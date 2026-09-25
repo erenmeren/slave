@@ -232,6 +232,9 @@ describe('renderRunContext', () => {
     expect(prompt).toBe(`Task: do the thing\n\n${IMPLEMENTATION_WORK_RULES}`)
     expect(IMPLEMENTATION_WORK_RULES).toMatch(/do the task itself/)
     expect(IMPLEMENTATION_WORK_RULES).toMatch(/Do not brainstorm, write a plan,\nor hand parts of it to helpers or subtasks of your own/)
+    // H9 F6: the worker is told its own question tool is refused, and where to ask instead.
+    expect(IMPLEMENTATION_WORK_RULES).toMatch(/a tool that asks the user a question is refused/)
+    expect(IMPLEMENTATION_WORK_RULES).toMatch(/ask through the protocol above/)
     // The fake CLI routes on these literals; a work run's trailer must carry none of them.
     for (const literal of ['"verdict"', 'verdict', 'task graph', 'candidateIndex', '"sources"']) {
       expect(IMPLEMENTATION_WORK_RULES).not.toContain(literal)

@@ -18,6 +18,7 @@ import { appendEvent } from '@slave-of-ai/events'
 import {
   capabilitiesOf,
   classifyGateEvent,
+  isUserQuestionTool,
   PERMISSION_DENY_REASON_PREFIX,
   parsePermissionDenyReason,
   type ProviderKind,
@@ -631,6 +632,19 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
    */
   const matrixDeniedToolUseIds = new Set<string>()
   /**
+   * H9 F6: the tool-use ids of the runtime's OWN ask-the-user tool that the runtime refused
+   * (`askQuestion` on Cursor, `AskUserQuestion` on Claude -- `@slave-of-ai/providers`'
+   * `USER_QUESTION_TOOLS`). A headless worker has no user to ask, so the vendor refuses the call;
+   * the refused id then reaches `outcome.deniedToolUseIds` exactly as a real denial does, and before
+   * this set the run was FAILED for it -- measured 2026-09-21, a Cursor worker that asked a question
+   * lost the run and an attempt. A question is not a misdeed: excused here exactly as a matrix
+   * refusal is, never pushed to `denied` (which is pause evidence on Cursor), and the worker is told
+   * by its prompt to ask through `<slave-ask>` instead. Seeded on resume from the run's own
+   * `run.tool_call` events, for the matrix seed's reason below.
+   */
+  const questionDeniedToolUseIds = new Set<string>()
+  const provider: ProviderKind = input.spawn?.provider ?? 'claude_code'
+  /**
    * B1 (M19): seeded on resume from the run's own prior `run.tool_denied` events, not left at the
    * empty set above. A prior pump on this run confirmed these ids as matrix denies -- it emitted
    * `run.tool_denied` for each, `toolUseId` included -- but that confirmation lived only in THIS
@@ -655,6 +669,18 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
       if (parsed.value.type === 'run.tool_denied' && typeof parsed.value.payload.toolUseId === 'string') {
         matrixDeniedToolUseIds.add(parsed.value.payload.toolUseId)
       }
+    }
+    // H9 F6's seed: a question this run asked before the pause is excused after it too. Only the
+    // runtime's own question tool is read, by the id the call was recorded under.
+    const priorCalls = await prisma.executionEvent.findMany({ where: { runId, type: 'run_tool_call' } })
+    for (const row of priorCalls) {
+      const parsed = toExecutionEvent(row)
+      if (!parsed.ok) throw new Error(`event log contains an unparseable run.tool_call row at seq ${String(row.seq)}: ${parsed.error}`)
+      if (parsed.value.type !== 'run.tool_call') continue
+      const { name, toolUseId } = parsed.value.payload
+      // `toolUseId` is optional on READ (rows older than M51 carry none); such a call has no id a
+      // denial could name, so there is nothing to excuse.
+      if (typeof toolUseId === 'string' && isUserQuestionTool(provider, name)) questionDeniedToolUseIds.add(toolUseId)
     }
   }
   // Seeded from the row, not from zero, for the same reason the column is incremented: on a resume
@@ -877,6 +903,17 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             await emit('run.tool_denied', 'slave', { tool: parsed.tool, capability: parsed.capability, toolUseId: event.toolUseId })
             break
           }
+        }
+        // H9 F6: the runtime refused its own ask-the-user tool, because a headless worker has no
+        // user. Not a denial of the slave's WORK -- the run goes on, and nothing fails it for this.
+        // Never `denied.push`: on Cursor that array is pause evidence (see the matrix branch above).
+        if (isUserQuestionTool(provider, event.toolName)) {
+          questionDeniedToolUseIds.add(event.toolUseId)
+          console.warn(
+            `[pump] run ${runId} called ${event.toolName} (${event.toolUseId}); a headless worker has no user to ` +
+              'ask, so the runtime refused it. Not failing the run: the prompt tells the worker to ask through <slave-ask>.',
+          )
+          break
         }
         denied.push(event.toolUseId)
         await emit('guardrail.tripped', 'system', {
@@ -1294,7 +1331,10 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // permission-mode denial -- or that a prior pump on this run confirmed and recorded the same way,
   // read back on resume (see the resume seed at the Set's declaration) -- so excluding them here
   // still fails a genuine pause/permission-mode denial byte-identically to before this fix.
-  const nonMatrixDeniedToolUseIds = outcome.deniedToolUseIds.filter((id) => !matrixDeniedToolUseIds.has(id))
+  // H9 F6: a refused ask-the-user call is excused the same way, for the same reason.
+  const nonMatrixDeniedToolUseIds = outcome.deniedToolUseIds.filter(
+    (id) => !matrixDeniedToolUseIds.has(id) && !questionDeniedToolUseIds.has(id),
+  )
   const failed = outcome.isError || nonMatrixDeniedToolUseIds.length > 0
 
   // M36 t2: a run that ended by asking another slave a question stops here instead of concluding.

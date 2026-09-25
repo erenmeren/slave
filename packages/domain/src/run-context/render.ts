@@ -108,6 +108,12 @@ export const PLANNING_GRAPH_INSTRUCTIONS = [
  * person's plugins (`@slave-of-ai/providers`' `cursor/home.ts` and `claude/flags.ts`); this is the
  * same rule said to the model, for whatever a vendor loads that no spawn flag reaches.
  *
+ * Its last sentences are H9 F6: a headless worker's own ask-the-user tool (`askQuestion`,
+ * `AskUserQuestion`) is refused by the runtime, because nobody is there to answer. The refusal no
+ * longer fails the run (`@slave-of-ai/providers`' `USER_QUESTION_TOOLS`); this is where the worker
+ * learns what to do instead -- the `<slave-ask>` protocol, offered in the `ask_protocol` section
+ * whenever there is somebody to address.
+ *
  * Must never contain the fake CLI's routing literals (`"verdict"`, `"task graph"`,
  * `"candidateIndex"`, `"sources"`): every implementation prompt carries it, and a fixture that
  * keyed on one would route a work run to the wrong arm.
@@ -116,6 +122,9 @@ export const IMPLEMENTATION_WORK_RULES = [
   'How to work: do the task itself, directly, in this repository. Do not brainstorm, write a plan,',
   'or hand parts of it to helpers or subtasks of your own -- this team already planned the work,',
   'and a reviewer checks it after you. Commit your work before you finish.',
+  'Nobody is watching this session live, so a tool that asks the user a question is refused. If you',
+  'need an answer from someone, ask through the protocol above when one is offered; otherwise make',
+  'the most reasonable assumption, say so in your final message, and finish the task.',
 ].join('\n')
 
 /**
