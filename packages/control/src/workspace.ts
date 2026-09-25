@@ -1,7 +1,14 @@
 import { stat } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { Prisma, prisma } from '@slave-of-ai/db/client'
-import { NON_TERMINAL_RUN_STATUSES, type Result, err, ok } from '@slave-of-ai/domain'
+import {
+  NON_TERMINAL_RUN_STATUSES,
+  isWorkspaceLimitAllowed,
+  type Result,
+  type WorkspaceLimitField,
+  err,
+  ok,
+} from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { ProviderKind } from '@slave-of-ai/providers'
 import { realGitProbe, type GitProbe } from './git-probe.js'
@@ -164,6 +171,90 @@ export async function setWorkspaceIntegration(
     userId: principal?.userId ?? null,
   })
   return ok({ unintegratedDone })
+}
+
+/** The patch {@link setWorkspaceLimits} takes: any of the three, each optional. */
+export interface WorkspaceLimitsPatch {
+  /** Milliseconds, the column's own unit -- and a whole number of minutes (`isWorkspaceLimitAllowed`). */
+  readonly runTimeoutMs?: number
+  readonly maxConcurrentRuns?: number
+  readonly maxAttempts?: number
+}
+
+/** One limit that moved: the `workspace.settings_changed` payload, handed back so a caller can say it. */
+export interface WorkspaceLimitMove {
+  readonly field: WorkspaceLimitField
+  readonly from: number
+  readonly to: number
+}
+
+/**
+ * Sets any of the project's three dispatch limits (H9 F8): how long a run may work, how many runs
+ * the project has at once, and how many attempts a task gets.
+ *
+ * `Workspace.runTimeoutMs` had no writer at all -- no verb, no route, the Runtime panel showed it
+ * read-only -- so a project whose tasks legitimately take longer than thirty minutes could only be
+ * helped by a hand edit of the database. The other two were in the same state outside the
+ * simulation adopt path. This is the writer, bounded by `WORKSPACE_LIMIT_BOUNDS`.
+ *
+ * EVERY figure is checked before anything is written: a patch carrying one good limit and one bad
+ * one writes neither, `setSupervisorSettings`' rule. One `workspace.settings_changed` per limit that
+ * actually MOVED, and none when nothing did, so a re-save of an unchanged form says nothing.
+ *
+ * What each one reaches, which is why the caller is handed the moves back:
+ * - `runTimeoutMs` is read live by the sweep, so a raised timeout reaches a run that is already
+ *   working on the next pass. It also bounds each verify and merge command.
+ * - `maxConcurrentRuns` is read by the next dispatch; a lowered one stops nothing already running.
+ * - `maxAttempts` is COPIED onto a task when the task is planned (`Task.maxAttempts`), so it reaches
+ *   tasks planned from now on only. A task already on the board keeps the ceiling it was created
+ *   with, and `retry-task` is what moves that one.
+ *
+ * No transaction and no lock, `setWorkspaceBudget`'s shape: three integers on one row, and two
+ * people racing to set them leave whatever the last writer said.
+ *
+ * Deliberately NOT refused for a halted project -- raising a timeout is a reasonable thing to do
+ * while it is stopped -- and the web route answers `archived` before this runs.
+ */
+export async function setWorkspaceLimits(
+  workspaceId: string,
+  patch: WorkspaceLimitsPatch,
+  principal?: Principal,
+): Promise<Result<{ readonly moved: readonly WorkspaceLimitMove[] }, ControlRefusal>> {
+  const fields: readonly WorkspaceLimitField[] = ['runTimeoutMs', 'maxConcurrentRuns', 'maxAttempts']
+  for (const field of fields) {
+    const value = patch[field]
+    if (value !== undefined && !isWorkspaceLimitAllowed(field, value)) return err({ kind: 'invalid_limit', field })
+  }
+
+  const workspace = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { runTimeoutMs: true, maxConcurrentRuns: true, maxAttempts: true },
+  })
+  if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
+
+  const moved: WorkspaceLimitMove[] = []
+  for (const field of fields) {
+    const to = patch[field]
+    if (to !== undefined && to !== workspace[field]) moved.push({ field, from: workspace[field], to })
+  }
+  if (moved.length === 0) return ok({ moved })
+
+  await prisma.workspace.update({
+    where: { id: workspaceId },
+    data: Object.fromEntries(moved.map((move) => [move.field, move.to])),
+  })
+  // One event per limit, in the table's order: a settings_changed is ONE field's move, which is
+  // what lets the Activity card say "run timeout 30m → 60m" without decoding a bag.
+  for (const move of moved) {
+    await appendEvent({
+      type: 'workspace.settings_changed',
+      workspaceId,
+      actor: 'human',
+      payload: { field: move.field, from: move.from, to: move.to },
+      userId: principal?.userId ?? null,
+    })
+  }
+  return ok({ moved })
 }
 
 export interface CreateWorkspaceInput {
