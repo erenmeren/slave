@@ -3480,6 +3480,65 @@ describe('the orchestrator CLI', () => {
       expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).autoMerge).toBe(false)
     })
 
+    // H9 F8: the three dispatch limits, which nothing could write before this verb.
+    it('set-limits writes the timeout in minutes, runs at once and attempts, and says what moved', async (): Promise<void> => {
+      const result = await runCli([
+        'set-limits',
+        '--workspace',
+        fixture.workspaceId,
+        '--run-timeout-min',
+        '60',
+        '--max-concurrent-runs',
+        '4',
+        '--max-attempts',
+        '5',
+      ])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('run timeout 30 min to 60 min, runs at once 3 to 4, attempts per task 3 to 5')
+      expect(result.stdout).toContain('a task already on the board keeps the ceiling it was planned with')
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
+      expect([workspace.runTimeoutMs, workspace.maxConcurrentRuns, workspace.maxAttempts]).toEqual([3_600_000, 4, 5])
+      const events = await prisma.executionEvent.findMany({
+        where: { workspaceId: fixture.workspaceId, type: 'workspace_settings_changed' },
+        orderBy: { seq: 'asc' },
+      })
+      expect(events.map((event) => event.payload)).toEqual([
+        { field: 'runTimeoutMs', from: 1_800_000, to: 3_600_000 },
+        { field: 'maxConcurrentRuns', from: 3, to: 4 },
+        { field: 'maxAttempts', from: 3, to: 5 },
+      ])
+    })
+
+    it('set-limits says nothing moved when the figure is already there, and prints no attempts caveat', async (): Promise<void> => {
+      const result = await runCli(['set-limits', '--workspace', fixture.workspaceId, '--run-timeout-min', '30'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('nothing changed')
+      expect(result.stdout).not.toContain('planned with')
+    })
+
+    it('refuses set-limits with no flag, and out of range with the rule, writing nothing', async (): Promise<void> => {
+      const neither = await runCli(['set-limits', '--workspace', fixture.workspaceId])
+      expect(neither.code).not.toBe(0)
+      expect(neither.stderr).toMatch(/one of --run-timeout-min, --max-concurrent-runs or --max-attempts is required/)
+
+      const long = await runCli(['set-limits', '--workspace', fixture.workspaceId, '--run-timeout-min', '181', '--max-attempts', '4'])
+      expect(long.code).not.toBe(0)
+      expect(long.stderr).toContain('a run timeout must be a whole number of minutes from 5 to 180')
+
+      const many = await runCli(['set-limits', '--workspace', fixture.workspaceId, '--max-concurrent-runs', '11'])
+      expect(many.code).not.toBe(0)
+      expect(many.stderr).toContain('runs at once must be a whole number from 1 to 10')
+
+      const word = await runCli(['set-limits', '--workspace', fixture.workspaceId, '--max-attempts', 'lots'])
+      expect(word.code).not.toBe(0)
+      expect(word.stderr).toContain('attempts per task must be a whole number from 1 to 10')
+
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
+      expect([workspace.runTimeoutMs, workspace.maxConcurrentRuns, workspace.maxAttempts]).toEqual([1_800_000, 3, 3])
+    })
+
     it('refuses set-supervisor with no flag at all', async (): Promise<void> => {
       const result = await runCli(['set-supervisor', '--workspace', fixture.workspaceId])
 

@@ -120,6 +120,7 @@ import {
   setPassword,
   setSupervisorSettings,
   setWorkspaceIntegration,
+  setWorkspaceLimits,
   listSupervisorMessages,
   sendSupervisorMessage,
   storeSupervisorUploads,
@@ -647,6 +648,15 @@ const USAGE = `usage: orchestrator <command> [options]
                                        Turning it on stamps nothing that is already done: work
                                        merged by hand stays unstamped and still needs
                                        confirm-integration once, and the command says how much.
+  set-limits --workspace <id> [--run-timeout-min <n>] [--max-concurrent-runs <n>] [--max-attempts <n>]
+                                       how long one run may work (5-180 minutes, default 30), how
+                                       many runs the project has at once (1-10, default 3) and how
+                                       many attempts a task gets (1-10, default 3). Refused with
+                                       no flag at all, and refused outright -- nothing written --
+                                       when any figure is out of range. A raised timeout reaches
+                                       a run that is already working; attempts reach tasks
+                                       planned from now on, and a task already on the board keeps
+                                       the ceiling it was planned with.
 
   delete-slave --slave <id> [--yes]    delete the PERSON sitting in this seat, and every other
                                        project they are on. Omit --yes to see how many projects
@@ -3700,6 +3710,49 @@ export async function main(argv: readonly string[]): Promise<number> {
         process.stdout.write(
           'this stamps nothing that is already done -- run confirm-integration --task <id> once on each to unblock ' +
             `its dependents; still unstamped here: ${plural(result.value.unintegratedDone, 'task')}\n`,
+        )
+      }
+      return 0
+    }
+
+    // H9 F8: the three dispatch limits, which had defaults since M2 and no writer -- a project
+    // whose runs need more than thirty minutes could only be helped by an UPDATE typed into psql.
+    case 'set-limits': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const timeoutText = flagText(flags, 'run-timeout-min')
+      const concurrentText = flagText(flags, 'max-concurrent-runs')
+      const attemptsText = flagText(flags, 'max-attempts')
+      if (timeoutText === undefined && concurrentText === undefined && attemptsText === undefined) {
+        throw new Error('one of --run-timeout-min, --max-concurrent-runs or --max-attempts is required')
+      }
+      // Handed on as numbers and NOT checked here: `setWorkspaceLimits` owns the bounds and the
+      // sentence, so `--run-timeout-min 1.5` and `--max-attempts lots` (NaN) are told the same rule
+      // the Runtime panel shows. Minutes become the column's milliseconds at this one boundary.
+      const result = await setWorkspaceLimits(workspaceId, {
+        ...(timeoutText === undefined ? {} : { runTimeoutMs: Number(timeoutText) * 60_000 }),
+        ...(concurrentText === undefined ? {} : { maxConcurrentRuns: Number(concurrentText) }),
+        ...(attemptsText === undefined ? {} : { maxAttempts: Number(attemptsText) }),
+      })
+      if (!result.ok) throw new Error(refusalText(result.error))
+      const { moved } = result.value
+      if (moved.length === 0) {
+        process.stdout.write(`nothing changed on ${workspaceId}: every limit given already reads that\n`)
+        return 0
+      }
+      const said = { runTimeoutMs: 'run timeout', maxConcurrentRuns: 'runs at once', maxAttempts: 'attempts per task' }
+      const figure = (field: keyof typeof said, value: number): string =>
+        field === 'runTimeoutMs' ? `${String(value / 60_000)} min` : String(value)
+      process.stdout.write(
+        `limits updated on ${workspaceId}: ` +
+          moved.map((move) => `${said[move.field]} ${figure(move.field, move.from)} to ${figure(move.field, move.to)}`).join(', ') +
+          '\n',
+      )
+      // `Task.maxAttempts` is copied from the project when a task is planned, so this reaches the
+      // next plan and not the board -- said where somebody is reading, as set-auto-merge says its
+      // own caveat.
+      if (moved.some((move) => move.field === 'maxAttempts')) {
+        process.stdout.write(
+          'attempts reach tasks planned from now on; a task already on the board keeps the ceiling it was planned with\n',
         )
       }
       return 0
