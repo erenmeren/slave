@@ -1,9 +1,10 @@
 import { hostname } from 'node:os'
-import { describeSync, drainCapabilityMappingCalls, drainIntakeCalls, drainModelCalls, drainSupervisorChatCalls, reconcileTemplateCapabilities, syncSkillCatalog, tickCapabilityMapping, tickIntakes, tickSimulations, tickSupervisorChat, WORKTREE_TTL_MS, type DeciderRegistry, type ModelDecider } from '@slave-of-ai/control'
+import { describeSync, drainCapabilityMappingCalls, drainIntakeCalls, drainModelCalls, drainSupervisorChatCalls, reconcileTemplateCapabilities, signalRun, syncSkillCatalog, tickCapabilityMapping, tickIntakes, tickSimulations, tickSupervisorChat, WORKTREE_TTL_MS, type DeciderRegistry, type ModelDecider } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { BROKER_TIMEOUT_MS, SUPERVISOR_DEFAULT_MODEL, workspaceId as brandWorkspaceId, type WorkspaceId } from '@slave-of-ai/domain'
-import { subscribeEvents, type EventSubscription } from '@slave-of-ai/events'
+import { acquireSessionLock, subscribeEvents, type EventSubscription, type SessionLock } from '@slave-of-ai/events'
 import type { AdapterRegistry } from '@slave-of-ai/providers'
+import { childPids, claimAndKillOwnRuns, releaseAbandonedRuns, within } from './abandon.js'
 import { serveBrokerRequests } from './broker.js'
 import { collectWorktrees } from './collect.js'
 import { hasTickRun, reconcileOrphans, sweep } from './sweep.js'
@@ -389,6 +390,68 @@ export function servingLine(names: readonly string[], following: boolean): strin
 }
 
 /**
+ * The advisory-lock key the daemon holds for as long as it runs (H9b R4, F3). Arbitrary, and
+ * constant: advisory locks are per database, so one key is "one daemon per database" by itself.
+ */
+export const DAEMON_LOCK_KEY = 0x5_1a7e_0fa1n
+
+/**
+ * How long a forced stop may spend on the database before it exits anyway (H9b R3). Per step --
+ * the claim, then the release -- so the worst case is twice this. A stop that is being forced may be
+ * forced BECAUSE the database hung, and the children are killed whatever the claim managed.
+ */
+export const FORCED_STOP_DB_BUDGET_MS = 3_000
+
+/** The message a second daemon on the same database refuses with (H9b R4). */
+export function lockHeldMessage(): string {
+  return (
+    'another daemon is already running on this database (it holds the daemon lock), so this one will not start: ' +
+    'two daemons on one database both sweep the same runs, time out each other\'s work and cancel runs they cannot see. ' +
+    'Stop the other one first (`pgrep -af "orchestrator.*daemon"`), or point this one at a different DATABASE_URL.'
+  )
+}
+
+/**
+ * The daemon: takes the database's daemon lock, serves ({@link serveDaemon}), and gives the lock
+ * back however serving ends (H9b R4, F3).
+ *
+ * The lock is a Postgres SESSION advisory lock on a connection of its own, so it dies with this
+ * process whichever way the process dies -- a SIGKILL included, which is how the restart-chaos gate
+ * can start the next daemon moments after killing the last. A second daemon on the same database
+ * refuses to start, loudly, with a non-zero exit (the CLI prints the thrown message): the tick's
+ * claims were always atomic, but the SWEEP acted on runs another instance owned -- timed them out,
+ * cancelled them through an adapter that had never heard of them -- and nothing stopped an operator
+ * starting two. The gates' `findRealDaemonPids` check stays as a courtesy with a better message.
+ *
+ * No lock without a `DATABASE_URL` in the environment: that is a test calling this with Prisma
+ * configured some other way, and there is no database name to scope a lock to.
+ */
+export async function runDaemon(deps: DaemonDeps): Promise<void> {
+  const connectionString = process.env['DATABASE_URL']
+  let lock: SessionLock | null = null
+  if (connectionString !== undefined && connectionString !== '') {
+    lock = await acquireSessionLock(connectionString, DAEMON_LOCK_KEY, {
+      onLost: (error): void => {
+        // The session is gone and the lock with it. Said loudly and not acted on: the database
+        // restarting under a running daemon is an ordinary event, and the tick's own queries fail
+        // and recover through it. A second daemon could start in the gap, which is the one hazard
+        // this lock exists for -- and the operator reading this line is the one who would start it.
+        process.stderr.write(
+          `[daemon] the connection holding the daemon lock was lost (${error instanceof Error ? error.message : String(error)}); ` +
+            'this daemon keeps running, but until it restarts nothing stops a second one starting on this database\n',
+        )
+      },
+    })
+    if (lock === null) throw new Error(lockHeldMessage())
+  }
+  try {
+    await serveDaemon(deps)
+  } finally {
+    await lock?.release()
+  }
+}
+
+/**
  * The daemon: one loop per project it serves, and the four things that are the process's own.
  *
  * ZERO ACTIVE PROJECTS IS NOT AN ERROR (M59 R15). It is the state a fresh install is in before its
@@ -405,7 +468,7 @@ export function servingLine(names: readonly string[], following: boolean): strin
  * NOT once per loop: three loops each stepping every simulation would step every simulation three
  * times as fast, and claim three intakes where one was due.
  */
-export async function runDaemon(deps: DaemonDeps): Promise<void> {
+async function serveDaemon(deps: DaemonDeps): Promise<void> {
   // The catalog, once per process, before the first tick (M14 §4.3). Non-fatal: a host with no
   // skills directory is an ordinary host, and a daemon that refuses to start because it could not
   // read one is worse than a daemon with an empty catalog. A failed scan is simply skipped --
@@ -613,12 +676,30 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
     resolveStopped = resolve
   })
   let shuttingDown = false
+  let forcing = false
   const shutdown = (): void => {
+    if (forcing) {
+      // A THIRD signal: whatever the forced stop is still waiting on, stop waiting.
+      process.exit(130)
+    }
     if (shuttingDown) {
       // The second signal is the universal "I mean it". Forcing is then a decision rather than
       // an accident -- and the first signal said what it was waiting for.
-      process.stderr.write('forced: exiting without finishing the shutdown\n')
-      process.exit(130)
+      //
+      // H9b R3 (F2): but not by abandoning the workers. Every run this process pumps is claimed
+      // as the platform's failure and its child killed, then every other child this process has,
+      // then the tasks are released -- each database step bounded, so a hung database costs
+      // seconds rather than the stop. See `abandon.ts`.
+      forcing = true
+      process.stderr.write('forced: ending this daemon\'s runs and killing its workers, then exiting. Signal again to exit at once.\n')
+      void (async (): Promise<void> => {
+        const claimed = await within(FORCED_STOP_DB_BUDGET_MS, claimAndKillOwnRuns([...activePumpRunIds]), [])
+        for (const pid of childPids()) signalRun(pid, 'SIGKILL')
+        await within(FORCED_STOP_DB_BUDGET_MS, releaseAbandonedRuns(claimed), undefined)
+        process.stderr.write(`forced: ${String(claimed.length)} run(s) ended as platform failures; exiting\n`)
+        process.exit(130)
+      })()
+      return
     }
     shuttingDown = true
     process.stderr.write('stopping: finishing the tick in flight, then draining. Signal again to force.\n')
