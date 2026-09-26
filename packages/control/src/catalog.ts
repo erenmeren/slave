@@ -1124,19 +1124,26 @@ export function capabilityKeysInDomain(domain: string, taxonomy: readonly Capabi
 }
 
 /**
- * Every filter as a Prisma clause (M55 R3).
+ * Every filter as a Prisma clause (M55 R3; widened to nine dimensions by workforce cards).
  *
- * This is what replaced `matches()`: seven dimensions that used to be an `Array#filter` over every
- * row in the table. `capability` and `skill` are `has` clauses over `String[]` columns, `q` is a
- * `contains` over the denormalised `searchText`, and `duplicates` is a relation filter over BOTH
- * sides of a pair -- `aId < bId` is a writer's rule, so a row is the `a` of some pairs and the `b`
- * of others and only the `OR` sees all of them.
+ * This is what replaced `matches()`: an `Array#filter` over every row in the table. `capability`
+ * and `skill` are `has` clauses over `String[]` columns, `specialty` is a `hasSome` over one
+ * domain's taxonomy keys ({@link capabilityKeysInDomain} -- an unknown domain matches nothing),
+ * `noSkills` is a `defaultSkills: { none: {} }` relation filter, `q` is an `OR` of a `contains` over
+ * the denormalised `searchText` and a `contains` over a linked skill's raw name, and `duplicates` is
+ * a relation filter over BOTH sides of a pair -- `aId < bId` is a writer's rule, so a row is the `a`
+ * of some pairs and the `b` of others and only the `OR` sees all of them.
  *
- * `q` is folded with `normalisePersona`, the SAME function that folded the column (plan erratum
- * E12), then its `%`, `_` and `\` are escaped ({@link escapeLikeWildcards}) so a search box stays a
- * search box and never a pattern language; `mode: 'insensitive'` is deliberately absent: the column
- * is already lower-cased by construction, so asking Postgres for `ILIKE` over it would be strictly
- * more work for the same answer, on the one clause R3 itself calls a sequential scan.
+ * `q`'s FIRST half (`searchText`) is folded with `normalisePersona`, the SAME function that folded
+ * the column (plan erratum E12), then its `%`, `_` and `\` are escaped
+ * ({@link escapeLikeWildcards}) so a search box stays a search box and never a pattern language;
+ * `mode: 'insensitive'` is deliberately absent from THIS half: the column is already lower-cased by
+ * construction and so is the folded query, so asking Postgres for `ILIKE` over it would be strictly
+ * more work for the same answer, on the one clause R3 itself calls a sequential scan. `q`'s SECOND
+ * half (workforce cards) is the opposite case: a linked skill's `name` is stored exactly as typed
+ * and this half is deliberately RAW rather than folded (the comment beside it says why), so neither
+ * side is already case-normalised and `mode: 'insensitive'` is what makes `q: 'PDF-maker'` find a
+ * skill stored as `pdf-maker`.
  */
 function catalogWhere(
   filters: WorkforceCatalogFilters,
@@ -1269,12 +1276,13 @@ async function rowDuplicatesFor(ids: readonly string[]): Promise<Map<string, Row
 }
 
 /**
- * The three facet menus, over EVERY row and before any filter ran (M46 R6's rule).
+ * The four facet menus, over EVERY row and before any filter ran (M46 R6's rule).
  *
- * Its own function because it is now SKIPPABLE (final wave, minor 2): one `groupBy` and two
- * `SELECT DISTINCT unnest(...)` whole-table scans are what a filter MENU costs, and a caller with
- * no menu to draw -- `listTemplates()`, the company pickers' unfiltered read -- was paying for
- * three of them on every `/workforce` load, beside the page's own three.
+ * Its own function because it is now SKIPPABLE (final wave, minor 2): one `groupBy`, two
+ * `SELECT DISTINCT unnest(...)` and one domain-count query -- four whole-table scans -- are what a
+ * filter MENU costs, and a caller with no menu to draw -- `listTemplates()`, the company pickers'
+ * unfiltered read -- was paying for four of them on every `/workforce` load, beside the page's own
+ * four.
  */
 async function readCatalogFacets(): Promise<WorkforceCatalogFacets> {
   const [divisionGroups, capabilityRows, skillRows, domainRows] = await Promise.all([
@@ -1315,17 +1323,21 @@ const NO_FACETS: WorkforceCatalogFacets = { divisions: [], capabilities: [], ski
  * effective spec in memory and filter the array; its own docblock argued that the catalog was
  * "hundreds of rows even after a full import -- a page's worth of memory", which stopped being true
  * on the day a full import became three hundred files and could become five thousand. Four
- * denormalised columns pay for four of the seven clauses -- the M47 precedent, whose own sentence is
+ * denormalised columns pay for four of the nine clauses -- the M47 precedent, whose own sentence is
  * that a filter vocabulary inside a JSON column cannot be a `where` -- and the page is a cursor over
- * `(name, id)`, which is a total order because `id` is unique.
+ * `(name, id)`, which is a total order because `id` is unique. `specialty` and `noSkills` (workforce
+ * cards) are the two newest clauses and neither adds a column of its own: `specialty` reuses
+ * `capabilityKeys`, already denormalised for the `capability` clause, and `noSkills` is a relation
+ * filter over `TemplateSkill` rather than a scalar column.
  *
  * **The FACETS are still computed over every row, before filtering** (M46 R6's rule, unchanged): a
  * filter menu built from the filtered rows collapses to whatever was already chosen, which makes it
  * impossible to change your mind. Each is its own bounded query rather than a fold over rows nobody
- * read: one `groupBy` for the divisions and one `SELECT DISTINCT unnest(...)` for each of the two
- * array columns. `options.facets: false` SKIPS all three and hands back empty lists (final wave,
- * minor 2) -- for the caller that draws no menu, which is `listTemplates()` and which was paying
- * for a second set of whole-table scans on every unfiltered `/workforce` load.
+ * read: one `groupBy` for the divisions, one `SELECT DISTINCT unnest(...)` for each of the two array
+ * columns, and one domain-count query (workforce cards) joined against the taxonomy.
+ * `options.facets: false` SKIPS all four and hands back empty lists (final wave, minor 2) -- for the
+ * caller that draws no menu, which is `listTemplates()` and which was paying for a second set of
+ * whole-table scans on every unfiltered `/workforce` load.
  *
  * A DIVISION is a directory a catalog was imported from, so both the menu and the clause read
  * `sourceDivision` alone (M46 plan erratum E22): a hand-made template whose `role` happens to spell
