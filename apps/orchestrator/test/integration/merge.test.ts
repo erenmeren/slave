@@ -196,6 +196,22 @@ describe('runMergePass', () => {
     }
   })
 
+  it('merges past a repository commit-msg hook that would refuse the merge subject', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: true })
+    const { taskId, taskKey } = await seedMergingTask(workspace)
+    // The shape commitlint installs through lefthook on `npm ci`: a hook that refuses any subject
+    // outside its convention -- here, every subject.
+    const hookPath = join(workspace.repoPath, '.git', 'hooks', 'commit-msg')
+    writeFileSync(hookPath, '#!/bin/sh\necho "subject refused" >&2\nexit 1\n', { mode: 0o755 })
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+    expect(task.status).toBe('done')
+    expect(task.integratedAt).not.toBeNull()
+    expect(mergeCommitSubjects(workspace.repoPath).some((subject) => subject.includes(taskKey))).toBe(true)
+  })
+
   it('(b) concludes done without merging when autoMerge is false', async (): Promise<void> => {
     const workspace = await seedWorkspace({ autoMerge: false })
     const { taskId, branch } = await seedMergingTask(workspace)
