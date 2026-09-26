@@ -302,9 +302,12 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
   // fast-forward. Wrapped like the rebase above: a merge can still fail here -- `main` moved
   // between the rebase and this command, or a lock collision with concurrent provisioning -- and
   // an uncaught throw would wedge the primary checkout mid-merge and stall the whole workspace's
-  // merge queue (the stuck claim silences every later pass) until a restart.
+  // merge queue (the stuck claim silences every later pass) until a restart. `--no-verify`, for the
+  // WIP commit's reason (`wipCommit.ts`): the repository's own commit hooks are the worker's to
+  // satisfy on its own commits, and a `commit-msg` hook enforcing a message convention (commitlint
+  // installed by `npm ci`) would otherwise refuse this commit's subject on every task, forever.
   try {
-    await gitIn(workspace.repoPath, 'merge', '--no-ff', branch, '-m', `merge(${taskKey}): ${task.title}`)
+    await gitIn(workspace.repoPath, 'merge', '--no-ff', '--no-verify', branch, '-m', `merge(${taskKey}): ${task.title}`)
   } catch (error) {
     await gitIn(workspace.repoPath, 'merge', '--abort').catch(() => {})
     const message = (error instanceof Error ? error.message : String(error)).slice(0, 2000)
