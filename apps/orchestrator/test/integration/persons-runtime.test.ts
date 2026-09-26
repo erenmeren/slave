@@ -60,7 +60,7 @@ beforeEach(async () => {
 afterAll(() => {
   for (const repo of repos) {
     try {
-      execFileSync('rm', ['-rf', repo])
+      execFileSync('rm', ['-rf', repo, `${repo}-slaveofai-worktrees`])
     } catch {
       // best-effort cleanup of scratch repos
     }

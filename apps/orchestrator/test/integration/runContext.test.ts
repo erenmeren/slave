@@ -192,7 +192,10 @@ describe('buildRunContext', () => {
   })
 
   afterAll(async (): Promise<void> => {
-    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+    for (const repo of repos) {
+      rmSync(`${repo}-slaveofai-worktrees`, { recursive: true, force: true })
+      rmSync(repo, { recursive: true, force: true })
+    }
     for (const tree of skillTrees) rmSync(tree, { recursive: true, force: true })
     await prisma.$disconnect()
   })

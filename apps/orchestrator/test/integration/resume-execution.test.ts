@@ -122,7 +122,10 @@ describe('executing a resume intent from the daemon', () => {
   })
 
   afterAll(async (): Promise<void> => {
-    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+    for (const repo of repos) {
+      rmSync(`${repo}-slaveofai-worktrees`, { recursive: true, force: true })
+      rmSync(repo, { recursive: true, force: true })
+    }
     await prisma.$disconnect()
   }, 30_000)
 
