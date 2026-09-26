@@ -1052,9 +1052,9 @@ try {
     page.getByTestId('workforce-tab-slaves'),
     async () =>
       normalize(
-        (await page.evaluate(
+        await page.evaluate(
           () => document.querySelector('[data-testid="people-rows"] [data-testid="workforce-card-grid"]')?.style.gridTemplateColumns ?? '',
-        )) ?? '',
+        ),
       ) === PEOPLE_GRID,
     "the Workforce page's People cards",
   )

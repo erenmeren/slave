@@ -451,9 +451,11 @@ try {
   async function scrollPeopleTo(needle) {
     const search = page.getByTestId('people-search')
     const rows = page.locator('[data-testid^="person-row-"]').filter({ hasText: needle })
-    // Already searched for and still absent (stage 1 searches while the new slave is being made):
-    // clear the box for longer than the bar's 250 ms debounce, so the refill is a NEW question.
+    // Already searched for and still absent: clear the box for longer than the bar's 250 ms
+    // debounce, so the refill is a NEW question. LOGGED every time -- People is meant to refresh
+    // by itself (stage 1 proves it without this), so a re-ask is worth seeing in the log.
     if ((await search.inputValue()) === needle && (await rows.count()) === 0) {
+      console.log(`re-asked people search for ${needle}`)
       await search.fill('')
       await delay(600)
     }
@@ -493,6 +495,11 @@ try {
 
   // ---- stage 1 -------------------------------------------------------------------------------
   await gotoReliably(`${baseUrl}/workforce?tab=slaves`)
+  // Workforce cards: People is paged, so the new slave is SEARCHED for -- and the search is typed
+  // BEFORE they exist, then never re-asked: the card has to appear by itself once New slave's own
+  // refresh lands, which is the claim this stage always made ("People updates after New slave").
+  await page.getByTestId('people-search').fill(PERSON_A)
+  await delay(600)
   await page.getByTestId('new-slave').click()
   await waitVisible(page.getByTestId('new-slave-drawer'), 'the New slave drawer')
   await page.getByTestId('new-slave-persona').selectOption(templateId)
@@ -502,10 +509,7 @@ try {
   if (!/pool/i.test(poolNote)) await fail(`stage 1: the drawer does not say the slave lands in the pool: ${poolNote}`)
   await page.getByTestId('new-slave-submit').click()
 
-  await settleTo(async () => {
-    await scrollPeopleTo(PERSON_A)
-    return page.locator('[data-testid^="person-row-"]').filter({ hasText: PERSON_A }).count()
-  }, 1)
+  await settleTo(async () => page.locator('[data-testid^="person-row-"]').filter({ hasText: PERSON_A }).count(), 1)
   const personId = await page.locator('[data-testid^="person-row-"]').filter({ hasText: PERSON_A }).first().getAttribute('data-person-id')
   if (personId === null) await fail('stage 1: the new People row has no data-person-id')
   const row = page.getByTestId(`person-row-${personId}`)

@@ -68,7 +68,7 @@ function patchedPersonSkills(current: readonly CardSkillRow[], outcome: SkillWri
  * Nothing ELSE ever drops a loaded page (controller ruling F2). A person-scope card write patches
  * that one card in place; a persona-scope write (it reaches every person hired from that persona),
  * a refused write, a change made in the person sheet (`refreshKey`) and a new `initial` from the
- * server (a `?slave=` open re-renders the page) all re-read the SAME range -- page one, then the
+ * server (a `?slave=` open re-renders the page, a new slave refreshes it) all re-read the SAME range -- page one, then the
  * cursor chain the "Show more" clicks already walked -- and swap it in only once it is whole.
  *
  * The person header (spec §2): avatar, name and division from the card, and WHERE THEY WORK in the
@@ -186,19 +186,16 @@ export function PeopleCards({
   }, [])
 
   // A NEW `initial` means the server re-rendered the page -- a `router.refresh()` after a new slave,
-  // or `useSelectedId`'s `router.replace` opening/closing a person. It is page one of the same URL,
-  // so it is taken as-is only when page one is all that is loaded; past that it would drop the
-  // pages after it (F2), and the loaded range is re-read instead.
+  // or `useSelectedId`'s `router.replace` opening/closing a person. It is NEVER taken as-is (Task 9
+  // fix round 1): the RSC payload was rendered for the URL at navigation START, so one landing after
+  // a newer filter's own answer would paint the old filter's rows under the new filter bar, and
+  // stay. It is only a signal that something changed: the loaded range is re-read under the
+  // filters the bar shows NOW (F2 -- never fewer rows than are loaded, and at least page one).
   const seeded = useRef(initial)
   useEffect(() => {
     if (seeded.current === initial) return
     seeded.current = initial
-    if (current.current.loaded <= initial.rows.length) {
-      setPage(initial)
-      setStale(false)
-      return
-    }
-    resync(current.current.filters, current.current.loaded)
+    resync(current.current.filters, Math.max(current.current.loaded, 1))
   }, [initial, resync])
 
   // The first pass does not fetch: `initial` IS that answer (the catalog's rule).

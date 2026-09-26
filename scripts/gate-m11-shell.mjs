@@ -418,6 +418,8 @@ try {
     // Already searched for and still absent (the answer predates them): clear the box for longer
     // than the bar's 250 ms debounce, so the refill below is a NEW question, not the same text.
     if ((await search.inputValue()) === name && (await rows.count()) === 0) {
+      // Logged every time, so a People list that stopped refreshing by itself stays visible.
+      console.log(`re-asked people search for ${name}`)
       await search.fill('')
       await page.waitForTimeout(600)
     }

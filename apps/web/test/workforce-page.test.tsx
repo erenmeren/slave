@@ -689,9 +689,10 @@ describe('WorkforceClient row click opens the panel', () => {
     expect(routerReplace).toHaveBeenLastCalledWith('/workforce', { scroll: false })
   })
 
-  // Controller ruling F2: opening a person writes `?slave=` and closing clears it -- neither may
-  // reset People to page one, or the card an operator just clicked would vanish behind the sheet.
-  it('keeps every "Show more" page loaded while a person is opened and closed', async () => {
+  // Controller ruling F2, CLIENT side only: opening a person writes `?slave=` and closing clears
+  // it, and neither may reset People to page one by itself. `router.replace` is a mock here, so no
+  // new server `initial` arrives -- that half is `people-cards.test.tsx`'s "a new page one" cases.
+  it('does not reset the loaded "Show more" pages on the client when a person is opened and closed', async () => {
     const later = personRow({ personId: 'p2', name: 'Later', seats: [] })
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
@@ -1038,9 +1039,6 @@ describe('the Workforce page seeds the catalog from the URL (M46 M1)', () => {
     expect((await renderPage({ tab: 'nonsense' })).props.initialTab).toBe('slaves')
   })
 
-  // M53 R12: both tables are `GROUP BY`s, so the domain chip has to reach the read that groups.
-  // A shared `?domain=` link that painted every domain under a chip row saying otherwise is the
-  // same bug M46's M1 fixed for the catalog, one tab over.
   it('seeds People from the same URL', async () => {
     listPeoplePage.mockClear()
     await renderPage({ state: 'pool', specialty: 'qa', skills: 'none' })
@@ -1048,6 +1046,9 @@ describe('the Workforce page seeds the catalog from the URL (M46 M1)', () => {
     expect(listPeoplePage).toHaveBeenCalledWith({ specialty: 'qa', noSkills: true, state: 'pool' })
   })
 
+  // M53 R12: both tables are `GROUP BY`s, so the domain chip has to reach the read that groups.
+  // A shared `?domain=` link that painted every domain under a chip row saying otherwise is the
+  // same bug M46's M1 fixed for the catalog, one tab over.
   it('seeds the Evidence tab with the domain the URL already claims to be filtering by', async () => {
     buildEvidencePage.mockClear()
     await renderPage({ tab: 'evidence', domain: 'qa' })

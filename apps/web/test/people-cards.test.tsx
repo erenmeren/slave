@@ -238,7 +238,6 @@ describe('PeopleCards keeps every loaded page (F2)', () => {
   it('re-reads the loaded range after a persona-scope write, so the OTHER cards of that persona change too', async () => {
     const sibling = person({ personId: 'p1', name: 'Sibling', personaId: 't1' })
     const first = pageOf([sibling], { total: 2, nextCursor: 'p1' })
-    const second = pageOf([later], { total: 2 })
     let written = false
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const url = urlOf(input)
@@ -253,7 +252,6 @@ describe('PeopleCards keeps every loaded page (F2)', () => {
     })
     renderWithSkills(first)
     await loadPageTwo()
-    expect(second.rows).toHaveLength(1)
 
     await addSql(screen.getByTestId('person-row-p101'), true)
 
@@ -286,15 +284,42 @@ describe('PeopleCards keeps every loaded page (F2)', () => {
     expect(screen.getByTestId('person-row-p101')).toBe(card)
   })
 
-  it('takes a fresh page one straight from the server when only page one is loaded', async () => {
+  it('re-reads page one when the server hands a new one after a new slave, and shows the new hire', async () => {
+    fetchMock.mockImplementation(async () =>
+      new Response(JSON.stringify(pageOf([person(), person({ personId: 'p2', name: 'New hire' })])), { status: 200 }),
+    )
     const view = renderWithSkills(pageOf([person()]))
     await act(async () => {
       view.rerender(
         <PeopleCards initial={pageOf([person(), person({ personId: 'p2', name: 'New hire' })])} departments={[]} skillCatalogue={[sql]} taxonomy={[]} onOpen={vi.fn()} />,
       )
     })
-    expect(screen.getByTestId('person-row-p2')).toBeTruthy()
-    expect(fetchMock).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.getByTestId('person-row-p2')).toBeTruthy())
+    expect(listReads()).toEqual(['/api/persons'])
+  })
+
+  // Task 9 fix round 1: an RSC payload is rendered for the URL at navigation START, so a sheet
+  // close followed by a search can deliver an UNFILTERED page one after the search's own answer.
+  it('keeps the filtered cards when a new server page one arrives without the filter', async () => {
+    const pooled = person({ personId: 'p9', name: 'Pooled', state: 'pool', stateLabel: 'IN THE POOL', seats: [] })
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = urlOf(input)
+      if (url === '/api/persons?state=pool') return new Response(JSON.stringify(pageOf([pooled])), { status: 200 })
+      throw new Error(`unexpected fetch ${url}`)
+    })
+    const unfiltered = pageOf([person(), person({ personId: 'p2', name: 'Other' })])
+    const view = renderWithSkills(unfiltered)
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('people-filter-pool'))
+    })
+    await waitFor(() => expect(screen.getAllByTestId(/^person-row-/u).map((card) => card.getAttribute('data-person-id'))).toEqual(['p9']))
+
+    await act(async () => {
+      view.rerender(<PeopleCards initial={{ ...unfiltered }} departments={[]} skillCatalogue={[sql]} taxonomy={[]} onOpen={vi.fn()} />)
+    })
+
+    await waitFor(() => expect(listReads().filter((url) => url === '/api/persons?state=pool')).toHaveLength(2))
+    expect(screen.getAllByTestId(/^person-row-/u).map((card) => card.getAttribute('data-person-id'))).toEqual(['p9'])
   })
 
   it('re-reads the loaded range, not page one, when the sheet changes somebody', async () => {
