@@ -196,6 +196,14 @@ export function WorkforceCatalog({
    * rows or run out of pages, so a refusal on a card past the first page never drops the pages
    * before it. Guarded by the same `latest` sequence `reload` uses, so an ordinary filter-driven
    * reload in flight still wins over this, and vice versa.
+   *
+   * Fix round 1 (coordinator review, Important): a network failure or a malformed body used to
+   * reject `fetchPage`'s promise with nothing to catch it -- an unhandled rejection, unlike `reload`
+   * in this same file and every `sendControl`/`postControl`/`postJson` call this app makes. `fetchPage`
+   * now catches both (a rejected `fetch` and a throwing `response.json()`) into the same `null` its
+   * `!response.ok` branch already returned, and a `null` surfaces `reload`'s own failure state
+   * (`catalog-stale`) rather than silently leaving the write's own error as the only sign anything
+   * went wrong -- without touching `page.rows`, so the pages already loaded stay exactly as they were.
    */
   const resyncAfterRefusal = useCallback((next: WorkforceCatalogFilters, keep: number): void => {
     const id = latest.current + 1
@@ -204,20 +212,37 @@ export function WorkforceCatalog({
       const params = catalogFilterParams(next)
       if (cursor !== undefined) params.set('cursor', cursor)
       const query = params.toString()
-      const response = await fetch(query === '' ? '/api/org/catalog' : `/api/org/catalog?${query}`)
-      return response.ok ? ((await response.json()) as WorkforceCatalogView) : null
+      try {
+        const response = await fetch(query === '' ? '/api/org/catalog' : `/api/org/catalog?${query}`)
+        return response.ok ? ((await response.json()) as WorkforceCatalogView) : null
+      } catch {
+        return null
+      }
+    }
+    const failed = (): void => {
+      if (id !== latest.current) return
+      setStaleError(true)
     }
     void (async (): Promise<void> => {
       let view = await fetchPage()
-      if (view === null || id !== latest.current) return
+      if (view === null) {
+        failed()
+        return
+      }
+      if (id !== latest.current) return
       let rows = view.rows
       while (rows.length < keep && view.nextCursor !== null) {
         const more = await fetchPage(view.nextCursor)
-        if (more === null || id !== latest.current) return
+        if (more === null) {
+          failed()
+          return
+        }
+        if (id !== latest.current) return
         view = more
         rows = [...rows, ...more.rows]
       }
       if (id !== latest.current) return
+      setStaleError(false)
       setPage({ ...view, rows })
     })()
   }, [])

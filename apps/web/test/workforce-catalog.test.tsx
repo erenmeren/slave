@@ -284,6 +284,62 @@ describe('WorkforceCatalog rows', () => {
     expect(within(card).getByTestId('card-skill-s-sql')).toBeTruthy()
   })
 
+  /**
+   * Fix round 1 (coordinator review, Important): `resyncAfterRefusal`'s own re-fetch used to have no
+   * error handling -- a rejected `fetch` became an unhandled promise rejection. This proves the fix:
+   * a refused card write's resync whose OWN fetch fails must not reject unhandled, must not drop any
+   * page already loaded, and must surface the same failure state `reload` uses elsewhere on this tab.
+   */
+  it('shows the stale-catalog failure and keeps every loaded page when a refusal’s own resync fails, with no unhandled rejection', async () => {
+    const pageOne = { ...view([row()]), nextCursor: 't1' }
+    const pageTwo = { ...view([row({ id: 't2', name: 'Verifier' })]), nextCursor: null }
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.startsWith('/api/org/templates/')) {
+        return new Response(JSON.stringify({ error: 'the skill sql is missing from disk' }), { status: 409 })
+      }
+      if (url.includes('cursor=')) return new Response(JSON.stringify(pageTwo), { status: 200 })
+      // The resync's own re-fetch (bare, no cursor) is what fix round 1 guards -- a rejected
+      // `fetch`, the same shape a network failure takes.
+      throw new Error('network down')
+    })
+
+    const rejections: unknown[] = []
+    const onRejection = (reason: unknown): void => {
+      rejections.push(reason)
+    }
+    process.on('unhandledRejection', onRejection)
+
+    try {
+      render(
+        <WorkforceCatalog
+          initial={pageOne}
+          skillCatalogue={[{ skillId: 's-sql', name: 'sql', providerName: 'personal', description: 'writes sql', missing: false }]}
+        />,
+      )
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('catalog-more'))
+      })
+      await waitFor(() => expect(screen.getByTestId('catalog-row-t2')).toBeTruthy())
+
+      const card = screen.getByTestId('catalog-row-t2')
+      fireEvent.click(within(card).getByTestId('card-skill-add'))
+      fireEvent.click(within(card).getByTestId('skill-picker-option-s-sql'))
+      await act(async () => {
+        fireEvent.click(within(card).getByTestId('skill-picker-confirm'))
+      })
+
+      await waitFor(() => expect(screen.getByTestId('catalog-stale')).toBeTruthy())
+      // Neither page was dropped by the failed resync.
+      expect(screen.getByTestId('catalog-row-t1')).toBeTruthy()
+      expect(screen.getByTestId('catalog-row-t2')).toBeTruthy()
+      expect(rejections).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onRejection)
+    }
+  })
+
   it('never prints a bare mapping-quality token as visible text (docs/ia.md rule 3)', () => {
     render(<WorkforceCatalog initial={view([row({ mappingQuality: 'partial' })])} />)
     const line = screen.getByTestId('catalog-row-t1')
