@@ -34,10 +34,10 @@ import type { BreakerFailure, SupervisorQuestion, SupervisorSlave, SupervisorTas
  * that names it (`unanswerable_question`) never fired, the panel showed "0 could answer it" beside
  * no situation at all, and the staffing proposal that would have fixed it was never offered.
  *
- * Deliberately a parameter rather than a second function: the three staffing predicates below
- * (`no_reviewer`, `planning_stalled`'s `no_planner` reason, `ready_unstaffed`) are about who can be
- * DISPATCHED and have no asker to exclude, so they pass nothing and read exactly as they always
- * did.
+ * Deliberately a parameter rather than a second function: the staffing predicates below
+ * (`planning_stalled`'s `no_planner` reason, `ready_unstaffed`) are about who can be DISPATCHED and
+ * have no asker to exclude, so they pass nothing. `no_reviewer` passes the task's IMPLEMENTER, the
+ * one seat a review can never be dispatched to.
  */
 function roleHasHolder(world: SupervisorWorld, role: string, exceptSlaveId?: string): boolean {
   return world.slaves.some((slave) => slave.id !== exceptSlaveId && slave.runtimeRoles.includes(role))
@@ -270,13 +270,20 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
 
   // no_reviewer: something is waiting for a review nobody can be dispatched to do. The subject is
   // the ROLE, not the task -- staffing a reviewer unblocks every task in review at once.
-  const reviewing = world.tasks.filter((task) => task.status === 'reviewing')
-  if (reviewing.length > 0 && !roleHasHolder(world, REVIEWER_ROLE)) {
+  //
+  // The implementer is excluded (`dispatchReview`'s rule: nobody reviews their own work). A
+  // `reviewing` task's `assigneeId` IS its implementer -- `startRun` writes both in one claim, and
+  // the only other writer (pre-assignment) touches `ready`/`rework` tasks alone -- so a task whose
+  // only reviewer-role holder wrote it is as unreviewable as one with no reviewer at all.
+  const unreviewable = world.tasks.filter(
+    (task) => task.status === 'reviewing' && !roleHasHolder(world, REVIEWER_ROLE, task.assigneeId ?? undefined),
+  )
+  if (unreviewable.length > 0) {
     add({
       kind: 'no_reviewer',
       subjectId: REVIEWER_ROLE,
-      summary: `${reviewing.length} task(s) are waiting for review and no slave holds the "${REVIEWER_ROLE}" role.`,
-      facts: { role: REVIEWER_ROLE, reviewingTasks: reviewing.length, firstTaskId: reviewing[0]?.id ?? null },
+      summary: `${unreviewable.length} task(s) are waiting for review and no slave but their implementer holds the "${REVIEWER_ROLE}" role.`,
+      facts: { role: REVIEWER_ROLE, reviewingTasks: unreviewable.length, firstTaskId: unreviewable[0]?.id ?? null },
     })
   }
 

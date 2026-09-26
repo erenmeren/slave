@@ -28,9 +28,10 @@
 // while a second dispatch was rewriting it would be a coin flip. It also turns stage 2's claim from
 // an observation into a measurement: the task reaches `reviewing` and sits there with a
 // `no_reviewer` guardrail event and no review run at all -- and then the operator's own
-// `set-runtime-roles --roles backend,reviewer` is the only thing that changes, and the very next
-// pass staffs the review onto that same worker whose title still reads `Senior Engineer`. `role`
-// matched nothing; `runtimeRoles` matched everything (M37 §5).
+// `set-runtime-roles --roles reviewer` on a SECOND worker, `Bram`, is the only thing that changes,
+// and the very next pass staffs the review onto Bram, whose title also reads `Senior Engineer`.
+// `role` matched nothing; `runtimeRoles` matched everything (M37 §5). A second worker and not
+// Atlas: nobody reviews their own work, so granting the implementer `reviewer` would end nothing.
 //
 // NEVER A MODEL CALL. The daemon is spawned with `SLAVEOFAI_CLAUDE_BIN=node`,
 // `SLAVEOFAI_CLAUDE_ARGS="<fake-claude.mjs> --fixture m8a-flow"` and `SLAVEOFAI_REQUIRE_FAKE_CLI=1`
@@ -48,8 +49,8 @@
 //      that worktree is EMPTY; and the file `git rev-parse --git-path info/exclude` names carries
 //      `/.claude/skills/alpha/`, which is why it is empty.
 //   2. Runtime roles, not the title. The task is `reviewing`, no review run exists, and a
-//      `no_reviewer` guardrail event says why. The real CLI grants `reviewer`; a review run appears
-//      on the SAME worker; its `RunContext` is `kind: review`, carries the same profile, carries
+//      `no_reviewer` guardrail event says why. The real CLI grants `reviewer` to Bram; a review run
+//      appears on Bram; its `RunContext` is `kind: review`, carries BRAM's own profile, carries
 //      the diff of the work the implementation run committed, and has no `inbox`, `roster` or
 //      `ask_protocol` section -- a reviewer is told none of those (M37 §3).
 //   3. The operator can read it back. `show-context --run <id>` as a real subprocess, whose stdout
@@ -103,6 +104,9 @@ const SLAVE_PROFILE =
   'You are Atlas. THIS WORKER OVERRODE ITS TEMPLATE: prefer the smallest change that works, and say what you did not do.'
 const TEMPLATE_MARK = 'THE TEMPLATE TEXT MUST NOT REACH A RUN'
 const SLAVE_MARK = 'THIS WORKER OVERRODE ITS TEMPLATE'
+/** The reviewer's own seat profile, so stage 2 can tell the reviewer's text from the implementer's. */
+const REVIEWER_PROFILE = 'You are Bram. THIS REVIEWER READS SOMEBODY ELSE\'S WORK: say what is wrong before what is right.'
+const REVIEWER_MARK = "THIS REVIEWER READS SOMEBODY ELSE'S WORK"
 
 // The skill that exists on disk, and the one the catalog remembers and the disk has forgotten.
 // Their DESCRIPTIONS are what `preflightCleanup` identifies a leftover row by: the names alone are
@@ -385,6 +389,18 @@ try {
       profile: SLAVE_PROFILE,
     },
   })
+  // The reviewer-to-be. Dispatchable as nothing until stage 2's grant, so it cannot touch the
+  // worktree stage 1 measures; its title matches nothing either.
+  const reviewerSeat = await prisma.slave.create({
+    data: {
+      teamId: team.id,
+      personId: (await prisma.person.upsert({ where: { name: 'Bram' }, create: { name: 'Bram' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id,
+      role: 'Senior Engineer',
+      runtimeRoles: [],
+      profile: REVIEWER_PROFILE,
+    },
+  })
+  console.log(`slave ${reviewerSeat.id} "Bram": role ${JSON.stringify(reviewerSeat.role)}, runtimeRoles ${JSON.stringify(reviewerSeat.runtimeRoles)}`)
   // M58 R3: a skill is the PERSON's, as an explicit grant over the persona's (empty) default set.
   await prisma.personSkill.createMany({
     data: [
@@ -582,7 +598,7 @@ try {
 
   // The measured negative: not "no review happened yet", which is just time passing, but the
   // daemon's own one-shot escalation saying it looked for a reviewer and this workspace has none --
-  // in a workspace whose only worker has `reviewer` nowhere but in the set it does not hold yet.
+  // in a workspace where nobody holds `reviewer` yet.
   const noReviewer = await waitUntil('the daemon to report that no reviewer is staffed', REVIEW_TIMEOUT_MS, async (note) => {
     const event = await prisma.executionEvent.findFirst({
       where: { workspaceId, taskId: task.id, type: 'guardrail_tripped', payload: { path: ['guardrail'], equals: 'no_reviewer' } },
@@ -597,11 +613,11 @@ try {
     await fail(`the task has ${runsBeforeGrant.length} runs before any reviewer is staffed, expected only the implementation run`)
   }
 
-  // The one thing that changes. The worker's TITLE is untouched by this verb and stays
+  // The one thing that changes. Bram's TITLE is untouched by this verb and stays
   // `Senior Engineer` -- which is exactly the point.
-  const grantOutput = runCli(['set-runtime-roles', '--slave', slave.id, '--roles', 'backend,reviewer', '--by', 'the M37 gate'])
+  const grantOutput = runCli(['set-runtime-roles', '--slave', reviewerSeat.id, '--roles', 'reviewer', '--by', 'the M37 gate'])
   console.log(`set-runtime-roles printed: ${JSON.stringify(grantOutput.trim())}`)
-  const slaveAfterGrant = await prisma.slave.findUniqueOrThrow({ where: { id: slave.id } })
+  const slaveAfterGrant = await prisma.slave.findUniqueOrThrow({ where: { id: reviewerSeat.id } })
   console.log(`slave after the grant: role ${JSON.stringify(slaveAfterGrant.role)}, runtimeRoles ${JSON.stringify(slaveAfterGrant.runtimeRoles)}`)
   if (slaveAfterGrant.role !== 'Senior Engineer') await fail(`set-runtime-roles changed the title to ${JSON.stringify(slaveAfterGrant.role)}`)
   if (!slaveAfterGrant.runtimeRoles.includes('reviewer')) await fail('the grant did not put reviewer in the runtime role set')
@@ -617,8 +633,8 @@ try {
     return run
   })
   console.log(`review run ${reviewRun.id} (${reviewRun.status}) staffed onto slave ${reviewRun.slaveId}`)
-  if (reviewRun.slaveId !== slave.id) {
-    await fail(`the review was staffed onto ${reviewRun.slaveId}, expected the only worker in this workspace ${slave.id}`)
+  if (reviewRun.slaveId !== reviewerSeat.id) {
+    await fail(`the review was staffed onto ${reviewRun.slaveId}, expected Bram ${reviewerSeat.id}, never the implementer ${slave.id}`)
   }
 
   const reviewContext = await waitUntil('the review run to record what it saw', REVIEW_TIMEOUT_MS, async (note) => {
@@ -636,7 +652,7 @@ try {
   if (reviewProfile === undefined || reviewProfile.origin !== 'seat') {
     await fail(`the review run was not given the reviewer's own profile -- ${JSON.stringify(reviewProfile)}`)
   }
-  if (!reviewContext.prompt.includes(SLAVE_MARK)) await fail("the review prompt does not carry the reviewer's profile text")
+  if (!reviewContext.prompt.includes(REVIEWER_MARK)) await fail("the review prompt does not carry the reviewer's profile text")
 
   const diffSource = sourceOfKind(reviewManifest, 'review_diff')
   console.log(`review manifest diff source: ${JSON.stringify(diffSource)}`)
@@ -667,7 +683,7 @@ try {
   const taskAfterReview = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
   console.log(`review run concluded: ${concludedReview.status}; the task is now ${taskAfterReview.status}`)
   console.log(
-    'stage 2 complete: a worker whose title is "Senior Engineer" reviewed its own task the moment an operator put `reviewer` ' +
+    'stage 2 complete: a worker whose title is "Senior Engineer" reviewed the task the moment an operator put `reviewer` ' +
       'in its runtime role set, and the review saw its profile and the diff and nothing addressed to an implementer',
   )
 

@@ -444,8 +444,8 @@ try {
   // The whole company. Atlas plans; Dev and Ops both hold `backend`, which is what makes
   // `--ask-on-task` necessary (exactly one of them may stop to ask); Rae reviews and does nothing
   // else, so it can never be dispatched a `backend` task mid-review nor be the author of the work
-  // it reviews -- `dispatchReview` excludes nobody, so a reviewer that also coded COULD review its
-  // own diff, and a fourth slave removes the ambiguity at zero product cost (ruling R5). Quinn
+  // it reviews -- `dispatchReview` now excludes the implementer anyway, and a fourth slave keeps the
+  // reviewer unambiguous at zero product cost (ruling R5). Quinn
   // holds `qa` only until the question has been asked (erratum E1).
   // M58 R2: the crew are PEOPLE, and the seats name them. The names carry this gate's own prefix
   // because `Person.name` is unique across the INSTALLATION (R1) and this gate shares a development

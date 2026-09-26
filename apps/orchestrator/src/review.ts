@@ -251,6 +251,7 @@ interface ReviewableTask {
   readonly title: string
   readonly description: string
   readonly branch: string | null
+  readonly assigneeId: string | null
   /** E R3: the moment a remedy declared the review attempts so far spent. `null` on every task
    *  nothing has retried, which is every task before this milestone. */
   readonly reviewWindowFrom: Date | null
@@ -375,8 +376,17 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
   // `permissions` included alongside `companySlave -> template` (M18 Task 5) -- see `tick.ts`'s
   // own `startRun` for why: the resolved deny list is snapshotted at dispatch, from this run's own
   // slave row.
+  //
+  // Never the implementer: a review is a second pair of eyes, and the seat that wrote the work is
+  // not one. The author is `latestImpl.slaveId` (`implementerOf`'s reading in `verify.ts`);
+  // `Task.assigneeId` is excluded too, since it names whoever HOLDS the task -- the same seat for a
+  // task in `reviewing` today, and nothing here should depend on that staying true. A workspace
+  // whose only reviewer is the implementer falls into the no-reviewer branch below, which is what
+  // the Supervisor's `no_reviewer` sees too and what its staffing remedy fixes.
+  const excluded = [latestImpl.slaveId, ...(task.assigneeId === null ? [] : [task.assigneeId])]
   const reviewers = await prisma.slave.findMany({
     where: {
+      id: { notIn: excluded },
       runtimeRoles: { has: 'reviewer' },
       team: { workspaceId: task.workspaceId },
       closedAt: null,
@@ -407,7 +417,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
         actor: 'system',
         payload: {
           guardrail: 'no_reviewer' satisfies GuardrailKind,
-          detail: `task "${task.title}" is waiting in reviewing: no reviewer-role slave in this workspace`,
+          detail: `task "${task.title}" is waiting in reviewing: no reviewer-role slave in this workspace but its implementer`,
         },
       })
     }

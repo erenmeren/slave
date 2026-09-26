@@ -34,6 +34,14 @@ describe('observe -- no_reviewer', () => {
     expect(observe(w)).toEqual([])
   })
 
+  it('reports it when the only reviewer is the task\'s implementer, and not when another reviewer exists', () => {
+    const implementer = slave({ id: 's1', runtimeRoles: ['backend', 'reviewer'] })
+    const reviewing = task({ status: 'reviewing', assigneeId: 's1' })
+    expect(keys(observe(world({ tasks: [reviewing], slaves: [implementer] })))).toEqual([['no_reviewer', 'reviewer']])
+    const other = slave({ id: 's2', runtimeRoles: ['reviewer'] })
+    expect(observe(world({ tasks: [reviewing], slaves: [implementer, other] }))).toEqual([])
+  })
+
   it('stays silent when nothing is in review, reviewer-less or not', () => {
     expect(observe(world({ tasks: [task({ status: 'running' })], slaves: [] }))).toEqual([])
   })

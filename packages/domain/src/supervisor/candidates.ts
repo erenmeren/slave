@@ -331,7 +331,11 @@ function steerTextWith(base: string, deniedKinds: readonly PermissionKind[]): st
  * take a role away as a side effect of adding one.
  */
 function staffingCandidates(world: SupervisorWorld, kind: SituationKind, role: string): Candidate[] {
+  // `no_reviewer`: a seat that implemented EVERY task waiting in review is no remedy -- nobody
+  // reviews their own work (`dispatchReview`), so the role would land and the wait would not end.
+  const reviewing = kind === 'no_reviewer' ? world.tasks.filter((task) => task.status === 'reviewing') : []
   const contenders = staffableSlaves(world, role)
+    .filter((slave) => reviewing.length === 0 || reviewing.some((task) => task.assigneeId !== slave.id))
     .map((slave) => ({ slave, mentions: slave.role.toLowerCase().includes(role.toLowerCase()) }))
     .toSorted((a, b) =>
       a.mentions === b.mentions ? a.slave.id.localeCompare(b.slave.id) : a.mentions ? -1 : 1,

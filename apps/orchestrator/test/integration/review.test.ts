@@ -343,6 +343,49 @@ describe('dispatchReviews', () => {
     expect(noReviewerEvents).toHaveLength(1)
   })
 
+  // Nobody reviews their own work. The other reviewer's id is pinned to sort after any uuid, so the
+  // implementer is first in `dispatchReview`'s `id asc` order -- the seat it picked before the rule.
+  it('never staffs the implementer as its own reviewer, and picks the other reviewer', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture)
+    await prisma.slave.update({ where: { id: fixture.slaveId }, data: { runtimeRoles: ['backend', 'reviewer'] } })
+    const team = await prisma.team.findFirstOrThrow()
+    const other = await prisma.slave.create({ data: { id: 'zzzzzzzz-reviewer', teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Riley' } })).id } })
+
+    const started = await dispatchReviews(reviewDeps)
+
+    expect(started).toHaveLength(1)
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'review' } })
+    expect(run.slaveId).toBe(other.id)
+    await drainPumps()
+  }, 60_000)
+
+  it('treats an implementer who is the only reviewer as no reviewer: escalates once, starts nothing', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture)
+    await prisma.slave.update({ where: { id: fixture.slaveId }, data: { runtimeRoles: ['backend', 'reviewer'] } })
+
+    expect(await dispatchReviews(reviewDeps)).toEqual([])
+    expect(await dispatchReviews(reviewDeps)).toEqual([])
+
+    expect(await prisma.slaveRun.count({ where: { kind: 'review' } })).toBe(0)
+    const guardrails = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, type: 'guardrail_tripped' },
+    })
+    expect(
+      guardrails.filter((event) => (event.payload as { guardrail?: string }).guardrail === 'no_reviewer'),
+    ).toHaveLength(1)
+  }, 60_000)
+
+  it('still staffs a reviewer when the implementer holds no reviewer role', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture)
+    await addReviewer()
+    const reviewer = await prisma.slave.findFirstOrThrow({ where: { runtimeRoles: { has: 'reviewer' } } })
+
+    expect(await dispatchReviews(reviewDeps)).toHaveLength(1)
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'review' } })
+    expect(run.slaveId).toBe(reviewer.id)
+    await drainPumps()
+  }, 60_000)
+
   // M37 t3, the other half of the staffing change: a slave whose TITLE is literally "reviewer"
   // but whose runtime role set is empty is not a candidate. Before M37 this row was the only kind
   // of reviewer there was; now it is a parked worker, and staffing it would put a run in front of

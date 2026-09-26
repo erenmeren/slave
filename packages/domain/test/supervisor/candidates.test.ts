@@ -989,6 +989,16 @@ describe('candidates -- capability_unstaffed (M47 R4)', () => {
     expect(offers[0]?.action.kind).toBe('set_runtime_roles')
     expect(offers).toHaveLength(3)
   })
+
+  it('never offers no_reviewer\'s role to the seat that implemented every task in review', () => {
+    const w = world({
+      tasks: [task({ status: 'reviewing', assigneeId: 's1' })],
+      slaves: [slave({ id: 's1', runtimeRoles: ['backend'] }), slave({ id: 's2', runtimeRoles: ['frontend'] })],
+    })
+    const offers = candidates({ kind: 'no_reviewer', subjectId: 'reviewer', summary: 's', facts: { role: 'reviewer' } }, w)
+    const staffed = offers.flatMap((offer) => (offer.action.kind === 'set_runtime_roles' ? [offer.action.slaveId] : []))
+    expect(staffed).toEqual(['s2'])
+  })
 })
 
 describe('isStaffableTask (M47 final review, Important 2)', () => {
