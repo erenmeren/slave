@@ -1,4 +1,5 @@
 import { setPersonSkills } from '@slave-of-ai/control'
+import { optionalIdArray } from '../../../../../server/idArrayField'
 import { orgControlResponse } from '../../../../../server/orgControlRoute'
 import { requirePrincipal } from '../../../../../server/principal'
 
@@ -21,12 +22,7 @@ export async function PATCH(
     )
   }
   const { grant, revoke, clear } = body as { grant?: unknown; revoke?: unknown; clear?: unknown }
-  const ids = (value: unknown): readonly string[] | undefined | 'bad' => {
-    if (value === undefined) return undefined
-    if (!Array.isArray(value) || value.some((one) => typeof one !== 'string')) return 'bad'
-    return value as readonly string[]
-  }
-  const [g, r, c] = [ids(grant), ids(revoke), ids(clear)]
+  const [g, r, c] = [optionalIdArray(grant), optionalIdArray(revoke), optionalIdArray(clear)]
   if (g === 'bad' || r === 'bad' || c === 'bad') {
     return Response.json({ error: 'grant, revoke and clear must be arrays of skill ids' }, { status: 400 })
   }
