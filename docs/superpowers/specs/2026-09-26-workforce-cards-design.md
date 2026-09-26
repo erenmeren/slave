@@ -140,5 +140,5 @@ Both are paged by cursor (the catalog's existing 100-row pages with "Show more")
 ## Open risks
 
 - **Density:** a rich card with 6 skills and 3 workflow steps is tall, so fewer fit on a screen. Mitigation: the chip caps above. Developer mode is denser.
-- **Pool size:** hundreds of pool people make People long; server paging and the "Assigned" default keep it usable.
+- **Pool size:** hundreds of pool people make People long; the default stays "Everyone" (not "Assigned") -- server paging, not the default, is what keeps the list usable.
 - **Profiles without a Workflow heading:** agency profiles vary, and some have no workflow section. The card says so rather than hiding the block.
