@@ -34,6 +34,9 @@ const PROTECTED_TOKENS = [
   // `EventType` literal `agent_message_sent` must still rename -- so protect `agent_message` only
   // when it is NOT followed by `_sent`.
   /agent_message(?!_sent)/g,
+  // A superpowers skill NAME (workforce cards, Task 1): the card and the picker flag it as a
+  // process skill, and the name is the vendor's own, not ours to rename -- `cursor-agent`'s reason.
+  /dispatching-parallel-agents/g,
   // ADR 0002's own filename (Task 5 docs read-through): docs/decisions/ is a protected path, so
   // the file itself was never renamed on disk -- a live doc's cross-reference to it must keep the
   // real name it points at, or the link breaks.

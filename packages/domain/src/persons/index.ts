@@ -6,3 +6,11 @@ export { FIRST_NAMES, LAST_NAMES, isGeneratedEnglishName, randomEnglishName, unb
 export { rankPoolCandidates, type PoolCandidate } from './selection.js'
 export { SKILL_GRANT_MODES } from './types.js'
 export type { OverrideLevels, OverrideOrigin, PersonSeat, Resolved, SkillGrantMode, SkillOrigin } from './types.js'
+export {
+  PROCESS_SKILL_NAMES,
+  PROCESS_SKILL_PROVIDERS,
+  PROCESS_SKILL_WARNING,
+  isProcessSkill,
+  skillSourceOf,
+  type SkillSource,
+} from './processSkills.js'
