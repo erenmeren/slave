@@ -4,12 +4,13 @@
 // through the ordinary control verbs, records the risky ones as proposals a human answers, and
 // stops thinking with a model the moment the money is gone.
 //
-// WHY THERE IS EXACTLY ONE SLAVE, AND WHY IT IS NOT A REVIEWER. `Dev` holds `runtimeRoles:
-// ['backend']` and nothing else. That single fact is what makes stage 1 a measurement rather than
-// an observation: the task really does reach `reviewing` and really cannot be reviewed, so the
-// `no_reviewer` situation is produced by the world and not by a fixture -- and the ONE staffing
-// candidate the rules can offer is `Dev`, which is why the fake CLI's `candidateIndex: 0` answer
-// is a decision about this workspace and not a coin flip over a menu.
+// WHY THERE ARE EXACTLY TWO SLAVES, AND WHY NEITHER IS A REVIEWER. `Dev` holds `runtimeRoles:
+// ['backend']` and implements the task; `Rae` holds `['frontend']`, which no task here needs. That
+// is what makes stage 1 a measurement rather than an observation: the task really does reach
+// `reviewing` and really cannot be reviewed, so the `no_reviewer` situation is produced by the
+// world and not by a fixture -- and the ONE staffing candidate the rules can offer is `Rae`, since
+// nobody reviews their own work and `Dev` is excluded as the implementer. That is why the fake
+// CLI's `candidateIndex: 0` answer is a decision about this workspace and not a coin flip.
 //
 // NEVER A MODEL CALL. The daemon is spawned with `SLAVEOFAI_CLAUDE_BIN=node`,
 // `SLAVEOFAI_CLAUDE_ARGS="<fake-claude.mjs> --fixture m8a-flow"` and `SLAVEOFAI_REQUIRE_FAKE_CLI=1`
@@ -29,10 +30,10 @@
 // STAGES
 //   1. A proposal is not an action. The task reaches `reviewing`; nobody can review it; the
 //      Supervisor writes ONE row -- `no_reviewer`, `tier: proposed`, `status: pending`, action
-//      `set_runtime_roles`, `decidedBy: model`, `modelCalled: true`, cost recorded -- and `Dev`'s
+//      `set_runtime_roles`, `decidedBy: model`, `modelCalled: true`, cost recorded -- and `Rae`'s
 //      runtime roles are UNCHANGED, because a proposal is a question. Then a human answers it with
 //      the operator's own `approve-decision --id <id>` as a real subprocess: the role is written,
-//      and the very next tick staffs the review onto `Dev`.
+//      and the very next tick staffs the review onto `Rae`.
 //   2. A routine action is taken without asking. A task parked `blocked` by the review retry cap
 //      (the one park E5 lets the Supervisor leave on its own), with attempts left, produces a row
 //      that is `tier: applied` / `status: applied` from birth: the task is back in `rework` and the
@@ -254,12 +255,16 @@ try {
   await prisma.providerConfiguration.create({ data: { workspaceId, kind: 'claude_code', settings: {} } })
 
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
-  // ONE worker, and no `reviewer` in its runtime role set. Its TITLE deliberately does not contain
+  // The implementer, and no `reviewer` in its runtime role set. Its TITLE deliberately does not contain
   // the word "reviewer" either: `staffingCandidates` orders its offers by whether the title reads
   // as the role, and a gate whose only candidate matched on the title would be proving the
   // ordering rather than the decision.
   const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.upsert({ where: { name: 'Dev' }, create: { name: 'Dev' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   console.log(`slave ${slave.id} "Dev": role ${JSON.stringify(slave.role)}, runtimeRoles ${JSON.stringify(slave.runtimeRoles)}`)
+  // The reviewer-to-be: idle, holding a role no task here asks for, so it never implements and is
+  // the one seat a review of Dev's work can be staffed onto. Its title is as neutral as Dev's.
+  const rae = await prisma.slave.create({ data: { teamId: team.id, role: 'Engineer', runtimeRoles: ['frontend'], personId: (await prisma.person.upsert({ where: { name: 'Rae' }, create: { name: 'Rae' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
+  console.log(`slave ${rae.id} "Rae": role ${JSON.stringify(rae.role)}, runtimeRoles ${JSON.stringify(rae.runtimeRoles)}`)
 
   const task = await prisma.task.create({
     data: {
@@ -394,11 +399,11 @@ try {
   if (proposal.action.kind !== 'set_runtime_roles') {
     await fail(`the no_reviewer decision's action is ${String(proposal.action.kind)}, expected set_runtime_roles`)
   }
-  if (proposal.action.slaveId !== slave.id) {
-    await fail(`the proposal names slave ${String(proposal.action.slaveId)}, expected the workspace's only worker ${slave.id}`)
+  if (proposal.action.slaveId !== rae.id) {
+    await fail(`the proposal names slave ${String(proposal.action.slaveId)}, expected the only non-implementer ${rae.id}`)
   }
-  if (JSON.stringify(proposal.action.roles) !== JSON.stringify(['backend', 'reviewer'])) {
-    await fail(`the proposal would write roles ${JSON.stringify(proposal.action.roles)}, expected ["backend","reviewer"]`)
+  if (JSON.stringify(proposal.action.roles) !== JSON.stringify(['frontend', 'reviewer'])) {
+    await fail(`the proposal would write roles ${JSON.stringify(proposal.action.roles)}, expected ["frontend","reviewer"]`)
   }
   // The model half of the "never a real model call" pair: a call WAS made, through the fake CLI,
   // and its cost is on the row and therefore in the workspace's spend.
@@ -413,10 +418,10 @@ try {
 
   // The measured negative, and the whole point of the tier: the row says what it WOULD do, and the
   // world is untouched.
-  const slaveBeforeApproval = await prisma.slave.findUniqueOrThrow({ where: { id: slave.id } })
-  console.log(`Dev while the proposal is pending: runtimeRoles ${JSON.stringify(slaveBeforeApproval.runtimeRoles)}`)
-  if (JSON.stringify(slaveBeforeApproval.runtimeRoles) !== JSON.stringify(['backend'])) {
-    await fail(`a PENDING proposal already changed Dev's runtime roles to ${JSON.stringify(slaveBeforeApproval.runtimeRoles)}`)
+  const slaveBeforeApproval = await prisma.slave.findUniqueOrThrow({ where: { id: rae.id } })
+  console.log(`Rae while the proposal is pending: runtimeRoles ${JSON.stringify(slaveBeforeApproval.runtimeRoles)}`)
+  if (JSON.stringify(slaveBeforeApproval.runtimeRoles) !== JSON.stringify(['frontend'])) {
+    await fail(`a PENDING proposal already changed Rae's runtime roles to ${JSON.stringify(slaveBeforeApproval.runtimeRoles)}`)
   }
   const runsBeforeApproval = await prisma.slaveRun.findMany({ where: { taskId: task.id } })
   console.log(`runs for the task while the proposal is pending: ${JSON.stringify(runsBeforeApproval.map((r) => ({ id: r.id, kind: r.kind })))}`)
@@ -451,15 +456,15 @@ try {
   if (approved.status !== 'approved') await fail(`the approved decision is ${approved.status}, expected approved`)
   if (approved.resolvedAt === null) await fail('the approved decision has no resolvedAt')
 
-  const slaveAfterApproval = await prisma.slave.findUniqueOrThrow({ where: { id: slave.id } })
+  const slaveAfterApproval = await prisma.slave.findUniqueOrThrow({ where: { id: rae.id } })
   console.log(
-    `Dev after approval: role ${JSON.stringify(slaveAfterApproval.role)}, runtimeRoles ${JSON.stringify(slaveAfterApproval.runtimeRoles)}`,
+    `Rae after approval: role ${JSON.stringify(slaveAfterApproval.role)}, runtimeRoles ${JSON.stringify(slaveAfterApproval.runtimeRoles)}`,
   )
   if (!slaveAfterApproval.runtimeRoles.includes('reviewer')) {
-    await fail(`approving the proposal did not put reviewer in Dev's runtime role set (${JSON.stringify(slaveAfterApproval.runtimeRoles)})`)
+    await fail(`approving the proposal did not put reviewer in Rae's runtime role set (${JSON.stringify(slaveAfterApproval.runtimeRoles)})`)
   }
-  if (slaveAfterApproval.role !== 'Senior Engineer') {
-    await fail(`applying the proposal changed Dev's TITLE to ${JSON.stringify(slaveAfterApproval.role)}`)
+  if (slaveAfterApproval.role !== 'Engineer') {
+    await fail(`applying the proposal changed Rae's TITLE to ${JSON.stringify(slaveAfterApproval.role)}`)
   }
 
   const reviewRun = await waitUntil('a review run to be staffed', REVIEW_TIMEOUT_MS, async (note) => {
@@ -468,8 +473,8 @@ try {
     return run
   })
   console.log(`review run ${reviewRun.id} (${reviewRun.status}) staffed onto slave ${reviewRun.slaveId}`)
-  if (reviewRun.slaveId !== slave.id) {
-    await fail(`the review was staffed onto ${reviewRun.slaveId}, expected the only worker in this workspace ${slave.id}`)
+  if (reviewRun.slaveId !== rae.id) {
+    await fail(`the review was staffed onto ${reviewRun.slaveId}, expected Rae ${rae.id}, never the implementer ${slave.id}`)
   }
   console.log(
     'stage 1 complete: the Supervisor saw a workspace that could not review its own work, proposed the one staffing action the ' +
@@ -478,7 +483,7 @@ try {
 
   // ================= Stage 2: a routine action is taken without asking ============================
 
-  // Waited out rather than raced: the review run holds Dev, and stage 2's row is about what the
+  // Waited out rather than raced: the review run holds Rae, and stage 2's row is about what the
   // Supervisor does with a task NOBODY is working on. `endedAt`, not `succeeded`, because the
   // verdict itself is `gate-m8a-merge.mjs`'s subject, not this gate's.
   const concludedReview = await waitUntil('the review run to conclude', REVIEW_TIMEOUT_MS, async (note) => {
