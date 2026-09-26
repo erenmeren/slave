@@ -608,6 +608,150 @@ describe('ProfileDrawer', () => {
     await waitFor(() => expect(screen.getByTestId('profile-drawer')).toBeTruthy())
   }
 
+  /**
+   * Final review, finding 1: the card's chips and the drawer's whole-set editor are ONE list. The
+   * editor PATCHes `{ skillIds }` -- the whole set -- so a drawer fed a stale list silently undoes
+   * whatever the card wrote since the page loaded. A stateful fake route here, so every read back
+   * is what the writes before it made.
+   */
+  describe('the card and the drawer edit one skill list', () => {
+    const CATALOGUE = [
+      { skillId: 's-sql', name: 'sql', providerName: 'personal', description: 'writes sql', missing: false },
+      { skillId: 's-pdf', name: 'pdf', providerName: 'personal', description: 'reads pdfs', missing: false },
+      { skillId: 's-git', name: 'git', providerName: 'personal', description: 'commits', missing: false },
+    ]
+    const chipOf = (skillId: string): CatalogRowView['skills'][number] => {
+      const skill = CATALOGUE.find((one) => one.skillId === skillId)
+      return { skillId, name: skill?.name ?? skillId, providerName: 'personal', missing: false, process: false, state: 'persona' }
+    }
+
+    /** The catalog route pages `pageSize` rows at a time; the skills route applies each PATCH and
+     *  records its body. */
+    const serve = (rows: readonly CatalogRowView[], pageSize = rows.length): { readonly bodies: unknown[] } => {
+      const held = new Map(rows.map((one) => [one.id, [...one.defaultSkillIds]]))
+      const bodies: unknown[] = []
+      const current = (one: CatalogRowView): CatalogRowView => {
+        const ids = held.get(one.id) ?? []
+        return { ...one, defaultSkillIds: ids, skills: ids.map(chipOf) }
+      }
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (url.includes('/profile')) return new Response(JSON.stringify(withEffective), { status: 200 })
+        if (url.includes('/duplicates')) return new Response(JSON.stringify([]), { status: 200 })
+        if (url.endsWith('/skills')) {
+          const id = url.split('/')[4] ?? ''
+          const body = JSON.parse(String(init?.body)) as { skillIds?: string[]; add?: string[]; remove?: string[] }
+          bodies.push(body)
+          const ids = body.skillIds ?? [...(held.get(id) ?? []).filter((one) => !(body.remove ?? []).includes(one)), ...(body.add ?? [])]
+          held.set(id, ids)
+          return new Response(JSON.stringify({ ok: true }), { status: 200 })
+        }
+        const cursor = new URL(url, 'http://local').searchParams.get('cursor')
+        const start = cursor === null ? 0 : rows.findIndex((one) => one.id === cursor) + 1
+        const slice = rows.slice(start, start + pageSize)
+        return new Response(
+          JSON.stringify({
+            ...view(slice.map(current)),
+            total: rows.length,
+            nextCursor: start + pageSize < rows.length ? (slice.at(-1)?.id ?? null) : null,
+          }),
+          { status: 200 },
+        )
+      })
+      return { bodies }
+    }
+
+    const openCardDrawer = async (id: string): Promise<void> => {
+      await act(async () => {
+        fireEvent.click(screen.getByTestId(`catalog-open-${id}`))
+      })
+      await screen.findByTestId('template-skills-editor')
+    }
+
+    const drawerAdd = async (skillId: string): Promise<void> => {
+      fireEvent.change(screen.getByTestId('template-skill-add'), { target: { value: skillId } })
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('template-skill-add-submit'))
+      })
+    }
+
+    it('keeps a skill the card added when the drawer then edits the list', async () => {
+      const { bodies } = serve([row()])
+      render(<WorkforceCatalog initial={view([row()])} skillCatalogue={CATALOGUE} />)
+
+      const card = screen.getByTestId('catalog-row-t1')
+      fireEvent.click(within(card).getByTestId('card-skill-add'))
+      fireEvent.click(within(card).getByTestId('skill-picker-option-s-sql'))
+      await act(async () => {
+        fireEvent.click(within(card).getByTestId('skill-picker-confirm'))
+      })
+
+      await openCardDrawer('t1')
+      await drawerAdd('s-pdf')
+      expect(bodies.at(-1)).toEqual({ skillIds: ['s-sql', 's-pdf'] })
+    })
+
+    it('does not bring back a skill the card removed when the drawer then edits the list', async () => {
+      const held = row({ defaultSkillIds: ['s-sql'], skills: [chipOf('s-sql')] })
+      const { bodies } = serve([held])
+      render(<WorkforceCatalog initial={view([held])} skillCatalogue={CATALOGUE} />)
+
+      await act(async () => {
+        fireEvent.click(within(screen.getByTestId('catalog-row-t1')).getByTestId('card-skill-remove-s-sql'))
+      })
+
+      await openCardDrawer('t1')
+      await drawerAdd('s-pdf')
+      expect(bodies.at(-1)).toEqual({ skillIds: ['s-pdf'] })
+    })
+
+    it('keeps every loaded page after a drawer edit on a "Show more" row, and a second edit keeps the first', async () => {
+      const second = row({ id: 't2', name: 'Verifier' })
+      const { bodies } = serve([row(), second], 1)
+      render(<WorkforceCatalog initial={{ ...view([row()]), total: 2, nextCursor: 't1' }} skillCatalogue={CATALOGUE} />)
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('catalog-more'))
+      })
+      await screen.findByTestId('catalog-row-t2')
+
+      await openCardDrawer('t2')
+      await drawerAdd('s-sql')
+      await waitFor(() => expect(within(screen.getByTestId('catalog-row-t2')).getByTestId('card-skill-s-sql')).toBeTruthy())
+      expect(screen.getByTestId('catalog-row-t1')).toBeTruthy()
+
+      await drawerAdd('s-pdf')
+      expect(bodies.at(-1)).toEqual({ skillIds: ['s-sql', 's-pdf'] })
+    })
+
+    // Task 8's deferred minor: `patchedSkills`' two other branches, at the catalog level.
+    it('drops a removed chip in place, and leaves the row as it was on a refusal', async () => {
+      const held = row({ defaultSkillIds: ['s-sql'], skills: [chipOf('s-sql')] })
+      serve([held])
+      render(<WorkforceCatalog initial={view([held])} skillCatalogue={CATALOGUE} />)
+
+      await act(async () => {
+        fireEvent.click(within(screen.getByTestId('catalog-row-t1')).getByTestId('card-skill-remove-s-sql'))
+      })
+      expect(within(screen.getByTestId('catalog-row-t1')).queryByTestId('card-skill-s-sql')).toBeNull()
+
+      const refusals = fetchMock.getMockImplementation()
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) =>
+        String(input).endsWith('/skills')
+          ? new Response(JSON.stringify({ error: 'the skill git is missing from disk' }), { status: 409 })
+          : (refusals as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>)(input, init),
+      )
+      const card = screen.getByTestId('catalog-row-t1')
+      fireEvent.click(within(card).getByTestId('card-skill-add'))
+      fireEvent.click(within(card).getByTestId('skill-picker-option-s-git'))
+      await act(async () => {
+        fireEvent.click(within(card).getByTestId('skill-picker-confirm'))
+      })
+      expect(within(screen.getByTestId('catalog-row-t1')).queryByTestId('card-skill-s-git')).toBeNull()
+      expect(within(screen.getByTestId('catalog-row-t1')).getByTestId('card-skill-error').textContent).toContain('missing from disk')
+    })
+  })
+
   // M47 §2: the row's MATCHABLE keys, resolved to the taxonomy's own words, above the persona's
   // free-text bullets -- the same `capability-chip` the Organization tab prints, so one capability
   // reads the same in both places.

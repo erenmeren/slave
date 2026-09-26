@@ -84,6 +84,16 @@ function patchedSkills(current: readonly CardSkillRow[], outcome: SkillWriteOutc
 }
 
 /**
+ * The row after a card write, with `defaultSkillIds` DERIVED from the patched chips (final review,
+ * finding 1): the drawer's editor PATCHes the whole set it is handed, so an id list left behind by
+ * a card write would silently undo that write on the drawer's next save.
+ */
+function patchedRow(row: CatalogRowView, outcome: SkillWriteOutcome): CatalogRowView {
+  const skills = patchedSkills(row.skills, outcome)
+  return { ...row, skills, defaultSkillIds: skills.map((skill) => skill.skillId) }
+}
+
+/**
  * The Workforce Catalog (M46 R6): every template a company can be staffed from, searchable and
  * filterable, each row opening the specialist profile behind it.
  *
@@ -195,7 +205,8 @@ export function WorkforceCatalog({
    * chain a person's own "Show more" clicks already walked, until it has read back at least `keep`
    * rows or run out of pages, so a refusal on a card past the first page never drops the pages
    * before it. Guarded by the same `latest` sequence `reload` uses, so an ordinary filter-driven
-   * reload in flight still wins over this, and vice versa.
+   * reload in flight still wins over this, and vice versa. The profile drawer's `onChanged` uses
+   * it too (final review, finding 1), for the same reason: its row may be past page one.
    *
    * Fix round 1 (coordinator review, Important): a network failure or a malformed body used to
    * reject `fetchPage`'s promise with nothing to catch it -- an unhandled rejection, unlike `reload`
@@ -338,7 +349,7 @@ export function WorkforceCatalog({
                   setPage((current) => ({
                     ...current,
                     rows: current.rows.map((candidate) =>
-                      candidate.id === row.id ? { ...candidate, skills: patchedSkills(candidate.skills, outcome) } : candidate,
+                      candidate.id === row.id ? patchedRow(candidate, outcome) : candidate,
                     ),
                   }))
                 }}
@@ -456,7 +467,9 @@ export function WorkforceCatalog({
           hiredCount={page.rows.find((row) => row.id === open.id)?.hiredCount ?? open.hiredCount}
           skillCatalogue={skillCatalogue}
           onClose={() => setOpen(null)}
-          onChanged={() => reload(filters)}
+          // Re-reads the LOADED range, never page one (F2; final review, finding 1): a drawer open
+          // on a "Show more" row must still find that row -- and its fresh skill list -- afterwards.
+          onChanged={() => resyncAfterRefusal(filters, page.rows.length)}
           /* M55 R6: the drawer's Duplicates group names the other template as a BUTTON that opens
            * ITS drawer. The keys come off the loaded page when the row is on it; a row that is not
            * (the pair points past the first hundred) opens with none, and the drawer's "Matchable
