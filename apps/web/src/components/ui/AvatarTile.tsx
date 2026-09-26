@@ -34,8 +34,9 @@ export function AvatarTile({
   /**
    * `sm` (28 px, `h-7 w-7`) is the handoff's original and stays the DEFAULT, so not one of the five
    * existing call sites moves a pixel. `md` (30 px) is the M57 Overview Team row's
-   * (README "Overview" → Team rows: "30px avatar tile (18% tint)"), and it is the only caller that
-   * passes it. `gate:m14-fidelity` measures both, each scoped to the surface it belongs to.
+   * (README "Overview" → Team rows: "30px avatar tile (18% tint)"), worn by `SlaveCard`, the
+   * project `TeamCard` and the Workforce Catalog/People cards (`WorkforceCard`). `gate:m14-fidelity`
+   * measures both, each scoped to the surface it belongs to.
    */
   readonly size?: 'sm' | 'md'
 }): React.JSX.Element {

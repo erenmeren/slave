@@ -63,14 +63,12 @@ export function DataTable({
      * whose content varies (wrapped text, an optional line, a fold that can open) from
      * overlapping its neighbour.
      *
-     * Default false/absent, and deliberately not the only mode: `PeopleTable`'s rows are fixed,
-     * single-line `--row-h` height by design, and its own test file mocks
-     * `HTMLElement.prototype.offsetHeight` to one constant for every element to fake a bounded
-     * jsdom viewport. `measureElement`'s own jsdom fallback (no `ResizeObserver` there) reads
-     * that same `offsetHeight` -- wired in unconditionally, every People row would "measure" at
-     * the mocked VIEWPORT height instead of the `rowHeight` estimate those tests are keyed to,
-     * changing what their virtualization-count assertions actually test. `KnowledgeClient` is
-     * the first caller to pass `dynamic: true`; `PeopleTable` and its test are untouched.
+     * Default false/absent, and deliberately not the only mode: a fixed, single-line `--row-h`
+     * table needs no per-row measuring, and a jsdom test that mocks
+     * `HTMLElement.prototype.offsetHeight` to one constant to fake a bounded viewport would,
+     * through `measureElement`'s own jsdom fallback (no `ResizeObserver` there), "measure" every
+     * row at the mocked VIEWPORT height instead of the `rowHeight` estimate its virtualization
+     * counts are keyed to. `KnowledgeClient` is the one caller that passes `dynamic: true`.
      */
     readonly dynamic?: boolean
   }

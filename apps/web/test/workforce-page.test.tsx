@@ -8,7 +8,7 @@ import { ModeProvider } from '../src/components/mode/ModeProvider.js'
 import { MODE_STORAGE_KEY } from '../src/lib/modeStorage.js'
 import type { AllSlaveRow, AllSlavesPage, CatalogRowView, WorkforceCatalogView } from '../src/server/org.js'
 import type { EvidencePage } from '../src/server/evidence.js'
-import type { PersonDetail, PersonRow } from '../src/server/persons.js'
+import type { PeoplePageView, PersonCardRow, PersonDetail, PersonRow } from '../src/server/persons.js'
 import type { SlaveCardData } from '../src/server/overview.js'
 import type { SkillsPage } from '../src/server/skills.js'
 
@@ -51,6 +51,7 @@ function HeaderActionSlot(): React.JSX.Element {
  */
 const listWorkforceCatalogPage = vi.fn(async (_filters?: unknown) => catalogPage([templateRow()]))
 const listTemplates = vi.fn(async () => [templateRow()] as readonly CatalogRowView[])
+const listPeoplePage = vi.fn(async (_filters?: unknown) => peoplePageOf([]))
 
 vi.mock('../src/server/org.js', () => ({
   listAllSlaves: async () => page([]),
@@ -74,6 +75,7 @@ vi.mock('../src/server/skills.js', () => ({ buildSkillsPage: async () => skillsP
 vi.mock('../src/server/persons.js', () => ({
   listPersons: async () => [],
   listSkillCatalogue: async () => [],
+  listPeoplePage: (filters?: unknown) => listPeoplePage(filters),
 }))
 
 // M53 R12: the sixth tab's read opens Postgres like the others, so the page's loader is a stub and
@@ -149,6 +151,18 @@ function personRow(over: Partial<PersonRow> = {}): PersonRow {
     ...over,
   }
 }
+
+/** A People row as a CARD reads it (workforce cards): the row plus the three card fields. */
+function personCard(row: PersonRow): PersonCardRow {
+  return { ...row, division: null, skills: [], workflowPreview: { steps: [], total: 0 } }
+}
+
+const peoplePageOf = (rows: readonly PersonRow[]): PeoplePageView => ({
+  rows: rows.map(personCard),
+  facets: { domains: [], divisions: [] },
+  total: rows.length,
+  nextCursor: null,
+})
 
 function personDetail(over: Partial<PersonDetail> = {}): PersonDetail {
   const row = personRow()
@@ -321,7 +335,7 @@ function TestWorkforceClient(
           people={[personRow()]}
           peopleDepartments={[{ companyTeamId: 'ct1', name: 'Engineering' }]}
           skillCatalogue={[]}
-          skillHolders={{}}
+          peoplePage={peoplePageOf(props.people ?? [personRow()])}
           {...props}
         />
       </HeaderActionProvider>
@@ -329,23 +343,8 @@ function TestWorkforceClient(
   )
 }
 
-/**
- * `PeopleTable`'s `DataTable` is virtualized now (Task 9): `@tanstack/react-virtual` measures its
- * scroll viewport via `offsetWidth`/`offsetHeight` when no `ResizeObserver` is present -- jsdom
- * has none -- and without this every case in this file that opens a person row would find NONE
- * rendered, since jsdom's unmeasured viewport is 0px tall. The same idiom
- * `test/activity-page.test.tsx`'s own `mockElementSizes` uses, sized generously (every fixture
- * here is a handful of rows, never `people-table.test.tsx`'s 500) so every row this file's fixtures
- * ever hand `WorkforceClient` renders.
- */
-function mockElementSizes(): void {
-  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 800 })
-  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 2000 })
-}
-
 beforeEach(() => {
   installStorage()
-  mockElementSizes()
 })
 
 afterEach(() => {
@@ -370,7 +369,7 @@ describe('WorkforceClient tabs (M44 R1)', () => {
   it('renders the people table by default, with the other three tabs beside it', () => {
     render(<TestWorkforceClient />)
     expect(screen.getByTestId('people-rows')).toBeTruthy()
-    expect(screen.getByTestId('person-name').textContent).toContain('Alex')
+    expect(screen.getByTestId('person-open').textContent).toContain('Alex')
     expect(screen.getByTestId('workforce-tab-slaves').getAttribute('aria-selected')).toBe('true')
     // FOUR since M57 R13 folded Departments into People and Runbooks into Skills & runbooks
     // (spec erratum E15) -- the two folded tabs are segments under their new parent now, not
@@ -688,6 +687,34 @@ describe('WorkforceClient row click opens the panel', () => {
     // cannot settle without real timers.
     fireEvent.click(within(sheet).getByTestId('sheet-close'))
     expect(routerReplace).toHaveBeenLastCalledWith('/workforce', { scroll: false })
+  })
+
+  // Controller ruling F2: opening a person writes `?slave=` and closing clears it -- neither may
+  // reset People to page one, or the card an operator just clicked would vanish behind the sheet.
+  it('keeps every "Show more" page loaded while a person is opened and closed', async () => {
+    const later = personRow({ personId: 'p2', name: 'Later', seats: [] })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/persons?cursor=p1') return new Response(JSON.stringify({ ...peoplePageOf([later]), total: 2 }), { status: 200 })
+      if (url === '/api/persons/p2') return new Response(JSON.stringify(personDetail({ personId: 'p2', name: 'Later', seats: [], allSeats: [] })), { status: 200 })
+      throw new Error(`unexpected fetch ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<TestWorkforceClient peoplePage={{ ...peoplePageOf([personRow()]), total: 2, nextCursor: 'p1' }} />)
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('people-more'))
+    })
+    const card = await screen.findByTestId('person-row-p2')
+
+    fireEvent.click(within(card).getByTestId('person-open'))
+    const sheet = await screen.findByTestId('person-sheet')
+    expect(routerReplace).toHaveBeenCalledWith('/workforce?slave=p2', { scroll: false })
+    expect(screen.getAllByTestId(/^person-row-/u).map((row) => row.getAttribute('data-person-id'))).toEqual(['p1', 'p2'])
+    expect(screen.getByTestId('person-row-p2')).toBe(card)
+
+    fireEvent.click(within(sheet).getByTestId('sheet-close'))
+    expect(screen.getAllByTestId(/^person-row-/u).map((row) => row.getAttribute('data-person-id'))).toEqual(['p1', 'p2'])
   })
 
   it('disables profile and runtime-roles save for a person in the pool (no seat)', async () => {
@@ -1014,6 +1041,13 @@ describe('the Workforce page seeds the catalog from the URL (M46 M1)', () => {
   // M53 R12: both tables are `GROUP BY`s, so the domain chip has to reach the read that groups.
   // A shared `?domain=` link that painted every domain under a chip row saying otherwise is the
   // same bug M46's M1 fixed for the catalog, one tab over.
+  it('seeds People from the same URL', async () => {
+    listPeoplePage.mockClear()
+    await renderPage({ state: 'pool', specialty: 'qa', skills: 'none' })
+
+    expect(listPeoplePage).toHaveBeenCalledWith({ specialty: 'qa', noSkills: true, state: 'pool' })
+  })
+
   it('seeds the Evidence tab with the domain the URL already claims to be filtering by', async () => {
     buildEvidencePage.mockClear()
     await renderPage({ tab: 'evidence', domain: 'qa' })

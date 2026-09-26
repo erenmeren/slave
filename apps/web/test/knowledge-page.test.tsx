@@ -12,7 +12,7 @@ vi.mock('next/navigation', () => ({ useSearchParams: () => new URLSearchParams(s
 /**
  * `KnowledgeClient`'s rows are virtualized now (M61 Task 10): `@tanstack/react-virtual` measures
  * its scroll viewport via `offsetWidth`/`offsetHeight` when no `ResizeObserver` is present --
- * jsdom has none by default -- the same idiom `test/people-table.test.tsx`'s own
+ * jsdom has none by default -- the same idiom `test/activity-page.test.tsx`'s own
  * `mockElementSizes` uses. Without it every case below (a row or two apiece) would find none
  * rendered at all, since jsdom's unmeasured viewport is 0px tall. Generous by default -- large
  * enough that every fixture in this file (never more than two rows) renders in full.
@@ -398,7 +398,7 @@ describe('KnowledgeClient', () => {
   })
 
   // M61 Task 10 (R19): the rows list is `DataTable`'s virtualized body now, which renders its own
-  // `ScrollArea` (the same `data-table-rows` idiom `PeopleTable` already uses) -- and no
+  // `ScrollArea` (the same `data-table-rows` idiom the People table used before it became cards) -- and no
   // `SectionLabel` on the page (the "asked for by" caption inside the fold, or the drawer's own)
   // carries `uppercase`/`font-mono` on top of `.type-label`.
   it('wraps its rows in a ScrollArea, and carries no uppercase/font-mono SectionLabel', () => {

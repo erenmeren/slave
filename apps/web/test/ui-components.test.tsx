@@ -292,7 +292,7 @@ describe('DataTable', () => {
   it('a dynamic table repositions the next row from a measured height, not the rowHeight estimate', () => {
     // `@tanstack/react-virtual` measures its scroll viewport -- and, once `dynamic` wires
     // `measureElement`, each row -- via `offsetWidth`/`offsetHeight` when no `ResizeObserver` is
-    // present; jsdom has neither by default. Same idiom `people-table.test.tsx`'s own
+    // present; jsdom has neither by default. Same idiom `activity-page.test.tsx`'s own
     // `mockElementSizes` uses for the VIEWPORT, restored after so it cannot affect a later test in
     // this file.
     const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')

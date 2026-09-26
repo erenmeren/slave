@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import type { CapabilityRecord } from '@slave-of-ai/domain'
 import type { AllSlavesPage, CatalogRowView, ProjectTeamRow, RosterCompany, RunbookRowView, WorkforceCatalogView } from '../../server/org'
 import type { SlaveCardData } from '../../server/overview'
-import type { PersonDetail, PersonRow, SkillCatalogueRow } from '../../server/persons'
+import type { PeoplePageView, PersonDetail, PersonRow, SkillCatalogueRow } from '../../server/persons'
 import type { EvidencePage } from '../../server/evidence'
 import type { SkillsPage } from '../../server/skills'
 import { useSelectedId } from '../../hooks/useSelectedId'
@@ -16,7 +16,7 @@ import { useMode } from '../mode/ModeProvider'
 import { useHeaderAction } from '../shell/HeaderActionProvider'
 import { SkillsClient } from '../SkillsClient'
 import { SlavePanel } from '../SlavePanel'
-import { PeopleTable } from '../persons/PeopleTable'
+import { PeopleCards } from '../persons/PeopleCards'
 import { assignableProjectsOf } from '../persons/PersonProjectsGroup'
 import { cardsOf, haltedReasonOf, liveSeatOf, personOf } from '../persons/liveSeat'
 import { NewSlaveDrawer } from '../slaves/NewSlaveDrawer'
@@ -109,9 +109,9 @@ export function WorkforceClient({
   runbooks,
   evidence,
   people,
+  peoplePage,
   peopleDepartments,
   skillCatalogue,
-  skillHolders,
 }: {
   readonly initialTab: WorkforceTab
   readonly slaves: AllSlavesPage
@@ -137,10 +137,12 @@ export function WorkforceClient({
    *  only for `?tab=evidence`. Selecting the tab from another one asks the server again --
    *  {@link select} below -- which is the `EvidenceTab`'s own domain-chip idiom. */
   readonly evidence: EvidencePage | null
+  /** Everybody, unpaged: the company manager's member picker, which must offer every person. */
   readonly people: readonly PersonRow[]
+  /** People as cards (workforce cards), read by the page under the URL's own filters. */
+  readonly peoplePage: PeoplePageView
   readonly peopleDepartments: readonly { readonly companyTeamId: string; readonly name: string }[]
   readonly skillCatalogue: readonly SkillCatalogueRow[]
-  readonly skillHolders: Readonly<Record<string, readonly string[]>>
 }): React.JSX.Element {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -294,22 +296,22 @@ export function WorkforceClient({
       }
     >
       {tab === 'slaves' && (
-        // Fix round 1 (Task 9 review, Important 2): the bare `flex min-h-0 flex-1 flex-col` frame
-        // `ActivityClient.tsx`/`HomeClient.tsx` use, not another `gap`-only `<div>` -- `PeopleTable`
-        // needs a REAL bounded height beneath it for its own virtualized `ScrollArea` to actually
-        // scroll instead of growing to fit every row.
+        // The bare `flex min-h-0 flex-1 flex-col` frame: `PeopleCards` scrolls inside its own
+        // `ScrollArea`, which needs a REAL bounded height at every level above it.
         <div className="flex min-h-0 flex-1 flex-col">
-          <PeopleTable
-            initial={people}
+          <PeopleCards
+            initial={peoplePage}
             departments={peopleDepartments}
-            skills={skillCatalogue}
-            skillHolders={skillHolders}
+            skillCatalogue={skillCatalogue}
+            taxonomy={taxonomy}
+            // A change made in the person sheet (a skill, a seat) re-reads the cards behind it.
+            refreshKey={personTick}
             onOpen={(personId) => setSelectedPerson(personId)}
           />
         </div>
       )}
       {/* M61 R4/R12, Task 11: these three tab bodies are inside a `ScrollArea`, the way the other
-          three already are (`PeopleTable`, `SkillsClient` and `EvidenceTab` each carry their own).
+          three already are (`PeopleCards`, `SkillsClient` and `EvidenceTab` each carry their own).
           `<main>` is `overflow-hidden` since R4 -- a tab body that is taller than the frame and is
           NOT inside a scrolling region is not a long page, it is a CLIPPED one, with the rows past
           the fold unreachable by any means. `gate:m61-simple-mode`'s stage 2 found all three. */}

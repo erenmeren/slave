@@ -1038,54 +1038,37 @@ try {
   await assertComputed('project-settings', '[data-testid="runtime-timeout"]', 'font-size', '14px')
   console.log('stage 2a: the project Settings tab carries perm-caption and a 14px runtime-timeout field')
 
-  // M58 R22: People is one row per person -- Name, Persona, Departments, Skills, Where they
-  // work, and the open control. Asserted TWICE and deliberately: `getComputedStyle` resolves
-  // `grid-template-columns` to USED track sizes, so the two `1fr` tracks come back as pixel
-  // widths and a literal string comparison against the authored template could never pass.
-  const PEOPLE_COLUMNS = '160px 140px 1fr 70px 1fr 40px'
+  // Workforce cards: People is a card GRID, one card per person. The track template is asserted
+  // TWICE, as the table's columns were: AUTHORED (the inline style) and USED (resolved to pixel
+  // tracks, each at least the 320px minimum -- at 1440x900 there is always room for one).
+  // `min(320px, 100%)` (controller ruling F9) is what keeps a phone-width viewport from scrolling
+  // sideways; at this gate's width it resolves to the plain 320px floor.
+  // The People tab is the Workforce default (`workforce-tab-slaves`); the `clickUntil` is kept --
+  // idempotent on an already-selected tab -- so this asserts the template rather than assuming
+  // which tab happened to be default. Keyed on `people-rows`: the Catalog's grid must not satisfy it.
+  const PEOPLE_GRID = 'repeat(auto-fill, minmax(min(320px, 100%), 1fr))'
   await gotoReliably(`${baseUrl}/workforce`)
-  // The People tab is the Workforce default (`workforce-tab-slaves`). The `clickUntil` is kept
-  // anyway -- it is idempotent on an already-selected tab, and it is what makes this stage
-  // assert the template rather than assume which tab happened to be default.
-  // Keyed on `people-rows`, not a bare `data-table-header`: other tables on the page must not
-  // satisfy this wait. An empty installation renders `people-empty` instead; this gate's fixture
-  // always has at least the seeded person, so the header is there to measure.
   await clickUntil(
     page.getByTestId('workforce-tab-slaves'),
     async () =>
-      (await page.evaluate(
-        () => document.querySelector('[data-testid="people-rows"] [data-testid="data-table-header"]')?.style.gridTemplateColumns ?? null,
-      )) === PEOPLE_COLUMNS,
-    'the Workforce page\'s People table',
+      normalize(
+        (await page.evaluate(
+          () => document.querySelector('[data-testid="people-rows"] [data-testid="workforce-card-grid"]')?.style.gridTemplateColumns ?? '',
+        )) ?? '',
+      ) === PEOPLE_GRID,
+    "the Workforce page's People cards",
   )
-  const workerHeaderCells = await page.getByTestId('people-rows').getByTestId('data-table-header-cell').count()
-  if (workerHeaderCells !== 6) {
-    await fail(`stage 2 (workforce): the People table has ${String(workerHeaderCells)} header cell(s), expected 6`)
-  }
-  const slavesComputed = normalize((await computed('[data-testid="people-rows"] [data-testid="data-table-header"]', 'grid-template-columns')) ?? '')
-  const slavesUsed = /^160px 140px (\d+(?:\.\d+)?)px 70px (\d+(?:\.\d+)?)px 40px$/.exec(slavesComputed)
-  if (slavesUsed === null) {
+  const peopleTracks = normalize((await computed('[data-testid="people-rows"] [data-testid="workforce-card-grid"]', 'grid-template-columns')) ?? '')
+  const trackWidths = peopleTracks.split(' ').map((token) => Number(/^(\d+(?:\.\d+)?)px$/.exec(token)?.[1] ?? 'NaN'))
+  if (trackWidths.length === 0 || trackWidths.some((width) => !(width >= 320))) {
     await fail(
-      `stage 2 (workforce): [data-testid="people-rows"] [data-testid="data-table-header"] grid-template-columns is ${JSON.stringify(slavesComputed)}, ` +
-        `expected the used form of ${JSON.stringify(PEOPLE_COLUMNS)} -- ` +
-        '`160px 140px <the first 1fr>px 70px <the second 1fr>px 40px`',
-    )
-  }
-  if (Number(slavesUsed[1]) <= 0 || Number(slavesUsed[2]) <= 0) {
-    await fail(`stage 2 (workforce): a \`1fr\` column resolved to ${slavesUsed[1]}px / ${slavesUsed[2]}px at 1440x900 -- it has no room at all`)
-  }
-  const slavesAuthored = await page.evaluate(
-    () => document.querySelector('[data-testid="people-rows"] [data-testid="data-table-header"]')?.style.gridTemplateColumns ?? null,
-  )
-  if (normalize(slavesAuthored ?? '') !== PEOPLE_COLUMNS) {
-    await fail(
-      `stage 2 (workforce): the People table is laid out on ${JSON.stringify(slavesAuthored)}, ` +
-        `expected ${JSON.stringify(PEOPLE_COLUMNS)}`,
+      `stage 2 (workforce): the People card grid resolved to ${JSON.stringify(peopleTracks)} -- ` +
+        'expected one or more pixel tracks of at least 320px',
     )
   }
   console.log(
-    `stage 2 (workforce): [data-testid="people-rows"] [data-testid="data-table-header"] grid-template-columns = ${JSON.stringify(PEOPLE_COLUMNS)} ` +
-      `(used: ${slavesComputed})`,
+    `stage 2 (workforce): [data-testid="people-rows"] [data-testid="workforce-card-grid"] = ${JSON.stringify(PEOPLE_GRID)} ` +
+      `(used: ${peopleTracks})`,
   )
   console.log(`stage 2a PASSED: ${String(NUMBERS.length + 2)} README values read back from getComputedStyle`)
 

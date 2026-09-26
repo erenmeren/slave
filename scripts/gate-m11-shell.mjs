@@ -410,28 +410,26 @@ try {
   // word is on the chip, the raw state is on `data-person-state`.
   await page.goto(`${baseUrl}/workforce`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
   await waitVisible(page.getByTestId('people-rows'), 'the People table')
-  // M61 R12: the People table is VIRTUALISED -- only the rows near the scrolled viewport are in
-  // the DOM, so a locator waiting for a row further down waits for a node React has deliberately
-  // not made. The table's own `ScrollArea` is walked in page-sized steps until the row mounts.
+  // Workforce cards: People is server-PAGED (a hundred a page) and filtered in the database, so a
+  // person past the first page is reached by SEARCHING for them, never by scrolling.
   async function scrollPeopleTo(name) {
-    return page.evaluate(async (needle) => {
-      const area = document.querySelector('[data-testid="people-rows"] [data-scroll-axis]')
-      const found = () =>
-        [...document.querySelectorAll('[data-testid^="person-row-"]')].some((node) => (node.textContent ?? '').includes(needle))
-      if (area === null) return { area: false, found: found() }
-      area.scrollTop = 0
-      await new Promise((resolve) => setTimeout(resolve, 60))
-      for (let step = 0; step < 300; step += 1) {
-        if (found()) return { area: true, steps: step, found: true }
-        const before = area.scrollTop
-        area.scrollTop = Math.min(area.scrollTop + Math.max(1, area.clientHeight - 40), area.scrollHeight)
-        await new Promise((resolve) => setTimeout(resolve, 60))
-        if (area.scrollTop === before) break
-      }
-      return { area: true, steps: -1, found: found() }
-    }, name)
+    const search = page.getByTestId('people-search')
+    const rows = page.locator('[data-testid^="person-row-"]').filter({ hasText: name })
+    // Already searched for and still absent (the answer predates them): clear the box for longer
+    // than the bar's 250 ms debounce, so the refill below is a NEW question, not the same text.
+    if ((await search.inputValue()) === name && (await rows.count()) === 0) {
+      await search.fill('')
+      await page.waitForTimeout(600)
+    }
+    await search.fill(name)
+    const found = await rows
+      .first()
+      .waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS })
+      .then(() => true)
+      .catch(() => false)
+    return { searched: true, found }
   }
-  console.log(`scrolled the virtualised People table to "${MEMBER_NAME}": ${JSON.stringify(await scrollPeopleTo(MEMBER_NAME))}`)
+  console.log(`searched the People cards for "${MEMBER_NAME}": ${JSON.stringify(await scrollPeopleTo(MEMBER_NAME))}`)
   const catalogRow = page.locator('[data-testid^="person-row-"]').filter({ hasText: MEMBER_NAME })
   await waitVisible(catalogRow, `a pooled "${MEMBER_NAME}" row before any project is assigned`)
   const catalogRowCount = await catalogRow.count()
@@ -553,7 +551,7 @@ try {
     slavesTab,
     async () => {
       if ((await slavesTab.getAttribute('aria-selected')) !== 'true') return false
-      // Virtualised (M61 R12), so the row has to be scrolled to before it can be seen.
+      // Paged (workforce cards), so the person is searched for before they can be seen.
       await scrollPeopleTo(MEMBER_NAME)
       return memberRows.first().isVisible()
     },

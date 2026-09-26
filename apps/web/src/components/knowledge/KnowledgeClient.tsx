@@ -56,8 +56,8 @@ const ROW_COLUMNS = '110px minmax(0,1fr) 190px'
 const ROW_GAP = 11
 
 /**
- * The virtualizer's starting guess for one row's height (M61 Task 10) -- unlike `PeopleTable`'s
- * `--row-h` (a fixed, single-line 40/34px table row), a knowledge row is a multi-line card whose
+ * The virtualizer's starting guess for one row's height (M61 Task 10) -- unlike a fixed,
+ * single-line `--row-h` (40/34px) table row, a knowledge row is a multi-line card whose
  * height genuinely varies with its body text and with whether its `DetailsGroup` fold is open.
  *
  * Scope fix (controller Ruling 10): `DataTable`'s `virtualized.dynamic: true` below is what
@@ -267,7 +267,7 @@ export function KnowledgeClient({
 
   /**
    * One `knowledge-row` article, drawn by index -- `DataTable`'s `virtualized.render` (M61 Task
-   * 10, copied from `PeopleTable`'s own wiring). The markup below is byte-identical to what this
+   * 10, copied from the People table's wiring, since replaced by cards). The markup below is byte-identical to what this
    * component's `view.rows.map` rendered directly before this task; only the list around it
    * changed. Kept as a function rather than inlined so the same JSX serves `virtualized.render`.
    */

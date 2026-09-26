@@ -1257,24 +1257,31 @@ try {
     await fail(`stage 9: the worker who is still here is greyed too: ${JSON.stringify(cards)}`)
   }
 
-  await gotoReliably(`${baseUrl}/workforce`)
-  // M58 R22: the People tab is one row per SLAVE now, not one per project seat. A released
-  // specialist is still marked and still greyed; the row's testid is `person-row-<personId>` and
-  // the word comes from `USER_PERSON_LABEL` rather than a lifecycle column on the seat.
-  await waitVisible(page.getByTestId('people-rows'), 'the People table')
+  // M58 R22: the People tab is one card per SLAVE, not one per project seat. A released specialist
+  // is still marked and still greyed; the card's testid is `person-row-<personId>` and the word
+  // comes from `USER_PERSON_LABEL` rather than a lifecycle column on the seat.
+  // Workforce cards: People is paged and filtered on the server, so each question gets its own
+  // segment -- the released specialist under Released, the worker still here under Assigned.
+  await gotoReliably(`${baseUrl}/workforce?state=released`)
+  await waitVisible(page.getByTestId('people-rows'), 'the released People cards')
   const releasedRows = await page
     .locator('[data-testid^="person-row-"][data-released="true"]')
     .evaluateAll((nodes) => nodes.map((node) => (node.textContent ?? '').trim().slice(0, 120)))
-  console.log(`stage 9 -- the released rows in the People table: ${JSON.stringify(releasedRows)}`)
+  console.log(`stage 9 -- the released cards: ${JSON.stringify(releasedRows)}`)
   if (!releasedRows.some((text) => text.includes(`${SECURITY_PERSONA} 2`))) {
-    await fail(`stage 9: the released specialist is not marked in the People table: ${JSON.stringify(releasedRows)}`)
+    await fail(`stage 9: the released specialist is not marked in People: ${JSON.stringify(releasedRows)}`)
   }
-  const stateWords = await page
+  const releasedStates = await page
     .locator('[data-testid^="person-row-"]')
     .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-person-state')))
-  console.log(`stage 9 -- the People table's states: ${JSON.stringify(stateWords)}`)
-  if (!stateWords.includes('released')) await fail(`stage 9: no released row: ${JSON.stringify(stateWords)}`)
-  if (!stateWords.includes('assigned')) await fail(`stage 9: no assigned row: ${JSON.stringify(stateWords)}`)
+  if (!releasedStates.includes('released')) await fail(`stage 9: no released card: ${JSON.stringify(releasedStates)}`)
+  await gotoReliably(`${baseUrl}/workforce?state=assigned`)
+  await waitVisible(page.getByTestId('people-rows'), 'the assigned People cards')
+  const assignedStates = await page
+    .locator('[data-testid^="person-row-"]')
+    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-person-state')))
+  console.log(`stage 9 -- the assigned cards' states: ${JSON.stringify(assignedStates)}`)
+  if (!assignedStates.includes('assigned')) await fail(`stage 9: no assigned card: ${JSON.stringify(assignedStates)}`)
 
   console.log(`gotoReliably retries this run: ${String(gotoRetries.length)}${gotoRetries.length === 0 ? '' : ` (${JSON.stringify(gotoRetries)})`}`)
   console.log(
