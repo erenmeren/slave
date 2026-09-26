@@ -358,7 +358,9 @@ try {
 
   await fillReliably(page.getByLabel('template name'), TEMPLATE_NAME, 'the template name field')
   await fillReliably(page.getByLabel('template role'), 'backend', 'the template role field')
-  const templateRow = page.getByTestId('data-table-row').filter({ hasText: TEMPLATE_NAME })
+  // Workforce cards: the catalog is a card grid, so the new template is found by its card wrapper
+  // (`catalog-row-<id>`) -- the handle `WorkforceCatalog` keeps for exactly this -- not a table row.
+  const templateRow = page.locator('[data-testid^="catalog-row-"]').filter({ hasText: TEMPLATE_NAME })
   await clickUntil(page.getByTestId('template-submit'), async () => templateRow.first().isVisible(), `"${TEMPLATE_NAME}" template submit`)
   await waitVisible(templateRow, `the "${TEMPLATE_NAME}" template row`)
   const template = await prisma.slaveTemplate.findUnique({ where: { name: TEMPLATE_NAME } })

@@ -134,14 +134,18 @@ describe('WorkforceCatalog rows', () => {
     expect(within(line).getByTestId('catalog-capability-more').textContent).toBe('+1')
   })
 
-  // E13: `gate:m11-shell` stage 1 fills the form below and then waits for a `data-table-row`
-  // carrying the new template's name. The catalog's own handles are ADDITIONAL, never a rename.
-  it('keeps the data-table primitives the m11 gate drives, under the catalog handle', () => {
-    render(<WorkforceCatalog initial={view([row()])} />)
+  // Workforce cards: the catalog is a GRID of persona cards now. `gate:m11-shell` waits for the new
+  // template by its `catalog-row-` wrapper (Task 8 moved it off `data-table-row`), so the wrapper
+  // is the handle that must survive.
+  it('lays the catalog out as persona cards on the card grid, one per template', () => {
+    render(<WorkforceCatalog initial={view([row(), row({ id: 't2', name: 'Verifier' })])} />)
 
     expect(screen.getByTestId('workforce-catalog')).toBeTruthy()
-    expect(screen.getByTestId('data-table')).toBeTruthy()
-    expect(within(screen.getByTestId('catalog-row-t1')).getByTestId('data-table-row')).toBeTruthy()
+    expect(screen.getByTestId('workforce-card-grid')).toBeTruthy()
+    expect(screen.queryByTestId('data-table')).toBeNull()
+    const card = within(screen.getByTestId('catalog-row-t1')).getByTestId('workforce-card')
+    expect(card.getAttribute('data-variant')).toBe('persona')
+    expect(screen.getAllByTestId(/^catalog-row-/u)).toHaveLength(2)
   })
 
   it('marks where a row came from, and says local for a hand-made template', () => {
@@ -214,17 +218,70 @@ describe('WorkforceCatalog rows', () => {
     expect(within(screen.getByTestId('catalog-row-t1')).getByText('backend')).toBeTruthy()
   })
 
-  // Fix round 1, minor 4: every `Row` is the only child of its wrapper, so `Row`'s own
-  // `last:border-b-0` matched ALL of them and the table drew no separator anywhere. The final
-  // wave (I1) found the first fix still shipped `last:border-b-0` on the non-last rows -- and a
-  // `:last-child` rule of higher specificity than `.border-b` still won on every wrapped row, so
-  // the separator was still missing. A row whose caller manages position carries NO `:last-child`
-  // rule at all: the non-last rows get a plain `border-b`, the last one gets neither.
-  it('draws a separator under every row but the last, with no :last-child rule to undo it', () => {
-    render(<WorkforceCatalog initial={view([row(), row({ id: 't2' }), row({ id: 't3' })])} />)
-    const classNames = screen.getAllByTestId('data-table-row').map((node) => node.className)
-    expect(classNames.map((name) => name.includes('border-b'))).toEqual([true, true, false])
-    expect(classNames.map((name) => name.includes('last:border-b-0'))).toEqual([false, false, false])
+  it("hands each card the row's skills and workflow", () => {
+    render(
+      <WorkforceCatalog
+        initial={view([
+          row({
+            skills: [{ skillId: 'sk1', name: 'pdf', providerName: 'personal', missing: false, process: false, state: 'persona' }],
+            workflowPreview: { steps: ['Read the ticket'], total: 4 },
+          }),
+        ])}
+      />,
+    )
+    const card = screen.getByTestId('catalog-row-t1')
+    expect(within(card).getByTestId('card-skill-sk1')).toBeTruthy()
+    expect(within(card).getByTestId('card-workflow-step').textContent).toBe('1. Read the ticket')
+    expect(within(card).getByTestId('card-workflow-more').textContent).toBe('+3 steps')
+  })
+
+  it('offers Clear filters when a filtered answer is empty', async () => {
+    search = 'q=nothing-like-it'
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(view([])), { status: 200 }))
+    render(<WorkforceCatalog initial={view([])} />)
+
+    const clear = await screen.findByTestId('catalog-empty-clear')
+    fireEvent.click(clear)
+    expect(replaceState).toHaveBeenLastCalledWith(null, '', '/workforce')
+  })
+
+  /**
+   * Controller ruling F2 (Task 8): a card write must not reset the loaded list to page one. This
+   * proves it end to end -- a row past the first page (loaded through `Show more`) keeps its own
+   * page-one sibling mounted, and picks up the write itself, when the persona-card write succeeds.
+   */
+  it('patches a card past the first page in place after a write, without dropping earlier pages', async () => {
+    const pageOne = { ...view([row()]), nextCursor: 't1' }
+    const pageTwo = { ...view([row({ id: 't2', name: 'Verifier' })]), nextCursor: null }
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.startsWith('/api/org/templates/')) return new Response(JSON.stringify({ ok: true }), { status: 200 })
+      if (url.includes('cursor=')) return new Response(JSON.stringify(pageTwo), { status: 200 })
+      return new Response(JSON.stringify(pageOne), { status: 200 })
+    })
+
+    render(
+      <WorkforceCatalog
+        initial={pageOne}
+        skillCatalogue={[{ skillId: 's-sql', name: 'sql', providerName: 'personal', description: 'writes sql', missing: false }]}
+      />,
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('catalog-more'))
+    })
+    await waitFor(() => expect(screen.getByTestId('catalog-row-t2')).toBeTruthy())
+
+    const card = screen.getByTestId('catalog-row-t2')
+    fireEvent.click(within(card).getByTestId('card-skill-add'))
+    fireEvent.click(within(card).getByTestId('skill-picker-option-s-sql'))
+    await act(async () => {
+      fireEvent.click(within(card).getByTestId('skill-picker-confirm'))
+    })
+
+    // Both pages are still on screen -- a write on page two must not truncate the list to page one.
+    expect(screen.getByTestId('catalog-row-t1')).toBeTruthy()
+    expect(within(card).getByTestId('card-skill-s-sql')).toBeTruthy()
   })
 
   it('never prints a bare mapping-quality token as visible text (docs/ia.md rule 3)', () => {

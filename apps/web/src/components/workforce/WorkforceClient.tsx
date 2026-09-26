@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import type { CapabilityRecord } from '@slave-of-ai/domain'
 import type { AllSlavesPage, CatalogRowView, ProjectTeamRow, RosterCompany, RunbookRowView, WorkforceCatalogView } from '../../server/org'
 import type { SlaveCardData } from '../../server/overview'
-import type { PersonDetail, PersonRow } from '../../server/persons'
+import type { PersonDetail, PersonRow, SkillCatalogueRow } from '../../server/persons'
 import type { EvidencePage } from '../../server/evidence'
 import type { SkillsPage } from '../../server/skills'
 import { useSelectedId } from '../../hooks/useSelectedId'
@@ -139,7 +139,7 @@ export function WorkforceClient({
   readonly evidence: EvidencePage | null
   readonly people: readonly PersonRow[]
   readonly peopleDepartments: readonly { readonly companyTeamId: string; readonly name: string }[]
-  readonly skillCatalogue: readonly { readonly skillId: string; readonly name: string; readonly providerName: string }[]
+  readonly skillCatalogue: readonly SkillCatalogueRow[]
   readonly skillHolders: Readonly<Record<string, readonly string[]>>
 }): React.JSX.Element {
   const searchParams = useSearchParams()
