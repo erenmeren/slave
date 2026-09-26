@@ -149,7 +149,10 @@ describe('dispatchReviews', () => {
   })
 
   afterAll(async (): Promise<void> => {
-    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+    for (const repo of repos) {
+      rmSync(`${repo}-slaveofai-worktrees`, { recursive: true, force: true })
+      rmSync(repo, { recursive: true, force: true })
+    }
     await prisma.$disconnect()
   })
 
@@ -992,7 +995,10 @@ describe('what a review teaches (M49 R2)', () => {
   })
 
   afterAll(async (): Promise<void> => {
-    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+    for (const repo of repos) {
+      rmSync(`${repo}-slaveofai-worktrees`, { recursive: true, force: true })
+      rmSync(repo, { recursive: true, force: true })
+    }
   })
 
   it('a rejected review teaches the worker that DID the work, never the reviewer', async (): Promise<void> => {
@@ -1124,7 +1130,10 @@ describe('the review verdict settles the rejection column, on the IMPLEMENTER ro
   })
 
   afterAll(async (): Promise<void> => {
-    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+    for (const repo of repos) {
+      rmSync(`${repo}-slaveofai-worktrees`, { recursive: true, force: true })
+      rmSync(repo, { recursive: true, force: true })
+    }
   })
 
   it('settles true on a rejection naming this attempt, against the implementation run', async (): Promise<void> => {

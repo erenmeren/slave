@@ -138,7 +138,11 @@ describe('the M3/M8a milestone gate', () => {
   })
 
   afterAll(async (): Promise<void> => {
-    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+    for (const repo of repos) {
+      // The sibling worktree root (`worktreeRootFor`), which removing the repository leaves behind.
+      rmSync(`${repo}-slaveofai-worktrees`, { recursive: true, force: true })
+      rmSync(repo, { recursive: true, force: true })
+    }
     await prisma.$disconnect()
   }, 30_000)
 
@@ -173,7 +177,7 @@ describe('the M3/M8a milestone gate', () => {
     const implRun = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'implementation' } })
     expect(implRun.status).toBe('succeeded')
     expect(implRun.pid).toBeGreaterThan(0)
-    expect(implRun.worktreePath).toContain(join('.slaveofai', 'worktrees'))
+    expect(implRun.worktreePath).toContain(join(`${fixture.repoPath}-slaveofai-worktrees`, 'T-'))
     expect(existsSync(join(implRun.worktreePath ?? '', 'setup-marker'))).toBe(true)
 
     expect(task.status).toBe('done')
@@ -277,7 +281,8 @@ describe('the M3/M8a milestone gate', () => {
     // Step 4: the checkpoint written from the pause carries what a fresh process needs to resume.
     const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: paused.id } })
     expect(checkpoint.sessionId).not.toBe('')
-    expect(checkpoint.worktreePath).toContain('.slaveofai')
+    expect(checkpoint.worktreePath).toBe(paused.worktreePath)
+    expect(checkpoint.worktreePath).toContain(join(`${fixture.repoPath}-slaveofai-worktrees`, 'T-'))
 
     const result = await runCli(['resume', '--run', paused.id], {
       SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,

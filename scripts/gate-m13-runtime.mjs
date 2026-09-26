@@ -1816,11 +1816,14 @@ try {
       await prisma.workspace.delete({ where: { id: workspaceId } }).catch(() => {})
     }
   }
-  // The repositories carry the run worktrees, the `.slaveofai` run directories and the git exclude
-  // file the Cursor adapter appended to -- all of it inside these two trees, so nothing this gate
-  // wrote outlives them.
-  if (unbudgetedRepo !== null) rmSync(unbudgetedRepo, { recursive: true, force: true })
-  if (budgetedRepo !== null) rmSync(budgetedRepo, { recursive: true, force: true })
+  // The repositories carry the `.slaveofai` directories and the git exclude file the Cursor adapter
+  // appended to; the run worktrees are in each one's sibling `<repo>-slaveofai-worktrees` (since
+  // 2026-09-26). Both removed, so nothing this gate wrote outlives them.
+  for (const repo of [unbudgetedRepo, budgetedRepo]) {
+    if (repo === null) continue
+    rmSync(`${repo}-slaveofai-worktrees`, { recursive: true, force: true })
+    rmSync(repo, { recursive: true, force: true })
+  }
   if (diagDir !== null && exitCode === 0) rmSync(diagDir, { recursive: true, force: true })
   await prisma.$disconnect()
 }

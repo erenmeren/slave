@@ -1,16 +1,18 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, relative } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   SETUP_OUTPUT_LIMIT,
   WorktreeExistsError,
   adoptWorktree,
   discardStaleWorktree,
+  legacyWorktreeRootFor,
   provisionWorktree,
   reattachWorktree,
+  worktreeRootFor,
 } from '../../src/worktree.js'
 
 function run(command: string, args: readonly string[], cwd: string): string {
@@ -54,6 +56,70 @@ const headOf = (repoPath: string, ref: string): string => run('git', ['rev-parse
 const branches = (repoPath: string): readonly string[] =>
   run('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads'], repoPath).split('\n')
 
+/** The repository AND its sibling worktree root: since 2026-09-26 removing the one leaves the other. */
+function removeRepo(repoPath: string): void {
+  rmSync(worktreeRootFor(repoPath), { recursive: true, force: true })
+  rmSync(repoPath, { recursive: true, force: true })
+}
+
+/** True when some segment of `path` BELOW `from` starts with a dot -- the shape biome skips. */
+const hasDotSegmentBelow = (from: string, path: string): boolean =>
+  relative(from, path)
+    .split(sep)
+    .some((segment) => segment.startsWith('.'))
+
+describe('worktreeRootFor', () => {
+  it('puts worktrees in a sibling of the repository, with no dot segment of its own', (): void => {
+    vi.stubEnv('SLAVEOFAI_WORKTREE_ROOT', '')
+    try {
+      const repoPath = join(tmpdir(), 'some-project')
+      const root = worktreeRootFor(repoPath)
+
+      expect(root).toBe(join(tmpdir(), 'some-project-slaveofai-worktrees'))
+      // Outside the repository -- not merely a differently-named directory inside it.
+      expect(root.startsWith(repoPath + sep)).toBe(false)
+      expect(hasDotSegmentBelow(dirname(repoPath), join(root, 'T-abcdef12'))).toBe(false)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('never starts the sibling with a dot, even for a repository whose own name does', (): void => {
+    vi.stubEnv('SLAVEOFAI_WORKTREE_ROOT', '')
+    try {
+      const root = worktreeRootFor(join(tmpdir(), '.dotfiles'))
+
+      expect(basename(root)).toBe('dotfiles-slaveofai-worktrees')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('honours SLAVEOFAI_WORKTREE_ROOT, one directory per repository beneath it', (): void => {
+    const override = join(tmpdir(), 'wt-override')
+    vi.stubEnv('SLAVEOFAI_WORKTREE_ROOT', override)
+    try {
+      const a = worktreeRootFor(join(tmpdir(), 'a', 'project'))
+      const b = worktreeRootFor(join(tmpdir(), 'b', 'project'))
+
+      expect(dirname(a)).toBe(override)
+      expect(basename(a)).toMatch(/^project-[0-9a-f]{8}$/)
+      // Two repositories with the same basename must not share a task-key namespace: a stale-
+      // directory repair in one would remove the other's tree.
+      expect(a).not.toBe(b)
+      expect(hasDotSegmentBelow(override, join(a, 'T-abcdef12'))).toBe(false)
+      // Stable, because a rework has to find its own previous tree again.
+      expect(worktreeRootFor(join(tmpdir(), 'a', 'project'))).toBe(a)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('still knows the old in-repository root', (): void => {
+    expect(legacyWorktreeRootFor('/r')).toBe(join('/r', '.slaveofai', 'worktrees'))
+  })
+})
+
 describe('provisionWorktree', () => {
   let repoPath: string
   let base: {
@@ -76,14 +142,19 @@ describe('provisionWorktree', () => {
   })
 
   afterEach((): void => {
-    rmSync(repoPath, { recursive: true, force: true })
+    removeRepo(repoPath)
   })
 
   it('creates a worktree on its own branch from the base branch', async (): Promise<void> => {
     const wt = await provisionWorktree(base)
 
     expect(wt.branch).toBe('slaveofai/TASK-001-add-thing')
-    expect(wt.path).toContain(join('.slaveofai', 'worktrees', 'TASK-001'))
+    // OUTSIDE the repository and with no dot segment of Slave's own (2026-09-26): tooling that
+    // skips dot-prefixed paths saw nothing to check in `<repo>/.slaveofai/worktrees/<key>`.
+    expect(wt.path).toBe(join(worktreeRootFor(repoPath), 'TASK-001'))
+    expect(wt.path.startsWith(repoPath + sep)).toBe(false)
+    expect(hasDotSegmentBelow(dirname(repoPath), wt.path)).toBe(false)
+    expect(existsSync(legacyWorktreeRootFor(repoPath))).toBe(false)
     expect(existsSync(join(wt.path, '.git'))).toBe(true)
 
     // The branch is not merely *named*: it is the one checked out in the worktree, and it starts
@@ -120,7 +191,7 @@ describe('provisionWorktree', () => {
   })
 
   it('stops at the first failing setup command and runs none after it', async (): Promise<void> => {
-    const worktreePath = join(repoPath, '.slaveofai', 'worktrees', 'TASK-001')
+    const worktreePath = join(worktreeRootFor(repoPath), 'TASK-001')
 
     await expect(
       provisionWorktree({ ...base, setupCommands: ['touch FIRST', 'exit 4', 'touch AFTER'] }),
@@ -166,7 +237,7 @@ describe('provisionWorktree', () => {
   })
 
   it('fails loudly when a setup command fails, and preserves the worktree', async (): Promise<void> => {
-    const expectedPath = join(repoPath, '.slaveofai', 'worktrees', 'TASK-001')
+    const expectedPath = join(worktreeRootFor(repoPath), 'TASK-001')
 
     await expect(
       provisionWorktree({ ...base, setupCommands: ['echo boom >&2; exit 3'] }),
@@ -260,7 +331,7 @@ describe('provisionWorktree', () => {
   })
 
   it('gives a timed-out command time to clean up before killing it outright', async (): Promise<void> => {
-    const worktreePath = join(repoPath, '.slaveofai', 'worktrees', 'TASK-001')
+    const worktreePath = join(worktreeRootFor(repoPath), 'TASK-001')
 
     await expect(
       provisionWorktree({
@@ -391,7 +462,7 @@ describe('provisionWorktree', () => {
   })
 
   it('tells a stray directory apart from a worktree this task left behind', async (): Promise<void> => {
-    mkdirSync(join(repoPath, '.slaveofai', 'worktrees', 'TASK-001'), { recursive: true })
+    mkdirSync(join(worktreeRootFor(repoPath), 'TASK-001'), { recursive: true })
 
     const error = await provisionWorktree(base).catch((cause: unknown): unknown => cause)
 
@@ -454,6 +525,7 @@ describe('provisionWorktree', () => {
     ).rejects.toThrow(/taskKey/)
 
     expect(existsSync(join(repoPath, '.slaveofai'))).toBe(false)
+    expect(existsSync(worktreeRootFor(repoPath))).toBe(false)
   })
 
   it('reports an absolute path even when handed a relative repository path', async (): Promise<void> => {
@@ -477,11 +549,11 @@ describe('repairing a half-provisioned worktree (E R6)', () => {
   })
 
   afterEach((): void => {
-    rmSync(repoPath, { recursive: true, force: true })
+    removeRepo(repoPath)
   })
 
   it('removes a stale directory and leaves the task provisionable again', async (): Promise<void> => {
-    const stale = join(repoPath, '.slaveofai', 'worktrees', 'TASK-001')
+    const stale = join(worktreeRootFor(repoPath), 'TASK-001')
     mkdirSync(stale, { recursive: true })
     writeFileSync(join(stale, 'leftover.txt'), 'half a provision\n')
     const branchesBefore = branches(repoPath)
@@ -547,5 +619,84 @@ describe('repairing a half-provisioned worktree (E R6)', () => {
     // Setup re-ran, for `adoptWorktree`'s own reason: a tree with no dependencies fails verify for
     // reasons that have nothing to do with the work.
     expect(readFileSync(join(repoPath, 'setup-log'), 'utf8')).toBe('ran\n')
+  })
+})
+
+/**
+ * Worktrees made before 2026-09-26 live at `<repo>/.slaveofai/worktrees/<key>`, and a live project
+ * has tasks in `rework` whose previous attempt is there. Everything with a STORED path keeps using
+ * it; these pin the functions that DERIVE a path from a key, which must find the old tree rather
+ * than provision a second one beside it while its branch is still checked out underneath.
+ */
+describe('a worktree made in the old in-repository location', () => {
+  let repoPath: string
+  const branch = 'slaveofai/TASK-001-add-thing'
+
+  /** Exactly what the old `provisionWorktree` left: the self-ignoring `.slaveofai/` and a tree in it. */
+  function makeLegacyWorktree(): string {
+    mkdirSync(join(repoPath, '.slaveofai'), { recursive: true })
+    writeFileSync(join(repoPath, '.slaveofai', '.gitignore'), '*\n')
+    const path = join(legacyWorktreeRootFor(repoPath), 'TASK-001')
+    run('git', ['worktree', 'add', '-q', '-b', branch, path, 'main'], repoPath)
+    return path
+  }
+
+  beforeEach((): void => {
+    repoPath = makeRepo()
+  })
+
+  afterEach((): void => {
+    removeRepo(repoPath)
+  })
+
+  it('is refused as `both` at its OLD path, not shadowed by a fresh tree in the new one', async (): Promise<void> => {
+    const legacy = makeLegacyWorktree()
+
+    const error = await provisionWorktree({ repoPath, baseBranch: 'main', taskKey: 'TASK-001', slug: 'add-thing', setupCommands: [] }).catch(
+      (cause: unknown): unknown => cause,
+    )
+
+    expect(error).toBeInstanceOf(WorktreeExistsError)
+    expect((error as WorktreeExistsError).reason).toBe('both')
+    expect((error as WorktreeExistsError).path).toBe(legacy)
+    expect(existsSync(worktreeRootFor(repoPath))).toBe(false)
+  })
+
+  it('is adopted where it lies, work and all', async (): Promise<void> => {
+    const legacy = makeLegacyWorktree()
+    writeFileSync(join(legacy, 'WORK_IN_PROGRESS'), 'the previous attempt\n')
+
+    const adopted = await adoptWorktree({ repoPath, taskKey: 'TASK-001', branch, setupCommands: [] })
+
+    expect(adopted.path).toBe(legacy)
+    expect(existsSync(join(adopted.path, 'WORK_IN_PROGRESS'))).toBe(true)
+  })
+
+  it('is discarded where it lies when it is a stray directory, and the task then provisions in the new root', async (): Promise<void> => {
+    const stale = join(legacyWorktreeRootFor(repoPath), 'TASK-001')
+    mkdirSync(stale, { recursive: true })
+
+    await discardStaleWorktree({ repoPath, taskKey: 'TASK-001' })
+    const wt = await provisionWorktree({ repoPath, baseBranch: 'main', taskKey: 'TASK-001', slug: 'add-thing', setupCommands: [] })
+
+    expect(existsSync(stale)).toBe(false)
+    expect(wt.path).toBe(join(worktreeRootFor(repoPath), 'TASK-001'))
+  })
+
+  it('comes back in the NEW root when its directory is gone and only the branch survived', async (): Promise<void> => {
+    const legacy = makeLegacyWorktree()
+    writeFileSync(join(legacy, 'WORK_IN_PROGRESS'), 'the previous attempt\n')
+    run('git', ['-C', legacy, 'add', '-A'], repoPath)
+    run('git', ['-C', legacy, 'commit', '-q', '-m', 'work in progress'], repoPath)
+    const onBranch = headOf(repoPath, branch)
+    // Gone WITHOUT `git worktree remove`: the registration survives and names the old path, which
+    // is what the prune inside `reattachWorktree` has to clear before git lets the branch move.
+    rmSync(legacy, { recursive: true, force: true })
+
+    const again = await reattachWorktree({ repoPath, taskKey: 'TASK-001', branch, setupCommands: [] })
+
+    expect(again.path).toBe(join(worktreeRootFor(repoPath), 'TASK-001'))
+    expect(again.headCommit).toBe(onBranch)
+    expect(existsSync(join(again.path, 'WORK_IN_PROGRESS'))).toBe(true)
   })
 })

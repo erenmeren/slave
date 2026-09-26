@@ -85,7 +85,10 @@ describe('the model chain reaches a dispatched run, and setSlaveModel changes th
   })
 
   afterAll(async (): Promise<void> => {
-    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+    for (const repo of repos) {
+      rmSync(`${repo}-slaveofai-worktrees`, { recursive: true, force: true })
+      rmSync(repo, { recursive: true, force: true })
+    }
   })
 
   it("starts a run with the template's default model, then the NEXT run reflects setSlaveModel", async (): Promise<void> => {

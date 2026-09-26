@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { refusalText, requestResume, runFilePaths, type ModelDecider } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
@@ -25,6 +25,7 @@ import {
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRunUnlessArchived } from '../../src/runs.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
+import { legacyWorktreeRootFor, worktreeRootFor } from '../../src/worktree.js'
 
 /**
  * Every `workspaceStats` call this file makes, in order (M39 §4).
@@ -190,7 +191,10 @@ describe('tick', () => {
   })
 
   afterAll(async (): Promise<void> => {
-    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+    for (const repo of repos) {
+      rmSync(worktreeRootFor(repo), { recursive: true, force: true })
+      rmSync(repo, { recursive: true, force: true })
+    }
     await prisma.$disconnect()
   })
 
@@ -200,7 +204,53 @@ describe('tick', () => {
     expect(report.started).toHaveLength(1)
     const run = await prisma.slaveRun.findFirstOrThrow()
     expect(run.pid).toBeGreaterThan(0)
-    expect(run.worktreePath).toContain(join('.slaveofai', 'worktrees'))
+    // Outside the repository since 2026-09-26, in the sibling root -- see `worktreeRootFor`.
+    expect(run.worktreePath).toBe(join(worktreeRootFor(fixture.repoPath), keyOf(fixture.taskId)))
+    expect(run.worktreePath?.startsWith(fixture.repoPath + sep)).toBe(false)
+  })
+
+  // THE BUG THIS PINS (2026-09-26): a repository whose own checker skips dot-prefixed paths -- a
+  // `biome.json` ignoring `.*` at any depth, fb55/css-what and fb55/domutils -- failed verify on
+  // every task, because the worktree was `<repo>/.slaveofai/worktrees/<key>` and the checker saw
+  // no files there. The verify command below is that bug's shape with nothing else in it: it
+  // fails exactly when its working directory has a dot segment, and passes in a normal clone.
+  it('passes a verify command that fails under any dot-prefixed directory', async (): Promise<void> => {
+    await prisma.workspace.update({
+      where: { id: fixture.workspaceId },
+      data: { verifyCommands: ['case "$PWD" in */.*) echo "dot segment in $PWD"; exit 1;; esac'] },
+    })
+    // The fixture itself must be a normal clone for this to mean anything.
+    expect(fixture.repoPath.includes(`${sep}.`)).toBe(false)
+
+    await tick(deps)
+    await drainPumps()
+
+    const task = await prisma.task.findFirstOrThrow()
+    expect(task.lastRejectionReason).toBeNull()
+    expect(task.status).toBe('reviewing')
+  })
+
+  // A live project upgraded mid-task: its previous attempt's tree is still at the OLD path, with
+  // the branch checked out there. The rework has to continue in THAT tree -- provisioning a fresh
+  // one in the new root would fail on the branch git already has checked out, and charge the task
+  // an attempt for an upgrade.
+  it('adopts a reworked task whose previous tree is still in the old in-repository location', async (): Promise<void> => {
+    const branch = `slaveofai/${keyOf(fixture.taskId)}-add-the-thing`
+    const legacy = join(legacyWorktreeRootFor(fixture.repoPath), keyOf(fixture.taskId))
+    mkdirSync(join(fixture.repoPath, '.slaveofai'), { recursive: true })
+    writeFileSync(join(fixture.repoPath, '.slaveofai', '.gitignore'), '*\n')
+    git(['worktree', 'add', '-q', '-b', branch, legacy, 'main'], fixture.repoPath)
+    writeFileSync(join(legacy, 'previous-attempt.txt'), 'kept\n')
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'rework', attempt: 1, branch } })
+
+    const report = await tick(deps)
+
+    expect(report.started).toHaveLength(1)
+    const run = await prisma.slaveRun.findFirstOrThrow()
+    expect(run.status).not.toBe('failed')
+    expect(run.worktreePath).toBe(legacy)
+    expect(existsSync(join(legacy, 'previous-attempt.txt'))).toBe(true)
+    expect(existsSync(worktreeRootFor(fixture.repoPath))).toBe(false)
   })
 
   it('hands the task to the seat its run actually went to (H2)', async (): Promise<void> => {
@@ -1325,7 +1375,7 @@ describe('tick', () => {
   // is no commit in it to preserve and nothing for §7.4 to show an operator -- and parking the
   // task on it burns an attempt on wreckage. The by-hand retry on 2026-09-20 died here.
   it('clears a stale worktree directory with no branch and provisions a fresh one', async (): Promise<void> => {
-    const worktreePath = join(fixture.repoPath, '.slaveofai', 'worktrees', keyOf(fixture.taskId))
+    const worktreePath = join(worktreeRootFor(fixture.repoPath), keyOf(fixture.taskId))
     mkdirSync(worktreePath, { recursive: true })
     writeFileSync(join(worktreePath, 'leftover.txt'), 'from a half-finished provision\n')
 
@@ -1352,7 +1402,7 @@ describe('tick', () => {
     await drainPumps()
     const first = await prisma.task.findFirstOrThrow()
     const branch = first.branch ?? ''
-    const worktreePath = join(fixture.repoPath, '.slaveofai', 'worktrees', keyOf(fixture.taskId))
+    const worktreePath = join(worktreeRootFor(fixture.repoPath), keyOf(fixture.taskId))
     // Exactly the residue of a half-finished removal: the directory taken away (and git's metadata
     // with it), the branch still there.
     git(['worktree', 'remove', '--force', worktreePath], fixture.repoPath)
@@ -1754,9 +1804,8 @@ describe('tick', () => {
   it("leaves the operator's own repository clean", async (): Promise<void> => {
     await tick(deps)
 
-    // Everything the orchestrator writes lands under `.slaveofai/` in the workspace's repo -- the
-    // worktrees, the per-run settings file, the pause flag -- and none of it belongs to the
-    // operator. Left untracked it shows in every `git status` they run, and a routine
+    // What the orchestrator writes into the workspace's repo lands under `.slaveofai/` -- verify
+    // artifacts, and before 2026-09-26 the worktrees -- and none of it belongs to the operator. Left untracked it shows in every `git status` they run, and a routine
     // `git clean -fdx` deletes the worktree directories while `.git/worktrees/` metadata survives.
     expect(git(['status', '--porcelain'], fixture.repoPath)).toBe('')
   })

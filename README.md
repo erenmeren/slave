@@ -83,7 +83,15 @@ npm run orchestrator -- create-workspace --name <name> --repo /abs/path/to/repo 
 
 `--repo` must be an absolute path to a git working tree, `--base` an existing branch, and at least
 one `--verify` command is required: a task is only done when your verify commands pass. The
-orchestrator keeps its worktrees and logs under `<repo>/.slaveofai/` and gitignores them for you.
+orchestrator keeps its verify logs under `<repo>/.slaveofai/` and gitignores them for you.
+
+**Worktrees live next to your repository, not inside it:** a task's tree is
+`<repo parent>/<repo name>-slaveofai-worktrees/T-xxxxxxxx`, so a checker that skips dot-prefixed
+paths (a `biome.json` ignoring `.*`, for one) sees exactly what it sees in a normal clone. Set
+`SLAVEOFAI_WORKTREE_ROOT` on the daemon to put them somewhere else instead:
+`$SLAVEOFAI_WORKTREE_ROOT/<repo name>-<hash>/T-xxxxxxxx`. Worktrees made by an older version under
+`<repo>/.slaveofai/worktrees` stay where they are and keep working — resume, review, merge and
+collect all use the path recorded on the run — and only new ones go to the new place.
 
 **Done is not the same as integrated.** A task reaches `done` once it has been reviewed and its
 verify commands pass — that is the only thing `done` means. Whether its code has actually reached

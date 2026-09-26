@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join, resolve, sep } from 'node:path'
+import { createHash } from 'node:crypto'
+import { basename, dirname, join, resolve, sep } from 'node:path'
 import { gitIn, ORCHESTRATOR_GIT_IDENTITY } from '@slave-of-ai/control'
 import {
   COMMAND_OUTPUT_LIMIT,
@@ -16,12 +17,62 @@ import {
 export const SETUP_OUTPUT_LIMIT = COMMAND_OUTPUT_LIMIT
 
 /**
- * Where worktrees live, relative to the workspace's repository root (spec §7.1). Inside the repo
- * rather than in a temp directory: a worktree is the inspection surface for a failed run (§7.4),
- * and an operator looking at why a task failed should find it next to the code, not have to be
- * told a path under `/tmp` that a reboot may already have taken away.
+ * Where worktrees live: OUTSIDE the workspace's repository, in a sibling directory
+ * `<parent>/<repo>-slaveofai-worktrees/<taskKey>` (spec §7.1), or under
+ * `$SLAVEOFAI_WORKTREE_ROOT/<repo>-<hash>/<taskKey>` when that is set.
+ *
+ * Next to the repo rather than in a temp directory: a worktree is the inspection surface for a
+ * failed run (§7.4), and an operator looking at why a task failed should find it next to the code,
+ * not have to be told a path under `/tmp` that a reboot may already have taken away.
+ *
+ * NOT INSIDE IT, and with no dot-prefixed segment of Slave's own (2026-09-26). Until then this was
+ * `<repo>/.slaveofai/worktrees/<taskKey>`, and a great deal of tooling skips any path with a dot
+ * segment in it. A `biome.json` that ignores `.*` at any depth is the recorded case (fb55/css-what,
+ * fb55/domutils): inside a Slave worktree `biome check .` processed no files and exited 1, so the
+ * repo's own verify failed on every task while the same command passed in a normal clone. The
+ * state root (`packages/control/src/paths.ts`) is no answer either: its default is under `~/.local`.
+ *
+ * The override's segment carries a hash of the repository path because the override is ONE
+ * directory for every repository on the machine, and two repos with the same basename must not
+ * share a task-key namespace -- {@link discardStaleWorktree} removes whatever sits at a key's path.
+ * A leading dot is stripped from the basename in both forms, or a repo called `.dotfiles` would
+ * bring the problem straight back.
  */
-const WORKTREE_ROOT = join('.slaveofai', 'worktrees')
+export function worktreeRootFor(repoPath: string): string {
+  const repo = resolve(repoPath)
+  const name = basename(repo).replace(/^\.+/, '') || 'repo'
+  const override = process.env['SLAVEOFAI_WORKTREE_ROOT']
+  if (override !== undefined && override !== '') {
+    const hash = createHash('sha256').update(repo).digest('hex').slice(0, 8)
+    return join(resolve(override), `${name}-${hash}`)
+  }
+  return join(dirname(repo), `${name}-slaveofai-worktrees`)
+}
+
+/**
+ * The OLD root, `<repo>/.slaveofai/worktrees`, which only a worktree created before 2026-09-26 is
+ * under. Never provisioned into again, but still looked for: a live project has paused and
+ * rework-bound tasks whose trees are there. Every path already recorded (`SlaveRun.worktreePath`,
+ * `Checkpoint.worktreePath`) keeps working on its own -- resume, verify, review, merge and collect
+ * all use the stored path -- so the only readers of this are the functions below that DERIVE a
+ * path from a task key.
+ */
+export function legacyWorktreeRootFor(repoPath: string): string {
+  return join(resolve(repoPath), '.slaveofai', 'worktrees')
+}
+
+/**
+ * Where THIS task's worktree is: the legacy location when a directory for the key is already there,
+ * the current one otherwise. One answer for provision, adopt, discard and reattach, so a rework
+ * finds its own previous tree wherever it was made, and a stale legacy directory is repaired where
+ * it lies rather than shadowed by a fresh one while its branch stays checked out underneath it.
+ */
+function locateWorktree(repoPath: string, taskKey: string): { readonly root: string; readonly path: string } {
+  const legacyRoot = legacyWorktreeRootFor(repoPath)
+  if (existsSync(join(legacyRoot, taskKey))) return { root: legacyRoot, path: join(legacyRoot, taskKey) }
+  const root = worktreeRootFor(repoPath)
+  return { root, path: join(root, taskKey) }
+}
 
 /**
  * Moved to `@slave-of-ai/control` in M23 B2 (`packages/control/src/git.ts`): `collectTaskWorktree`
@@ -44,11 +95,12 @@ const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 /**
  * Makes `.slaveofai/` ignore itself inside the operator's repository.
  *
- * The orchestrator writes worktrees, settings files and pause flags into the workspace's own repo,
- * and nothing in that repo asks for them. Without this, `git status` there shows the orchestrator's
- * bookkeeping as untracked content forever, and a `git clean -fdx` -- a routine operator action --
- * deletes every worktree directory while `.git/worktrees/` metadata survives, leaving
- * `git worktree list` describing directories that no longer exist.
+ * The orchestrator writes verify artifacts (and, before 2026-09-26, worktrees) into the workspace's
+ * own repo, and nothing in that repo asks for them. Without this, `git status` there shows the
+ * orchestrator's bookkeeping as untracked content forever, and a `git clean -fdx` -- a routine
+ * operator action -- deletes every old in-repo worktree directory while `.git/worktrees/` metadata
+ * survives, leaving `git worktree list` describing directories that no longer exist. Kept for both
+ * reasons: artifacts still land here, and the trees made before the move still live here.
  *
  * A `.gitignore` *inside* the directory rather than a line appended to the repo's own: it needs no
  * permission to edit a file the operator maintains, and it disappears with the directory.
@@ -179,7 +231,7 @@ export async function provisionWorktree(input: ProvisionWorktreeInput): Promise<
   // there -- from a process that may have restarted into a different working directory.
   const repoPath = resolve(input.repoPath)
   ensureIgnored(repoPath)
-  const path = join(repoPath, WORKTREE_ROOT, input.taskKey)
+  const { path } = locateWorktree(repoPath, input.taskKey)
   const branch = `slaveofai/${input.taskKey}-${input.slug}`
 
   // Checked *before* the add rather than left to git's refusal, because `worktree add -b` creates
@@ -250,13 +302,13 @@ export interface AdoptWorktreeInput {
  * is a registered worktree checked out on *that* branch. Adopting an unverified directory would
  * hand the slave a tree with someone else's contents and no branch behind it.
  *
- * It lives here rather than at the call site because it needs {@link WORKTREE_ROOT}, the branch
+ * It lives here rather than at the call site because it needs {@link locateWorktree}, the branch
  * naming rule and the identity-scoped `git` wrapper — re-deriving those one module over is how a
  * second source of truth for a path starts.
  */
 export async function adoptWorktree(input: AdoptWorktreeInput): Promise<WorktreeHandle> {
   const repoPath = resolve(input.repoPath)
-  const path = join(repoPath, WORKTREE_ROOT, input.taskKey)
+  const { path } = locateWorktree(repoPath, input.taskKey)
 
   // `--porcelain` emits one blank-line-separated record per worktree, each a set of `key value`
   // lines: `worktree <path>`, `HEAD <sha>`, and `branch refs/heads/<name>` (absent when detached).
@@ -298,8 +350,8 @@ export async function adoptWorktree(input: AdoptWorktreeInput): Promise<Worktree
  * to preserve and nothing for §7.4 to show an operator. Parking the task on it burns an attempt on
  * wreckage, which is exactly how the by-hand retry on 2026-09-20 died.
  *
- * The path is DERIVED here, from {@link WORKTREE_ROOT} and a key this module re-validates, and
- * then checked to be inside the worktrees directory before anything is removed. Nothing recursive
+ * The path is DERIVED here, from {@link locateWorktree} and a key this module re-validates, and
+ * then checked to be inside that worktrees directory before anything is removed. Nothing recursive
  * is ever run against a path a caller handed in: this function takes a key, not a path, precisely
  * so there is no argument that could name the repository root.
  *
@@ -320,8 +372,7 @@ export async function discardStaleWorktree(input: {
     throw new Error(`taskKey must match ${String(SAFE_SEGMENT)} to be safe as a path segment, got: ${input.taskKey}`)
   }
   const repoPath = resolve(input.repoPath)
-  const root = join(repoPath, WORKTREE_ROOT)
-  const path = join(root, input.taskKey)
+  const { root, path } = locateWorktree(repoPath, input.taskKey)
   // Belt and braces over the check above: `join` collapses `..`, so this is what would actually
   // catch a key that escaped the pattern. A removal outside the worktrees directory is a bug in
   // this module, and it refuses rather than deletes.
@@ -354,7 +405,10 @@ export async function discardStaleWorktree(input: {
 export async function reattachWorktree(input: AdoptWorktreeInput): Promise<WorktreeHandle> {
   const repoPath = resolve(input.repoPath)
   ensureIgnored(repoPath)
-  const path = join(repoPath, WORKTREE_ROOT, input.taskKey)
+  // The directory is gone by definition, so this is always the CURRENT root: a legacy tree whose
+  // directory was lost comes back outside the repository, after the prune below has dropped its
+  // old registration.
+  const { path } = locateWorktree(repoPath, input.taskKey)
 
   // A directory that is gone may still be REGISTERED (`.git/worktrees/<key>/`), and `worktree add`
   // refuses a path git still believes in. Prune is git's verb for that and drops only entries whose

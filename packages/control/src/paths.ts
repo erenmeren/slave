@@ -32,10 +32,13 @@ import type { RunId } from '@slave-of-ai/domain'
  * goes, and its own two tests (`paths.test.ts`) are unchanged -- which is a signal rather than a
  * convenience: the check did not change meaning, only the directory moved.
  *
- * What did NOT move, and must not be claimed to have (plan erratum E4): `<repo>/.slaveofai/worktrees`
+ * What did NOT move here, and must not be claimed to have (plan erratum E4): worktrees
  * (`apps/orchestrator/src/worktree.ts`) and `<repo>/.slaveofai/artifacts` (`verify.ts`, `merge.ts`).
  * A worktree is the worker's workspace and an artifact is a log a person downloads through
- * `/api/w/:id/tasks/:id/artifacts/:id`; neither is a verdict about the worker.
+ * `/api/w/:id/tasks/:id/artifacts/:id`; neither is a verdict about the worker. (Worktrees did move
+ * later, on 2026-09-26, out of `<repo>/.slaveofai/worktrees` to a sibling of the repository -- for
+ * a different reason, tooling that skips dot-prefixed paths -- and deliberately NOT under this state
+ * root, whose default is itself under `~/.local`.)
  *
  * A run in flight across the upgrade keeps its ORIGINAL directory and needs no migration: both
  * adapters re-derive `runDir` from `dirname(checkpoint.pauseFlagPath)`, which is an absolute path

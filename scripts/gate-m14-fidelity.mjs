@@ -1595,9 +1595,12 @@ try {
     await prisma.executionEvent.deleteMany({ where: { workspaceId } }).catch(() => {})
     await prisma.workspace.delete({ where: { id: workspaceId } }).catch(() => {})
   }
-  // The repository carries the run worktrees and the `.slaveofai` run directories -- all of it
-  // inside this tree, so nothing this gate wrote outlives it.
-  if (repoPath !== null) rmSync(repoPath, { recursive: true, force: true })
+  // The repository carries the `.slaveofai` directories and its sibling `<repo>-slaveofai-worktrees`
+  // the run worktrees (since 2026-09-26) -- both removed, so nothing this gate wrote outlives them.
+  if (repoPath !== null) {
+    rmSync(`${repoPath}-slaveofai-worktrees`, { recursive: true, force: true })
+    rmSync(repoPath, { recursive: true, force: true })
+  }
   if (diagDir !== null && exitCode === 0) rmSync(diagDir, { recursive: true, force: true })
   await prisma.$disconnect()
 }
