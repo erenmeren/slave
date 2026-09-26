@@ -180,7 +180,60 @@ describe('WorkforceCard writes', () => {
       body: JSON.stringify({ add: ['s-sql'] }),
     })
     expect(screen.getByTestId('card-skill-s-sql')).toBeTruthy()
-    expect(props.onChanged).toHaveBeenCalled()
+    // Fix round 1: a persona-card add PATCHes the persona's own skill list, which reaches every
+    // person hired from it -- the outcome must say so (`scope: 'persona'`), not just "changed".
+    expect(props.onChanged).toHaveBeenCalledWith({
+      kind: 'added',
+      skill: { skillId: 's-sql', name: 'sql', providerName: 'personal', missing: false, process: false, state: 'persona' },
+      scope: 'persona',
+      personaId: 't1',
+    })
+  })
+
+  it('adds from the picker as a person-only grant when the default scope is left alone', async () => {
+    const props = renderCard({ variant: 'person', testId: 'person-row-p1', target: PERSON, openTestId: 'person-open' })
+    fireEvent.click(screen.getByTestId('card-skill-add'))
+    fireEvent.click(screen.getByTestId('skill-picker-option-s-sql'))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('skill-picker-confirm'))
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/persons/p1/skills', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant: ['s-sql'] }),
+    })
+    expect(screen.getByTestId('card-skill-s-sql')).toBeTruthy()
+    // Only this person's own record changed -- the parent patches just this row.
+    expect(props.onChanged).toHaveBeenCalledWith({
+      kind: 'added',
+      skill: { skillId: 's-sql', name: 'sql', providerName: 'personal', missing: false, process: false, state: 'person' },
+      scope: 'person',
+      personaId: null,
+    })
+  })
+
+  it('adds from the picker to the persona when a person card is scoped "Everyone from <persona>"', async () => {
+    const props = renderCard({ variant: 'person', testId: 'person-row-p1', target: PERSON, openTestId: 'person-open' })
+    fireEvent.click(screen.getByTestId('card-skill-add'))
+    fireEvent.click(screen.getByTestId('skill-picker-option-s-sql'))
+    fireEvent.click(screen.getByTestId('skill-picker-scope-persona'))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('skill-picker-confirm'))
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/org/templates/t1/skills', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ add: ['s-sql'] }),
+    })
+    expect(screen.getByTestId('card-skill-s-sql')).toBeTruthy()
+    // A write scoped to "everyone from <persona>" reaches every person hired from it, same as a
+    // persona-card write -- the outcome must say `scope: 'persona'` here too, naming that persona.
+    expect(props.onChanged).toHaveBeenCalledWith({
+      kind: 'added',
+      skill: { skillId: 's-sql', name: 'sql', providerName: 'personal', missing: false, process: false, state: 'persona' },
+      scope: 'persona',
+      personaId: 't1',
+    })
   })
 
   it('rolls the chip back and says why when the write is refused', async () => {
@@ -197,22 +250,32 @@ describe('WorkforceCard writes', () => {
     })
     expect(screen.queryByTestId('card-skill-s-sql')).toBeNull()
     expect(screen.getByTestId('card-skill-error').textContent).toContain('missing from disk')
-    // A refusal is also a reason to re-read: another edit may have raced this one.
-    expect(props.onChanged).toHaveBeenCalled()
+    // A refusal is also a reason to re-read: another edit may have raced this one. `refused`
+    // carries nothing else -- the chip already rolled itself back on this card.
+    expect(props.onChanged).toHaveBeenCalledWith({ kind: 'refused' })
   })
 
   it('on a person card, removing an inherited skill asks who loses it', async () => {
-    renderCard({ variant: 'person', testId: 'person-row-p1', target: PERSON, openTestId: 'person-open', skills: [chip('a', 'pdf')] })
+    const props = renderCard({
+      variant: 'person',
+      testId: 'person-row-p1',
+      target: PERSON,
+      openTestId: 'person-open',
+      skills: [chip('a', 'pdf')],
+    })
     fireEvent.click(screen.getByTestId('card-skill-remove-a'))
     expect(screen.getByTestId('card-skill-remove-scope-persona').textContent).toBe('Everyone from Builder')
     await act(async () => {
       fireEvent.click(screen.getByTestId('card-skill-remove-scope-persona'))
     })
     expect(fetchMock).toHaveBeenCalledWith('/api/org/templates/t1/skills', expect.objectContaining({ body: JSON.stringify({ remove: ['a'] }) }))
+    // "Everyone from <persona>" PATCHes the persona's own list -- every person hired from it loses
+    // the skill, not just this row.
+    expect(props.onChanged).toHaveBeenCalledWith({ kind: 'removed', skillId: 'a', scope: 'persona', personaId: 't1' })
   })
 
   it("on a person card, removing the person's own grant clears it without asking", async () => {
-    renderCard({
+    const props = renderCard({
       variant: 'person',
       testId: 'person-row-p1',
       target: PERSON,
@@ -224,6 +287,32 @@ describe('WorkforceCard writes', () => {
     })
     expect(screen.queryByTestId('card-skill-remove-scope')).toBeNull()
     expect(fetchMock).toHaveBeenCalledWith('/api/persons/p1/skills', expect.objectContaining({ body: JSON.stringify({ clear: ['b'] }) }))
+    expect(props.onChanged).toHaveBeenCalledWith({ kind: 'removed', skillId: 'b', scope: 'person', personaId: null })
+  })
+
+  it('on a person card, restoring a revoked skill clears the revocation and reports a person-scoped write', async () => {
+    const props = renderCard({
+      variant: 'person',
+      testId: 'person-row-p1',
+      target: PERSON,
+      openTestId: 'person-open',
+      skills: [chip('c', 'lint', { state: 'revoked' })],
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('card-skill-restore-c'))
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/persons/p1/skills', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clear: ['c'] }),
+    })
+    // A restore only ever clears THIS person's own revocation -- it never writes the persona.
+    expect(props.onChanged).toHaveBeenCalledWith({
+      kind: 'restored',
+      skill: { skillId: 'c', name: 'lint', providerName: 'personal', missing: false, process: false, state: 'persona' },
+      scope: 'person',
+      personaId: null,
+    })
   })
 })
 

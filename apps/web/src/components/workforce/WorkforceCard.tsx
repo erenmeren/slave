@@ -56,19 +56,45 @@ const stop = (event: React.SyntheticEvent): void => event.stopPropagation()
 
 /**
  * What a card's write DID, handed to `onChanged` (controller ruling F2) so the row's owner -- a
- * page of persona or person rows, Tasks 8/9 -- can patch THIS row's `skills` in place instead of
- * re-reading the whole list from page one: `added`/`restored` carry the `CardSkillRow` the card now
- * shows (the same shape `PersonCardRow.skills`/the catalog row's `skills` already store, so it drops
+ * page of persona or person rows, Tasks 8/9 -- can patch the right thing instead of re-reading the
+ * whole list from page one: `added`/`restored` carry the `CardSkillRow` the card now shows for that
+ * skill (the same shape `PersonCardRow.skills`/the catalog row's `skills` already store, so it drops
  * straight into a `.map` over the page's rows), `removed` carries the id that dropped off, and
  * `refused` carries nothing to patch -- the chip already rolled itself back on this card -- but is
  * still reported, because a refusal (a race with another edit, a skill gone missing from disk since
  * the page loaded) means the row's cached data cannot be trusted either, and only a re-read settles
  * that.
+ *
+ * Fix round 1: every success variant also carries `scope` and `personaId`, mirroring exactly which
+ * table `addSkillWrite`/`removeSkillWrite`/`restoreSkillWrite` actually PATCHed -- a persona-card
+ * write, and a person-card write scoped "Everyone from <persona>", both PATCH the PERSONA's skill
+ * list (`scope: 'persona'`, `personaId` the persona written), which changes every person hired from
+ * it; anything else PATCHes only this person's own record (`scope: 'person'`, `personaId: null`).
+ * The parent's rule: `scope: 'person'` -- patch this one row; `scope: 'persona'` -- re-read the
+ * loaded rows for that persona (or the whole loaded range), because one row's `CardSkillRow` cannot
+ * represent a change that reaches every row hired from that persona, and do so without dropping any
+ * "Show more" page already loaded.
  */
 export type SkillWriteOutcome =
-  | { readonly kind: 'added' | 'restored'; readonly skill: CardSkillRow }
-  | { readonly kind: 'removed'; readonly skillId: string }
+  | { readonly kind: 'added' | 'restored'; readonly skill: CardSkillRow; readonly scope: SkillScope; readonly personaId: string | null }
+  | { readonly kind: 'removed'; readonly skillId: string; readonly scope: SkillScope; readonly personaId: string | null }
   | { readonly kind: 'refused' }
+
+/** The `scope`/`personaId` a write's outcome reports, computed the same way `addSkillWrite` and
+ *  `removeSkillWrite` route the write itself -- so the outcome can never say "person" while the
+ *  `fetch` it describes actually PATCHed the persona's skill list. */
+function writeScopeOf(target: SkillTarget, toPersona: boolean): { readonly scope: SkillScope; readonly personaId: string | null } {
+  if (!toPersona) return { scope: 'person', personaId: null }
+  return { scope: 'persona', personaId: target.kind === 'persona' ? target.templateId : target.personaId }
+}
+
+/** Whether `removeSkillWrite` (above) will route this remove to the persona's own skill list --
+ *  the one other place besides `add`'s own `toPersona` that decides a write's effective scope. */
+function removeTargetsPersona(target: SkillTarget, skill: { readonly state: CardSkillRow['state'] }, scope: SkillScope): boolean {
+  if (target.kind === 'persona') return true
+  if (skill.state !== 'persona') return false
+  return scope === 'persona' && target.personaId !== null
+}
 
 /** The Catalog and People tabs' shared layout (spec §2): cards flow onto {@link CARD_GRID_COLUMNS}'s
  *  auto-fill track instead of each tab hand-rolling its own grid wrapper. */
@@ -212,14 +238,18 @@ export function WorkforceCard({
         unadd(skillId)
         unhide(skillId)
       },
-      { kind: 'added', skill: chip },
+      { kind: 'added', skill: chip, ...writeScopeOf(target, toPersona) },
     )
   }
 
   const remove = (skill: CardSkillRow, scope: SkillScope): void => {
     setRemoving(null)
     hide(skill.skillId)
-    void run(removeSkillWrite(target, skill, scope), () => unhide(skill.skillId), { kind: 'removed', skillId: skill.skillId })
+    void run(removeSkillWrite(target, skill, scope), () => unhide(skill.skillId), {
+      kind: 'removed',
+      skillId: skill.skillId,
+      ...writeScopeOf(target, removeTargetsPersona(target, skill, scope)),
+    })
   }
 
   const restore = (skill: CardSkillRow): void => {
@@ -227,13 +257,15 @@ export function WorkforceCard({
     hide(skill.skillId)
     const restored: CardSkillRow = { ...skill, state: 'persona' }
     setAdded((current) => [...current, restored])
+    // `restoreSkillWrite` only ever clears THIS person's own revocation record -- never the
+    // persona's list -- so a restore's outcome is always `scope: 'person'`.
     void run(
       restoreSkillWrite(target, skill.skillId),
       () => {
         unadd(skill.skillId)
         unhide(skill.skillId)
       },
-      { kind: 'restored', skill: restored },
+      { kind: 'restored', skill: restored, scope: 'person', personaId: null },
     )
   }
 
