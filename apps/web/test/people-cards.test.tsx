@@ -364,3 +364,44 @@ describe('PeopleCards keeps every loaded page (F2)', () => {
     }
   })
 })
+
+/**
+ * Final review, finding 4: re-granting a skill this person REVOKED is a restore -- the persona
+ * speaks again -- never a grant of their own. The picker offers the struck skill; choosing it must
+ * send the restore's `clear`, and the chip must come back inherited, so its × then asks the
+ * inherited question (revoke) rather than clearing a grant that does not exist.
+ */
+describe('re-granting a revoked skill restores it (final review, finding 4)', () => {
+  const sql: SkillCatalogueRow = { skillId: 's-sql', name: 'sql', providerName: 'personal', description: 'writes sql', missing: false }
+  const struck: CardSkillRow = { skillId: 's-sql', name: 'sql', providerName: 'personal', missing: false, process: false, state: 'revoked' }
+
+  it.each(['person', 'persona'] as const)('restores through the picker with scope %s, and × then revokes again', async (scope) => {
+    const bodies: unknown[] = []
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/skills')) {
+        bodies.push({ url, body: JSON.parse(String(init?.body)) as unknown })
+        return new Response(JSON.stringify({ ok: true }), { status: 200 })
+      }
+      return new Response(JSON.stringify(pageOf([person({ skills: [{ ...struck, state: 'persona' }] })])), { status: 200 })
+    })
+    render(<PeopleCards initial={pageOf([person({ skills: [struck] })])} departments={[]} skillCatalogue={[sql]} taxonomy={[]} onOpen={vi.fn()} />)
+    const card = screen.getByTestId('person-row-p1')
+
+    fireEvent.click(within(card).getByTestId('card-skill-add'))
+    if (scope === 'persona') fireEvent.click(within(card).getByTestId('skill-picker-scope-persona'))
+    fireEvent.click(within(card).getByTestId('skill-picker-option-s-sql'))
+    await act(async () => {
+      fireEvent.click(within(card).getByTestId('skill-picker-confirm'))
+    })
+
+    expect(bodies).toEqual([{ url: '/api/persons/p1/skills', body: { clear: ['s-sql'] } }])
+    await waitFor(() => expect(within(card).getByTestId('card-skill-s-sql').getAttribute('data-origin')).toBe('persona'))
+
+    fireEvent.click(within(card).getByTestId('card-skill-remove-s-sql'))
+    await act(async () => {
+      fireEvent.click(within(card).getByTestId('card-skill-remove-scope-person'))
+    })
+    expect(bodies.at(-1)).toEqual({ url: '/api/persons/p1/skills', body: { revoke: ['s-sql'] } })
+  })
+})

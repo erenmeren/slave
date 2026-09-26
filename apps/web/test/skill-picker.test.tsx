@@ -101,6 +101,16 @@ describe('SkillPicker', () => {
     expect(onConfirm).toHaveBeenCalledWith('s-plan', 'persona')
   })
 
+  // Final review (Task 6's deferred minor): a choice a later search hides is no longer a choice --
+  // Add must not stay live for a row nobody can see.
+  it('drops the selection when a search filters the chosen row away', () => {
+    render(<SkillPicker catalogue={CATALOGUE} linked={new Set()} scope={null} onConfirm={vi.fn()} onCancel={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('skill-picker-option-s-sql'))
+    expect((screen.getByTestId('skill-picker-confirm') as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.change(screen.getByTestId('skill-picker-search'), { target: { value: 'pdf' } })
+    expect((screen.getByTestId('skill-picker-confirm') as HTMLButtonElement).disabled).toBe(true)
+  })
+
   it('Cancel and Escape both close it', () => {
     const onCancel = vi.fn()
     render(<SkillPicker catalogue={CATALOGUE} linked={new Set()} scope={null} onConfirm={vi.fn()} onCancel={onCancel} />)

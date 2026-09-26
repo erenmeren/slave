@@ -69,7 +69,9 @@ export function SkillPicker({
       .map((entry) => ({ group: entry.group, rows: entry.rows.toSorted((a, b) => a.name.localeCompare(b.name)) }))
   }, [catalogue, search])
 
-  const chosen = catalogue.find((row) => row.skillId === selected) ?? null
+  // Only a row the search still SHOWS can be chosen: a selection a later search hides would leave
+  // Add live for a skill nobody can see (final review, Task 6's deferred minor).
+  const chosen = groups.flatMap((entry) => entry.rows).find((row) => row.skillId === selected) ?? null
   const chosenIsProcess = chosen !== null && isProcessSkill(chosen)
   const canConfirm = chosen !== null && !pending && (!chosenIsProcess || processConfirmed)
   const scopeOptions: readonly { readonly id: SkillScope; readonly label: string }[] = [

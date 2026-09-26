@@ -220,6 +220,14 @@ export function WorkforceCard({
     const row = catalogue.find((one) => one.skillId === skillId)
     if (row === undefined) return
     setPicking(false)
+    // Final review, finding 4: the picker offers a skill this person REVOKED, and giving it back is
+    // the chip's own restore -- whichever scope was chosen, the persona already holds it. A grant
+    // here would read back as inherited while the card said "this person only".
+    const revoked = visible.find((one) => one.skillId === skillId && one.state === 'revoked')
+    if (revoked !== undefined) {
+      restore(revoked)
+      return
+    }
     const toPersona = target.kind === 'persona' || (scope === 'persona' && target.personaId !== null)
     // A struck-through chip for the same skill gives way to the one being added.
     hide(skillId)
