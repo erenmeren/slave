@@ -11,6 +11,7 @@ import { appendEvent } from '@slave-of-ai/events'
 import { ClaudeCodeAdapter, type AdapterRegistry } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { concludeReview, dispatchReviews } from '../../src/review.js'
+import { supervise } from '../../src/supervisor.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
@@ -376,6 +377,42 @@ describe('dispatchReviews', () => {
     expect(
       guardrails.filter((event) => (event.payload as { guardrail?: string }).guardrail === 'no_reviewer'),
     ).toHaveLength(1)
+  }, 60_000)
+
+  // The benchmark's stall: a one-seat team whose only seat implemented the work. Under `act`, one
+  // Supervisor pass hires a reviewer from the catalog and the next dispatch reviews on the NEW seat.
+  it('under act, hires a reviewer for a one-seat team and the next dispatch reviews on the new seat', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture)
+    await prisma.slave.update({ where: { id: fixture.slaveId }, data: { runtimeRoles: ['backend', 'manager', 'reviewer'] } })
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { supervisorAutonomy: 'act' } })
+    const createdCapability =
+      (await prisma.capability.findUnique({ where: { key: 'review.code-review' } })) === null
+        ? await prisma.capability.create({ data: { key: 'review.code-review', label: 'Code review', domain: 'review', role: 'reviewer' } })
+        : null
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'No-reviewer Fixture Code Reviewer', role: 'reviewer', capabilityKeys: ['review.code-review'], active: true },
+    })
+    try {
+      expect(await dispatchReviews(reviewDeps)).toEqual([])
+
+      const report = await supervise({ workspaceId: brandWorkspaceId(fixture.workspaceId) })
+      expect(report.applied).toBeGreaterThanOrEqual(1)
+      const decision = await prisma.supervisorDecision.findFirstOrThrow({ where: { situationKind: 'no_reviewer' } })
+      expect(decision).toMatchObject({ action: { kind: 'hire_from_catalog', capability: 'review.code-review' }, tier: 'applied', status: 'applied' })
+      const hired = await prisma.slave.findFirstOrThrow({ where: { person: { templateId: template.id } } })
+      expect(hired.id).not.toBe(fixture.slaveId)
+      expect(hired.runtimeRoles).toContain('reviewer')
+
+      expect(await dispatchReviews(reviewDeps)).toHaveLength(1)
+      const run = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'review' } })
+      expect(run.slaveId).toBe(hired.id)
+      await drainPumps()
+    } finally {
+      await prisma.slave.deleteMany({ where: { person: { templateId: template.id } } })
+      await prisma.person.deleteMany({ where: { templateId: template.id } })
+      await prisma.slaveTemplate.delete({ where: { id: template.id } })
+      if (createdCapability !== null) await prisma.capability.delete({ where: { key: createdCapability.key } })
+    }
   }, 60_000)
 
   it('still staffs a reviewer when the implementer holds no reviewer role', async (): Promise<void> => {

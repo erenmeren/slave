@@ -1001,6 +1001,89 @@ describe('candidates -- capability_unstaffed (M47 R4)', () => {
   })
 })
 
+/**
+ * `no_reviewer` on a team with nobody to give the role to: the one-seat team intake forms, whose only
+ * seat implemented the work in review. The benchmark run that found it stalled on an escalation even
+ * under `act`; the remedy is a hire through `formTeam`, offered only when no seat can be staffed.
+ */
+describe('candidates -- no_reviewer hires when no seat can review', () => {
+  const REVIEW_TAXONOMY = [
+    ...TAXONOMY,
+    { key: 'review.code-review', label: 'Code review', domain: 'review', role: 'reviewer', synonyms: [] },
+    { key: 'review.release-readiness', label: 'Release readiness', domain: 'review', role: 'reviewer', synonyms: [] },
+  ]
+  const REVIEWER_TEMPLATE = {
+    templateId: 'tpl-rev',
+    name: 'Code Reviewer',
+    capabilities: ['review.code-review'],
+    division: 'engineering',
+    recommended: false,
+    defaultModel: null,
+  }
+  const SOLE_SEAT = slave({
+    id: 's1',
+    capabilities: ['review.code-review'],
+    runtimeRoles: ['engineering', 'manager', 'reviewer'],
+  })
+
+  it('offers a catalog reviewer for the one-seat team whose only seat implemented the work', () => {
+    const w = world({
+      autonomy: 'act',
+      taxonomy: REVIEW_TAXONOMY,
+      tasks: [task({ status: 'reviewing', assigneeId: 's1' })],
+      slaves: [SOLE_SEAT],
+      catalog: [REVIEWER_TEMPLATE],
+    })
+    const offers = offered(w)
+    expect(kinds(offers)).toEqual(['hire_from_catalog', 'escalate_to_human', 'no_action'])
+    // One task in review is one assignment, so `formTeam` makes it M50's temporary hire for it --
+    // and the implementer, who PROVIDES code review, is never the existing-worker pick.
+    expect(offers[0]?.action).toEqual({
+      kind: 'hire_from_catalog',
+      templateId: 'tpl-rev',
+      capability: 'review.code-review',
+      capabilityLabel: 'Code review',
+      name: 'Code Reviewer',
+      rationale: expect.stringContaining('Code review'),
+      temporary: true,
+      engagementTaskId: 't1',
+    })
+    expect(offers[0]?.tier).toBe('applied')
+    expect(offered({ ...w, autonomy: 'propose' })[0]?.tier).toBe('proposed')
+  })
+
+  it('seats a pool person before hiring from the catalog', () => {
+    const w = world({
+      taxonomy: REVIEW_TAXONOMY,
+      tasks: [task({ status: 'reviewing', assigneeId: 's1' })],
+      slaves: [SOLE_SEAT],
+      pool: [{ personId: 'p1', name: 'Sam', capabilities: ['review.release-readiness'], templateId: null }],
+      catalog: [REVIEWER_TEMPLATE],
+    })
+    expect(offered(w)[0]?.action).toMatchObject({ kind: 'materialise_company_worker', personId: 'p1', capability: 'review.release-readiness' })
+  })
+
+  it('still offers set_runtime_roles first when an idle non-implementer seat can take the role', () => {
+    const w = world({
+      taxonomy: REVIEW_TAXONOMY,
+      tasks: [task({ status: 'reviewing', assigneeId: 's1' })],
+      slaves: [SOLE_SEAT, slave({ id: 's2', runtimeRoles: ['frontend'] })],
+      catalog: [REVIEWER_TEMPLATE],
+    })
+    expect(kinds(offered(w))).toEqual(['set_runtime_roles', 'escalate_to_human', 'no_action'])
+  })
+
+  it('offers nothing but the escalation when neither the catalog nor the pool has a reviewer', () => {
+    const w = world({
+      taxonomy: REVIEW_TAXONOMY,
+      tasks: [task({ status: 'reviewing', assigneeId: 's1' })],
+      slaves: [SOLE_SEAT],
+      catalog: [{ ...REVIEWER_TEMPLATE, capabilities: ['backend.api-design'] }],
+    })
+    expect(kinds(offered(w))).toEqual(['escalate_to_human', 'no_action'])
+  })
+})
+
 describe('isStaffableTask (M47 final review, Important 2)', () => {
   it('is the situation predicate: ready, with its dependencies integrated', () => {
     expect(isStaffableTask(task({ status: 'ready', dependenciesDone: true }))).toBe(true)

@@ -1,8 +1,8 @@
 import { steerTextFor } from '../breaker/constants.js'
 import { capabilityLabel as capabilityLabelIn, projectRoles } from '../capability/taxonomy.js'
-import { formTeam, type TeamPlan, type TeamProposal, type TeamRanking } from '../capability/team.js'
+import { formTeam, type TeamPlan, type TeamProposal, type TeamRanking, type TeamSource } from '../capability/team.js'
 import { profileKeyOf } from '../evidence/derive.js'
-import { PERMISSION_KINDS, PERMISSION_LABEL, type PermissionKind } from '../permission/kinds.js'
+import { PERMISSION_KINDS, PERMISSION_LABEL, type PermissionKind, type PermissionRunKind } from '../permission/kinds.js'
 import { PROVIDER_LABEL } from '../provider/kind.js'
 import { recommendRunbooks } from '../runbook/recommend.js'
 import type { Action, Candidate } from './actions.js'
@@ -11,6 +11,7 @@ import {
   HALT_CLEAR_INTERVAL_MS,
   MANAGER_ROLE,
   RETRIES_MAX,
+  REVIEWER_ROLE,
   SUPERVISOR_DEFAULT_PROVIDER,
 } from './constants.js'
 import { readFailure, type FailureDiagnosis } from './diagnosis.js'
@@ -354,6 +355,39 @@ function staffingCandidates(world: SupervisorWorld, kind: SituationKind, role: s
   )
 }
 
+/** `formTeam`'s tiers, cheapest first (M47 R4, M50 R2). */
+const TIER_ORDER: readonly TeamSource[] = ['existing_worker', 'pool_person', 'project_worker', 'temporary']
+
+/**
+ * `no_reviewer`'s remedy when no seat here can take the role: bring somebody in who can.
+ *
+ * A one-seat team -- intake forms them -- used to review its own work, and since "a task's reviewer
+ * is never its implementer" its only seat is excluded from {@link staffingCandidates}, so without
+ * this the task waited in `reviewing` for a human even under `act`. The hire goes through M47's own
+ * `formTeam` rather than a second search: the need is every taxonomy key that projects to the
+ * reviewer role, the tasks needing it are the ones in review (one task makes it an M50 temporary
+ * hire for that assignment, as for any other gap), and the roster leaves out their IMPLEMENTERS so
+ * the existing-worker tier cannot offer the one seat that may not review. ONE offer, from the
+ * cheapest tier that has one (R4's order: a seat here, the pool, the catalog) -- any proposal ends
+ * the wait, since every key it covers projects to the reviewer role `hireFromTemplate` and
+ * `seatMember` then seat them with, and `formTeam`'s own list is sorted by key, not by tier.
+ */
+function reviewerHireCandidates(world: SupervisorWorld): Candidate[] {
+  const reviewing = world.tasks.filter((task) => task.status === 'reviewing')
+  const keys = world.taxonomy.filter((record) => record.role === REVIEWER_ROLE).map((record) => record.key)
+  const taskIds = reviewing.map((task) => task.id)
+  const implementers = new Set(reviewing.flatMap((task) => (task.assigneeId === null ? [] : [task.assigneeId])))
+  const plan = formTeamOver(world, {
+    required: keys,
+    requiredBy: new Map(keys.map((key) => [key, taskIds] as const)),
+    roster: world.slaves.filter((slave) => !slave.released && !implementers.has(slave.id)),
+    runKind: 'review',
+  })
+  const proposal = plan.proposals.toSorted((a, b) => TIER_ORDER.indexOf(a.source) - TIER_ORDER.indexOf(b.source))[0]
+  if (proposal === undefined) return []
+  return [candidate(actionOf(proposal, proposal.capability, world), world, 'no_reviewer', proposal.rationale)]
+}
+
 /** The words for a key, off the world's own taxonomy -- the key itself when the taxonomy has never
  *  heard of it, which is `capabilityLabel`'s own fallback and keeps `capabilityLabel: z.string()
  *  .min(1)` satisfiable for any key at all. */
@@ -409,6 +443,37 @@ export function teamPlanOf(world: SupervisorWorld): TeamPlan {
       else if (!waiting.includes(task.id)) waiting.push(task.id)
     }
   }
+  return formTeamOver(world, {
+    required,
+    requiredBy,
+    // M50 R3: a RELEASED worker is not on this team. Its capabilities are still on its row -- they
+    // are what it did here -- but it holds no runtime roles and nothing may propose giving it any,
+    // so leaving it in the roster would make `formTeam`'s first tier offer the one worker that
+    // cannot take the job.
+    roster: world.slaves.filter((slave) => !slave.released),
+    // Every staffing decision the board's own gaps raise is about implementation work:
+    // `assign_capability` grants a runtime role, and the run that role is dispatched as is an
+    // `implementation` run. A parameter rather than a constant because `BASELINE_GRANTS` differs
+    // per kind and both answers are true (M52 R1).
+    runKind: 'implementation',
+  })
+}
+
+/**
+ * `formTeam` over this world's pool, catalog and ranking context, for a NEED the caller names:
+ * {@link teamPlanOf}'s is the board's staffable tasks, {@link reviewerHireCandidates}' is the
+ * reviewing tasks nobody but their implementer could review. One function, so the two can never
+ * rank the same field two different ways.
+ */
+function formTeamOver(
+  world: SupervisorWorld,
+  need: {
+    readonly required: readonly string[]
+    readonly requiredBy: ReadonlyMap<string, readonly string[]>
+    readonly roster: readonly SupervisorSlave[]
+    readonly runKind: PermissionRunKind
+  },
+): TeamPlan {
   // M53 R8: everything the six steps need, gathered once from the world. `profileKeyOf` is R1's own
   // rule applied to each candidate kind -- a seated or pooled person keys on the persona they were
   // hired from, or on themself when nobody hired them from one, and a catalog entry keys on the
@@ -451,29 +516,19 @@ export function teamPlanOf(world: SupervisorWorld): TeamPlan {
     templateOf,
     modelOf,
     profileKeyOf: profileKeys,
-    // Every staffing decision the Supervisor makes is about implementation work: `assign_capability`
-    // grants a runtime role, and the run that role is dispatched as is an `implementation` run.
-    // A parameter rather than a constant because `BASELINE_GRANTS` differs per kind and both
-    // answers are true (M52 R1).
-    runKind: 'implementation',
+    runKind: need.runKind,
   }
 
   return formTeam({
-    required,
-    requiredBy,
-    // M50 R3: a RELEASED worker is not on this team. Its capabilities are still on its row -- they
-    // are what it did here -- but it holds no runtime roles and nothing may propose giving it any,
-    // so leaving it in the roster would make `formTeam`'s first tier offer the one worker that
-    // cannot take the job.
-    roster: world.slaves
-      .filter((slave) => !slave.released)
-      .map((slave) => ({
-        slaveId: slave.id,
-        name: slave.name,
-        capabilities: slave.capabilities,
-        runtimeRoles: slave.runtimeRoles,
-        busy: slave.busy,
-      })),
+    required: need.required,
+    requiredBy: need.requiredBy,
+    roster: need.roster.map((slave) => ({
+      slaveId: slave.id,
+      name: slave.name,
+      capabilities: slave.capabilities,
+      runtimeRoles: slave.runtimeRoles,
+      busy: slave.busy,
+    })),
     pool: world.pool.map((person) => ({
       personId: person.personId,
       name: person.name,
@@ -686,6 +741,7 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
       // RETIRED -- `observe` stopped emitting it in H4a -- and the arm stays because a stored
       // decision row carrying it is still read back, re-offered on an approval, and shown.
       offers.push(...staffingCandidates(world, situation.kind, situation.subjectId))
+      if (situation.kind === 'no_reviewer' && offers.length === 0) offers.push(...reviewerHireCandidates(world))
       break
 
     case 'planning_stalled': {

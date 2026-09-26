@@ -4,6 +4,7 @@ import {
   NON_TERMINAL_RUN_STATUSES,
   PENDING_TTL_MS,
   PERMISSION_DENIAL_WINDOW_MS,
+  REVIEWER_ROLE,
   RUN_PROMPT_MAX_CHARS,
   THREAD_BODY_MAX_CHARS,
   boundThread,
@@ -1064,8 +1065,16 @@ export async function loadSupervisorWorld(
       // A finished 200-task project whose history is full of capabilities has no gap left to staff,
       // and paying three queries a tick to build a roster and a catalog `formTeam` would then be
       // handed zero requirements for is a cost with no answer in it.
+      //
+      // A task in review that nobody but its implementer may review is a staffing question too:
+      // `no_reviewer`'s last remedy is a hire through the same `formTeam` (`candidates.ts`), and it
+      // needs the taxonomy, the pool and the catalog to find one. `observe`'s own predicate over the
+      // rows already here, so a project whose reviews are staffed pays for nothing new.
       const asksForCapabilities = taskRows.some(
-        (row) => isStaffableTask(row) && row.requiredCapabilities.length > 0,
+        (row) =>
+          (isStaffableTask(row) && row.requiredCapabilities.length > 0) ||
+          (row.status === 'reviewing' &&
+            !slaveRows.some((slave) => slave.id !== row.assigneeId && slave.runtimeRoles.includes(REVIEWER_ROLE))),
       )
 
       // H4a: the facts `planning_stalled` is decided from, behind the same kind of gate.
