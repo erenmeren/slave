@@ -49,13 +49,15 @@ function row(over: Partial<CatalogRowView> = {}): CatalogRowView {
     duplicateCount: 0,
     defaultSkillIds: [],
     hiredCount: 0,
+    skills: [],
+    workflowPreview: { steps: [], total: 0 },
     ...over,
   }
 }
 
 const view = (rows: readonly CatalogRowView[], over: Partial<WorkforceCatalogView> = {}): WorkforceCatalogView => ({
   rows,
-  facets: { divisions: ['engineering'], capabilities: ['backend.services'], skills: ['writing-plans'] },
+  facets: { divisions: ['engineering'], capabilities: ['backend.services'], skills: ['writing-plans'], domains: [] },
   total: rows.length,
   nextCursor: null,
   ...over,

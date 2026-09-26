@@ -269,7 +269,7 @@ describe('listWorkforceCatalog: the facets and the row (M55 R3, R6)', () => {
 
     expect(page.rows.map((row) => row.name)).toEqual(['Engineer', 'Tester'])
     expect(page.total).toBe(2)
-    expect(page.facets).toEqual({ divisions: [], capabilities: [], skills: [] })
+    expect(page.facets).toEqual({ divisions: [], capabilities: [], skills: [], domains: [] })
     // And the default is unchanged: a caller that says nothing still gets the whole menu.
     expect((await listWorkforceCatalog()).facets.divisions).toEqual(['engineering', 'testing'])
   })

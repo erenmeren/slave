@@ -63,6 +63,8 @@ function row(over: Partial<CatalogRowView> = {}): CatalogRowView {
     duplicateCount: 0,
     defaultSkillIds: [],
     hiredCount: 0,
+    skills: [],
+    workflowPreview: { steps: [], total: 0 },
     ...over,
   }
 }
@@ -73,6 +75,7 @@ const view = (rows: readonly CatalogRowView[]): WorkforceCatalogView => ({
     divisions: ['engineering', 'testing'],
     capabilities: ['Design the module boundary', 'Run the work back'],
     skills: ['writing-plans'],
+    domains: [],
   },
   // A fixture IS the whole answer, so the honest total is what it holds and the honest cursor
   // is the absence of one (M55 R3).

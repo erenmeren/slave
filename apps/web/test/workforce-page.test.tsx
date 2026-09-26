@@ -255,6 +255,8 @@ function templateRow(over: Partial<CatalogRowView> = {}): CatalogRowView {
     duplicateCount: 0,
     defaultSkillIds: [],
     hiredCount: 0,
+    skills: [],
+    workflowPreview: { steps: [], total: 0 },
     ...over,
   }
 }
@@ -269,7 +271,7 @@ const emptyEvidence = (): EvidencePage => ({
 
 const catalogPage = (rows: readonly CatalogRowView[]): WorkforceCatalogView => ({
   rows,
-  facets: { divisions: [], capabilities: [], skills: [] },
+  facets: { divisions: [], capabilities: [], skills: [], domains: [] },
   // A fixture IS the whole answer (M55 R3): the total is what it holds and there is no next page.
   total: rows.length,
   nextCursor: null,

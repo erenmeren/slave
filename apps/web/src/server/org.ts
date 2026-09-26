@@ -1,5 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { toRunState } from '@slave-of-ai/db'
+import { CARD_SKILL_SELECT, byCardOrder, cardSkillOf, type CardSkillRow } from '../lib/cardSkills'
 import {
   capabilitiesOf,
   listCapabilities,
@@ -1035,6 +1036,9 @@ export type CatalogRowView = Omit<WorkforceCatalogRow, 'importedAt' | 'activatio
   readonly defaultSkillIds: readonly string[]
   /** How many people were hired from this persona -- the blast radius the Default skills note names. */
   readonly hiredCount: number
+  /** Workforce cards: this persona's default skills as CHIPS -- name, source, missing, process --
+   *  in card order. `defaultSkillIds` stays beside it for the drawer's editor, which takes ids. */
+  readonly skills: readonly CardSkillRow[]
 }
 
 export interface WorkforceCatalogView {
@@ -1083,27 +1087,34 @@ function catalogRowViewOf(row: WorkforceCatalogRow): CatalogRowView {
     capabilityMappedAt: row.capabilityMappedAt === null ? null : row.capabilityMappedAt.toISOString(),
     defaultSkillIds: [],
     hiredCount: 0,
+    skills: [],
   }
 }
 
 /** M58 R25: two grouped reads for the whole page, never one per row -- the persona's default skill
- *  ids and how many people were hired from it. */
+ *  ids and how many people were hired from it. Workforce cards widens the first read to the chip
+ *  columns ({@link CARD_SKILL_SELECT}) in the SAME query, so the page is still two round trips. */
 async function withPersonaSkills(rows: readonly CatalogRowView[]): Promise<readonly CatalogRowView[]> {
   const ids = rows.map((row) => row.id)
   if (ids.length === 0) return rows
   const [skills, hired] = await Promise.all([
     prisma.templateSkill.findMany({
       where: { templateId: { in: ids } },
-      select: { templateId: true, skillId: true },
+      select: { templateId: true, skillId: true, skill: { select: CARD_SKILL_SELECT } },
       orderBy: [{ templateId: 'asc' }, { skillId: 'asc' }],
     }),
     prisma.person.groupBy({ by: ['templateId'], where: { templateId: { in: ids } }, _count: { _all: true } }),
   ])
   const skillsBy = new Map<string, string[]>()
+  const chipsBy = new Map<string, CardSkillRow[]>()
   for (const row of skills) {
     const list = skillsBy.get(row.templateId)
     if (list === undefined) skillsBy.set(row.templateId, [row.skillId])
     else list.push(row.skillId)
+    const chip = cardSkillOf(row.skill, 'persona')
+    const chips = chipsBy.get(row.templateId)
+    if (chips === undefined) chipsBy.set(row.templateId, [chip])
+    else chips.push(chip)
   }
   const hiredBy = new Map(
     hired.flatMap((group) => (group.templateId === null ? [] : [[group.templateId, group._count._all] as const])),
@@ -1111,6 +1122,7 @@ async function withPersonaSkills(rows: readonly CatalogRowView[]): Promise<reado
   return rows.map((row) => ({
     ...row,
     defaultSkillIds: skillsBy.get(row.id) ?? [],
+    skills: (chipsBy.get(row.id) ?? []).toSorted(byCardOrder),
     hiredCount: hiredBy.get(row.id) ?? 0,
   }))
 }

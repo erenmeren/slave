@@ -48,7 +48,13 @@ export const ACTIVATION_LABEL: Record<CatalogActivation, string> = {
  */
 export const CATALOG_SEARCH_DEBOUNCE_MS = 250
 
-function text(params: URLSearchParams, key: string): string | undefined {
+/** The one value `?skills=` takes (workforce cards): `skills=none` is the "No skills" toggle. Any
+ *  other value is DROPPED, never refused -- this file's lenient rule. */
+export const CATALOG_NO_SKILLS = 'none'
+
+/** A trimmed, blank-means-absent URL param -- every dimension below reads through this one function,
+ *  and Task 3's People filter reuses it rather than re-trimming the same way a second time. */
+export function text(params: URLSearchParams, key: string): string | undefined {
   const raw = (params.get(key) ?? '').trim()
   return raw === '' ? undefined : raw
 }
@@ -61,6 +67,8 @@ export function parseCatalogFilters(params: URLSearchParams): WorkforceCatalogFi
   const skill = text(params, 'skill')
   const active = text(params, 'active')
   const duplicates = text(params, 'duplicates')
+  const specialty = text(params, 'specialty')
+  const skills = text(params, 'skills')
   return {
     ...(q !== undefined ? { q } : {}),
     ...(division !== undefined ? { division } : {}),
@@ -75,6 +83,8 @@ export function parseCatalogFilters(params: URLSearchParams): WorkforceCatalogFi
     ...(duplicates !== undefined && (DUPLICATE_FACETS as readonly string[]).includes(duplicates)
       ? { duplicates: duplicates as DuplicateFacet }
       : {}),
+    ...(specialty !== undefined ? { specialty } : {}),
+    ...(skills === CATALOG_NO_SKILLS ? { noSkills: true } : {}),
   }
 }
 
@@ -90,5 +100,7 @@ export function catalogFilterParams(filters: WorkforceCatalogFilters): URLSearch
   if (filters.skill !== undefined) params.set('skill', filters.skill)
   if (filters.active !== undefined) params.set('active', filters.active ? 'active' : 'inactive')
   if (filters.duplicates !== undefined) params.set('duplicates', filters.duplicates)
+  if (filters.specialty !== undefined) params.set('specialty', filters.specialty)
+  if (filters.noSkills === true) params.set('skills', CATALOG_NO_SKILLS)
   return params
 }
