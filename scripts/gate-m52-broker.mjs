@@ -56,8 +56,10 @@
 //   10. The browser: the panel's six lines and three glyphs, the sentence naming who granted and
 //       when, the matrix's six word headers with the keys on `data-kind`, and a third click taking a
 //       decision back.
-//   11. The run directory is outside the repository (erratum E4) -- and `<repo>/.slaveofai/worktrees`
-//       still exists, because a worktree is the worker's workspace and only the verdict moved.
+//   11. The run directory is outside the repository (erratum E4) -- and so is the worktree, in the
+//       repo's sibling `<repo>-slaveofai-worktrees/` rather than the state root: a worktree is the
+//       worker's workspace, not a verdict, and it left `<repo>/.slaveofai/worktrees` on 2026-09-26
+//       for a reason of its own (tooling that skips dot-prefixed paths).
 //
 // IT NEVER EDITS A FILE IN THIS REPOSITORY. The fixtures are read and never written; the temporary
 // repositories and the state directory it makes are removed in the `finally`; `git status
@@ -856,15 +858,22 @@ try {
   }
   const repoRunsDir = join(main.repoPath, '.slaveofai', 'runs')
   const repoWorktreesDir = join(main.repoPath, '.slaveofai', 'worktrees')
+  const siblingWorktreesDir = `${main.repoPath}-slaveofai-worktrees`
+  // Re-read, not `firstRun`: that row was read in stage 1, before the dispatch wrote the path.
+  const firstWorktree = (await runRow(firstRunId))?.worktreePath ?? ''
   console.log(`stage 11: ${repoRunsDir} exists? ${String(existsSync(repoRunsDir))}`)
   console.log(`stage 11: ${repoWorktreesDir} exists? ${String(existsSync(repoWorktreesDir))}`)
+  console.log(`stage 11: the first run's worktree = ${firstWorktree} (exists? ${String(existsSync(firstWorktree))})`)
   if (existsSync(repoRunsDir)) await fail(`stage 11: ${repoRunsDir} still exists -- the verdict is back inside the repository`)
-  // Asserting BOTH is what keeps this stage honest: "`.slaveofai` is gone" would be false, and a
-  // gate that asserted it would have to be weakened the first time somebody read it.
-  if (!existsSync(repoWorktreesDir)) {
-    await fail(`stage 11: ${repoWorktreesDir} does NOT exist -- a worktree is the worker's workspace and must not have moved`)
+  // Asserting the worktree's POSITIVE location as well as the absences is what keeps this stage
+  // honest: "nothing under `.slaveofai`" alone would pass for a run that never got a worktree.
+  if (!firstWorktree.startsWith(`${siblingWorktreesDir}/`) || !existsSync(firstWorktree)) {
+    await fail(`stage 11: the first run's worktree ${firstWorktree} is not a live directory under ${siblingWorktreesDir}`)
   }
-  console.log('stage 11 PASSED: the verdict left the repository and the worktree stayed')
+  if (existsSync(repoWorktreesDir)) {
+    await fail(`stage 11: ${repoWorktreesDir} exists -- a worktree was made inside the repository, under a dot-prefixed path`)
+  }
+  console.log('stage 11 PASSED: the verdict and the worktree are both outside the repository, each where it belongs')
 
   // ============================================================================================
   // Stage 3: a person moves the wall -- and the run already in flight keeps its own verdict.
@@ -1554,7 +1563,10 @@ try {
     await deleteUser(gateUserId).catch(() => {})
     await prisma.user.delete({ where: { id: gateUserId } }).catch(() => {})
   }
-  for (const path of repoPaths) rmSync(path, { recursive: true, force: true })
+  for (const path of repoPaths) {
+    rmSync(`${path}-slaveofai-worktrees`, { recursive: true, force: true })
+    rmSync(path, { recursive: true, force: true })
+  }
   // THE WHOLE STATE TREE (Task 2's C1). Every run directory this gate caused is under it, which is
   // the difference between a gate that cleans up after itself and 366 directories in somebody's
   // `$HOME`.

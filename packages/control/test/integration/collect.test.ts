@@ -20,8 +20,12 @@ const BRANCH = 'slaveofai/T-abc-x'
  * worktree on its own branch -- exactly the shape `provisionWorktree` leaves behind, built
  * directly with git so this suite proves `collectTaskWorktree` against the real thing rather than
  * a mock asserting its own script.
+ *
+ * The tree is at the OLD in-repository path by default, on purpose: a live project still has
+ * worktrees made there before 2026-09-26, and collection goes by the path stored on the run, never
+ * by where a worktree would be made today. `sibling` builds today's shape (`worktreeRootFor`).
  */
-function makeRepo(): { repoPath: string; worktreePath: string } {
+function makeRepo(location: 'legacy' | 'sibling' = 'legacy'): { repoPath: string; worktreePath: string } {
   const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-collect-'))
   run('git', ['init', '-q', '-b', 'main'], repoPath)
   run('git', ['config', 'user.name', 'Fixture'], repoPath)
@@ -34,7 +38,8 @@ function makeRepo(): { repoPath: string; worktreePath: string } {
   mkdirSync(slaveofaiRoot, { recursive: true })
   writeFileSync(join(slaveofaiRoot, '.gitignore'), '*\n')
 
-  const worktreePath = join(slaveofaiRoot, 'worktrees', 'T-abc')
+  const worktreePath =
+    location === 'legacy' ? join(slaveofaiRoot, 'worktrees', 'T-abc') : join(`${repoPath}-slaveofai-worktrees`, 'T-abc')
   run('git', ['worktree', 'add', '-b', BRANCH, worktreePath], repoPath)
 
   return { repoPath, worktreePath }
@@ -63,9 +68,10 @@ async function seed(
     readonly runStatus?: string
     readonly runPid?: number | null
     readonly withWorktreePath?: boolean
+    readonly location?: 'legacy' | 'sibling'
   } = {},
 ): Promise<Fixture> {
-  const { repoPath, worktreePath } = makeRepo()
+  const { repoPath, worktreePath } = makeRepo(overrides.location)
   repos.push(repoPath)
   const workspace = await prisma.workspace.create({
     data: { name: `Checkout ${repos.length}`, repoPath, verifyCommands: ['true'], setupCommands: [] },
@@ -112,7 +118,23 @@ describe('collectTaskWorktree', () => {
   })
 
   afterAll((): void => {
-    for (const repoPath of repos) rmSync(repoPath, { recursive: true, force: true })
+    for (const repoPath of repos) {
+      rmSync(`${repoPath}-slaveofai-worktrees`, { recursive: true, force: true })
+      rmSync(repoPath, { recursive: true, force: true })
+    }
+  })
+
+  it('collects a tree in the sibling root outside the repository just the same', async (): Promise<void> => {
+    const fixture = await seed({ location: 'sibling' })
+
+    const result = await collectTaskWorktree(fixture.taskId, 'operator')
+
+    expect(result.ok).toBe(true)
+    expect(existsSync(fixture.worktreePath)).toBe(false)
+    expect(
+      execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: fixture.repoPath }).toString(),
+    ).not.toContain(fixture.worktreePath)
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: fixture.runId } })).worktreePath).toBeNull()
   })
 
   it('removes the tree, keeps the branch, nulls the path, records the event', async (): Promise<void> => {

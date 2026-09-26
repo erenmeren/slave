@@ -201,7 +201,11 @@ describe('the orchestrator CLI', () => {
   })
 
   afterAll(async (): Promise<void> => {
-    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+    for (const repo of repos) {
+      // The sibling worktree root (`worktreeRootFor`), which removing the repository leaves behind.
+      rmSync(`${repo}-slaveofai-worktrees`, { recursive: true, force: true })
+      rmSync(repo, { recursive: true, force: true })
+    }
     await prisma.$disconnect()
   }, 30_000)
 
@@ -1371,7 +1375,7 @@ describe('the orchestrator CLI', () => {
     // the pump, a resumed run emits a second `run.started` -- an illegal transition from `working`
     // for anything replaying the log through the domain's state machine.
     expect(await prisma.executionEvent.count({ where: { runId: paused.id, type: 'run_started' } })).toBe(1)
-    expect(checkpoint.worktreePath).toContain('.slaveofai')
+    expect(checkpoint.worktreePath).toBe(join(`${fixture.repoPath}-slaveofai-worktrees`, `T-${fixture.taskId.slice(0, 8)}`))
     expect(checkpoint.gitAuthorEmail).toContain('@slaveofai.local')
   }, 60_000)
 
