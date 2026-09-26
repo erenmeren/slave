@@ -52,6 +52,12 @@ export const CATALOG_SEARCH_DEBOUNCE_MS = 250
  *  other value is DROPPED, never refused -- this file's lenient rule. */
 export const CATALOG_NO_SKILLS = 'none'
 
+/** The nine params the catalog owns in the address bar, and the only ones its hook clears before
+ *  writing its own back -- a `?tab=catalog` or a `?from=nav` that arrived on the link survives. */
+export const CATALOG_FILTER_PARAMS = [
+  'q', 'division', 'capability', 'source', 'skill', 'active', 'duplicates', 'specialty', 'skills',
+] as const
+
 /** A trimmed, blank-means-absent URL param -- every dimension below reads through this one function,
  *  and Task 3's People filter reuses it rather than re-trimming the same way a second time. */
 export function text(params: URLSearchParams, key: string): string | undefined {

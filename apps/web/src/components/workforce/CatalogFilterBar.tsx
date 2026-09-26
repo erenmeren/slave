@@ -1,6 +1,5 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
 import type { WorkforceCatalogFacets, WorkforceCatalogFilters } from '@slave-of-ai/control'
 import {
   DUPLICATE_FACETS,
@@ -12,13 +11,12 @@ import {
 import {
   ACTIVATION_LABEL,
   CATALOG_ACTIVATIONS,
-  CATALOG_SEARCH_DEBOUNCE_MS,
   CATALOG_SOURCES,
   type CatalogActivation,
   type CatalogSource,
 } from '../../lib/catalogFilters'
-import { Button } from '../ui/Button'
 import { FieldLabel, INPUT_SHELL } from '../ui/FormControls'
+import { CHIP_BUTTON, WorkforceFilterBar, chipTone } from './WorkforceFilterBar'
 
 /**
  * ONE vocabulary (M46 fix round 1): the chip says exactly the word the catalog ROW says for the same
@@ -36,20 +34,24 @@ const SOURCE_LABEL: Record<CatalogSource, string> = {
   local: 'local',
 }
 
-type FilterKey = 'q' | 'division' | 'capability' | 'source' | 'skill' | 'active' | 'duplicates'
+type FilterKey =
+  | 'q'
+  | 'division'
+  | 'capability'
+  | 'source'
+  | 'skill'
+  | 'active'
+  | 'duplicates'
+  | 'specialty'
+  | 'noSkills'
 
 const asSource = (value: string): CatalogSource | undefined => CATALOG_SOURCES.find((member) => member === value)
 const asFacet = (value: string): DuplicateFacet | undefined => DUPLICATE_FACETS.find((member) => member === value)
 
 /**
- * One filter changed, the other six carried through -- and `''` means "drop this one" rather than
- * "match the empty string" (an `<option value="">any</option>`, a cleared search box and a chip
- * clicked twice all send it).
- *
- * Written out key by key instead of a computed-key spread: under `exactOptionalPropertyTypes` an
- * optional key that is PRESENT and `undefined` is a different type from an absent one, and a
- * `{ [key]: value }` over a union of keys widens to an index signature that would let an eighth
- * filter through without anybody deciding what it means.
+ * One filter changed, the other eight carried through -- and `''` means "drop this one". Written
+ * out key by key instead of a computed-key spread: under `exactOptionalPropertyTypes` an optional
+ * key that is PRESENT and `undefined` is a different type from an absent one.
  */
 function withFilter(filters: WorkforceCatalogFilters, key: FilterKey, value: string): WorkforceCatalogFilters {
   const q = key === 'q' ? value : filters.q
@@ -59,6 +61,8 @@ function withFilter(filters: WorkforceCatalogFilters, key: FilterKey, value: str
   const skill = key === 'skill' ? value : filters.skill
   const active = key === 'active' ? (value === '' ? undefined : value === 'active') : filters.active
   const duplicates = key === 'duplicates' ? asFacet(value) : filters.duplicates
+  const specialty = key === 'specialty' ? value : filters.specialty
+  const noSkills = key === 'noSkills' ? value === 'true' : filters.noSkills
   return {
     ...(q !== undefined && q !== '' ? { q } : {}),
     ...(division !== undefined && division !== '' ? { division } : {}),
@@ -67,20 +71,16 @@ function withFilter(filters: WorkforceCatalogFilters, key: FilterKey, value: str
     ...(skill !== undefined && skill !== '' ? { skill } : {}),
     ...(active !== undefined ? { active } : {}),
     ...(duplicates !== undefined ? { duplicates } : {}),
+    ...(specialty !== undefined && specialty !== '' ? { specialty } : {}),
+    ...(noSkills === true ? { noSkills } : {}),
   }
 }
 
 /**
- * The catalog's filter row (M46 R6, seven controls since M55 R3), shaped like
- * `activity/FilterBar.tsx`: coarse chips for the two facets with two values, a `<select>` for each
- * facet that is a list. No new dependency and no combobox -- the facets come back sorted and a
- * division list is short enough to scan.
- *
- * The SEARCH BOX keeps its own state and pushes it up after {@link CATALOG_SEARCH_DEBOUNCE_MS}
- * (M53 section 6's carried item, taken here by M55 R3). It was cosmetic while the read model
- * filtered an array; it stopped being cosmetic the moment each keystroke became a scan over the
- * whole table plus a `count` over the same `where`. The input stays instant -- what waits is the
- * request.
+ * The catalog's filter row (M46 R6, nine controls since workforce cards): the shared
+ * {@link WorkforceFilterBar} plus the four controls only a persona list has -- source, activation,
+ * capability and duplicates. Every testid a gate drives (`catalog-search`, `catalog-*-select`,
+ * `catalog-source-chip-*`, `catalog-active-chip-*`, `catalog-clear-filters`) is unchanged.
  */
 export function CatalogFilterBar({
   filters,
@@ -91,84 +91,32 @@ export function CatalogFilterBar({
   readonly filters: WorkforceCatalogFilters
   readonly facets: WorkforceCatalogFacets
   /** M55 R3: the capability facet's OPTIONS are taxonomy keys, and this is what turns each into a
-   *  word. Defaults to empty, where every key prints as itself -- the `capabilityLabel` fallback,
-   *  which is the honest thing to show for a key this bundle has never heard of. */
+   *  word. Defaults to empty, where every key prints as itself. */
   readonly taxonomy?: readonly CapabilityRecord[]
   readonly onChange: (next: WorkforceCatalogFilters) => void
 }): React.JSX.Element {
   const set = (key: FilterKey, value: string): void => onChange(withFilter(filters, key, value))
 
-  // The search box's own state, so typing is never gated on a network round trip. Seeded from the
-  // filters and re-seeded whenever they change from OUTSIDE this component -- Clear filters, or a
-  // link opened with a `?q=` on it -- which is what the dependency on `filters.q` is for.
-  const [query, setQuery] = useState(filters.q ?? '')
-  useEffect(() => {
-    setQuery(filters.q ?? '')
-  }, [filters.q])
-  /**
-   * The push the timer makes, kept CURRENT (fix, found by `gate:m46-workforce-catalog` stage 2c).
-   *
-   * The wait below deliberately restarts on `query` alone, so the callback it arms closes over the
-   * `filters` of the render that armed it. A source chip clicked during those 250 ms was then
-   * silently REVERTED when the keystroke's own push landed carrying the older six -- the filter bar
-   * undoing a click a person had already watched take effect. A ref refreshed after every render
-   * fixes that without making the wait restart on every render, which is what a dependency would.
-   */
-  const push = useRef<(value: string) => void>(() => undefined)
-  useEffect(() => {
-    push.current = (value: string): void => {
-      onChange(withFilter(filters, 'q', value))
-    }
-  })
-  useEffect(() => {
-    if (query === (filters.q ?? '')) return
-    const timer = setTimeout(() => push.current(query), CATALOG_SEARCH_DEBOUNCE_MS)
-    return () => clearTimeout(timer)
-    // `filters.q` is read to decide whether there is anything to push at all; re-arming the wait
-    // when it changes would restart it on the very push that ended it. `query` is the only thing
-    // whose change should restart the wait.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query])
-
-  const select = (
-    key: 'division' | 'capability' | 'skill',
-    label: string,
-    options: readonly string[],
-    textOf: (option: string) => string = (option) => option,
-  ): React.JSX.Element => (
-    <label className="flex flex-col gap-1">
-      <FieldLabel>{label}</FieldLabel>
-      <select
-        data-testid={`catalog-${key}-select`}
-        aria-label={label}
-        value={filters[key] ?? ''}
-        onChange={(event) => set(key, event.target.value)}
-        className={`w-44 ${INPUT_SHELL}`}
-      >
-        <option value="">any</option>
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {textOf(option)}
-          </option>
-        ))}
-      </select>
-    </label>
-  )
-  const filtered = Object.keys(filters).length > 0
-
   return (
-    <div data-testid="catalog-filters" className="flex flex-wrap items-end gap-3">
-      <label className="flex flex-col gap-1">
-        <FieldLabel>Search</FieldLabel>
-        <input
-          data-testid="catalog-search"
-          aria-label="search the catalog"
-          value={query}
-          placeholder="name, summary, capability, expertise"
-          onChange={(event) => setQuery(event.target.value)}
-          className={`w-72 ${INPUT_SHELL}`}
-        />
-      </label>
+    <WorkforceFilterBar
+      testIdPrefix="catalog"
+      query={filters.q ?? ''}
+      onQuery={(value) => set('q', value)}
+      domains={facets.domains}
+      specialty={filters.specialty}
+      onSpecialty={(value) => set('specialty', value)}
+      divisions={facets.divisions}
+      division={filters.division}
+      onDivision={(value) => set('division', value)}
+      skillOptions={facets.skills.map((one) => ({ value: one, label: one }))}
+      skill={filters.skill}
+      onSkill={(value) => set('skill', value)}
+      noSkills={filters.noSkills === true}
+      onNoSkills={(next) => set('noSkills', next ? 'true' : '')}
+      filtered={Object.keys(filters).length > 0}
+      onClear={() => onChange({})}
+      searchPlaceholder="name, summary, capability, skill"
+    >
       <div className="flex items-center gap-1 pb-1">
         {CATALOG_SOURCES.map((source) => (
           <button
@@ -178,17 +126,13 @@ export function CatalogFilterBar({
             data-source={source}
             aria-pressed={filters.source === source}
             onClick={() => set('source', filters.source === source ? '' : source)}
-            className={`rounded-bubble border px-[9px] py-[3px] font-mono text-[10px] font-medium transition-colors ${
-              filters.source === source ? 'border-text-1 bg-bg-2 text-text-1' : 'border-line bg-bg-1 text-text-3 hover:text-text-2'
-            }`}
+            className={`${CHIP_BUTTON} ${chipTone(filters.source === source)}`}
           >
             {SOURCE_LABEL[source]}
           </button>
         ))}
       </div>
-      {/* M55 R6: the activation chips, in the source chips' own two-value shape -- and clicking the
-        * pressed one clears the filter, because "either" is a real third state and a two-chip
-        * control with no way back to it is a trap. */}
+      {/* M55 R6: clicking the pressed activation chip clears it -- "either" is a real third state. */}
       <div className="flex items-center gap-1 pb-1">
         {CATALOG_ACTIVATIONS.map((activation: CatalogActivation) => {
           const pressed = filters.active === (activation === 'active')
@@ -200,20 +144,31 @@ export function CatalogFilterBar({
               data-activation={activation}
               aria-pressed={pressed}
               onClick={() => set('active', pressed ? '' : activation)}
-              className={`rounded-bubble border px-[9px] py-[3px] font-mono text-[10px] font-medium transition-colors ${
-                pressed ? 'border-text-1 bg-bg-2 text-text-1' : 'border-line bg-bg-1 text-text-3 hover:text-text-2'
-              }`}
+              className={`${CHIP_BUTTON} ${chipTone(pressed)}`}
             >
               {ACTIVATION_LABEL[activation]}
             </button>
           )
         })}
       </div>
-      {select('division', 'Division', facets.divisions)}
-      {/* M55 R3: the OPTIONS are taxonomy keys and the TEXT is their labels -- `docs/ia.md` rule 3,
-        * and the key is what a gate reads off `<option value>`. */}
-      {select('capability', 'Capability', facets.capabilities, (key) => capabilityLabel(key, taxonomy))}
-      {select('skill', 'Skill', facets.skills)}
+      {/* M55 R3: the OPTIONS are taxonomy keys and the TEXT is their labels (`docs/ia.md` rule 3). */}
+      <label className="flex flex-col gap-1">
+        <FieldLabel>Capability</FieldLabel>
+        <select
+          data-testid="catalog-capability-select"
+          aria-label="Capability"
+          value={filters.capability ?? ''}
+          onChange={(event) => set('capability', event.target.value)}
+          className={`w-44 ${INPUT_SHELL}`}
+        >
+          <option value="">any</option>
+          {facets.capabilities.map((key) => (
+            <option key={key} value={key}>
+              {capabilityLabel(key, taxonomy)}
+            </option>
+          ))}
+        </select>
+      </label>
       <label className="flex flex-col gap-1">
         <FieldLabel>Duplicates</FieldLabel>
         <select
@@ -231,11 +186,6 @@ export function CatalogFilterBar({
           ))}
         </select>
       </label>
-      {filtered && (
-        <Button variant="ghost" size="sm" data-testid="catalog-clear-filters" onClick={() => onChange({})}>
-          Clear filters
-        </Button>
-      )}
-    </div>
+    </WorkforceFilterBar>
   )
 }
