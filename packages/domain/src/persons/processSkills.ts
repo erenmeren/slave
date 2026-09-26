@@ -28,6 +28,8 @@ export const PROCESS_SKILL_PROVIDERS: readonly string[] = ['plugin:superpowers']
 /** The one sentence the chip's tooltip and the picker's confirm both say. */
 export const PROCESS_SKILL_WARNING = 'Process skill: can make a worker plan and delegate instead of doing its task.'
 
+/** Matches the BARE name, case-insensitively, after any plugin prefix, so the warning follows a
+ *  process skill wherever it is linked -- a personal copy, a project copy, or a plugin's own name. */
 export function isProcessSkill(skill: { readonly name: string; readonly providerName: string }): boolean {
   if (PROCESS_SKILL_PROVIDERS.includes(skill.providerName)) return true
   const bare = (skill.name.split(':').at(-1) ?? '').trim().toLowerCase()

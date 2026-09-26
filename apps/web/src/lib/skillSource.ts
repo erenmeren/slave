@@ -7,6 +7,7 @@ import { skillSourceOf } from '@slave-of-ai/domain'
  */
 export const SKILL_SOURCE_GLYPH = { local: '🧩', plugin: '🔌' } as const
 
+/** The one glyph a card prints for this provider -- 🔌 for a plugin, 🧩 for anything on local disk. */
 export function skillGlyphOf(providerName: string): string {
   return SKILL_SOURCE_GLYPH[skillSourceOf(providerName).kind]
 }

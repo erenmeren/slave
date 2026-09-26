@@ -7,6 +7,8 @@ export interface WorkflowPreview {
   readonly total: number
 }
 
+/** Three is the card's height budget for a workflow (workforce cards spec): enough to show a shape,
+ *  never so many the card grows past its row. */
 export const WORKFLOW_PREVIEW_STEPS = 3
 
 /** The answer for a profile with no workflow at all -- one value, so a test can compare to it. */
