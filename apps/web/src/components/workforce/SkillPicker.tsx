@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { PROCESS_SKILL_WARNING, isProcessSkill } from '@slave-of-ai/domain'
 import type { SkillCatalogueRow } from '../../server/persons'
 import { skillGlyphOf, skillGroupOf, skillSourceTitle, type SkillGroup } from '../../lib/skillSource'
@@ -53,6 +53,12 @@ export function SkillPicker({
   const [selected, setSelected] = useState<string | null>(null)
   const [scope, setScope] = useState<SkillScope>('person')
   const [processConfirmed, setProcessConfirmed] = useState(false)
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  // In-flow, so nothing moves focus into it for us: the search is where a picker starts.
+  useEffect(() => {
+    searchRef.current?.focus()
+  }, [])
 
   const groups = useMemo((): readonly { readonly group: SkillGroup; readonly rows: readonly SkillCatalogueRow[] }[] => {
     const needle = search.trim().toLowerCase()
@@ -85,7 +91,10 @@ export function SkillPicker({
       role="group"
       aria-label="Add a skill"
       onKeyDown={(event) => {
-        if (event.key === 'Escape') onCancel()
+        if (event.key !== 'Escape') return
+        // Closes the PICKER only -- never the hire sheet or drawer it sits inside as well.
+        event.stopPropagation()
+        onCancel()
       }}
       className="flex flex-col gap-2 rounded-card border border-line bg-bg-1 p-2"
     >
@@ -100,6 +109,7 @@ export function SkillPicker({
       <label className="flex flex-col gap-1">
         <FieldLabel>Find a skill</FieldLabel>
         <input
+          ref={searchRef}
           data-testid="skill-picker-search"
           aria-label="find a skill"
           value={search}

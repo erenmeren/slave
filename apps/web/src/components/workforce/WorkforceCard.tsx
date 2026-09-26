@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   PROCESS_SKILL_WARNING,
   capabilityLabel,
@@ -186,6 +186,7 @@ export function WorkforceCard({
   const [error, setError] = useState<string | null>(null)
   const [picking, setPicking] = useState(false)
   const [removing, setRemoving] = useState<CardSkillRow | null>(null)
+  const plusRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     setHidden(new Set())
@@ -310,6 +311,11 @@ export function WorkforceCard({
         <span data-testid="card-skill-name" className={`min-w-0 truncate font-mono ${struck ? 'line-through' : ''}`.trim()}>
           {skill.name}
         </span>
+        {/* The glyph is `aria-hidden` and a `title` is not reliably read, so the source and the
+          * missing state are said again here, for a screen reader only (final review minor). */}
+        <span data-testid="card-skill-sr" className="sr-only">
+          {`, ${skillSourceTitle(skill.providerName)}${skill.missing ? ', missing from disk' : ''}`}
+        </span>
         {skill.process && (
           <span data-testid="card-skill-process" role="img" aria-label="process skill" title={PROCESS_SKILL_WARNING}>
             ⚠️
@@ -407,6 +413,7 @@ export function WorkforceCard({
           <span onClick={stop}>
             <button
               type="button"
+              ref={plusRef}
               data-testid="card-skill-add"
               aria-expanded={picking}
               disabled={pending}
@@ -439,7 +446,11 @@ export function WorkforceCard({
               scope={target.kind === 'person' ? { personaName: target.personaName } : null}
               pending={pending}
               onConfirm={add}
-              onCancel={() => setPicking(false)}
+              onCancel={() => {
+                // Focus goes back where it came from: the picker it was in is gone.
+                setPicking(false)
+                plusRef.current?.focus()
+              }}
             />
           </div>
         )}

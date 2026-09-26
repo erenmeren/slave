@@ -74,7 +74,7 @@ Laid out in a grid `repeat(auto-fill, minmax(320px, 1fr))`, reusing `Card`, `Ava
   - Process-management skills get ⚠️ (§4).
   - Up to 6 chips plus "+N".
   - Each chip has a remove control, with the same scope rule as adding.
-- **Workflow:** the first 3 steps of the effective profile's `workflow` (`ProfileSpec.workflow`, with overrides applied), then "+N steps". "No workflow in this profile" when empty.
+- **Workflow:** the first 3 steps of the effective profile's `workflow` (`ProfileSpec.workflow`, with overrides applied), then "+N steps". "No workflow in this profile" when empty. A person card shows its PERSONA's effective workflow: the person-level profile override has no workflow section, so there is nothing person-specific to show (note added by the final review).
 - **"+ skill":** opens the picker (§3).
 - **Click on the card body:** opens the existing drawer: `ProfileDrawer` for personas, the person sheet for people. Nothing inside the drawers changes.
 

@@ -102,6 +102,15 @@ describe('WorkforceCard chips', () => {
     expect(mark.getAttribute('title')).toBe('Process skill: can make a worker plan and delegate instead of doing its task.')
   })
 
+  // Final review minor: the glyph is `aria-hidden` and a `title` is not read reliably, so the
+  // source and the missing state are ALSO visually hidden text a screen reader reads with the name.
+  it('says the source and a missing state in visually hidden text, not only in tooltips', () => {
+    renderCard({ skills: [chip('b', 'frontend-design', { providerName: 'plugin:frontend', missing: true })] })
+    const hidden = within(screen.getByTestId('card-skill-b')).getByTestId('card-skill-sr')
+    expect(hidden.className).toContain('sr-only')
+    expect(hidden.textContent).toBe(', from the frontend plugin, missing from disk')
+  })
+
   it('greys a skill missing from disk but still lets it be removed', () => {
     renderCard({ skills: [chip('a', 'archived', { missing: true })] })
     const missing = screen.getByTestId('card-skill-a')
@@ -313,6 +322,29 @@ describe('WorkforceCard writes', () => {
       scope: 'person',
       personaId: null,
     })
+  })
+})
+
+// Final review minor: the in-flow picker takes focus when it opens and hands it back to
+// "+ skill" when it closes, and Escape from any control inside it closes it.
+describe('WorkforceCard picker focus', () => {
+  it('focuses the search on open and returns focus to "+ skill" on Cancel', () => {
+    renderCard()
+    const plus = screen.getByTestId('card-skill-add')
+    fireEvent.click(plus)
+    expect(document.activeElement).toBe(screen.getByTestId('skill-picker-search'))
+    fireEvent.click(screen.getByTestId('skill-picker-cancel'))
+    expect(screen.queryByTestId('skill-picker')).toBeNull()
+    expect(document.activeElement).toBe(plus)
+  })
+
+  it('closes on Escape from an option, and returns focus to "+ skill"', () => {
+    renderCard()
+    const plus = screen.getByTestId('card-skill-add')
+    fireEvent.click(plus)
+    fireEvent.keyDown(screen.getByTestId('skill-picker-option-s-sql'), { key: 'Escape' })
+    expect(screen.queryByTestId('skill-picker')).toBeNull()
+    expect(document.activeElement).toBe(plus)
   })
 })
 
