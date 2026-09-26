@@ -8,6 +8,7 @@ import type { CatalogRowView, WorkforceCatalogView } from '../../server/org'
 import type { SkillCatalogueRow } from '../../server/persons'
 import type { CardSkillRow } from '../../lib/cardSkills'
 import { catalogFilterParams } from '../../lib/catalogFilters'
+import type { PageKeep } from '../../lib/pageKeep'
 import { plural } from '../../lib/plural'
 import { sendControl } from '../../lib/postControl'
 import { useCatalogFilters } from '../../hooks/useCatalogFilters'
@@ -115,16 +116,25 @@ export function WorkforceCatalog({
   initial,
   taxonomy = [],
   skillCatalogue = [],
+  keep,
+  trustInitial = true,
+  urlSync = true,
 }: {
   readonly initial: WorkforceCatalogView
   /** The capability taxonomy, read once by the page beside the catalog (M47 §2) -- what turns the
    *  drawer's `capabilityKeys` into words. Defaults to empty, where every key prints as itself. */
   readonly taxonomy?: readonly CapabilityRecord[]
   readonly skillCatalogue?: readonly SkillCatalogueRow[]
+  /** Where the loaded list waits while the Catalog tab is unmounted -- see {@link PageKeep}. */
+  readonly keep?: PageKeep<WorkforceCatalogView>
+  /** Whether `initial` answers the URL this mounts under -- `PeopleCards`' prop of the same name. */
+  readonly trustInitial?: boolean
+  /** False for the hire sheet (final review, finding 3): its filters are its own, never the URL's. */
+  readonly urlSync?: boolean
 }): React.JSX.Element {
   const router = useRouter()
-  const { filters, setFilters } = useCatalogFilters()
-  const [page, setPage] = useState<WorkforceCatalogView>(initial)
+  const { filters, setFilters } = useCatalogFilters(urlSync)
+  const [page, setPage] = useState<WorkforceCatalogView>(() => keep?.current?.view ?? initial)
   const [staleError, setStaleError] = useState(false)
   /**
    * What a refused WRITE said, in the words the control layer used (fix round 1, item 3).
@@ -261,7 +271,9 @@ export function WorkforceCatalog({
   /**
    * Seeded from the server on the first render; re-read whenever the filters move. The first pass
    * does NOT fetch when the URL carried no filter -- `initial` IS that answer, and asking for it
-   * again would be a second identical query on every page load.
+   * again would be a second identical query on every page load -- unless `initial` is not trusted,
+   * or this is a REMOUNT (final review, finding 2): that starts from the kept list and re-reads the
+   * same range, or page one when a shared filter moved while the tab was away.
    *
    * A ref rather than a `mounted` state flag: setting state inside the effect would re-run it with
    * the same filters and issue exactly the fetch this guard exists to avoid.
@@ -270,10 +282,21 @@ export function WorkforceCatalog({
   useEffect(() => {
     if (firstPass.current) {
       firstPass.current = false
-      if (Object.keys(filters).length === 0) return
+      const kept = keep?.current ?? null
+      if (kept !== null) {
+        if (kept.query === catalogFilterParams(filters).toString()) resyncAfterRefusal(filters, kept.view.rows.length)
+        else reload(filters)
+        return
+      }
+      if (trustInitial && Object.keys(filters).length === 0) return
     }
     reload(filters)
-  }, [filters, reload])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `keep`/`trustInitial` are read on the first pass only
+  }, [filters, reload, resyncAfterRefusal])
+
+  useEffect(() => {
+    if (keep !== undefined) keep.current = { view: page, query: catalogFilterParams(filters).toString() }
+  }, [keep, page, filters])
 
   return (
     <div className="flex flex-col gap-3">

@@ -29,23 +29,31 @@ export interface UrlFilterSpec<F> {
  * MERGED into the current query, never a bare `?q=`: dropping `?tab=catalog` would send a shared
  * link to the People tab.
  */
-export function useUrlFilterSpec<F>(spec: UrlFilterSpec<F>): {
+export function useUrlFilterSpec<F>(
+  spec: UrlFilterSpec<F>,
+  /** False for a list that must not share the page's filters (the simple-mode hire sheet beside
+   *  People -- final review, finding 3): it starts unfiltered and never touches the address bar. */
+  urlSync = true,
+): {
   readonly filters: F
   readonly setFilters: (next: F) => void
 } {
   const searchParams = useSearchParams()
-  const [filters, setFiltersState] = useState<F>(() => spec.parse(new URLSearchParams(searchParams.toString())))
+  const [filters, setFiltersState] = useState<F>(() =>
+    spec.parse(new URLSearchParams(urlSync ? searchParams.toString() : '')),
+  )
 
   const setFilters = useCallback(
     (next: F): void => {
       setFiltersState(next)
+      if (!urlSync) return
       const query = new URLSearchParams(window.location.search)
       for (const key of spec.keys) query.delete(key)
       for (const [key, value] of spec.toParams(next)) query.set(key, value)
       const text = query.toString()
       window.history.replaceState(null, '', text === '' ? '/workforce' : `/workforce?${text}`)
     },
-    [spec],
+    [spec, urlSync],
   )
 
   return { filters, setFilters }

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WorkforceClient, type WorkforceTab } from '../src/components/workforce/WorkforceClient.js'
 import WorkforcePage from '../src/app/workforce/page.js'
@@ -11,6 +11,7 @@ import type { EvidencePage } from '../src/server/evidence.js'
 import type { PeoplePageView, PersonCardRow, PersonDetail, PersonRow } from '../src/server/persons.js'
 import type { SlaveCardData } from '../src/server/overview.js'
 import type { SkillsPage } from '../src/server/skills.js'
+import { CATALOG_SEARCH_DEBOUNCE_MS } from '../src/lib/catalogFilters.js'
 
 const routerRefresh = vi.fn()
 const routerReplace = vi.fn()
@@ -844,6 +845,182 @@ describe('WorkforceClient row click opens the panel', () => {
 // MOVED from `projects-page.test.tsx` (M44 t3): the catalog these assertions describe left the
 // Projects home for the Workforce Catalog tab. M42 t4's subject is unchanged -- where an operator
 // reads what an import did.
+/**
+ * Final review, findings 2 and 3. `useSearchParams` is a mock that reads `search`; Next syncs a
+ * `replaceState` into it AND re-renders its readers, which `syncUrl` stands in for (the caller
+ * re-renders). The address bar itself is jsdom's.
+ */
+const syncUrl = (): void => {
+  search = window.location.search.replace(/^\?/u, '')
+}
+
+/** One keystroke in a filter bar's search box, plus the box's debounce. */
+const typeInto = async (testId: string, value: string, within_: HTMLElement = document.body): Promise<void> => {
+  await act(async () => {
+    fireEvent.change(within(within_).getByTestId(testId), { target: { value } })
+    await new Promise((resolve) => setTimeout(resolve, CATALOG_SEARCH_DEBOUNCE_MS + 20))
+  })
+}
+
+const shownPeople = (): (string | null)[] =>
+  screen.getAllByTestId(/^person-row-/u).map((row) => row.getAttribute('data-person-id'))
+
+describe('a tab round trip keeps each list matching its filter bar (final review, finding 2)', () => {
+  const reacty = personRow({ personId: 'p2', name: 'Reacty' })
+
+  beforeEach(() => {
+    window.history.replaceState(null, '', '/workforce')
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    window.history.replaceState(null, '', '/workforce')
+  })
+
+  const stubPeople = (): ReturnType<typeof vi.fn> => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/persons?q=react')) return new Response(JSON.stringify(peoplePageOf([reacty])), { status: 200 })
+      if (url.startsWith('/api/persons')) return new Response(JSON.stringify(peoplePageOf([personRow(), reacty])), { status: 200 })
+      if (url.startsWith('/api/org/catalog')) return new Response(JSON.stringify(catalogPage([templateRow()])), { status: 200 })
+      throw new Error(`unexpected fetch ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  /** Renders the page the way Next would after a `replaceState`: `useSearchParams` moved, so every
+   *  reader of it renders again before the next click. */
+  let rerender: (ui: React.ReactElement) => void = () => {}
+  let props: Partial<WorkforceProps> = {}
+  const renderClient = (next: Partial<WorkforceProps>): void => {
+    props = next
+    rerender = render(<TestWorkforceClient {...props} />).rerender
+  }
+
+  const switchTo = async (tab: WorkforceTab): Promise<void> => {
+    syncUrl()
+    rerender(<TestWorkforceClient {...props} />)
+    await act(async () => {
+      fireEvent.click(screen.getByTestId(`workforce-tab-${tab}`))
+    })
+  }
+
+  it('People: a search, a trip to Catalog and back -- the bar and the list still agree', async () => {
+    stubPeople()
+    renderClient({ people: [personRow(), reacty], catalog: catalogPage([templateRow()]) })
+
+    await typeInto('people-search', 'react')
+    expect(shownPeople()).toEqual(['p2'])
+
+    await switchTo('catalog')
+    await switchTo('slaves')
+
+    expect((screen.getByTestId('people-search') as HTMLInputElement).value).toBe('react')
+    await waitFor(() => expect(shownPeople()).toEqual(['p2']))
+  })
+
+  it('People: a shared filter set on Catalog filters People when it opens', async () => {
+    stubPeople()
+    renderClient({ people: [personRow(), reacty], catalog: catalogPage([templateRow()]) })
+
+    await switchTo('catalog')
+    await typeInto('catalog-search', 'react')
+    await switchTo('slaves')
+
+    expect((screen.getByTestId('people-search') as HTMLInputElement).value).toBe('react')
+    await waitFor(() => expect(shownPeople()).toEqual(['p2']))
+  })
+
+  it('Catalog: a card write survives a trip to People and back', async () => {
+    const skill = { skillId: 's-sql', name: 'sql', providerName: 'personal', description: 'writes sql', missing: false }
+    let linked = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === '/api/org/templates/t1/skills') {
+          linked = true
+          return new Response(JSON.stringify({ ok: true }), { status: 200 })
+        }
+        if (url.startsWith('/api/org/catalog')) {
+          const chips = linked ? [{ skillId: 's-sql', name: 'sql', providerName: 'personal', missing: false, process: false, state: 'persona' as const }] : []
+          return new Response(JSON.stringify(catalogPage([templateRow({ skills: chips, defaultSkillIds: linked ? ['s-sql'] : [] })])), { status: 200 })
+        }
+        if (url.startsWith('/api/persons')) return new Response(JSON.stringify(peoplePageOf([personRow()])), { status: 200 })
+        throw new Error(`unexpected fetch ${url}`)
+      }),
+    )
+    renderClient({ initialTab: 'catalog', catalog: catalogPage([templateRow()]), skillCatalogue: [skill] })
+
+    const card = screen.getByTestId('catalog-row-t1')
+    fireEvent.click(within(card).getByTestId('card-skill-add'))
+    fireEvent.click(within(card).getByTestId('skill-picker-option-s-sql'))
+    await act(async () => {
+      fireEvent.click(within(card).getByTestId('skill-picker-confirm'))
+    })
+    expect(within(screen.getByTestId('catalog-row-t1')).getByTestId('card-skill-s-sql')).toBeTruthy()
+
+    await switchTo('slaves')
+    await switchTo('catalog')
+
+    await waitFor(() => expect(within(screen.getByTestId('catalog-row-t1')).getByTestId('card-skill-s-sql')).toBeTruthy())
+  })
+})
+
+describe('the hire sheet keeps its own filters (final review, finding 3)', () => {
+  beforeEach(() => {
+    mode = 'simple'
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    window.history.replaceState(null, '', '/workforce')
+  })
+
+  const stub = (): ReturnType<typeof vi.fn> => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/org/catalog?')) return new Response(JSON.stringify(catalogPage([])), { status: 200 })
+      if (url === '/api/org/catalog') {
+        return new Response(JSON.stringify(catalogPage([templateRow(), templateRow({ id: 't2', name: 'Verifier' })])), { status: 200 })
+      }
+      throw new Error(`unexpected fetch ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it("does not open pre-filtered by People's search", async () => {
+    window.history.replaceState(null, '', '/workforce?q=alice')
+    search = 'q=alice'
+    const fetchMock = stub()
+    render(<TestWorkforceClient catalog={catalogPage([])} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('hire-from-catalogue'))
+    })
+    const sheet = screen.getByTestId('hire-sheet')
+    expect((within(sheet).getByTestId('catalog-search') as HTMLInputElement).value).toBe('')
+    await waitFor(() => expect(within(sheet).getByTestId('catalog-row-t2')).toBeTruthy())
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/org/catalog?q=alice')
+  })
+
+  it("never writes its search into the URL, and leaves People's list alone", async () => {
+    window.history.replaceState(null, '', '/workforce')
+    const fetchMock = stub()
+    render(<TestWorkforceClient catalog={catalogPage([templateRow()])} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('hire-from-catalogue'))
+    })
+    await typeInto('catalog-search', 'builder', screen.getByTestId('hire-sheet'))
+
+    expect(window.location.search).toBe('')
+    expect(fetchMock).toHaveBeenCalledWith('/api/org/catalog?q=builder')
+    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/persons'))).toBe(false)
+    expect(shownPeople()).toEqual(['p1'])
+  })
+})
+
 describe('the catalog import surfaces', () => {
   const imported = templateRow({
     id: 't2',

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CapabilityRecord } from '@slave-of-ai/domain'
 import type { PeoplePageView, PersonCardRow, SkillCatalogueRow } from '../../server/persons'
 import { byCardOrder, type CardSkillRow } from '../../lib/cardSkills'
+import type { PageKeep } from '../../lib/pageKeep'
 import { peopleFilterParams, withPeopleFilter, type PeopleFilters, type PeopleState } from '../../lib/peopleFilters'
 import { plural } from '../../lib/plural'
 import { usePeopleFilters } from '../../hooks/usePeopleFilters'
@@ -85,6 +86,8 @@ export function PeopleCards({
   skillCatalogue,
   taxonomy,
   refreshKey = 0,
+  keep,
+  trustInitial = true,
   onOpen,
 }: {
   readonly initial: PeoplePageView
@@ -93,10 +96,16 @@ export function PeopleCards({
   readonly taxonomy: readonly CapabilityRecord[]
   /** Moves when the person sheet changed somebody (a skill, a seat): re-read what is loaded. */
   readonly refreshKey?: number
+  /** Where the loaded list waits while this tab is unmounted -- see {@link PageKeep}. */
+  readonly keep?: PageKeep<PeoplePageView>
+  /** Whether `initial` answers the URL this mounts under: true only for the tab the page LOADED
+   *  on, the first time it mounts. Any later first mount re-reads -- another tab may have moved a
+   *  shared filter, or written a skill these cards show. */
+  readonly trustInitial?: boolean
   readonly onOpen: (personId: string) => void
 }): React.JSX.Element {
   const { filters, setFilters } = usePeopleFilters()
-  const [page, setPage] = useState<PeoplePageView>(initial)
+  const [page, setPage] = useState<PeoplePageView>(() => keep?.current?.view ?? initial)
   const [stale, setStale] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
 
@@ -198,15 +207,28 @@ export function PeopleCards({
     resync(current.current.filters, Math.max(current.current.loaded, 1))
   }, [initial, resync])
 
-  // The first pass does not fetch: `initial` IS that answer (the catalog's rule).
+  // The first pass does not fetch when `initial` IS that answer (the catalog's rule). A REMOUNT
+  // (final review, finding 2) starts from the kept list and re-reads it: the same range under the
+  // same filters, or page one when a shared filter moved while this tab was away.
   const firstPass = useRef(true)
   useEffect(() => {
     if (firstPass.current) {
       firstPass.current = false
-      return
+      const kept = keep?.current ?? null
+      if (kept !== null) {
+        if (kept.query === peopleFilterParams(filters).toString()) resync(filters, Math.max(kept.view.rows.length, 1))
+        else reload(filters)
+        return
+      }
+      if (trustInitial) return
     }
     reload(filters)
-  }, [filters, reload])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `keep`/`trustInitial` are read on the first pass only
+  }, [filters, reload, resync])
+
+  useEffect(() => {
+    if (keep !== undefined) keep.current = { view: page, query: peopleFilterParams(filters).toString() }
+  }, [keep, page, filters])
 
   const shownKey = useRef(refreshKey)
   useEffect(() => {

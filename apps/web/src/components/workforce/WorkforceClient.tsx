@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useRef, useState, useMemo } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { CapabilityRecord } from '@slave-of-ai/domain'
 import type { AllSlavesPage, CatalogRowView, ProjectTeamRow, RosterCompany, RunbookRowView, WorkforceCatalogView } from '../../server/org'
@@ -9,6 +9,7 @@ import type { PeoplePageView, PersonDetail, PersonRow, SkillCatalogueRow } from 
 import type { EvidencePage } from '../../server/evidence'
 import type { SkillsPage } from '../../server/skills'
 import { useSelectedId } from '../../hooks/useSelectedId'
+import type { PageKeep } from '../../lib/pageKeep'
 import { CatalogImports, type CatalogImportRow } from '../CatalogImports'
 import { CompanyManager, type CompanyRow } from '../CompanyManager'
 import { DepartmentsTable } from '../DepartmentsTable'
@@ -159,6 +160,12 @@ export function WorkforceClient({
   useEffect((): void => {
     setTab(initialTab)
   }, [initialTab])
+  // Final review, finding 2: each list tab's loaded page outlives the tab unmounting, and only the
+  // tab the page LOADED on may take its server-rendered `initial` as-is -- a tab mounted later, or
+  // again, may be looking at a URL (a shared filter) or data (a skill write) that moved since.
+  const [loadTab] = useState(initialTab)
+  const peopleKeep = useRef<PageKeep<PeoplePageView>['current']>(null)
+  const catalogKeep = useRef<PageKeep<WorkforceCatalogView>['current']>(null)
   const [newOpen, setNewOpen] = useState(false)
   const [hireOpen, setHireOpen] = useState(false)
   const catalogPeople = useMemo(
@@ -306,6 +313,8 @@ export function WorkforceClient({
             taxonomy={taxonomy}
             // A change made in the person sheet (a skill, a seat) re-reads the cards behind it.
             refreshKey={personTick}
+            keep={peopleKeep}
+            trustInitial={loadTab === 'slaves'}
             onOpen={(personId) => setSelectedPerson(personId)}
           />
         </div>
@@ -323,7 +332,13 @@ export function WorkforceClient({
       {tab === 'catalog' && (
         <ScrollArea className="flex flex-col gap-4">
           <Panel title="Workforce catalog">
-            <WorkforceCatalog initial={catalog} taxonomy={taxonomy} skillCatalogue={skillCatalogue} />
+            <WorkforceCatalog
+              initial={catalog}
+              taxonomy={taxonomy}
+              skillCatalogue={skillCatalogue}
+              keep={catalogKeep}
+              trustInitial={loadTab === 'catalog'}
+            />
           </Panel>
           <Panel title="Companies">
             {/* M58 R5: a department holds PEOPLE, so the add-member form picks from everybody this
@@ -372,9 +387,11 @@ export function WorkforceClient({
       {/* `hire-from-catalogue`'s own Sheet (Task 9): the SAME `WorkforceCatalog`, fed the same
           props the Catalog tab passes it, opened without leaving the People a simple-mode
           operator was just looking at. Mounted unconditionally, like `NewSlaveDrawer` above --
-          `open` is what drives visibility. */}
+          `open` is what drives visibility. Its filters are its OWN (final review, finding 3): the
+          URL's belong to the People tab beside it, so the sheet opens unfiltered and reads its
+          own first page rather than trusting `catalog`, which was read under People's URL. */}
       <Sheet open={hireOpen} onClose={() => setHireOpen(false)} testId="hire-sheet" title="Hire from the catalogue" width="720px">
-        <WorkforceCatalog initial={catalog} taxonomy={taxonomy} skillCatalogue={skillCatalogue} />
+        <WorkforceCatalog initial={catalog} taxonomy={taxonomy} skillCatalogue={skillCatalogue} urlSync={false} trustInitial={false} />
       </Sheet>
       {/* The person panel (`panel` above), inside a `Sheet` rather than a hand-rolled fixed aside
           (Task 9) -- open for every non-idle `panel.kind`, so the loading and error states get the
