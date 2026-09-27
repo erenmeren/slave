@@ -56,8 +56,8 @@ export interface SweepDeps {
 
 export interface SweepReport {
   readonly timedOut: readonly RunId[]
-  /** Conductor R0: a `working` run whose stream said nothing for `RUN_STALL_MS` with no tool call
-   *  open -- a dead connection, not a slow answer. Ended the same way a timeout is: claimed,
+  /** Conductor R0: a `working` (or `pause_requested`) run whose stream said nothing for
+   *  `RUN_STALL_MS` with no tool call open -- a dead connection, not a slow answer. Ended the same way a timeout is: claimed,
    *  cancelled and announced (`run_stalled`), so the ordinary retry path takes over. */
   readonly stalled: readonly RunId[]
   readonly overToolCap: readonly RunId[]
@@ -710,8 +710,8 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     // A constrained run really is past its tool-call ceiling; giving the same fact a second name is
     // how a filter comes to miss half of it.
     const overCapNow = run.toolCalls > (run.toolCallCap ?? workspace.maxToolCallsPerRun)
-    // Conductor R0: a WORKING run whose stream has said nothing for RUN_STALL_MS with no tool call
-    // open is a dead connection, not a slow answer. Wall clock since the last output -- the stream
+    // Conductor R0: a working (or `pause_requested`, below) run whose stream has said nothing for
+    // RUN_STALL_MS with no tool call open is a dead connection, not a slow answer. Wall clock since the last output -- the stream
     // either spoke or it did not -- and never on a clock-jump pass, whose silence is the host's.
     //
     // ALSO never on this process's first pass of the workspace (controller ruling, fix round 1): a
@@ -719,13 +719,26 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     // right up until the process died -- `lastOutputAt`/`startedAt` reach back through the downtime
     // exactly as `observedFrom` does above, and the first pass has no reading of its own to trust
     // instead. The accrual block above caps the SAME two passes at one beat for the same reason.
+    //
+    // `pause_requested` too, not `working` alone (final review I1): the breaker's `no_progress` arm
+    // steers a silent implementation run at about five minutes, and a steer is a `requestPause` --
+    // the run moves to `pause_requested`, and a Claude pause lands only through the PreToolUse hook
+    // on the run's NEXT tool call. A dead stream never makes one, so a `working`-only check let the
+    // breaker's own steer carry exactly the runs this check exists for past it, to sit there until
+    // `runTimeoutMs`. A pause that cannot land because the stream is silent with no tool call open
+    // is itself proof of the stall. This does not contradict H6 (`beatBreaker`'s docstring): H6
+    // refuses to cancel a steered run for making no tool CALL, which a thinking run does for
+    // minutes; this cancels it for saying nothing AT ALL for fifteen, which a thinking run does not
+    // -- every line the stream prints, a thinking block included (it reaches the pump as `ignored`),
+    // resets `lastOutputAt`. Nothing double-acts: `beatBreaker` returns
+    // at once for any status but `working`, and the claim below takes the run out of both.
     const silentFrom = (run.lastOutputAt ?? run.startedAt).getTime()
     const stalledNow =
       !timedOutNow &&
       !overCapNow &&
       !clockJumped &&
       !firstPassOfProcess &&
-      run.status === 'working' &&
+      (run.status === 'working' || run.status === 'pause_requested') &&
       run.toolCallOpenSince === null &&
       now - silentFrom > RUN_STALL_MS
     // M51 R2/E6. The breaker is evaluated here, INSIDE the branch that used to `continue`, which is

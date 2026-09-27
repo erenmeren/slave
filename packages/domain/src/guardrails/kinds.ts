@@ -42,8 +42,8 @@ export const GUARDRAIL_KINDS = [
    *  `circuit_breaker` above, which is how the two compose. */
   'behavioural_loop',
   'run_timeout',
-  /** Conductor R0: a `working` run whose stream said nothing for `RUN_STALL_MS` with no tool call
-   *  open -- a dead connection, not a slow answer. Right after `run_timeout`: both are the sweep's
+  /** Conductor R0: a `working` (or `pause_requested`) run whose stream said nothing for
+   *  `RUN_STALL_MS` with no tool call open -- a dead connection, not a slow answer. Right after `run_timeout`: both are the sweep's
    *  hard-limit path over a run's wall clock, and this one is the newer of the two. */
   'run_stalled',
   'tool_call_ceiling',

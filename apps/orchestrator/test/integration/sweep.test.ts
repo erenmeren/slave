@@ -423,6 +423,33 @@ describe('sweep and reconcileOrphans', () => {
       expect(report.stalled).toEqual([quiet.id])
     })
 
+    it('ends a pause_requested run whose stream went silent with no tool call open: its pause can never land', async (): Promise<void> => {
+      // Final review I1: the breaker's `no_progress` arm steers a silent implementation run at
+      // about five minutes, which puts it in `pause_requested` -- and a Claude pause lands only
+      // through the PreToolUse hook on the NEXT tool call, which a dead stream never makes. Judging
+      // `working` alone left exactly the runs this check exists for parked there until the
+      // workspace's run timeout.
+      const run = await givenRun({ status: 'pause_requested', pid: process.pid, startedAt: minutesAgo(20), lastOutputAt: minutesAgo(16) })
+      noteSweepAt(deps.workspaceId, secondsAgo(1).getTime())
+
+      const report = await sweep(deps)
+
+      expect(report.stalled).toEqual([run.id])
+      expect(report.timedOut).toEqual([])
+      expect(cancelled).toEqual([run.id])
+      const tripped = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'guardrail_tripped' } })
+      expect((tripped.payload as { guardrail: string }).guardrail).toBe('run_stalled')
+      expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('stopping')
+    })
+
+    it('leaves a pause_requested run alone while a tool call is open: that call is where its pause lands', async (): Promise<void> => {
+      await givenRun({ status: 'pause_requested', pid: process.pid, startedAt: minutesAgo(20), lastOutputAt: minutesAgo(16), toolCallOpenSince: minutesAgo(16) })
+      noteSweepAt(deps.workspaceId, secondsAgo(1).getTime())
+      const report = await sweep(deps)
+      expect(report.stalled).toEqual([])
+      expect(cancelled).toEqual([])
+    })
+
     it('does not call a run stalled on the pass after a clock jump', async (): Promise<void> => {
       await givenRun({ status: 'working', pid: process.pid, startedAt: minutesAgo(20), lastOutputAt: minutesAgo(16) })
       noteSweepAt(deps.workspaceId, Date.now() - CLOCK_JUMP_MS - 60_000)
