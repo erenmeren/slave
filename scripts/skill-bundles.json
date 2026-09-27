@@ -1,0 +1,112 @@
+{
+  "$comment": "Default skills per persona, applied by scripts/equip-specialists.mjs. A skill is <provider>/<name> as the catalog records it; library:* skills live in ~/.slaveofai/skill-library/<source>/ with a SOURCE.json naming the upstream repo, commit, licence and local patches. Additive only: the script never removes a link.",
+  "bundles": {
+    "base": [
+      "plugin:superpowers/test-driven-development",
+      "plugin:superpowers/systematic-debugging",
+      "plugin:superpowers/verification-before-completion"
+    ],
+    "typescript": [
+      "library:wshobson/typescript-advanced-types",
+      "library:wshobson/javascript-testing-patterns"
+    ],
+    "python": [
+      "library:wshobson/python-testing-patterns",
+      "library:wshobson/python-type-safety",
+      "library:wshobson/python-anti-patterns",
+      "library:wshobson/python-error-handling"
+    ],
+    "backend": [
+      "library:wshobson/error-handling-patterns",
+      "library:ecc/api-design"
+    ],
+    "database": [
+      "library:wshobson/postgresql-table-design",
+      "library:wshobson/sql-optimization-patterns"
+    ],
+    "frontend": [
+      "library:vercel/vercel-react-best-practices",
+      "library:ecc/react-testing",
+      "library:wshobson/accessibility-compliance",
+      "plugin:frontend-design/frontend-design"
+    ],
+    "review": [
+      "library:wshobson/code-review-excellence",
+      "library:sentry/find-bugs",
+      "library:trailofbits/sharp-edges"
+    ],
+    "security": [
+      "library:sentry/owasp-security-review",
+      "library:sentry/gha-security-review",
+      "library:sentry/find-bugs",
+      "library:trailofbits/sharp-edges",
+      "library:trailofbits/supply-chain-risk-auditor"
+    ],
+    "testing": [
+      "library:trailofbits/property-based-testing",
+      "library:wshobson/javascript-testing-patterns",
+      "library:wshobson/python-testing-patterns"
+    ],
+    "devops": [
+      "library:wshobson/github-actions-templates",
+      "library:ecc/docker-patterns"
+    ],
+    "docs": [
+      "library:wshobson/openapi-spec-generation",
+      "library:wshobson/architecture-decision-records"
+    ],
+    "design": [
+      "personal/emil-design-eng",
+      "personal/apple-design",
+      "personal/review-animations",
+      "plugin:frontend-design/frontend-design",
+      "plugin:taste-skill/design-taste-frontend",
+      "plugin:taste-skill/redesign-existing-projects",
+      "library:wshobson/accessibility-compliance"
+    ]
+  },
+  "divisions": {
+    "engineering": ["base"],
+    "testing": ["base", "testing"],
+    "security": ["security"],
+    "design": ["design"]
+  },
+  "personas": {
+    "Senior Developer": ["typescript", "python", "backend"],
+    "Software Architect": ["typescript", "python", "backend", "database", "docs"],
+    "Rapid Prototyper": ["typescript", "python", "backend"],
+    "Minimal Change Engineer": ["typescript", "python", "backend"],
+    "Codebase Onboarding Engineer": ["typescript", "python"],
+    "Developer Tooling Engineer": ["typescript", "python", "devops"],
+    "Backend Architect": ["typescript", "python", "backend", "database", "docs"],
+    "API Platform Engineer": ["typescript", "python", "backend", "database", "docs"],
+    "Payments & Billing Engineer": ["typescript", "backend", "database"],
+    "Realtime Collaboration Engineer": ["typescript", "backend"],
+    "Identity & Access Engineer": ["typescript", "backend", "security"],
+    "Privacy Engineer": ["security"],
+    "Database Optimizer": ["python", "database"],
+    "Database Reliability Engineer": ["database", "devops"],
+    "Data Engineer": ["python", "database"],
+    "Frontend Developer": ["typescript", "frontend"],
+    "Data Visualization Engineer": ["typescript", "frontend"],
+    "Section 508 Accessibility Specialist": ["frontend"],
+    "USWDS Developer": ["frontend"],
+    "AI Engineer": ["python", "backend"],
+    "RAG Pipeline Engineer": ["python", "database"],
+    "LLM Post-Training Engineer": ["python"],
+    "Search Relevance Engineer": ["python", "database"],
+    "Knowledge Graph Engineer": ["python", "database"],
+    "AI Data Remediation Engineer": ["python"],
+    "DevOps Automator": ["devops"],
+    "Platform Engineer": ["devops"],
+    "SRE (Site Reliability Engineer)": ["devops"],
+    "Code Reviewer": ["review", "typescript", "python"],
+    "Technical Writer": ["docs"],
+    "MCP Builder": ["base", "typescript", "backend"],
+    "Model QA Specialist": ["python", "testing"],
+    "Reality Checker": ["review"],
+    "Evidence Collector": ["review"],
+    "Accessibility Auditor": ["frontend"],
+    "API Tester": ["backend"]
+  }
+}

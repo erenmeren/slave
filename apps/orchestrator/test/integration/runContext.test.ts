@@ -64,7 +64,7 @@ interface Fixture {
   readonly repoPath: string
   readonly worktreePath: string
   readonly branch: string
-  readonly skillRoots: { personal: string; pluginCache: string; project: string }
+  readonly skillRoots: { personal: string; pluginCache: string; project: string; library: string }
 }
 
 /** The builder's own hash, spelled again here rather than imported: a test that reused the
@@ -83,6 +83,7 @@ async function seed(options: { readonly profile?: string } = {}): Promise<Fixtur
     personal: join(skillRoot, 'personal'),
     pluginCache: join(skillRoot, 'plugins'),
     project: join(skillRoot, 'project'),
+    library: join(skillRoot, 'library'),
   }
   mkdirSync(skillRoots.personal, { recursive: true })
 
@@ -145,7 +146,12 @@ async function assign(
   const providerName = options.provider ?? 'personal'
   const description = options.description ?? `does ${name}`
   if (options.onDisk !== false) {
-    const root = providerName === 'project' ? fixture.skillRoots.project : fixture.skillRoots.personal
+    const root =
+      providerName === 'project'
+        ? fixture.skillRoots.project
+        : providerName.startsWith('library:')
+          ? join(fixture.skillRoots.library, providerName.slice('library:'.length))
+          : fixture.skillRoots.personal
     writeSkillDir(root, name, description)
   }
   const provider = await prisma.skillProvider.upsert({
@@ -509,6 +515,20 @@ describe('buildRunContext', () => {
       expect(skillsSource(manifest)).toMatchObject({ copied: [], shadowedByRepo: ['house-style'] })
       // Still offered to the slave: the CLI discovers the repository's own copy either way.
       expect(prompt).toContain('house-style')
+      expect(git(['status', '--porcelain'], fixture.worktreePath)).toBe('')
+    })
+
+    it('copies a skill from the skill library, its reference files with it', async () => {
+      await assign(fixture, 'sharp-edges', { provider: 'library:trailofbits', description: 'finds footguns' })
+      mkdirSync(join(fixture.skillRoots.library, 'trailofbits', 'sharp-edges', 'references'), { recursive: true })
+      writeFileSync(join(fixture.skillRoots.library, 'trailofbits', 'sharp-edges', 'references', 'lang.md'), '# notes\n')
+
+      const { prompt, manifest } = await buildImplementation(fixture)
+
+      expect(skillsSource(manifest)).toMatchObject({ copied: ['sharp-edges'], missing: [] })
+      expect(existsSync(join(fixture.worktreePath, '.claude/skills/sharp-edges/SKILL.md'))).toBe(true)
+      expect(existsSync(join(fixture.worktreePath, '.claude/skills/sharp-edges/references/lang.md'))).toBe(true)
+      expect(prompt).toContain('sharp-edges')
       expect(git(['status', '--porcelain'], fixture.worktreePath)).toBe('')
     })
 

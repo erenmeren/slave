@@ -380,6 +380,15 @@ something that is not there. A skill your repository ships itself is left alone 
 `shadowedByRepo`: the runtime discovers the repo's own copy anyway, and overwriting it would put a
 diff in front of your merge.
 
+Skills come from four places: your own `~/.claude/skills` (🧩), your Claude Code plugins (🔌), the
+repository's `.claude/skills`, and the **skill library** at `~/.slaveofai/skill-library/<source>/<skill>/`
+(📚, provider `library:<source>`). The library is for skills you install *for the slaves* — a
+third-party collection you want your specialists to carry — without loading them into your own
+Claude Code sessions: nothing there is visible to anyone until it is assigned. Drop a source's
+skill directories in, then run `npm run orchestrator -- skills sync` (the daemon also syncs on
+start). The Docker image does not mount the library; set `SLAVEOFAI_SKILL_ROOTS_JSON` with a
+`library` path to point it somewhere else.
+
 Nothing that is copied in shows up in `git status`, because the injected paths are added to **the
 repository's `info/exclude`** (`git rev-parse --git-path info/exclude`) rather than to a
 `.gitignore`, which would itself be a file in the tree. Two consequences worth knowing, both

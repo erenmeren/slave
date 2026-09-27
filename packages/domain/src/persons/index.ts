@@ -10,6 +10,7 @@ export {
   PROCESS_SKILL_NAMES,
   PROCESS_SKILL_PROVIDERS,
   PROCESS_SKILL_WARNING,
+  WORKING_DISCIPLINE_SKILL_NAMES,
   isProcessSkill,
   skillSourceOf,
   type SkillSource,
