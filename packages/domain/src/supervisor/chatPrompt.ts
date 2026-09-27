@@ -44,9 +44,11 @@ export const CHAT_ATTACHMENT_CHARS = 20_000
 export const CHAT_ATTACHMENTS_TOTAL_CHARS = 60_000
 
 /** The longest single message -- the person's own, and each turn of the history -- this prompt
- *  carries. `INTAKE_MESSAGE_MAX_CHARS`' own number and its own reason: eight thousand characters is
- *  a long description and a short document, and past it the person is pasting a specification,
- *  which belongs in the goal or in an attachment where the budgets above can see it. */
+ *  carries. Eight thousand characters is a long description and a short document, and past it the
+ *  person is pasting a specification, which belongs in the goal or in an attachment where the
+ *  budgets above can see it. Intake's cap was this number until a large project's brief could not
+ *  enter intake at all; it is now `INTAKE_BRIEF_MAX_CHARS`, because there the brief IS the
+ *  specification and has nowhere else to go, while here an attachment is where one belongs. */
 export const CHAT_MESSAGE_MAX_CHARS = 8_000
 
 /**

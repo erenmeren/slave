@@ -368,7 +368,7 @@ export type ControlRefusal =
   /** M59 R12: the conversation has used its `INTAKE_MAX_MODEL_CALLS` turns. Not an error about the
    *  person and the sentence says so -- the form is still there, pre-filled. */
   | { readonly kind: 'intake_budget_exhausted'; readonly intakeId: string; readonly calls: number }
-  /** M59 R6: a blank message, or one past `INTAKE_MESSAGE_MAX_CHARS`. Supervisor chat R1 reuses it
+  /** M59 R6: a blank message, or one past `INTAKE_BRIEF_MAX_CHARS`. Supervisor chat R1 reuses it
    *  for a chat message past `CHAT_MESSAGE_MAX_CHARS` and for a blank note for the planner: it is
    *  the same fact about the same kind of input, and a new kind would cost three homes to say it. */
   | { readonly kind: 'invalid_message'; readonly reason: string }

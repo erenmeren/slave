@@ -103,19 +103,38 @@ export const INTAKE_PER_CALL_CAP_USD = SUPERVISOR_PER_CALL_CAP_USD
  *  process that died holding it. */
 export const INTAKE_CLAIM_TTL_MS = 5 * 60_000
 
-/** The longest single message a person may send. Eight thousand characters is a long description
- *  of a project and a short document; past it the person is pasting a specification, and the goal
- *  field (also 8000) is where that belongs. */
-export const INTAKE_MESSAGE_MAX_CHARS = 8_000
+/**
+ * The longest brief intake carries WHOLE: one message a person sends, the goal a draft proposes
+ * (`intakeDraftSchema`), a person's line as the model reads it (`buildIntakePrompt`) and the
+ * person's words `acceptIntake` records as the goal's `request`.
+ *
+ * ONE NUMBER FOR ALL FOUR, because they are one text at four stops. The brief a person pastes is
+ * the goal the draft restates, the line the model drafts from and the request the Supervisor
+ * conversation opens with; a smaller cap at any one stop silently cuts the brief there while the
+ * others accept it whole. That is exactly what happened before: the message and the goal stopped at
+ * 8000, the prompt cut the person's line at 4000 ({@link INTAKE_TEXT_MAX_CHARS}, the cap on what the
+ * MODEL may say, applied to the person too) and the request at 4000 -- so a large project's brief
+ * (19.5k characters, the benchmark's large case) could not enter intake at all, and one that had
+ * would have been drafted from its first fifth.
+ *
+ * WHY 32 000. The size of a real specification with room over the largest one measured (19.5k): a
+ * project that big is described in a document, and asking the person to cut their document to fit
+ * a text box loses precisely the detail a large project needs. It stays a CAP rather than none
+ * because every character is re-sent on each of up to {@link INTAKE_MAX_MODEL_CALLS} calls: the
+ * worst case, a conversation of full-length messages, is a few hundred thousand characters per
+ * call -- well inside a model's context and {@link INTAKE_PER_CALL_CAP_USD}, where an unbounded
+ * message is neither.
+ *
+ * `set-goal` has no cap at all; this one is only intake's, and it is not the Supervisor chat's
+ * (`CHAT_MESSAGE_MAX_CHARS`, which has its own budget and its own reason).
+ */
+export const INTAKE_BRIEF_MAX_CHARS = 32_000
 
 /** The longest `text` a model may hand back in one answer -- `ANSWER_MAX_CHARS`' own number and
  *  its own reason (`../supervisor/constants.ts`): past it the model has stopped answering and
  *  started writing the project. */
 export const INTAKE_TEXT_MAX_CHARS = 4_000
 
-/** How much of the human half of the transcript `acceptIntake` puts on the `workspace.goal_set`
- *  event as its `request` (M59 R10 step 4). The same cap for the same reason. */
-export const INTAKE_TRANSCRIPT_MAX_CHARS = 4_000
 
 /**
  * The gate a project whose repository did not exist yet is created with (M60 §7b).

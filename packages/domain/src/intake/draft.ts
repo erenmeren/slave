@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { PROVIDER_KINDS } from '../provider/kind.js'
-import { INTAKE_MAX_RUNTIME_ROLES, INTAKE_MAX_SEATS_PER_TEMPLATE, INTAKE_STEPS, INTAKE_STEP_STATUSES } from './constants.js'
+import { INTAKE_BRIEF_MAX_CHARS, INTAKE_MAX_RUNTIME_ROLES, INTAKE_MAX_SEATS_PER_TEMPLATE, INTAKE_STEPS, INTAKE_STEP_STATUSES } from './constants.js'
 
 /**
  * Where a verify command came from (M59 R8), and the difference is enforced rather than decorative:
@@ -59,7 +59,10 @@ export type IntakeSeat = z.infer<typeof intakeSeatSchema>
  */
 export const intakeDraftSchema = z.object({
   name: z.string().trim().min(1).max(80),
-  goal: z.string().trim().min(1).max(8_000),
+  // The brief's own cap, not a smaller one of its own: a draft's goal restates the brief the person
+  // sent, and a goal cap below the message cap refused the WHOLE draft of a large project -- the
+  // model could not write back what it had just been told (`INTAKE_BRIEF_MAX_CHARS`).
+  goal: z.string().trim().min(1).max(INTAKE_BRIEF_MAX_CHARS),
   repo: z.discriminatedUnion('mode', [
     z.object({ mode: z.literal('existing'), path: z.string().trim().min(1).max(4_096) }),
     z.object({ mode: z.literal('new'), path: z.string().trim().min(1).max(4_096).nullable() }),

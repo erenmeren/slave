@@ -8,12 +8,11 @@ import {
   INTAKE_BOOTSTRAP_VERIFY_COMMAND,
   INTAKE_BOOTSTRAP_VERIFY_SCRIPT,
   INTAKE_BOOTSTRAP_VERIFY_SCRIPT_PATH,
+  INTAKE_BRIEF_MAX_CHARS,
   INTAKE_CATALOGUE_MAX,
   INTAKE_CLAIM_TTL_MS,
   INTAKE_MAX_MODEL_CALLS,
-  INTAKE_MESSAGE_MAX_CHARS,
   INTAKE_STEPS,
-  INTAKE_TRANSCRIPT_MAX_CHARS,
   SUPERVISOR_DEFAULT_PROVIDER,
   err,
   factsSummary,
@@ -228,10 +227,12 @@ export async function sendIntakeMessage(
 ): Promise<Result<{ readonly seq: number }, ControlRefusal>> {
   const message = text.trim()
   if (message === '') return err({ kind: 'invalid_message', reason: 'a message must not be blank' })
-  if (message.length > INTAKE_MESSAGE_MAX_CHARS) {
+  // The brief's cap (`INTAKE_BRIEF_MAX_CHARS`): a large project's specification is sent here as
+  // one message, and the prompt, the draft's goal and the recorded request all carry that many.
+  if (message.length > INTAKE_BRIEF_MAX_CHARS) {
     return err({
       kind: 'invalid_message',
-      reason: `a message must be at most ${String(INTAKE_MESSAGE_MAX_CHARS)} characters; this one is ${String(message.length)}`,
+      reason: `a message must be at most ${String(INTAKE_BRIEF_MAX_CHARS)} characters; this one is ${String(message.length)}`,
     })
   }
 
@@ -563,15 +564,24 @@ async function appendStep(intakeId: string, entry: IntakeStepEntry): Promise<voi
   })
 }
 
-/** The human half of the conversation, joined and capped -- what `setGoal` records as the REQUEST
- *  so the project's Supervisor conversation opens with the words the person actually typed (M57 R9
- *  groups `workspace.goal_set` into threads). */
+/**
+ * The human half of the conversation, joined and capped -- what `setGoal` records as the REQUEST
+ * so the project's Supervisor conversation opens with the words the person actually typed (M57 R9
+ * groups `workspace.goal_set` into threads).
+ *
+ * Capped at the BRIEF's number, so the first message -- the brief itself, however long intake let
+ * it be -- is always recorded whole; a cap below the message cap (it was 4000) opened a large
+ * project's thread with the first fifth of its specification. Nothing downstream needs it smaller:
+ * the same event already carries the whole goal document, `requestChange` records a request of any
+ * length, and every prompt that quotes one caps it at its own budget (`CHAT_MESSAGE_MAX_CHARS`,
+ * `ANSWER_MAX_CHARS` on a feed sentence).
+ */
 function transcriptSummary(messages: readonly IntakeMessageView[]): string {
   return messages
     .filter((message) => message.role === 'human')
     .map((message) => message.text)
     .join('\n')
-    .slice(0, INTAKE_TRANSCRIPT_MAX_CHARS)
+    .slice(0, INTAKE_BRIEF_MAX_CHARS)
 }
 
 /**

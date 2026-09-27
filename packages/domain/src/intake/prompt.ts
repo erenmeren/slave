@@ -5,7 +5,13 @@ import {
 } from '../external/fence.js'
 import { neutraliseMarkers } from '../run-context/markers.js'
 import { REVIEWER_ROLE } from '../supervisor/constants.js'
-import { INTAKE_MAX_SEATS_PER_TEMPLATE, INTAKE_PROMPT_MESSAGES_MAX, INTAKE_TEXT_MAX_CHARS, type IntakeRole } from './constants.js'
+import {
+  INTAKE_BRIEF_MAX_CHARS,
+  INTAKE_MAX_SEATS_PER_TEMPLATE,
+  INTAKE_PROMPT_MESSAGES_MAX,
+  INTAKE_TEXT_MAX_CHARS,
+  type IntakeRole,
+} from './constants.js'
 import type { IntakeFacts } from './facts.js'
 
 /**
@@ -23,6 +29,21 @@ const SPEAKER: Record<IntakeRole, string> = {
   human: 'PERSON',
   assistant: 'YOU',
   fact: 'FOUND',
+}
+
+/**
+ * How much of one transcript line the model reads, by who said it.
+ *
+ * The PERSON's line is carried as long as intake accepts it ({@link INTAKE_BRIEF_MAX_CHARS}): it is
+ * the brief the draft is written from, and a large project's brief cut here was drafted from its
+ * first four thousand characters while the message row held all of it. The model's own lines and
+ * the fact summaries keep {@link INTAKE_TEXT_MAX_CHARS} -- the answer schema already holds the model
+ * to it, and a fact line is this system's one-sentence summary of what detection found.
+ */
+const LINE_MAX_CHARS: Record<IntakeRole, number> = {
+  human: INTAKE_BRIEF_MAX_CHARS,
+  assistant: INTAKE_TEXT_MAX_CHARS,
+  fact: INTAKE_TEXT_MAX_CHARS,
 }
 
 /**
@@ -95,7 +116,7 @@ export function buildIntakePrompt(input: {
   ]
 
   for (const line of recent) {
-    blocks.push(`${SPEAKER[line.role]}: ${line.text.slice(0, INTAKE_TEXT_MAX_CHARS)}`)
+    blocks.push(`${SPEAKER[line.role]}: ${line.text.slice(0, LINE_MAX_CHARS[line.role])}`)
   }
 
   blocks.push('', 'FACTS')
