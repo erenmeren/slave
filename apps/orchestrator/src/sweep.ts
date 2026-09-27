@@ -19,6 +19,7 @@ import {
   detectBehaviour,
   type GuardrailKind,
   runId as brandRunId,
+  RUN_STALL_MS,
   steerTextFor,
   type RunId,
   type RunStatus,
@@ -55,6 +56,10 @@ export interface SweepDeps {
 
 export interface SweepReport {
   readonly timedOut: readonly RunId[]
+  /** Conductor R0: a `working` run whose stream said nothing for `RUN_STALL_MS` with no tool call
+   *  open -- a dead connection, not a slow answer. Ended the same way a timeout is: claimed,
+   *  cancelled and announced (`run_stalled`), so the ordinary retry path takes over. */
+  readonly stalled: readonly RunId[]
   readonly overToolCap: readonly RunId[]
   readonly deadPids: readonly RunId[]
   /** Task ids whose `activeRunId` pointed at a run that was already over (M42 t1, spec R6a). */
@@ -597,6 +602,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
   })
 
   const timedOut: RunId[] = []
+  const stalled: RunId[] = []
   const overToolCap: RunId[] = []
   const deadPids: RunId[] = []
   const stoppingConcluded: RunId[] = []
@@ -704,11 +710,29 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     // A constrained run really is past its tool-call ceiling; giving the same fact a second name is
     // how a filter comes to miss half of it.
     const overCapNow = run.toolCalls > (run.toolCallCap ?? workspace.maxToolCallsPerRun)
+    // Conductor R0: a WORKING run whose stream has said nothing for RUN_STALL_MS with no tool call
+    // open is a dead connection, not a slow answer. Wall clock since the last output -- the stream
+    // either spoke or it did not -- and never on a clock-jump pass, whose silence is the host's.
+    //
+    // ALSO never on this process's first pass of the workspace (controller ruling, fix round 1): a
+    // freshly restarted daemon cannot know whether the stream was silent while it was down or spoke
+    // right up until the process died -- `lastOutputAt`/`startedAt` reach back through the downtime
+    // exactly as `observedFrom` does above, and the first pass has no reading of its own to trust
+    // instead. The accrual block above caps the SAME two passes at one beat for the same reason.
+    const silentFrom = (run.lastOutputAt ?? run.startedAt).getTime()
+    const stalledNow =
+      !timedOutNow &&
+      !overCapNow &&
+      !clockJumped &&
+      !firstPassOfProcess &&
+      run.status === 'working' &&
+      run.toolCallOpenSince === null &&
+      now - silentFrom > RUN_STALL_MS
     // M51 R2/E6. The breaker is evaluated here, INSIDE the branch that used to `continue`, which is
     // also exactly what "after the hard limits" means: a run past its timeout or its ceiling is
     // stopped for THAT reason and never reaches the breaker, so one run is never stopped twice
     // under two names. Everything below this line is the hard-limit path, untouched.
-    if (!timedOutNow && !overCapNow) {
+    if (!timedOutNow && !overCapNow && !stalledNow) {
       // The one `try` in this loop, and it is the breaker's whole "nothing here may throw" promise
       // made good at the boundary rather than asserted inside: this pass spawns git, reads the
       // event log and calls two control verbs, and one of them (`requestPause`, through
@@ -743,6 +767,9 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
       const ceiling = run.toolCallCap ?? workspace.maxToolCallsPerRun
       breaches.push(`it has made ${run.toolCalls} tool calls, past the ceiling of ${ceiling}`)
     }
+    if (stalledNow) {
+      breaches.push(`silent for ${Math.round((now - silentFrom) / 60_000)} min with no tool call open`)
+    }
 
     // Claim the run before cancelling it, exactly as the tick claims a task. `cancel` awaits the
     // child's exit, so by the time it returns the pump has very plausibly written the terminal row
@@ -767,6 +794,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
 
     if (timedOutNow) timedOut.push(brandRunId(run.id))
     if (overCapNow) overToolCap.push(brandRunId(run.id))
+    if (stalledNow) stalled.push(brandRunId(run.id))
 
     // A failure here makes the event louder rather than silencing it -- the third time this
     // milestone has needed saying.
@@ -804,7 +832,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
       runId: run.id,
       actor: 'system',
       payload: {
-        guardrail: (timedOutNow ? 'run_timeout' : 'tool_call_ceiling') satisfies GuardrailKind,
+        guardrail: (timedOutNow ? 'run_timeout' : overCapNow ? 'tool_call_ceiling' : 'run_stalled') satisfies GuardrailKind,
         detail:
           `cancelling this run: ${breaches.join('; ')}` +
           (cancelError === null
@@ -821,6 +849,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
 
   return {
     timedOut,
+    stalled,
     overToolCap,
     deadPids,
     strandedClaims,

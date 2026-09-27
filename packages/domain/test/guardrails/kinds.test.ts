@@ -6,7 +6,10 @@ describe('GUARDRAIL_KINDS', () => {
   it('is the closed list of every spelling this codebase writes, plus M51 behavioural_loop', () => {
     // Eighteen, not seventeen (final wave, I1/E21): `verify.ts` writes `verify_not_configured` and
     // the inventory R4 was written from missed it, so the activity card printed the raw key.
-    expect(GUARDRAIL_KINDS).toHaveLength(18)
+    //
+    // Nineteen since conductor Task 3 (R0): `sweep.ts` also writes `run_stalled`, for a `working`
+    // run whose stream went silent with nothing running.
+    expect(GUARDRAIL_KINDS).toHaveLength(19)
     expect(GUARDRAIL_KINDS).toEqual([
       'emergency_stop',
       'concurrency',
@@ -16,6 +19,7 @@ describe('GUARDRAIL_KINDS', () => {
       'circuit_breaker',
       'behavioural_loop',
       'run_timeout',
+      'run_stalled',
       'tool_call_ceiling',
       'pause_gate',
       'permission_mode',
