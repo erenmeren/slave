@@ -13,6 +13,7 @@ import {
   PROFILE_MAX_CHARS,
   REPLAN_INSTRUCTIONS,
   REVIEW_VERDICT_INSTRUCTIONS,
+  emptyProfileSpec,
   runContextManifestSchema,
   type Manifest,
 } from '@slave-of-ai/domain'
@@ -72,6 +73,12 @@ interface Fixture {
 /** The builder's own hash, spelled again here rather than imported: a test that reused the
  *  implementation's helper would agree with whatever it computed. */
 const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex')
+
+/** A `ProfileSpec` with every field blank, the same fixture `packages/domain/test/profile/*.test.ts`
+ *  builds tests on top of (conductor R6): what this file needs is a shape `profileSpecSchema`
+ *  accepts, not a persona with anything to say, so the emptied spec plus one field this describe
+ *  sets is the whole fixture. */
+const MINIMAL_PROFILE_SPEC = emptyProfileSpec()
 
 const repos: string[] = []
 const skillTrees: string[] = []
@@ -637,6 +644,33 @@ describe('buildRunContext', () => {
       })
       expect(prompt).toContain('This runtime has no skills mechanism')
       expect(prompt).not.toContain('Never inline me for cursor.')
+    })
+  })
+
+  describe('the persona workflow (conductor R6)', () => {
+    it("renders the persona's workflow as a numbered checklist the worker must report on", async () => {
+      const template = await prisma.slaveTemplate.create({
+        data: {
+          name: 'Workflow Persona', role: 'engineering', profile: 'You follow a workflow.',
+          // `as unknown as object`: the same cast every other fixture in this repository uses to
+          // hand a `ProfileSpec` (whose list fields are `readonly string[]`) to a Prisma `Json?`
+          // column, which wants a plain mutable-array JSON value (`cli.test.ts`, `daemon.test.ts`,
+          // `packages/control/test/integration/*`).
+          profileSpec: { ...MINIMAL_PROFILE_SPEC, workflow: ['Read the brief back', 'Write the failing test', 'Make it pass'] } as unknown as object,
+        },
+      })
+      await prisma.person.update({ where: { id: fixture.personId }, data: { templateId: template.id } })
+
+      const { prompt, manifest } = await buildImplementation(fixture)
+
+      expect(prompt).toContain('YOUR WORKFLOW')
+      expect(prompt).toMatch(/1\. Read the brief back\n2\. Write the failing test\n3\. Make it pass/)
+      expect(manifest.sections.find((s) => s.kind === 'workflow')).toEqual({ kind: 'workflow', steps: 3, origin: 'template' })
+    })
+
+    it('has no workflow section for a persona without one', async () => {
+      const { manifest } = await buildImplementation(fixture)
+      expect(manifest.sections.some((s) => s.kind === 'workflow')).toBe(false)
     })
   })
 

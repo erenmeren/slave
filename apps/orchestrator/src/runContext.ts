@@ -11,11 +11,14 @@ import {
   TERMINAL,
   defuseRoutingLiterals,
   effectiveProfileFor,
+  effectiveProfileSpec,
   effectiveSkills,
   fitSkillBodies,
   handoffCanonicalJson,
   neutraliseMarkers,
   parseHandoffContract,
+  profileOverridesSchema,
+  profileSpecSchema,
   providerRunsSkills,
   renderHandoff,
   renderRunContext,
@@ -791,7 +794,10 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     include: {
       person: {
         include: {
-          template: { select: { profile: true } },
+          // `profileSpec`/`profileOverrides` ride along for the `workflow` section below (conductor
+          // R6): the checklist is the persona's own `ProfileSpec.workflow`, which lives on the
+          // template and nowhere the seat -> person chain also carries a `profile` string.
+          template: { select: { profile: true, profileSpec: true, profileOverrides: true } },
           skills: { include: { skill: { include: { provider: true } } } },
         },
       },
@@ -960,6 +966,45 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
           : {}),
       },
     })
+  }
+
+  // 3b. How to do it, in order (conductor R6, spec R6). A persona's `workflow` field is a list of
+  // steps like any other in `ProfileSpec` (`profile/spec.ts`), and before this it reached a run only
+  // as bullets inside the rendered `WHO YOU ARE` Markdown -- indistinguishable from `capabilities` or
+  // `expertise`, and nothing told the worker to actually follow it or account for having done so.
+  // Read straight off the template's own columns rather than the rendered `profile` string:
+  // `effectiveProfileFor` above composes seat -> person -> template into ONE piece of prose meant to
+  // be read as a whole, and picking a `## Workflow` heading back out of that Markdown would be
+  // parsing a rendering this function itself produced. `profileSpec`/`profileOverrides` are the
+  // structured source those words came from, and `effectiveProfileSpec` is the one function that
+  // already knows how to combine them (R1 upstream + local rule) -- reusing it here is the same
+  // rule `renderProfileSpec` follows, applied to one field instead of all of them.
+  if (order.includes('workflow')) {
+    // READ-tolerant like every other manifest source (`sections.ts`'s idiom): a hand-edited column,
+    // or simply no `SlaveTemplate` at all (`template?` above), parses as "nothing to say" rather
+    // than refusing the whole dispatch over a field this run does not even use.
+    const spec = profileSpecSchema.safeParse(slave.person.template?.profileSpec)
+    const overrides = profileOverridesSchema.safeParse(slave.person.template?.profileOverrides ?? {})
+    const steps = spec.success
+      ? effectiveProfileSpec(spec.data, overrides.success ? overrides.data : {})
+          .workflow.map((step) => step.trim())
+          .filter((step) => step !== '')
+      : []
+    // A spec with a `workflow` field of all-blank strings is "no workflow" (final review), the same
+    // as `renderProfileSpec`'s `sectionText` treating an empty list as nothing to render -- a
+    // section that names zero steps is not a checklist, it is noise.
+    if (steps.length > 0) {
+      sections.push({
+        kind: 'workflow',
+        text: block('YOUR WORKFLOW', [
+          'Work through these steps in order. In your final message, say for each step whether you did it',
+          'and, if you skipped one, why.',
+          '',
+          ...steps.map((step, index) => `${index + 1}. ${neutraliseMarkers(step)}`),
+        ]),
+        source: { kind: 'workflow', steps: steps.length, origin: 'template' },
+      })
+    }
   }
 
   // 4. What it is being asked to do.

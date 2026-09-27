@@ -15,6 +15,7 @@ function validManifest(): Manifest {
         provider_unsupported: false,
         no_worktree: false,
       },
+      { kind: 'workflow', steps: 3, origin: 'template' },
       { kind: 'inbox', messageIds: ['m1'] },
       { kind: 'ask_protocol' },
       { kind: 'task', taskId: 't1', sha256: 'd'.repeat(64) },
@@ -208,6 +209,27 @@ describe('runContextManifestSchema', () => {
 
   it('rejects a handoff source with no sha256 -- there is no pre-M48 handoff row to tolerate', () => {
     const malformed = { kind: 'implementation', sections: [{ kind: 'handoff', taskId: 't1' }] }
+    expect(runContextManifestSchema.safeParse(malformed).success).toBe(false)
+  })
+
+  // Conductor R6: the persona workflow's own source kind, round-tripped.
+  it('accepts an implementation manifest carrying a workflow source', () => {
+    const manifest: Manifest = {
+      kind: 'implementation',
+      sections: [{ kind: 'workflow', steps: 3, origin: 'template' }],
+    }
+    const parsed = runContextManifestSchema.safeParse(manifest)
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data).toEqual(manifest)
+  })
+
+  it('rejects a workflow source with no steps -- this kind is new, so there is no pre-conductor row to tolerate', () => {
+    const malformed = { kind: 'implementation', sections: [{ kind: 'workflow', origin: 'template' }] }
+    expect(runContextManifestSchema.safeParse(malformed).success).toBe(false)
+  })
+
+  it('rejects a workflow source whose steps is negative', () => {
+    const malformed = { kind: 'implementation', sections: [{ kind: 'workflow', steps: -1, origin: 'template' }] }
     expect(runContextManifestSchema.safeParse(malformed).success).toBe(false)
   })
 

@@ -9,6 +9,11 @@ export type SectionKind =
   | 'profile'
   | 'roster'
   | 'skills'
+  /** Conductor R6: the persona's own `workflow` list (`ProfileSpec.workflow`,
+   *  `packages/domain/src/profile/spec.ts`), rendered as a numbered checklist the worker is told to
+   *  report against in its final message -- today those same steps only ever reached a run as
+   *  bullets buried inside the rendered profile Markdown, indistinguishable from every other list. */
+  | 'workflow'
   | 'inbox'
   | 'ask_protocol'
   | 'answer_protocol'
@@ -101,6 +106,16 @@ export type SectionSource =
       readonly truncated?: readonly string[] | undefined
       readonly omitted?: readonly string[] | undefined
     }
+  /** Conductor R6: the persona's workflow, rendered as its own section rather than folded into
+   *  `profile`. `steps` is the COUNT, not the text -- `RunContext.prompt` already carries the words
+   *  once, the same reason `capabilities.keys` and `roles.roles` stay text but `memory.memoryIds`
+   *  and `review_diff` stay counts and ids. `origin` is always `'template'` today: a workflow lives
+   *  on `SlaveTemplate.profileSpec`/`profileOverrides` and nowhere else a persona's fields do (a
+   *  seat or a person carry no `profileSpec` of their own), so there is exactly one place this
+   *  section's text can have come from -- but it is still named, the `profile.origin` idiom, rather
+   *  than left implicit, so a reader asking "where did THIS come from" never has to know that by
+   *  other means. */
+  | { readonly kind: 'workflow'; readonly steps: number; readonly origin: 'template' }
   | { readonly kind: 'inbox'; readonly messageIds: readonly string[] }
   | { readonly kind: 'ask_protocol' }
   | { readonly kind: 'answer_protocol' }
@@ -195,6 +210,14 @@ const skillsSourceSchema = z.object({
   omitted: z.array(z.string()).optional(),
 })
 
+// Conductor R6: NEW kind, so both fields REQUIRED by the `replan`/`capabilities` rule -- there is no
+// history of a `workflow` row written without them to be tolerant of.
+const workflowSourceSchema = z.object({
+  kind: z.literal('workflow'),
+  steps: z.number().int().nonnegative(),
+  origin: z.literal('template'),
+})
+
 const inboxSourceSchema = z.object({
   kind: z.literal('inbox'),
   messageIds: z.array(z.string()),
@@ -267,6 +290,7 @@ const sectionSourceSchema = z.discriminatedUnion('kind', [
   profileSourceSchema,
   rosterSourceSchema,
   skillsSourceSchema,
+  workflowSourceSchema,
   inboxSourceSchema,
   askProtocolSourceSchema,
   answerProtocolSourceSchema,

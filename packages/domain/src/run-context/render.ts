@@ -10,7 +10,21 @@ export const SECTION_ORDER: Readonly<Record<Manifest['kind'], readonly SectionKi
   // `memory` sits directly after the contract and BEFORE the rejection (M49 R3, plan decision D2):
   // what the organisation knows is context for the work, and the last attempt's rejection is the
   // instruction to act on -- so the rejection stays the last thing the worker reads.
-  implementation: ['profile', 'roster', 'skills', 'inbox', 'ask_protocol', 'task', 'handoff', 'memory', 'rejection'],
+  // `workflow` sits directly after `skills` (conductor R6): both are "how to do this", one is what
+  // the worker may reach for and the other is the order to do it in, and the checklist reads better
+  // right after the tools than buried between the roster and the inbox.
+  implementation: [
+    'profile',
+    'roster',
+    'skills',
+    'workflow',
+    'inbox',
+    'ask_protocol',
+    'task',
+    'handoff',
+    'memory',
+    'rejection',
+  ],
   review: ['profile', 'skills', 'task', 'handoff', 'review_diff'],
   // `replan` is present only when the goal CHANGED on a non-empty board (M40 §3). It comes last,
   // after the new goal it is about, so the prompt reads "here is the goal, here is what changed

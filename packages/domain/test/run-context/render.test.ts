@@ -30,7 +30,18 @@ function section(kind: Section['kind'], text: string, source: Section['source'])
 describe('SECTION_ORDER', () => {
   it('lists the fixed order for each run kind', () => {
     expect(SECTION_ORDER).toEqual({
-      implementation: ['profile', 'roster', 'skills', 'inbox', 'ask_protocol', 'task', 'handoff', 'memory', 'rejection'],
+      implementation: [
+        'profile',
+        'roster',
+        'skills',
+        'workflow',
+        'inbox',
+        'ask_protocol',
+        'task',
+        'handoff',
+        'memory',
+        'rejection',
+      ],
       review: ['profile', 'skills', 'task', 'handoff', 'review_diff'],
       planning: ['profile', 'planning_goal', 'replan', 'roles', 'capabilities', 'runbook', 'handoff_protocol', 'memory'],
     })

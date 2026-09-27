@@ -65,6 +65,10 @@ export function sectionLine(source: SectionSource): SectionLine {
       if (source.truncated?.length) parts.push(`cut for length: ${source.truncated.join(', ')}`)
       return { kind: source.kind, detail: parts.join(' · '), missing: source.missing }
     }
+    // Conductor R6: the COUNT of steps, not the checklist text -- `RunContext.prompt` already
+    // carries the words once, the same rule `memory` and `capabilities` follow for their own lists.
+    case 'workflow':
+      return { kind: source.kind, detail: plural(source.steps, 'workflow step'), missing: [] }
     case 'inbox':
       return { kind: source.kind, detail: plural(source.messageIds.length, 'message'), missing: [] }
     case 'ask_protocol':
