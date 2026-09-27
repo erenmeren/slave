@@ -14,6 +14,11 @@ import { SelectField } from '../ui/FormControls'
  *
  * A SET, not a delta: every write sends the whole list, which is what `setTemplateSkills` takes and
  * is why two operators editing the same persona cannot interleave into a half-list.
+ *
+ * After a save, the set just SENT is this editor's base until the `skillIds` prop changes (the
+ * caller's re-read landing). The editor re-enables when the PATCH answers, before that re-read; a
+ * quick second edit built from the not-yet-updated prop wrote the pre-save set back and reverted
+ * the first edit.
  */
 export function TemplateSkillsEditor({
   templateId,
@@ -33,6 +38,12 @@ export function TemplateSkillsEditor({
   const [pending, setPending] = useState(false)
   const [adding, setAdding] = useState('')
   const [errorText, setErrorText] = useState<string | null>(null)
+  // `from` is the prop as it was when `sent` was saved: the moment the prop differs from it, the
+  // caller's re-read has landed and the prop is the truth again. Compared by value, because a
+  // re-read that hands back a new array holding the OLD set has not caught up yet.
+  const [saved, setSaved] = useState<{ readonly from: string; readonly sent: readonly string[] } | null>(null)
+  const propKey = skillIds.join('\n')
+  const current = saved !== null && saved.from === propKey ? saved.sent : skillIds
 
   const write = async (next: readonly string[]): Promise<void> => {
     setPending(true)
@@ -52,6 +63,7 @@ export function TemplateSkillsEditor({
         )
         return
       }
+      setSaved({ from: propKey, sent: next })
       setAdding('')
       onChanged()
     } finally {
@@ -60,12 +72,12 @@ export function TemplateSkillsEditor({
   }
 
   const nameOf = new Map(catalogue.map((row) => [row.skillId, row] as const))
-  const addable = catalogue.filter((row) => !skillIds.includes(row.skillId))
+  const addable = catalogue.filter((row) => !current.includes(row.skillId))
 
   return (
     <div data-testid="template-skills-editor" className="flex flex-col gap-1.5">
-      {skillIds.length === 0 && <p className="text-xs text-text-3">no default skills</p>}
-      {skillIds.map((skillId) => {
+      {current.length === 0 && <p className="text-xs text-text-3">no default skills</p>}
+      {current.map((skillId) => {
         const skill = nameOf.get(skillId)
         return (
           <div key={skillId} data-testid={`template-skill-${skillId}`} className="flex items-center justify-between gap-2 text-xs">
@@ -78,7 +90,7 @@ export function TemplateSkillsEditor({
               size="sm"
               data-testid={`template-skill-remove-${skillId}`}
               disabled={pending}
-              onClick={() => void write(skillIds.filter((one) => one !== skillId))}
+              onClick={() => void write(current.filter((one) => one !== skillId))}
             >
               remove
             </Button>
@@ -107,7 +119,7 @@ export function TemplateSkillsEditor({
           size="sm"
           data-testid="template-skill-add-submit"
           disabled={pending || adding === ''}
-          onClick={() => void write([...skillIds, adding])}
+          onClick={() => void write([...current, adding])}
         >
           Add
         </Button>

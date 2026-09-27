@@ -10,10 +10,11 @@ import {
   listWorkforceCatalogPage,
   listWorkspaceNames,
 } from '../../server/org'
-import { listPersons, listSkillCatalogue } from '../../server/persons'
+import { listPeoplePage, listPersons, listSkillCatalogue } from '../../server/persons'
 import { buildEvidencePage } from '../../server/evidence'
 import { buildSkillsPage } from '../../server/skills'
 import { parseCatalogFilters } from '../../lib/catalogFilters'
+import { parsePeopleFilters } from '../../lib/peopleFilters'
 import { WorkforceClient, type WorkforceTab } from '../../components/workforce/WorkforceClient'
 
 export const dynamic = 'force-dynamic'
@@ -73,7 +74,7 @@ export default async function WorkforcePage({
   const query = queryOf(params)
   const filters = parseCatalogFilters(query)
   const initialTab = TAB_IDS.find((id) => id === tab) ?? 'slaves'
-  const [slaves, teams, workspaces, companies, roster, catalog, templates, catalogImports, skills, taxonomy, runbooks, evidence, people, skillCatalogue] =
+  const [slaves, teams, workspaces, companies, roster, catalog, templates, catalogImports, skills, taxonomy, runbooks, evidence, people, skillCatalogue, peoplePage] =
     await Promise.all([
       listAllSlaves(),
       listProjectTeams(),
@@ -108,16 +109,14 @@ export default async function WorkforcePage({
       initialTab === 'evidence' ? buildEvidencePage({ domain: query.get('domain') }) : Promise.resolve(null),
       listPersons(),
       listSkillCatalogue(),
+      // Workforce cards: People as server-paged CARDS, seeded with the filters the URL already
+      // claims -- the catalog's M46 M1 rule, for the tab this page opens on by default. `people`
+      // above stays: it is the company manager's member picker, which must be everybody.
+      listPeoplePage(parsePeopleFilters(query)),
     ])
   const peopleDepartments = roster.flatMap((company) =>
     company.teams.map((team) => ({ companyTeamId: team.companyTeamId, name: team.teamName })),
   )
-  const skillHolders: Record<string, readonly string[]> = {}
-  for (const provider of skills.providers) {
-    for (const skill of provider.skills) {
-      skillHolders[skill.id] = skill.holders.map((holder) => holder.personId)
-    }
-  }
   return (
     <WorkforceClient
       initialTab={initialTab}
@@ -134,9 +133,9 @@ export default async function WorkforcePage({
       runbooks={runbooks}
       evidence={evidence}
       people={people}
+      peoplePage={peoplePage}
       peopleDepartments={peopleDepartments}
       skillCatalogue={skillCatalogue}
-      skillHolders={skillHolders}
     />
   )
 }

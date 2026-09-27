@@ -84,6 +84,9 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   team_workspace_mismatch: true,
   company_mismatch: true,
   skill_not_found: true,
+  // Workforce cards Task 4: an ADD of a skill `missingSince` marks as gone from disk. 409 --
+  // the skill row is there, it just cannot be linked again until a scan finds it.
+  skill_missing: true,
   invalid_tool: true,
   invalid_permission_mode: true,
   repo_path_not_absolute: true,

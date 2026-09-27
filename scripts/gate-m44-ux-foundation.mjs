@@ -929,25 +929,11 @@ try {
     if (target.name === 'workforce') {
       // M58 R22: People is one row per person. The fixture worker is seated, so the derived
       // state is `assigned` -- there is no run pill on this table any more.
-      // M61 R12: the People table is VIRTUALISED -- only the rows near the scrolled viewport are
-      // in the DOM at all, so a locator waiting for a row further down the list waits for a node
-      // React has deliberately not made. The table's own `ScrollArea` is scrolled in page-sized
-      // steps until the row mounts; the assertion below is exactly the one that was always here.
+      // Workforce cards: People is paged, so the fixture worker is SEARCHED for, not scrolled to;
+      // the assertion below is exactly the one that was always here.
       const row = page.locator('[data-testid^="person-row-"]').filter({ hasText: SLAVE_NAME })
-      const scrolled = await page.evaluate(async (name) => {
-        const area = document.querySelector('[data-testid="people-rows"] [data-scroll-axis]')
-        if (area === null) return { area: false, steps: 0 }
-        const found = () => [...document.querySelectorAll('[data-testid^="person-row-"]')].some((node) => (node.textContent ?? '').includes(name))
-        for (let step = 0; step < 200; step += 1) {
-          if (found()) return { area: true, steps: step }
-          const before = area.scrollTop
-          area.scrollTop = Math.min(area.scrollTop + area.clientHeight, area.scrollHeight)
-          await new Promise((resolve) => setTimeout(resolve, 60))
-          if (area.scrollTop === before) break
-        }
-        return { area: true, steps: -1, found: found() }
-      }, SLAVE_NAME)
-      console.log(`stage 4 (workforce): scrolled the virtualised People table to reach ${SLAVE_NAME} -- ${JSON.stringify(scrolled)}`)
+      await page.getByTestId('people-search').fill(SLAVE_NAME)
+      console.log(`stage 4 (workforce): searched the People cards for ${SLAVE_NAME}`)
       await waitVisible(row, `the fixture worker's row on /workforce`)
       const state = await row.first().getAttribute('data-person-state')
       const released = await row.first().getAttribute('data-released')

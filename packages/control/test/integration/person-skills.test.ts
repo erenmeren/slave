@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '@slave-of-ai/db/client'
 import { createPerson } from '../../src/persons.js'
-import { personEffectiveSkills, setPersonSkills, setTemplateSkills } from '../../src/personSkills.js'
+import {
+  changeTemplateSkills,
+  personEffectiveSkills,
+  setPersonSkills,
+  setTemplateSkills,
+} from '../../src/personSkills.js'
 import { truncateAll } from './helpers.js'
 
 async function twoSkills(): Promise<{ pdf: string; sql: string }> {
@@ -121,5 +126,99 @@ describe('setPersonSkills', () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.error.kind).toBe('person_not_found')
+  })
+})
+
+describe('changeTemplateSkills (workforce cards)', () => {
+  it('adds without touching the other links', async () => {
+    const { pdf, sql } = await twoSkills()
+    const template = await prisma.slaveTemplate.create({ data: { name: 'Builder', role: 'dev' } })
+    await setTemplateSkills(template.id, [pdf])
+
+    const result = await changeTemplateSkills(template.id, { add: [sql] })
+    expect(result.ok && result.value.skills).toEqual([pdf, sql].toSorted())
+  })
+
+  it('removes only what it names', async () => {
+    const { pdf, sql } = await twoSkills()
+    const template = await prisma.slaveTemplate.create({ data: { name: 'Builder', role: 'dev' } })
+    await setTemplateSkills(template.id, [pdf, sql])
+
+    const result = await changeTemplateSkills(template.id, { remove: [pdf] })
+    expect(result.ok && result.value.skills).toEqual([sql])
+  })
+
+  it('two concurrent adds from two cards both land -- a delta cannot drop the other one', async () => {
+    const { pdf, sql } = await twoSkills()
+    const template = await prisma.slaveTemplate.create({ data: { name: 'Builder', role: 'dev' } })
+
+    const [a, b] = await Promise.all([
+      changeTemplateSkills(template.id, { add: [pdf] }),
+      changeTemplateSkills(template.id, { add: [sql] }),
+    ])
+    expect(a.ok && b.ok).toBe(true)
+    const rows = await prisma.templateSkill.findMany({ where: { templateId: template.id } })
+    expect(rows.map((row) => row.skillId).toSorted()).toEqual([pdf, sql].toSorted())
+  })
+
+  it('adding a skill that is already linked is not an error and not a second row', async () => {
+    const { pdf } = await twoSkills()
+    const template = await prisma.slaveTemplate.create({ data: { name: 'Builder', role: 'dev' } })
+    await changeTemplateSkills(template.id, { add: [pdf] })
+
+    expect((await changeTemplateSkills(template.id, { add: [pdf] })).ok).toBe(true)
+    expect(await prisma.templateSkill.count()).toBe(1)
+  })
+
+  it('refuses the same skill in add and remove, an unknown template and an unknown skill', async () => {
+    const { pdf } = await twoSkills()
+    const template = await prisma.slaveTemplate.create({ data: { name: 'Builder', role: 'dev' } })
+
+    const both = await changeTemplateSkills(template.id, { add: [pdf], remove: [pdf] })
+    expect(!both.ok && both.error.kind).toBe('invalid_request')
+    const noTemplate = await changeTemplateSkills('nope', { add: [pdf] })
+    expect(!noTemplate.ok && noTemplate.error.kind).toBe('template_not_found')
+    const noSkill = await changeTemplateSkills(template.id, { add: ['nope'] })
+    expect(!noSkill.ok && noSkill.error.kind).toBe('skill_not_found')
+    expect(await prisma.templateSkill.count()).toBe(0)
+  })
+})
+
+describe('a skill missing from disk (workforce cards)', () => {
+  const markMissing = async (skillId: string): Promise<void> => {
+    await prisma.skill.update({ where: { id: skillId }, data: { missingSince: new Date() } })
+  }
+
+  it('cannot be ADDED to a persona, by delta or by set, and nothing is written', async () => {
+    const { pdf } = await twoSkills()
+    await markMissing(pdf)
+    const template = await prisma.slaveTemplate.create({ data: { name: 'Builder', role: 'dev' } })
+
+    const delta = await changeTemplateSkills(template.id, { add: [pdf] })
+    expect(!delta.ok && delta.error).toEqual({ kind: 'skill_missing', skillId: pdf, name: 'pdf' })
+    const set = await setTemplateSkills(template.id, [pdf])
+    expect(!set.ok && set.error.kind).toBe('skill_missing')
+    expect(await prisma.templateSkill.count()).toBe(0)
+  })
+
+  it('keeps a link that already existed when the set is re-sent, and can still be removed', async () => {
+    const { pdf, sql } = await twoSkills()
+    const template = await prisma.slaveTemplate.create({ data: { name: 'Builder', role: 'dev' } })
+    await setTemplateSkills(template.id, [pdf])
+    await markMissing(pdf)
+
+    expect((await setTemplateSkills(template.id, [pdf, sql])).ok).toBe(true)
+    expect((await changeTemplateSkills(template.id, { remove: [pdf] })).ok).toBe(true)
+  })
+
+  it('cannot be GRANTED to a person; a revoke of it still works', async () => {
+    const { pdf } = await twoSkills()
+    await markMissing(pdf)
+    const person = await createPerson({ name: 'Atlas' })
+    if (!person.ok) throw new Error('setup')
+
+    const grant = await setPersonSkills(person.value.personId, { grant: [pdf] })
+    expect(!grant.ok && grant.error.kind).toBe('skill_missing')
+    expect((await setPersonSkills(person.value.personId, { revoke: [pdf] })).ok).toBe(true)
   })
 })

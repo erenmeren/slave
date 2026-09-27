@@ -14,7 +14,7 @@ import { SectionLabel } from './SectionLabel'
  * does nothing otherwise. Without it, `flex-1` alone still lets this frame grow to fit an
  * unbounded descendant's content (flexbox's own "automatic minimum size" default) instead of that
  * descendant shrinking to fit the frame -- which is what a page with its own internal
- * `min-h-0 flex-1` scroll region (e.g. `PeopleTable`'s virtualized table) needs from every
+ * `min-h-0 flex-1` scroll region (e.g. `PeopleCards`' own `ScrollArea`) needs from every
  * ancestor between it and the viewport.
  *
  * `children` render inside their OWN `flex min-h-0 flex-1 flex-col` wrapper now (M61 Task 10):

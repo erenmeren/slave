@@ -447,26 +447,25 @@ try {
     return response
   }
 
-  /** Scrolls the VIRTUALISED People table (M61 R12) until a row matching `needle` is mounted.
-   *  Only the rows near the scrolled viewport are in the DOM, so a locator waiting for one
-   *  further down waits for a node React has deliberately not made. */
+  /** Finds a person on the PAGED People cards (workforce cards) by searching for them. */
   async function scrollPeopleTo(needle) {
-    return page.evaluate(async (text) => {
-      const area = document.querySelector('[data-testid="people-rows"] [data-scroll-axis]')
-      const found = () =>
-        [...document.querySelectorAll('[data-testid^="person-row-"]')].some((node) => (node.textContent ?? '').includes(text))
-      if (area === null) return { area: false, found: found() }
-      area.scrollTop = 0
-      await new Promise((resolve) => setTimeout(resolve, 60))
-      for (let step = 0; step < 300; step += 1) {
-        if (found()) return { area: true, steps: step, found: true }
-        const before = area.scrollTop
-        area.scrollTop = Math.min(area.scrollTop + Math.max(1, area.clientHeight - 40), area.scrollHeight)
-        await new Promise((resolve) => setTimeout(resolve, 60))
-        if (area.scrollTop === before) break
-      }
-      return { area: true, steps: -1, found: found() }
-    }, needle)
+    const search = page.getByTestId('people-search')
+    const rows = page.locator('[data-testid^="person-row-"]').filter({ hasText: needle })
+    // Already searched for and still absent: clear the box for longer than the bar's 250 ms
+    // debounce, so the refill is a NEW question. LOGGED every time -- People is meant to refresh
+    // by itself (stage 1 proves it without this), so a re-ask is worth seeing in the log.
+    if ((await search.inputValue()) === needle && (await rows.count()) === 0) {
+      console.log(`re-asked people search for ${needle}`)
+      await search.fill('')
+      await delay(600)
+    }
+    await search.fill(needle)
+    const found = await rows
+      .first()
+      .waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS })
+      .then(() => true)
+      .catch(() => false)
+    return { searched: true, found }
   }
 
   async function settleTo(read, expected) {
@@ -496,6 +495,11 @@ try {
 
   // ---- stage 1 -------------------------------------------------------------------------------
   await gotoReliably(`${baseUrl}/workforce?tab=slaves`)
+  // Workforce cards: People is paged, so the new slave is SEARCHED for -- and the search is typed
+  // BEFORE they exist, then never re-asked: the card has to appear by itself once New slave's own
+  // refresh lands, which is the claim this stage always made ("People updates after New slave").
+  await page.getByTestId('people-search').fill(PERSON_A)
+  await delay(600)
   await page.getByTestId('new-slave').click()
   await waitVisible(page.getByTestId('new-slave-drawer'), 'the New slave drawer')
   await page.getByTestId('new-slave-persona').selectOption(templateId)
@@ -505,10 +509,7 @@ try {
   if (!/pool/i.test(poolNote)) await fail(`stage 1: the drawer does not say the slave lands in the pool: ${poolNote}`)
   await page.getByTestId('new-slave-submit').click()
 
-  await settleTo(async () => {
-    await scrollPeopleTo(PERSON_A)
-    return page.locator('[data-testid^="person-row-"]').filter({ hasText: PERSON_A }).count()
-  }, 1)
+  await settleTo(async () => page.locator('[data-testid^="person-row-"]').filter({ hasText: PERSON_A }).count(), 1)
   const personId = await page.locator('[data-testid^="person-row-"]').filter({ hasText: PERSON_A }).first().getAttribute('data-person-id')
   if (personId === null) await fail('stage 1: the new People row has no data-person-id')
   const row = page.getByTestId(`person-row-${personId}`)
@@ -593,7 +594,7 @@ try {
   const otherHiredPersonId = otherHired.id
 
   await gotoReliably(`${baseUrl}/workforce?tab=slaves`)
-  console.log(`scrolled the virtualised People table to the hired person: ${JSON.stringify(await scrollPeopleTo(PERSON_A))}`)
+  console.log(`searched the People cards for the hired person: ${JSON.stringify(await scrollPeopleTo(PERSON_A))}`)
   await openPerson()
   await waitVisible(page.getByTestId(`panel-person-skill-${skillId}`), "the person's skill row")
   const origin = await page.getByTestId(`panel-person-skill-${skillId}`).getAttribute('data-skill-state')

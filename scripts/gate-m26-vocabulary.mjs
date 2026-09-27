@@ -18,7 +18,7 @@ const PATTERN = '(^|[^a-z])agent|aiteamos|ai-team-os|AITEAMOS_|AI Team OS'
 // own filename -- docs/superpowers/ is a protected path, so the file was never renamed on disk,
 // and a live doc's cross-reference to it must keep citing the real name, same shape as
 // `0002-derived-agent-status` just before it.
-const PROTECTED = /fake-cursor-agent|cursor-agent|--agents\b|user-agent|agentic|AGENTS\.md|claude-agent-sdk|@anthropic-ai\/[a-z-]+|agent_message(?!_sent)|0002-derived-agent-status|2026-08-17-ai-team-os-design/gi
+const PROTECTED = /fake-cursor-agent|cursor-agent|dispatching-parallel-agents|--agents\b|user-agent|agentic|AGENTS\.md|claude-agent-sdk|@anthropic-ai\/[a-z-]+|agent_message(?!_sent)|0002-derived-agent-status|2026-08-17-ai-team-os-design/gi
 
 let out = ''
 try {

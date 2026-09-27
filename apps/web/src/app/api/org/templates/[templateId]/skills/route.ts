@@ -1,11 +1,36 @@
-import { setTemplateSkills } from '@slave-of-ai/control'
+import { changeTemplateSkills, refusalText, setTemplateSkills } from '@slave-of-ai/control'
+import { optionalIdArray } from '../../../../../../server/idArrayField'
+import { readPersonaDefaultSkills } from '../../../../../../server/org'
 import { orgControlResponse } from '../../../../../../server/orgControlRoute'
 import { requirePrincipal } from '../../../../../../server/principal'
+import { refusalStatus } from '../../../../../../server/refusalStatus'
 
 export const dynamic = 'force-dynamic'
 
-/** M58 R25: the persona's DEFAULT skills. A SET -- the editor sends the whole list -- and changing
- *  it changes every person hired from this persona at once, because nothing copies. */
+const BODY = 'the body must be { "skillIds": string[] } or { "add"?: string[], "remove"?: string[] }'
+
+/** The persona's default skill ids and hired count, BY ID: what the drawer's editor starts from
+ *  when this persona is not on the loaded catalog page (Duplicates data-loss fix) -- a whole-set
+ *  editor must never start from a set it does not know. 200 or 404, the profile route's rule. */
+export async function GET(_request: Request, context: { params: Promise<{ templateId: string }> }): Promise<Response> {
+  const gate = await requirePrincipal()
+  if ('response' in gate) return gate.response
+  const { templateId } = await context.params
+  const result = await readPersonaDefaultSkills(templateId)
+  if (!result.ok) {
+    return Response.json({ error: refusalText(result.error) }, { status: refusalStatus(result.error.kind) })
+  }
+  return Response.json(result.value)
+}
+
+/**
+ * M58 R25: the persona's DEFAULT skills -- and changing them changes every person hired from this
+ * persona at once, because nothing copies.
+ *
+ * Two bodies. `{ skillIds }` is the SET the drawer's editor sends, unchanged. `{ add, remove }` is
+ * the DELTA a workforce card sends (workforce cards §3): a card never sends a whole list, so two
+ * cards editing one persona at once cannot drop each other's skill.
+ */
 export async function PATCH(
   request: Request,
   context: { params: Promise<{ templateId: string }> },
@@ -14,12 +39,19 @@ export async function PATCH(
   if ('response' in gate) return gate.response
   const { templateId } = await context.params
   const body: unknown = await request.json().catch(() => null)
-  if (body === null || typeof body !== 'object') {
-    return Response.json({ error: 'the body must be { "skillIds": string[] }' }, { status: 400 })
+  if (body === null || typeof body !== 'object') return Response.json({ error: BODY }, { status: 400 })
+  const { skillIds, add, remove } = body as { skillIds?: unknown; add?: unknown; remove?: unknown }
+  const [set, a, r] = [optionalIdArray(skillIds), optionalIdArray(add), optionalIdArray(remove)]
+  if (set === 'bad' || a === 'bad' || r === 'bad') return Response.json({ error: BODY }, { status: 400 })
+  if (set !== undefined) {
+    if (a !== undefined || r !== undefined) return Response.json({ error: BODY }, { status: 400 })
+    return orgControlResponse(() => setTemplateSkills(templateId, set))
   }
-  const { skillIds } = body as { skillIds?: unknown }
-  if (!Array.isArray(skillIds) || skillIds.some((one) => typeof one !== 'string')) {
-    return Response.json({ error: 'the body must be { "skillIds": string[] }' }, { status: 400 })
-  }
-  return orgControlResponse(() => setTemplateSkills(templateId, skillIds as readonly string[]))
+  if (a === undefined && r === undefined) return Response.json({ error: BODY }, { status: 400 })
+  return orgControlResponse(() =>
+    changeTemplateSkills(templateId, {
+      ...(a === undefined ? {} : { add: a }),
+      ...(r === undefined ? {} : { remove: r }),
+    }),
+  )
 }

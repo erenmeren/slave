@@ -74,7 +74,7 @@ Laid out in a grid `repeat(auto-fill, minmax(320px, 1fr))`, reusing `Card`, `Ava
   - Process-management skills get ⚠️ (§4).
   - Up to 6 chips plus "+N".
   - Each chip has a remove control, with the same scope rule as adding.
-- **Workflow:** the first 3 steps of the effective profile's `workflow` (`ProfileSpec.workflow`, with overrides applied), then "+N steps". "No workflow in this profile" when empty.
+- **Workflow:** the first 3 steps of the effective profile's `workflow` (`ProfileSpec.workflow`, with overrides applied), then "+N steps". "No workflow in this profile" when empty. A person card shows its PERSONA's effective workflow: the person-level profile override has no workflow section, so there is nothing person-specific to show (note added by the final review).
 - **"+ skill":** opens the picker (§3).
 - **Click on the card body:** opens the existing drawer: `ProfileDrawer` for personas, the person sheet for people. Nothing inside the drawers changes.
 
@@ -140,5 +140,5 @@ Both are paged by cursor (the catalog's existing 100-row pages with "Show more")
 ## Open risks
 
 - **Density:** a rich card with 6 skills and 3 workflow steps is tall, so fewer fit on a screen. Mitigation: the chip caps above. Developer mode is denser.
-- **Pool size:** hundreds of pool people make People long; server paging and the "Assigned" default keep it usable.
+- **Pool size:** hundreds of pool people make People long; the default stays "Everyone" (not "Assigned") -- server paging, not the default, is what keeps the list usable.
 - **Profiles without a Workflow heading:** agency profiles vary, and some have no workflow section. The card says so rather than hiding the block.

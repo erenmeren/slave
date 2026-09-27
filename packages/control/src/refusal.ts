@@ -334,6 +334,10 @@ export type ControlRefusal =
   | { readonly kind: 'company_mismatch'; readonly companySlaveId: string; readonly companyTeamId: string }
   /** A skill id that no `Skill` row carries (M14 §4.3). */
   | { readonly kind: 'skill_not_found'; readonly skillId: string }
+  /** Workforce cards: an ADD of a skill a scan could not find on disk (`Skill.missingSince` set) --
+   *  an uninstalled plugin's skill, say. The links it already has stay (the catalog never deletes),
+   *  but a NEW one would promise a worker a skill no run can load. */
+  | { readonly kind: 'skill_missing'; readonly skillId: string; readonly name: string }
   /** A permission kind outside `PERMISSION_KINDS` (M14 §5.7; M52 R1 moved the vocabulary).
    *  The kind's NAME and its payload FIELD both stay `tool` (plan erratum E11) -- renaming a
    *  refusal costs three homes to rename a word no surface prints; only its sentence moved. */
@@ -796,6 +800,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return `department template ${refusal.companyTeamId} belongs to another company than catalog slave ${refusal.companySlaveId}`
     case 'skill_not_found':
       return `no skill with id ${refusal.skillId}`
+    case 'skill_missing':
+      return `the skill ${refusal.name} is missing from disk; it can be linked again once a skills scan finds it`
     case 'invalid_tool':
       return 'a permission must name one of the six operations'
     case 'invalid_permission_mode':

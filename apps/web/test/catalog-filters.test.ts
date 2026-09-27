@@ -83,3 +83,20 @@ describe('parseCatalogFilters', () => {
     expect(parseCatalogFilters(catalogFilterParams(filters))).toEqual(filters)
   })
 })
+
+describe('workforce cards params', () => {
+  it('reads a specialty domain and skills=none', () => {
+    expect(parseCatalogFilters(new URLSearchParams('specialty=frontend&skills=none'))).toEqual({
+      specialty: 'frontend',
+      noSkills: true,
+    })
+  })
+
+  it('drops a skills value other than none rather than refusing the link', () => {
+    expect(parseCatalogFilters(new URLSearchParams('skills=some&q=builder'))).toEqual({ q: 'builder' })
+  })
+
+  it('writes both back', () => {
+    expect(catalogFilterParams({ specialty: 'qa', noSkills: true }).toString()).toBe('specialty=qa&skills=none')
+  })
+})

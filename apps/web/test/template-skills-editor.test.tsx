@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { TemplateSkillsEditor } from '../src/components/workforce/TemplateSkillsEditor.js'
 
@@ -38,6 +38,46 @@ describe('TemplateSkillsEditor (R25)', () => {
 
     fireEvent.click(screen.getByTestId('template-skill-remove-sk1'))
     expect(JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toEqual({ skillIds: ['sk2'] })
+    vi.unstubAllGlobals()
+  })
+
+  /**
+   * The window between a save and the re-read it triggers: the editor re-enables when the PATCH
+   * answers, before its `skillIds` prop has caught up. A second edit built from that prop wrote the
+   * pre-save set back -- reverting the first edit.
+   */
+  it('builds a quick second edit on the set it just saved, not on the prop that has not caught up', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const catalogueOf3 = [...catalogue, { skillId: 'sk3', name: 'git', providerName: 'personal' }]
+    render(<TemplateSkillsEditor templateId="t1" skillIds={['sk1']} catalogue={catalogueOf3} hiredCount={0} onChanged={() => {}} />)
+
+    fireEvent.change(screen.getByTestId('template-skill-add'), { target: { value: 'sk2' } })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('template-skill-add-submit'))
+    })
+    expect(screen.getByTestId('template-skill-sk2')).toBeTruthy()
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('template-skill-remove-sk1'))
+    })
+    const bodyOf = (call: number): unknown => JSON.parse(String((fetchMock.mock.calls[call] as unknown as [string, RequestInit])[1].body))
+    expect(bodyOf(1)).toEqual({ skillIds: ['sk2'] })
+    vi.unstubAllGlobals()
+  })
+
+  it('follows the prop again once the re-read lands', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })))
+    const { rerender } = render(
+      <TemplateSkillsEditor templateId="t1" skillIds={['sk1']} catalogue={catalogue} hiredCount={0} onChanged={() => {}} />,
+    )
+    fireEvent.change(screen.getByTestId('template-skill-add'), { target: { value: 'sk2' } })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('template-skill-add-submit'))
+    })
+    // The server's answer wins, whatever it is -- here somebody else removed sk1 meanwhile.
+    rerender(<TemplateSkillsEditor templateId="t1" skillIds={['sk2']} catalogue={catalogue} hiredCount={0} onChanged={() => {}} />)
+    expect(screen.queryByTestId('template-skill-sk1')).toBeNull()
+    expect(screen.getByTestId('template-skill-sk2')).toBeTruthy()
     vi.unstubAllGlobals()
   })
 

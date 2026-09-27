@@ -1309,8 +1309,10 @@ try {
     )
 
     const firstRow = pg.locator('[data-testid^="person-row-"]').first()
-    await waitVisible(firstRow, 'a row in the People table')
-    await clickUntil(firstRow, async () => pg.getByTestId('person-sheet').isVisible(), 'a person row')
+    await waitVisible(firstRow, 'a card in People')
+    // Workforce cards: the AVATAR -- card body, never a control -- so the claim stays "a click on
+    // the card opens the person", without the click landing on a chip's remove button.
+    await clickUntil(firstRow.getByTestId('avatar-tile'), async () => pg.getByTestId('person-sheet').isVisible(), 'a person card')
     const personSheet = await waitUntil('the person sheet to finish opening', ACTION_TIMEOUT_MS, async () => {
       const seen = await pg.evaluate(() => ({
         panel: document.querySelector('[data-testid="person-sheet"] [data-testid="slave-panel"]') !== null,

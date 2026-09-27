@@ -24,6 +24,7 @@ import {
   profileSpecSchema,
   renderProfileSpec,
   runbookFromProfileSpec,
+  storedWorkflowPreview,
   type CapabilityRecord,
   type DuplicateBasis,
   type DuplicateClass,
@@ -34,6 +35,7 @@ import {
   type ProfileOverrides,
   type ProfileSpec,
   type Result,
+  type WorkflowPreview,
 } from '@slave-of-ai/domain'
 import { effectiveCapabilityKeys, listCapabilities, syncCapabilityTaxonomy } from './capability.js'
 import { writeTemplateDuplicates } from './duplicates.js'
@@ -922,12 +924,24 @@ export interface WorkforceCatalogRow {
    *  Postgres -- a truncated count would be a number that is wrong rather than a number that is
    *  missing. */
   readonly duplicateCount: number
+  /** Workforce cards: the first steps of the EFFECTIVE profile's workflow (overrides applied) and
+   *  how many there are -- the card's Workflow block. Empty for a row that is not structured. */
+  readonly workflowPreview: WorkflowPreview
+}
+
+/** One capability domain and how many rows carry at least one of its keys (workforce cards §1). */
+export interface CapabilityDomainFacet {
+  readonly domain: string
+  readonly count: number
 }
 
 export interface WorkforceCatalogFacets {
   readonly divisions: readonly string[]
   readonly capabilities: readonly string[]
   readonly skills: readonly string[]
+  /** Workforce cards: the Specialty chips -- every domain with at least one row, most rows first,
+   *  counted over the WHOLE table before any filter ran (M46 R6's rule for every facet here). */
+  readonly domains: readonly CapabilityDomainFacet[]
 }
 
 export interface WorkforceCatalogFilters {
@@ -943,6 +957,12 @@ export interface WorkforceCatalogFilters {
   readonly active?: boolean
   /** M55 R6. `'none'` is the NOT of "in any undismissed pair"; absent is no filter at all. */
   readonly duplicates?: DuplicateFacet
+  /** Workforce cards: a capability DOMAIN (`frontend`, `qa`). A row matches when any of its
+   *  `capabilityKeys` is one of that domain's taxonomy keys -- "starts with `<domain>.`", asked of
+   *  the one vocabulary a key may come from. */
+  readonly specialty?: string
+  /** Workforce cards: only rows with no default skill at all -- who still needs equipping. */
+  readonly noSkills?: boolean
 }
 
 export interface WorkforceCatalogPage {
@@ -1060,6 +1080,10 @@ function catalogRowOf(
             otherName: duplicate.otherName,
           },
     duplicateCount: duplicate?.n ?? 0,
+    // Workforce cards, ruling F12: `storedWorkflowPreview` does its own parse-and-effective merge
+    // off the two raw JSON columns, so this calls it directly rather than re-deriving `effective`
+    // a second time above just to hand it to `workflowPreview`.
+    workflowPreview: storedWorkflowPreview(template.profileSpec, template.profileOverrides),
   }
 }
 
@@ -1087,32 +1111,68 @@ export const TEMPLATE_PICKER_MAX = 500
  * looks like one. The backslash is replaced FIRST (one pass, one alternation), or it would escape
  * the escapes this function just wrote.
  */
-const escapeLikeWildcards = (text: string): string => text.replace(/[\\%_]/gu, (match) => `\\${match}`)
+export const escapeLikeWildcards = (text: string): string => text.replace(/[\\%_]/gu, (match) => `\\${match}`)
 
 /**
- * Every filter as a Prisma clause (M55 R3).
- *
- * This is what replaced `matches()`: seven dimensions that used to be an `Array#filter` over every
- * row in the table. `capability` and `skill` are `has` clauses over `String[]` columns, `q` is a
- * `contains` over the denormalised `searchText`, and `duplicates` is a relation filter over BOTH
- * sides of a pair -- `aId < bId` is a writer's rule, so a row is the `a` of some pairs and the `b`
- * of others and only the `OR` sees all of them.
- *
- * `q` is folded with `normalisePersona`, the SAME function that folded the column (plan erratum
- * E12), then its `%`, `_` and `\` are escaped ({@link escapeLikeWildcards}) so a search box stays a
- * search box and never a pattern language; `mode: 'insensitive'` is deliberately absent: the column
- * is already lower-cased by construction, so asking Postgres for `ILIKE` over it would be strictly
- * more work for the same answer, on the one clause R3 itself calls a sequential scan.
+ * Every taxonomy key under one domain (workforce cards §1). `Capability.domain` is stored as the
+ * key's own prefix, so this IS "starts with `<domain>.`" -- asked of the taxonomy rather than of
+ * free text, which is what lets the clause be a `hasSome` Postgres can run. An unknown domain has
+ * no keys, and the caller turns that into "matches nothing".
  */
-function catalogWhere(filters: WorkforceCatalogFilters): Prisma.SlaveTemplateWhereInput {
+export function capabilityKeysInDomain(domain: string, taxonomy: readonly CapabilityRecord[]): string[] {
+  return taxonomy.filter((record) => record.domain === domain).map((record) => record.key)
+}
+
+/**
+ * Every filter as a Prisma clause (M55 R3; widened to nine dimensions by workforce cards).
+ *
+ * This is what replaced `matches()`: an `Array#filter` over every row in the table. `capability`
+ * and `skill` are `has` clauses over `String[]` columns, `specialty` is a `hasSome` over one
+ * domain's taxonomy keys ({@link capabilityKeysInDomain} -- an unknown domain matches nothing),
+ * `noSkills` is a `defaultSkills: { none: {} }` relation filter, `q` is an `OR` of a `contains` over
+ * the denormalised `searchText` and a `contains` over a linked skill's raw name, and `duplicates` is
+ * a relation filter over BOTH sides of a pair -- `aId < bId` is a writer's rule, so a row is the `a`
+ * of some pairs and the `b` of others and only the `OR` sees all of them.
+ *
+ * `q`'s FIRST half (`searchText`) is folded with `normalisePersona`, the SAME function that folded
+ * the column (plan erratum E12), then its `%`, `_` and `\` are escaped
+ * ({@link escapeLikeWildcards}) so a search box stays a search box and never a pattern language;
+ * `mode: 'insensitive'` is deliberately absent from THIS half: the column is already lower-cased by
+ * construction and so is the folded query, so asking Postgres for `ILIKE` over it would be strictly
+ * more work for the same answer, on the one clause R3 itself calls a sequential scan. `q`'s SECOND
+ * half (workforce cards) is the opposite case: a linked skill's `name` is stored exactly as typed
+ * and this half is deliberately RAW rather than folded (the comment beside it says why), so neither
+ * side is already case-normalised and `mode: 'insensitive'` is what makes `q: 'PDF-maker'` find a
+ * skill stored as `pdf-maker`.
+ */
+function catalogWhere(
+  filters: WorkforceCatalogFilters,
+  taxonomy: readonly CapabilityRecord[],
+): Prisma.SlaveTemplateWhereInput {
   const clauses: Prisma.SlaveTemplateWhereInput[] = []
   if (filters.source !== undefined) clauses.push({ sourceId: filters.source === 'imported' ? { not: null } : null })
   if (filters.division !== undefined) clauses.push({ sourceDivision: filters.division })
   if (filters.capability !== undefined) clauses.push({ capabilityKeys: { has: filters.capability } })
   if (filters.skill !== undefined) clauses.push({ recommendedSkills: { has: filters.skill } })
   if (filters.active !== undefined) clauses.push({ active: filters.active })
+  if (filters.specialty !== undefined) {
+    const keys = capabilityKeysInDomain(filters.specialty, taxonomy)
+    // An unknown domain matches NOTHING, spelled out: a stale shared link renders an empty list
+    // under its still-pressed chip, never the whole catalog under a filter that says otherwise.
+    clauses.push(keys.length === 0 ? { id: { in: [] } } : { capabilityKeys: { hasSome: keys } })
+  }
+  if (filters.noSkills === true) clauses.push({ defaultSkills: { none: {} } })
   const q = normalisePersona(filters.q ?? '')
-  if (q !== '') clauses.push({ searchText: { contains: escapeLikeWildcards(q) } })
+  if (q !== '') {
+    clauses.push({
+      OR: [
+        { searchText: { contains: escapeLikeWildcards(q) } },
+        // Workforce cards: a linked skill's NAME is searchable too -- RAW (trimmed), not folded:
+        // `normalisePersona` turns `writing-plans` into `writing plans`, a spelling no skill has.
+        { defaultSkills: { some: { skill: { name: { contains: escapeLikeWildcards((filters.q ?? '').trim()), mode: 'insensitive' } } } } },
+      ],
+    })
+  }
   if (filters.duplicates !== undefined) {
     const some: Prisma.TemplateDuplicateWhereInput =
       filters.duplicates === 'none' ? { dismissedAt: null } : { dismissedAt: null, class: filters.duplicates }
@@ -1216,15 +1276,16 @@ async function rowDuplicatesFor(ids: readonly string[]): Promise<Map<string, Row
 }
 
 /**
- * The three facet menus, over EVERY row and before any filter ran (M46 R6's rule).
+ * The four facet menus, over EVERY row and before any filter ran (M46 R6's rule).
  *
- * Its own function because it is now SKIPPABLE (final wave, minor 2): one `groupBy` and two
- * `SELECT DISTINCT unnest(...)` whole-table scans are what a filter MENU costs, and a caller with
- * no menu to draw -- `listTemplates()`, the company pickers' unfiltered read -- was paying for
- * three of them on every `/workforce` load, beside the page's own three.
+ * Its own function because it is now SKIPPABLE (final wave, minor 2): one `groupBy`, two
+ * `SELECT DISTINCT unnest(...)` and one domain-count query -- four whole-table scans -- are what a
+ * filter MENU costs, and a caller with no menu to draw -- `listTemplates()`, the company pickers'
+ * unfiltered read -- was paying for four of them on every `/workforce` load, beside the page's own
+ * four.
  */
 async function readCatalogFacets(): Promise<WorkforceCatalogFacets> {
-  const [divisionGroups, capabilityRows, skillRows] = await Promise.all([
+  const [divisionGroups, capabilityRows, skillRows, domainRows] = await Promise.all([
     prisma.slaveTemplate.groupBy({ by: ['sourceDivision'], orderBy: { sourceDivision: 'asc' } }),
     prisma.$queryRaw<{ value: string }[]>`
       SELECT DISTINCT unnest("capabilityKeys") AS value FROM "SlaveTemplate" ORDER BY value ASC
@@ -1232,17 +1293,28 @@ async function readCatalogFacets(): Promise<WorkforceCatalogFacets> {
     prisma.$queryRaw<{ value: string }[]>`
       SELECT DISTINCT unnest("recommendedSkills") AS value FROM "SlaveTemplate" ORDER BY value ASC
     `,
+    // Workforce cards: one row per domain, a persona counted ONCE however many of its keys sit in
+    // it. `::int` because `count` is a `bigint` Prisma hands back as a non-JSON `BigInt`.
+    prisma.$queryRaw<{ domain: string; count: number }[]>`
+      SELECT c.domain AS domain, count(DISTINCT t.id)::int AS count
+      FROM "SlaveTemplate" t
+      CROSS JOIN LATERAL unnest(t."capabilityKeys") AS k(key)
+      JOIN "Capability" c ON c.key = k.key
+      GROUP BY c.domain
+      ORDER BY count DESC, domain ASC
+    `,
   ])
   return {
     divisions: divisionGroups.flatMap((group) => (group.sourceDivision === null ? [] : [group.sourceDivision])),
     capabilities: capabilityRows.map((row) => row.value),
     skills: skillRows.map((row) => row.value),
+    domains: domainRows.map((row) => ({ domain: row.domain, count: row.count })),
   }
 }
 
-/** What a caller that draws no filter menu gets back: three empty lists, and three scans it did not
+/** What a caller that draws no filter menu gets back: four empty lists, and four scans it did not
  *  run. Never a partial menu computed from the page, which is the thing R6 forbids. */
-const NO_FACETS: WorkforceCatalogFacets = { divisions: [], capabilities: [], skills: [] }
+const NO_FACETS: WorkforceCatalogFacets = { divisions: [], capabilities: [], skills: [], domains: [] }
 
 /**
  * The Workforce Catalog's read model (M46 R6, rewritten by M55 R3).
@@ -1251,17 +1323,21 @@ const NO_FACETS: WorkforceCatalogFacets = { divisions: [], capabilities: [], ski
  * effective spec in memory and filter the array; its own docblock argued that the catalog was
  * "hundreds of rows even after a full import -- a page's worth of memory", which stopped being true
  * on the day a full import became three hundred files and could become five thousand. Four
- * denormalised columns pay for four of the seven clauses -- the M47 precedent, whose own sentence is
+ * denormalised columns pay for four of the nine clauses -- the M47 precedent, whose own sentence is
  * that a filter vocabulary inside a JSON column cannot be a `where` -- and the page is a cursor over
- * `(name, id)`, which is a total order because `id` is unique.
+ * `(name, id)`, which is a total order because `id` is unique. `specialty` and `noSkills` (workforce
+ * cards) are the two newest clauses and neither adds a column of its own: `specialty` reuses
+ * `capabilityKeys`, already denormalised for the `capability` clause, and `noSkills` is a relation
+ * filter over `TemplateSkill` rather than a scalar column.
  *
  * **The FACETS are still computed over every row, before filtering** (M46 R6's rule, unchanged): a
  * filter menu built from the filtered rows collapses to whatever was already chosen, which makes it
  * impossible to change your mind. Each is its own bounded query rather than a fold over rows nobody
- * read: one `groupBy` for the divisions and one `SELECT DISTINCT unnest(...)` for each of the two
- * array columns. `options.facets: false` SKIPS all three and hands back empty lists (final wave,
- * minor 2) -- for the caller that draws no menu, which is `listTemplates()` and which was paying
- * for a second set of whole-table scans on every unfiltered `/workforce` load.
+ * read: one `groupBy` for the divisions, one `SELECT DISTINCT unnest(...)` for each of the two array
+ * columns, and one domain-count query (workforce cards) joined against the taxonomy.
+ * `options.facets: false` SKIPS all four and hands back empty lists (final wave, minor 2) -- for the
+ * caller that draws no menu, which is `listTemplates()` and which was paying for a second set of
+ * whole-table scans on every unfiltered `/workforce` load.
  *
  * A DIVISION is a directory a catalog was imported from, so both the menu and the clause read
  * `sourceDivision` alone (M46 plan erratum E22): a hand-made template whose `role` happens to spell
@@ -1272,9 +1348,13 @@ export async function listWorkforceCatalog(
   filters: WorkforceCatalogFilters = {},
   options: { readonly cursor?: string; readonly pageSize?: number; readonly facets?: boolean } = {},
 ): Promise<WorkforceCatalogPage> {
-  const where = catalogWhere(filters)
+  // The taxonomy FIRST (workforce cards): the specialty clause is built from it, so it can no
+  // longer ride in the same `Promise.all` as the reads that use the clause. `catalogRowOf` reads the
+  // same value for R8's staleness, so this is still one taxonomy read per page.
+  const taxonomy = await listCapabilities()
+  const where = catalogWhere(filters, taxonomy)
   const take = Math.max(1, Math.min(options.pageSize ?? CATALOG_PAGE_SIZE, TEMPLATE_PICKER_MAX))
-  const [templates, total, facets, taxonomy] = await Promise.all([
+  const [templates, total, facets] = await Promise.all([
     prisma.slaveTemplate.findMany({
       where,
       select: CATALOG_ROW_SELECT,
@@ -1287,10 +1367,6 @@ export async function listWorkforceCatalog(
     }),
     prisma.slaveTemplate.count({ where }),
     options.facets === false ? Promise.resolve(NO_FACETS) : readCatalogFacets(),
-    // R8: the taxonomy `catalogRowOf` needs to tell a stale mapping from a current one -- the SAME
-    // read `capabilityMappingHash` was computed against, key ascending (`listCapabilities`'s own
-    // order), loaded once per page rather than once per row.
-    listCapabilities(),
   ])
 
   const ids = templates.map((template) => template.id)

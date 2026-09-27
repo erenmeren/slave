@@ -1,5 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { toRunState } from '@slave-of-ai/db'
+import { CARD_SKILL_SELECT, byCardOrder, cardSkillOf, type CardSkillRow } from '../lib/cardSkills'
 import {
   capabilitiesOf,
   listCapabilities,
@@ -21,6 +22,8 @@ import {
 } from '@slave-of-ai/control'
 import {
   deriveSlaveStatus,
+  err,
+  ok,
   needsYou,
   sumSpendFromGroups,
   INTAKE_PER_CALL_CAP_USD,
@@ -1035,6 +1038,9 @@ export type CatalogRowView = Omit<WorkforceCatalogRow, 'importedAt' | 'activatio
   readonly defaultSkillIds: readonly string[]
   /** How many people were hired from this persona -- the blast radius the Default skills note names. */
   readonly hiredCount: number
+  /** Workforce cards: this persona's default skills as CHIPS -- name, source, missing, process --
+   *  in card order. `defaultSkillIds` stays beside it for the drawer's editor, which takes ids. */
+  readonly skills: readonly CardSkillRow[]
 }
 
 export interface WorkforceCatalogView {
@@ -1083,27 +1089,34 @@ function catalogRowViewOf(row: WorkforceCatalogRow): CatalogRowView {
     capabilityMappedAt: row.capabilityMappedAt === null ? null : row.capabilityMappedAt.toISOString(),
     defaultSkillIds: [],
     hiredCount: 0,
+    skills: [],
   }
 }
 
 /** M58 R25: two grouped reads for the whole page, never one per row -- the persona's default skill
- *  ids and how many people were hired from it. */
+ *  ids and how many people were hired from it. Workforce cards widens the first read to the chip
+ *  columns ({@link CARD_SKILL_SELECT}) in the SAME query, so the page is still two round trips. */
 async function withPersonaSkills(rows: readonly CatalogRowView[]): Promise<readonly CatalogRowView[]> {
   const ids = rows.map((row) => row.id)
   if (ids.length === 0) return rows
   const [skills, hired] = await Promise.all([
     prisma.templateSkill.findMany({
       where: { templateId: { in: ids } },
-      select: { templateId: true, skillId: true },
+      select: { templateId: true, skillId: true, skill: { select: CARD_SKILL_SELECT } },
       orderBy: [{ templateId: 'asc' }, { skillId: 'asc' }],
     }),
     prisma.person.groupBy({ by: ['templateId'], where: { templateId: { in: ids } }, _count: { _all: true } }),
   ])
   const skillsBy = new Map<string, string[]>()
+  const chipsBy = new Map<string, CardSkillRow[]>()
   for (const row of skills) {
     const list = skillsBy.get(row.templateId)
     if (list === undefined) skillsBy.set(row.templateId, [row.skillId])
     else list.push(row.skillId)
+    const chip = cardSkillOf(row.skill, 'persona')
+    const chips = chipsBy.get(row.templateId)
+    if (chips === undefined) chipsBy.set(row.templateId, [chip])
+    else chips.push(chip)
   }
   const hiredBy = new Map(
     hired.flatMap((group) => (group.templateId === null ? [] : [[group.templateId, group._count._all] as const])),
@@ -1111,8 +1124,36 @@ async function withPersonaSkills(rows: readonly CatalogRowView[]): Promise<reado
   return rows.map((row) => ({
     ...row,
     defaultSkillIds: skillsBy.get(row.id) ?? [],
+    skills: (chipsBy.get(row.id) ?? []).toSorted(byCardOrder),
     hiredCount: hiredBy.get(row.id) ?? 0,
   }))
+}
+
+/** One persona's default skills and hired count, read BY ID -- {@link withPersonaSkills}' two
+ *  columns for a single template. */
+export interface PersonaDefaultSkillsView {
+  readonly defaultSkillIds: readonly string[]
+  readonly hiredCount: number
+}
+
+/**
+ * The by-id read behind `GET /api/org/templates/[id]/skills` (Duplicates data-loss fix): the
+ * drawer's default-skills editor PATCHes the WHOLE set, so it must never start from a set it does
+ * not know. A persona opened from a drawer's Duplicates group is commonly not on the loaded catalog
+ * page; the drawer reads its set here instead of guessing `[]` -- a guess whose first Add wiped the
+ * persona's defaults, and with them everybody hired from it. Same order as the page read
+ * (`skillId` ascending), so the two never disagree about what the editor lists first.
+ */
+export async function readPersonaDefaultSkills(
+  templateId: string,
+): Promise<Result<PersonaDefaultSkillsView, ControlRefusal>> {
+  const template = await prisma.slaveTemplate.findUnique({ where: { id: templateId }, select: { id: true } })
+  if (template === null) return err({ kind: 'template_not_found', templateId })
+  const [links, hiredCount] = await Promise.all([
+    prisma.templateSkill.findMany({ where: { templateId }, select: { skillId: true }, orderBy: { skillId: 'asc' } }),
+    prisma.person.count({ where: { templateId } }),
+  ])
+  return ok({ defaultSkillIds: links.map((link) => link.skillId), hiredCount })
 }
 
 /** Every slave template, UNPAGED and unfiltered -- the shape `CompanyManager`'s member `<select>`,

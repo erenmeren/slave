@@ -1,0 +1,363 @@
+// @vitest-environment jsdom
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { CapabilityRecord } from '@slave-of-ai/domain'
+import { CARD_GRID_COLUMNS, WorkforceCard, WorkforceCardGrid } from '../src/components/workforce/WorkforceCard.js'
+import type { CardSkillRow } from '../src/lib/cardSkills.js'
+import type { SkillCatalogueRow } from '../src/server/persons.js'
+import type { SkillTarget } from '../src/lib/skillWrites.js'
+
+const chip = (skillId: string, name: string, over: Partial<CardSkillRow> = {}): CardSkillRow => ({
+  skillId,
+  name,
+  providerName: 'personal',
+  missing: false,
+  process: false,
+  state: 'persona',
+  ...over,
+})
+
+const CATALOGUE: readonly SkillCatalogueRow[] = [
+  { skillId: 's-sql', name: 'sql', providerName: 'personal', description: 'writes sql', missing: false },
+  { skillId: 's-pdf', name: 'pdf', providerName: 'personal', description: 'makes pdfs', missing: false },
+]
+
+const TAXONOMY: readonly CapabilityRecord[] = [
+  { key: 'frontend.styling', label: 'Styling', domain: 'frontend', role: 'frontend', synonyms: [] },
+]
+
+const PERSONA: SkillTarget = { kind: 'persona', templateId: 't1' }
+const PERSON: SkillTarget = { kind: 'person', personId: 'p1', personaId: 't1', personaName: 'Builder' }
+
+type CardProps = React.ComponentProps<typeof WorkforceCard>
+
+function renderCard(over: Partial<CardProps> = {}): CardProps {
+  const props: CardProps = {
+    variant: 'persona',
+    testId: 'catalog-row-t1',
+    tone: 'idle',
+    name: 'Core Builder',
+    division: 'engineering',
+    capabilityKeys: [],
+    taxonomy: TAXONOMY,
+    skills: [],
+    workflow: { steps: [], total: 0 },
+    target: PERSONA,
+    catalogue: CATALOGUE,
+    openTestId: 'catalog-open-t1',
+    onOpen: vi.fn(),
+    onChanged: vi.fn(),
+    ...over,
+  }
+  render(<WorkforceCard {...props} />)
+  return props
+}
+
+let fetchMock: ReturnType<typeof vi.fn>
+
+beforeEach(() => {
+  fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+  vi.stubGlobal('fetch', fetchMock)
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+describe('WorkforceCard chips', () => {
+  it('marks a local skill 🧩 and a plugin skill 🔌, naming the plugin in the tooltip', () => {
+    renderCard({ skills: [chip('a', 'pdf'), chip('b', 'frontend-design', { providerName: 'plugin:frontend' })] })
+    const plugin = screen.getByTestId('card-skill-b')
+    expect(plugin.getAttribute('data-source')).toBe('plugin')
+    expect(within(plugin).getByTestId('card-skill-glyph').textContent).toBe('🔌')
+    expect(within(plugin).getByTestId('card-skill-glyph').getAttribute('title')).toBe('from the frontend plugin')
+    expect(within(screen.getByTestId('card-skill-a')).getByTestId('card-skill-glyph').textContent).toBe('🧩')
+  })
+
+  it('on a person card, says where each skill came from and strikes a revoked one with a restore', () => {
+    renderCard({
+      variant: 'person',
+      testId: 'person-row-p1',
+      target: PERSON,
+      openTestId: 'person-open',
+      skills: [chip('a', 'pdf'), chip('b', 'sql', { state: 'person' }), chip('c', 'lint', { state: 'revoked' })],
+    })
+    expect(within(screen.getByTestId('card-skill-a')).getByTestId('card-skill-origin').textContent).toBe('from persona')
+    expect(within(screen.getByTestId('card-skill-b')).getByTestId('card-skill-origin').textContent).toBe('this person only')
+    const revoked = screen.getByTestId('card-skill-c')
+    expect(revoked.getAttribute('data-origin')).toBe('revoked')
+    expect(within(revoked).getByTestId('card-skill-name').className).toContain('line-through')
+    expect(screen.getByTestId('card-skill-restore-c')).toBeTruthy()
+  })
+
+  it('never marks the origin on a persona card -- every chip there is the persona\'s', () => {
+    renderCard({ skills: [chip('a', 'pdf')] })
+    expect(screen.queryByTestId('card-skill-origin')).toBeNull()
+  })
+
+  it('flags a process skill ⚠️ with the sentence in its tooltip', () => {
+    renderCard({ skills: [chip('a', 'writing-plans', { process: true })] })
+    const mark = within(screen.getByTestId('card-skill-a')).getByTestId('card-skill-process')
+    expect(mark.textContent).toBe('⚠️')
+    expect(mark.getAttribute('title')).toBe('Process skill: can make a worker plan and delegate instead of doing its task.')
+  })
+
+  // Final review minor: the glyph is `aria-hidden` and a `title` is not read reliably, so the
+  // source and the missing state are ALSO visually hidden text a screen reader reads with the name.
+  it('says the source and a missing state in visually hidden text, not only in tooltips', () => {
+    renderCard({ skills: [chip('b', 'frontend-design', { providerName: 'plugin:frontend', missing: true })] })
+    const hidden = within(screen.getByTestId('card-skill-b')).getByTestId('card-skill-sr')
+    expect(hidden.className).toContain('sr-only')
+    expect(hidden.textContent).toBe(', from the frontend plugin, missing from disk')
+  })
+
+  it('greys a skill missing from disk but still lets it be removed', () => {
+    renderCard({ skills: [chip('a', 'archived', { missing: true })] })
+    const missing = screen.getByTestId('card-skill-a')
+    expect(missing.getAttribute('data-missing')).toBe('true')
+    expect(missing.getAttribute('title')).toBe('archived — missing from disk')
+    expect((screen.getByTestId('card-skill-remove-a') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('shows six skills and a +N, three specialties and a +N', () => {
+    renderCard({
+      skills: Array.from({ length: 8 }, (_, index) => chip(`s${String(index)}`, `skill-${String(index)}`)),
+      capabilityKeys: [],
+      capabilityText: ['One', 'Two', 'Three', 'Four', 'Five'],
+    })
+    expect(screen.getAllByTestId(/^card-skill-s\d$/u)).toHaveLength(6)
+    expect(screen.getByTestId('card-skills-more').textContent).toBe('+2')
+    expect(screen.getAllByTestId('catalog-capability-chip').map((node) => node.textContent)).toEqual(['One', 'Two', 'Three'])
+    expect(screen.getByTestId('catalog-capability-more').textContent).toBe('+2')
+  })
+
+  it('labels taxonomy keys, and falls back to the key itself', () => {
+    renderCard({ capabilityKeys: ['frontend.styling', 'qa.unknown'] })
+    expect(screen.getAllByTestId('catalog-capability-chip').map((node) => node.textContent)).toEqual(['Styling', 'qa.unknown'])
+  })
+
+  it('truncates a very long skill name inside the chip instead of widening the card', () => {
+    renderCard({ skills: [chip('a', `a-${'very-long-skill-name-'.repeat(8)}`, { providerName: `plugin:${'x'.repeat(80)}` })] })
+    expect(screen.getByTestId('card-skill-a').className).toContain('max-w-full')
+    expect(screen.getByTestId('card-skill-a').className).toContain('min-w-0')
+    expect(within(screen.getByTestId('card-skill-a')).getByTestId('card-skill-name').className).toContain('truncate')
+  })
+})
+
+describe('WorkforceCard workflow', () => {
+  it('shows the first three steps and "+N steps"', () => {
+    renderCard({ workflow: { steps: ['Read', 'Plan', 'Build'], total: 5 } })
+    expect(screen.getAllByTestId('card-workflow-step').map((node) => node.textContent)).toEqual(['1. Read', '2. Plan', '3. Build'])
+    expect(screen.getByTestId('card-workflow-more').textContent).toBe('+2 steps')
+  })
+
+  it('says so when the profile has no workflow, rather than hiding the block', () => {
+    renderCard({ workflow: { steps: [], total: 0 } })
+    expect(screen.getByTestId('card-workflow-empty').textContent).toBe('No workflow in this profile')
+    expect(screen.queryByTestId('card-workflow-more')).toBeNull()
+  })
+
+  it('draws no "+N" when every step is shown', () => {
+    renderCard({ workflow: { steps: ['Only'], total: 1 } })
+    expect(screen.queryByTestId('card-workflow-more')).toBeNull()
+  })
+})
+
+describe('WorkforceCard opening', () => {
+  it('a click on the body opens it; the name button opens it once; a chip control does not open it', () => {
+    const props = renderCard({ skills: [chip('a', 'pdf')] })
+    fireEvent.click(screen.getByTestId('avatar-tile'))
+    expect(props.onOpen).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByTestId('catalog-open-t1'))
+    expect(props.onOpen).toHaveBeenCalledTimes(2)
+    fireEvent.click(screen.getByTestId('card-skill-add'))
+    expect(props.onOpen).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('WorkforceCard writes', () => {
+  it('adds from the picker as a persona DELTA, shows the chip at once, and reports the write for the row to patch in place', async () => {
+    const props = renderCard()
+    fireEvent.click(screen.getByTestId('card-skill-add'))
+    fireEvent.click(screen.getByTestId('skill-picker-option-s-sql'))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('skill-picker-confirm'))
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/org/templates/t1/skills', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ add: ['s-sql'] }),
+    })
+    expect(screen.getByTestId('card-skill-s-sql')).toBeTruthy()
+    // Fix round 1: a persona-card add PATCHes the persona's own skill list, which reaches every
+    // person hired from it -- the outcome must say so (`scope: 'persona'`), not just "changed".
+    expect(props.onChanged).toHaveBeenCalledWith({
+      kind: 'added',
+      skill: { skillId: 's-sql', name: 'sql', providerName: 'personal', missing: false, process: false, state: 'persona' },
+      scope: 'persona',
+      personaId: 't1',
+    })
+  })
+
+  it('adds from the picker as a person-only grant when the default scope is left alone', async () => {
+    const props = renderCard({ variant: 'person', testId: 'person-row-p1', target: PERSON, openTestId: 'person-open' })
+    fireEvent.click(screen.getByTestId('card-skill-add'))
+    fireEvent.click(screen.getByTestId('skill-picker-option-s-sql'))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('skill-picker-confirm'))
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/persons/p1/skills', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant: ['s-sql'] }),
+    })
+    expect(screen.getByTestId('card-skill-s-sql')).toBeTruthy()
+    // Only this person's own record changed -- the parent patches just this row.
+    expect(props.onChanged).toHaveBeenCalledWith({
+      kind: 'added',
+      skill: { skillId: 's-sql', name: 'sql', providerName: 'personal', missing: false, process: false, state: 'person' },
+      scope: 'person',
+      personaId: null,
+    })
+  })
+
+  it('adds from the picker to the persona when a person card is scoped "Everyone from <persona>"', async () => {
+    const props = renderCard({ variant: 'person', testId: 'person-row-p1', target: PERSON, openTestId: 'person-open' })
+    fireEvent.click(screen.getByTestId('card-skill-add'))
+    fireEvent.click(screen.getByTestId('skill-picker-option-s-sql'))
+    fireEvent.click(screen.getByTestId('skill-picker-scope-persona'))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('skill-picker-confirm'))
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/org/templates/t1/skills', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ add: ['s-sql'] }),
+    })
+    expect(screen.getByTestId('card-skill-s-sql')).toBeTruthy()
+    // A write scoped to "everyone from <persona>" reaches every person hired from it, same as a
+    // persona-card write -- the outcome must say `scope: 'persona'` here too, naming that persona.
+    expect(props.onChanged).toHaveBeenCalledWith({
+      kind: 'added',
+      skill: { skillId: 's-sql', name: 'sql', providerName: 'personal', missing: false, process: false, state: 'persona' },
+      scope: 'persona',
+      personaId: 't1',
+    })
+  })
+
+  it('rolls the chip back and says why when the write is refused', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'the skill sql is missing from disk; it can be linked again once a skills scan finds it' }), {
+        status: 409,
+      }),
+    )
+    const props = renderCard()
+    fireEvent.click(screen.getByTestId('card-skill-add'))
+    fireEvent.click(screen.getByTestId('skill-picker-option-s-sql'))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('skill-picker-confirm'))
+    })
+    expect(screen.queryByTestId('card-skill-s-sql')).toBeNull()
+    expect(screen.getByTestId('card-skill-error').textContent).toContain('missing from disk')
+    // A refusal is also a reason to re-read: another edit may have raced this one. `refused`
+    // carries nothing else -- the chip already rolled itself back on this card.
+    expect(props.onChanged).toHaveBeenCalledWith({ kind: 'refused' })
+  })
+
+  it('on a person card, removing an inherited skill asks who loses it', async () => {
+    const props = renderCard({
+      variant: 'person',
+      testId: 'person-row-p1',
+      target: PERSON,
+      openTestId: 'person-open',
+      skills: [chip('a', 'pdf')],
+    })
+    fireEvent.click(screen.getByTestId('card-skill-remove-a'))
+    expect(screen.getByTestId('card-skill-remove-scope-persona').textContent).toBe('Everyone from Builder')
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('card-skill-remove-scope-persona'))
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/org/templates/t1/skills', expect.objectContaining({ body: JSON.stringify({ remove: ['a'] }) }))
+    // "Everyone from <persona>" PATCHes the persona's own list -- every person hired from it loses
+    // the skill, not just this row.
+    expect(props.onChanged).toHaveBeenCalledWith({ kind: 'removed', skillId: 'a', scope: 'persona', personaId: 't1' })
+  })
+
+  it("on a person card, removing the person's own grant clears it without asking", async () => {
+    const props = renderCard({
+      variant: 'person',
+      testId: 'person-row-p1',
+      target: PERSON,
+      openTestId: 'person-open',
+      skills: [chip('b', 'sql', { state: 'person' })],
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('card-skill-remove-b'))
+    })
+    expect(screen.queryByTestId('card-skill-remove-scope')).toBeNull()
+    expect(fetchMock).toHaveBeenCalledWith('/api/persons/p1/skills', expect.objectContaining({ body: JSON.stringify({ clear: ['b'] }) }))
+    expect(props.onChanged).toHaveBeenCalledWith({ kind: 'removed', skillId: 'b', scope: 'person', personaId: null })
+  })
+
+  it('on a person card, restoring a revoked skill clears the revocation and reports a person-scoped write', async () => {
+    const props = renderCard({
+      variant: 'person',
+      testId: 'person-row-p1',
+      target: PERSON,
+      openTestId: 'person-open',
+      skills: [chip('c', 'lint', { state: 'revoked' })],
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('card-skill-restore-c'))
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/persons/p1/skills', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clear: ['c'] }),
+    })
+    // A restore only ever clears THIS person's own revocation -- it never writes the persona.
+    expect(props.onChanged).toHaveBeenCalledWith({
+      kind: 'restored',
+      skill: { skillId: 'c', name: 'lint', providerName: 'personal', missing: false, process: false, state: 'persona' },
+      scope: 'person',
+      personaId: null,
+    })
+  })
+})
+
+// Final review minor: the in-flow picker takes focus when it opens and hands it back to
+// "+ skill" when it closes, and Escape from any control inside it closes it.
+describe('WorkforceCard picker focus', () => {
+  it('focuses the search on open and returns focus to "+ skill" on Cancel', () => {
+    renderCard()
+    const plus = screen.getByTestId('card-skill-add')
+    fireEvent.click(plus)
+    expect(document.activeElement).toBe(screen.getByTestId('skill-picker-search'))
+    fireEvent.click(screen.getByTestId('skill-picker-cancel'))
+    expect(screen.queryByTestId('skill-picker')).toBeNull()
+    expect(document.activeElement).toBe(plus)
+  })
+
+  it('closes on Escape from an option, and returns focus to "+ skill"', () => {
+    renderCard()
+    const plus = screen.getByTestId('card-skill-add')
+    fireEvent.click(plus)
+    fireEvent.keyDown(screen.getByTestId('skill-picker-option-s-sql'), { key: 'Escape' })
+    expect(screen.queryByTestId('skill-picker')).toBeNull()
+    expect(document.activeElement).toBe(plus)
+  })
+})
+
+describe('WorkforceCardGrid', () => {
+  it('lays cards out on the auto-fill grid, as an inline style a gate can read back', () => {
+    render(
+      <WorkforceCardGrid>
+        <span />
+      </WorkforceCardGrid>,
+    )
+    // F9 (controller ruling): `minmax(min(320px, 100%), 1fr)` rather than a plain `minmax(320px, 1fr)`,
+    // so a single card on a viewport under 320px does not force horizontal scroll.
+    expect(CARD_GRID_COLUMNS).toBe('repeat(auto-fill, minmax(min(320px, 100%), 1fr))')
+    expect(screen.getByTestId('workforce-card-grid').style.gridTemplateColumns).toBe(CARD_GRID_COLUMNS)
+  })
+})

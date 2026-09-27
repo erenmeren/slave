@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WorkforceClient, type WorkforceTab } from '../src/components/workforce/WorkforceClient.js'
 import WorkforcePage from '../src/app/workforce/page.js'
@@ -8,9 +8,10 @@ import { ModeProvider } from '../src/components/mode/ModeProvider.js'
 import { MODE_STORAGE_KEY } from '../src/lib/modeStorage.js'
 import type { AllSlaveRow, AllSlavesPage, CatalogRowView, WorkforceCatalogView } from '../src/server/org.js'
 import type { EvidencePage } from '../src/server/evidence.js'
-import type { PersonDetail, PersonRow } from '../src/server/persons.js'
+import type { PeoplePageView, PersonCardRow, PersonDetail, PersonRow } from '../src/server/persons.js'
 import type { SlaveCardData } from '../src/server/overview.js'
 import type { SkillsPage } from '../src/server/skills.js'
+import { CATALOG_SEARCH_DEBOUNCE_MS } from '../src/lib/catalogFilters.js'
 
 const routerRefresh = vi.fn()
 const routerReplace = vi.fn()
@@ -51,6 +52,7 @@ function HeaderActionSlot(): React.JSX.Element {
  */
 const listWorkforceCatalogPage = vi.fn(async (_filters?: unknown) => catalogPage([templateRow()]))
 const listTemplates = vi.fn(async () => [templateRow()] as readonly CatalogRowView[])
+const listPeoplePage = vi.fn(async (_filters?: unknown) => peoplePageOf([]))
 
 vi.mock('../src/server/org.js', () => ({
   listAllSlaves: async () => page([]),
@@ -74,6 +76,7 @@ vi.mock('../src/server/skills.js', () => ({ buildSkillsPage: async () => skillsP
 vi.mock('../src/server/persons.js', () => ({
   listPersons: async () => [],
   listSkillCatalogue: async () => [],
+  listPeoplePage: (filters?: unknown) => listPeoplePage(filters),
 }))
 
 // M53 R12: the sixth tab's read opens Postgres like the others, so the page's loader is a stub and
@@ -149,6 +152,18 @@ function personRow(over: Partial<PersonRow> = {}): PersonRow {
     ...over,
   }
 }
+
+/** A People row as a CARD reads it (workforce cards): the row plus the three card fields. */
+function personCard(row: PersonRow): PersonCardRow {
+  return { ...row, division: null, skills: [], workflowPreview: { steps: [], total: 0 } }
+}
+
+const peoplePageOf = (rows: readonly PersonRow[]): PeoplePageView => ({
+  rows: rows.map(personCard),
+  facets: { domains: [], divisions: [] },
+  total: rows.length,
+  nextCursor: null,
+})
 
 function personDetail(over: Partial<PersonDetail> = {}): PersonDetail {
   const row = personRow()
@@ -255,6 +270,8 @@ function templateRow(over: Partial<CatalogRowView> = {}): CatalogRowView {
     duplicateCount: 0,
     defaultSkillIds: [],
     hiredCount: 0,
+    skills: [],
+    workflowPreview: { steps: [], total: 0 },
     ...over,
   }
 }
@@ -269,7 +286,7 @@ const emptyEvidence = (): EvidencePage => ({
 
 const catalogPage = (rows: readonly CatalogRowView[]): WorkforceCatalogView => ({
   rows,
-  facets: { divisions: [], capabilities: [], skills: [] },
+  facets: { divisions: [], capabilities: [], skills: [], domains: [] },
   // A fixture IS the whole answer (M55 R3): the total is what it holds and there is no next page.
   total: rows.length,
   nextCursor: null,
@@ -319,7 +336,7 @@ function TestWorkforceClient(
           people={[personRow()]}
           peopleDepartments={[{ companyTeamId: 'ct1', name: 'Engineering' }]}
           skillCatalogue={[]}
-          skillHolders={{}}
+          peoplePage={peoplePageOf(props.people ?? [personRow()])}
           {...props}
         />
       </HeaderActionProvider>
@@ -327,23 +344,8 @@ function TestWorkforceClient(
   )
 }
 
-/**
- * `PeopleTable`'s `DataTable` is virtualized now (Task 9): `@tanstack/react-virtual` measures its
- * scroll viewport via `offsetWidth`/`offsetHeight` when no `ResizeObserver` is present -- jsdom
- * has none -- and without this every case in this file that opens a person row would find NONE
- * rendered, since jsdom's unmeasured viewport is 0px tall. The same idiom
- * `test/activity-page.test.tsx`'s own `mockElementSizes` uses, sized generously (every fixture
- * here is a handful of rows, never `people-table.test.tsx`'s 500) so every row this file's fixtures
- * ever hand `WorkforceClient` renders.
- */
-function mockElementSizes(): void {
-  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 800 })
-  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 2000 })
-}
-
 beforeEach(() => {
   installStorage()
-  mockElementSizes()
 })
 
 afterEach(() => {
@@ -368,7 +370,7 @@ describe('WorkforceClient tabs (M44 R1)', () => {
   it('renders the people table by default, with the other three tabs beside it', () => {
     render(<TestWorkforceClient />)
     expect(screen.getByTestId('people-rows')).toBeTruthy()
-    expect(screen.getByTestId('person-name').textContent).toContain('Alex')
+    expect(screen.getByTestId('person-open').textContent).toContain('Alex')
     expect(screen.getByTestId('workforce-tab-slaves').getAttribute('aria-selected')).toBe('true')
     // FOUR since M57 R13 folded Departments into People and Runbooks into Skills & runbooks
     // (spec erratum E15) -- the two folded tabs are segments under their new parent now, not
@@ -688,6 +690,35 @@ describe('WorkforceClient row click opens the panel', () => {
     expect(routerReplace).toHaveBeenLastCalledWith('/workforce', { scroll: false })
   })
 
+  // Controller ruling F2, CLIENT side only: opening a person writes `?slave=` and closing clears
+  // it, and neither may reset People to page one by itself. `router.replace` is a mock here, so no
+  // new server `initial` arrives -- that half is `people-cards.test.tsx`'s "a new page one" cases.
+  it('does not reset the loaded "Show more" pages on the client when a person is opened and closed', async () => {
+    const later = personRow({ personId: 'p2', name: 'Later', seats: [] })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/persons?cursor=p1') return new Response(JSON.stringify({ ...peoplePageOf([later]), total: 2 }), { status: 200 })
+      if (url === '/api/persons/p2') return new Response(JSON.stringify(personDetail({ personId: 'p2', name: 'Later', seats: [], allSeats: [] })), { status: 200 })
+      throw new Error(`unexpected fetch ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<TestWorkforceClient peoplePage={{ ...peoplePageOf([personRow()]), total: 2, nextCursor: 'p1' }} />)
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('people-more'))
+    })
+    const card = await screen.findByTestId('person-row-p2')
+
+    fireEvent.click(within(card).getByTestId('person-open'))
+    const sheet = await screen.findByTestId('person-sheet')
+    expect(routerReplace).toHaveBeenCalledWith('/workforce?slave=p2', { scroll: false })
+    expect(screen.getAllByTestId(/^person-row-/u).map((row) => row.getAttribute('data-person-id'))).toEqual(['p1', 'p2'])
+    expect(screen.getByTestId('person-row-p2')).toBe(card)
+
+    fireEvent.click(within(sheet).getByTestId('sheet-close'))
+    expect(screen.getAllByTestId(/^person-row-/u).map((row) => row.getAttribute('data-person-id'))).toEqual(['p1', 'p2'])
+  })
+
   it('disables profile and runtime-roles save for a person in the pool (no seat)', async () => {
     const pooled = personRow({ seats: [], state: 'pool', stateLabel: 'IN THE POOL' })
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -814,6 +845,182 @@ describe('WorkforceClient row click opens the panel', () => {
 // MOVED from `projects-page.test.tsx` (M44 t3): the catalog these assertions describe left the
 // Projects home for the Workforce Catalog tab. M42 t4's subject is unchanged -- where an operator
 // reads what an import did.
+/**
+ * Final review, findings 2 and 3. `useSearchParams` is a mock that reads `search`; Next syncs a
+ * `replaceState` into it AND re-renders its readers, which `syncUrl` stands in for (the caller
+ * re-renders). The address bar itself is jsdom's.
+ */
+const syncUrl = (): void => {
+  search = window.location.search.replace(/^\?/u, '')
+}
+
+/** One keystroke in a filter bar's search box, plus the box's debounce. */
+const typeInto = async (testId: string, value: string, within_: HTMLElement = document.body): Promise<void> => {
+  await act(async () => {
+    fireEvent.change(within(within_).getByTestId(testId), { target: { value } })
+    await new Promise((resolve) => setTimeout(resolve, CATALOG_SEARCH_DEBOUNCE_MS + 20))
+  })
+}
+
+const shownPeople = (): (string | null)[] =>
+  screen.getAllByTestId(/^person-row-/u).map((row) => row.getAttribute('data-person-id'))
+
+describe('a tab round trip keeps each list matching its filter bar (final review, finding 2)', () => {
+  const reacty = personRow({ personId: 'p2', name: 'Reacty' })
+
+  beforeEach(() => {
+    window.history.replaceState(null, '', '/workforce')
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    window.history.replaceState(null, '', '/workforce')
+  })
+
+  const stubPeople = (): ReturnType<typeof vi.fn> => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/persons?q=react')) return new Response(JSON.stringify(peoplePageOf([reacty])), { status: 200 })
+      if (url.startsWith('/api/persons')) return new Response(JSON.stringify(peoplePageOf([personRow(), reacty])), { status: 200 })
+      if (url.startsWith('/api/org/catalog')) return new Response(JSON.stringify(catalogPage([templateRow()])), { status: 200 })
+      throw new Error(`unexpected fetch ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  /** Renders the page the way Next would after a `replaceState`: `useSearchParams` moved, so every
+   *  reader of it renders again before the next click. */
+  let rerender: (ui: React.ReactElement) => void = () => {}
+  let props: Partial<WorkforceProps> = {}
+  const renderClient = (next: Partial<WorkforceProps>): void => {
+    props = next
+    rerender = render(<TestWorkforceClient {...props} />).rerender
+  }
+
+  const switchTo = async (tab: WorkforceTab): Promise<void> => {
+    syncUrl()
+    rerender(<TestWorkforceClient {...props} />)
+    await act(async () => {
+      fireEvent.click(screen.getByTestId(`workforce-tab-${tab}`))
+    })
+  }
+
+  it('People: a search, a trip to Catalog and back -- the bar and the list still agree', async () => {
+    stubPeople()
+    renderClient({ people: [personRow(), reacty], catalog: catalogPage([templateRow()]) })
+
+    await typeInto('people-search', 'react')
+    expect(shownPeople()).toEqual(['p2'])
+
+    await switchTo('catalog')
+    await switchTo('slaves')
+
+    expect((screen.getByTestId('people-search') as HTMLInputElement).value).toBe('react')
+    await waitFor(() => expect(shownPeople()).toEqual(['p2']))
+  })
+
+  it('People: a shared filter set on Catalog filters People when it opens', async () => {
+    stubPeople()
+    renderClient({ people: [personRow(), reacty], catalog: catalogPage([templateRow()]) })
+
+    await switchTo('catalog')
+    await typeInto('catalog-search', 'react')
+    await switchTo('slaves')
+
+    expect((screen.getByTestId('people-search') as HTMLInputElement).value).toBe('react')
+    await waitFor(() => expect(shownPeople()).toEqual(['p2']))
+  })
+
+  it('Catalog: a card write survives a trip to People and back', async () => {
+    const skill = { skillId: 's-sql', name: 'sql', providerName: 'personal', description: 'writes sql', missing: false }
+    let linked = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === '/api/org/templates/t1/skills') {
+          linked = true
+          return new Response(JSON.stringify({ ok: true }), { status: 200 })
+        }
+        if (url.startsWith('/api/org/catalog')) {
+          const chips = linked ? [{ skillId: 's-sql', name: 'sql', providerName: 'personal', missing: false, process: false, state: 'persona' as const }] : []
+          return new Response(JSON.stringify(catalogPage([templateRow({ skills: chips, defaultSkillIds: linked ? ['s-sql'] : [] })])), { status: 200 })
+        }
+        if (url.startsWith('/api/persons')) return new Response(JSON.stringify(peoplePageOf([personRow()])), { status: 200 })
+        throw new Error(`unexpected fetch ${url}`)
+      }),
+    )
+    renderClient({ initialTab: 'catalog', catalog: catalogPage([templateRow()]), skillCatalogue: [skill] })
+
+    const card = screen.getByTestId('catalog-row-t1')
+    fireEvent.click(within(card).getByTestId('card-skill-add'))
+    fireEvent.click(within(card).getByTestId('skill-picker-option-s-sql'))
+    await act(async () => {
+      fireEvent.click(within(card).getByTestId('skill-picker-confirm'))
+    })
+    expect(within(screen.getByTestId('catalog-row-t1')).getByTestId('card-skill-s-sql')).toBeTruthy()
+
+    await switchTo('slaves')
+    await switchTo('catalog')
+
+    await waitFor(() => expect(within(screen.getByTestId('catalog-row-t1')).getByTestId('card-skill-s-sql')).toBeTruthy())
+  })
+})
+
+describe('the hire sheet keeps its own filters (final review, finding 3)', () => {
+  beforeEach(() => {
+    mode = 'simple'
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    window.history.replaceState(null, '', '/workforce')
+  })
+
+  const stub = (): ReturnType<typeof vi.fn> => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/org/catalog?')) return new Response(JSON.stringify(catalogPage([])), { status: 200 })
+      if (url === '/api/org/catalog') {
+        return new Response(JSON.stringify(catalogPage([templateRow(), templateRow({ id: 't2', name: 'Verifier' })])), { status: 200 })
+      }
+      throw new Error(`unexpected fetch ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it("does not open pre-filtered by People's search", async () => {
+    window.history.replaceState(null, '', '/workforce?q=alice')
+    search = 'q=alice'
+    const fetchMock = stub()
+    render(<TestWorkforceClient catalog={catalogPage([])} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('hire-from-catalogue'))
+    })
+    const sheet = screen.getByTestId('hire-sheet')
+    expect((within(sheet).getByTestId('catalog-search') as HTMLInputElement).value).toBe('')
+    await waitFor(() => expect(within(sheet).getByTestId('catalog-row-t2')).toBeTruthy())
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/org/catalog?q=alice')
+  })
+
+  it("never writes its search into the URL, and leaves People's list alone", async () => {
+    window.history.replaceState(null, '', '/workforce')
+    const fetchMock = stub()
+    render(<TestWorkforceClient catalog={catalogPage([templateRow()])} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('hire-from-catalogue'))
+    })
+    await typeInto('catalog-search', 'builder', screen.getByTestId('hire-sheet'))
+
+    expect(window.location.search).toBe('')
+    expect(fetchMock).toHaveBeenCalledWith('/api/org/catalog?q=builder')
+    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/persons'))).toBe(false)
+    expect(shownPeople()).toEqual(['p1'])
+  })
+})
+
 describe('the catalog import surfaces', () => {
   const imported = templateRow({
     id: 't2',
@@ -1007,6 +1214,13 @@ describe('the Workforce page seeds the catalog from the URL (M46 M1)', () => {
 
   it('still falls back to the Slaves tab for an unknown ?tab=', async () => {
     expect((await renderPage({ tab: 'nonsense' })).props.initialTab).toBe('slaves')
+  })
+
+  it('seeds People from the same URL', async () => {
+    listPeoplePage.mockClear()
+    await renderPage({ state: 'pool', specialty: 'qa', skills: 'none' })
+
+    expect(listPeoplePage).toHaveBeenCalledWith({ specialty: 'qa', noSkills: true, state: 'pool' })
   })
 
   // M53 R12: both tables are `GROUP BY`s, so the domain chip has to reach the read that groups.
