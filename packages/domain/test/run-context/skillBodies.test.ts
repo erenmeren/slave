@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SKILL_BODIES_MAX_CHARS, SKILL_BODY_MAX_CHARS, fitSkillBodies } from '../../src/run-context/skillBodies.js'
+import { SKILL_BODIES_MAX_CHARS, SKILL_BODY_MAX_CHARS, dropLastSkillBody, fitSkillBodies } from '../../src/run-context/skillBodies.js'
 
 describe('fitSkillBodies', () => {
   it('puts persona defaults first, then grants, each by name', () => {
@@ -44,5 +44,36 @@ describe('fitSkillBodies', () => {
     expect(out.inlined).toEqual(['fine'])
     expect(out.omitted).toEqual([])
     expect(out.unreadable).toEqual(['blank', 'gone'])
+  })
+
+})
+
+describe('dropLastSkillBody', () => {
+  it('drops grants before persona defaults, keeping omitted in the fit order', () => {
+    const big = 'y'.repeat(SKILL_BODY_MAX_CHARS)
+    const fitted = fitSkillBodies([
+      { name: 'grant', origin: 'person', body: big + 'z' },
+      { name: 'default', origin: 'persona', body: 'short' },
+      { name: 'late', origin: 'person', body: big },
+      { name: 'later', origin: 'person', body: big },
+      { name: 'blank', origin: 'person', body: null },
+    ])
+    expect(fitted.inlined).toEqual(['default', 'grant', 'late'])
+    expect(fitted.truncated).toEqual(['grant'])
+    expect(fitted.omitted).toEqual(['later'])
+
+    const once = dropLastSkillBody(fitted)
+    expect(once.inlined).toEqual(['default', 'grant'])
+    expect(once.omitted).toEqual(['late', 'later'])
+
+    const twice = dropLastSkillBody(once)
+    expect(twice.inlined).toEqual(['default'])
+    expect(twice.truncated).toEqual([])
+    expect(twice.omitted).toEqual(['grant', 'late', 'later'])
+    expect(twice.unreadable).toEqual(['blank'])
+
+    const empty = dropLastSkillBody(dropLastSkillBody(twice))
+    expect(empty.blocks).toEqual([])
+    expect(empty.omitted).toEqual(['default', 'grant', 'late', 'later'])
   })
 })

@@ -13,6 +13,8 @@ import {
   PROFILE_MAX_CHARS,
   REPLAN_INSTRUCTIONS,
   REVIEW_VERDICT_INSTRUCTIONS,
+  RUN_PROMPT_MAX_BYTES,
+  SKILL_BODY_MAX_CHARS,
   emptyProfileSpec,
   runContextManifestSchema,
   type Manifest,
@@ -289,6 +291,42 @@ describe('buildRunContext', () => {
       expect((refusal as RunContextRefused).length).toBe(PROFILE_MAX_CHARS + 1)
       expect((refusal as RunContextRefused).limit).toBe(PROFILE_MAX_CHARS)
       // Nothing recorded: a run that was refused before it was rendered never had a context.
+      expect(await prisma.runContext.count({ where: { runId: fixture.runId } })).toBe(0)
+    })
+
+    // Final review I2: the prompt is ONE argv string, and Linux refuses an argument of 131072 bytes
+    // or more (E2BIG). '€' is one character and three UTF-8 bytes, which is how a profile inside its
+    // own character cap still weighs more than the kernel allows.
+    it('drops inlined skill bodies, grants first, until the prompt fits its byte budget', async () => {
+      await prisma.slave.update({ where: { id: fixture.slaveId }, data: { profile: '€'.repeat(30_000) } })
+      const body = (letter: string): string => letter.repeat(SKILL_BODY_MAX_CHARS)
+      await giveToPersona(fixture, 'persona-rule', body('p'))
+      await assign(fixture, 'grant-a', { body: body('a') })
+      await assign(fixture, 'grant-b', { body: body('b') })
+
+      const { prompt, manifest } = await buildImplementation(fixture)
+
+      expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThanOrEqual(RUN_PROMPT_MAX_BYTES)
+      // 90k bytes of profile plus three 8k bodies is over; one body out is under.
+      expect(skillsSource(manifest)).toMatchObject({ inlined: ['persona-rule', 'grant-a'], omitted: ['grant-b'] })
+      expect(prompt).toContain('Not shown here for length, but installed: grant-b.')
+      expect(prompt).toContain(body('a'))
+      expect(prompt).not.toContain(body('b'))
+      // What is recorded is what is sent.
+      expect((await prisma.runContext.findUniqueOrThrow({ where: { runId: fixture.runId } })).prompt).toBe(prompt)
+    })
+
+    it('refuses a prompt still over its byte budget with no skill body left to drop', async () => {
+      await prisma.slave.update({ where: { id: fixture.slaveId }, data: { profile: '€'.repeat(40_000) } })
+      await assign(fixture, 'grant-a', { body: 'a'.repeat(100) })
+
+      const refusal = await buildImplementation(fixture).catch((error: unknown): unknown => error)
+
+      expect(refusal).toBeInstanceOf(RunContextRefused)
+      expect((refusal as RunContextRefused).kind).toBe('prompt_too_long')
+      expect((refusal as RunContextRefused).limit).toBe(RUN_PROMPT_MAX_BYTES)
+      expect((refusal as RunContextRefused).length).toBeGreaterThan(RUN_PROMPT_MAX_BYTES)
+      expect((refusal as RunContextRefused).message).toContain('bytes')
       expect(await prisma.runContext.count({ where: { runId: fixture.runId } })).toBe(0)
     })
 

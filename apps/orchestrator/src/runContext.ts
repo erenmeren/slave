@@ -7,9 +7,11 @@ import { readSkillBody, runbookForWorkspace, skillRoots, skillSourceDir, type Sk
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   PROFILE_MAX_CHARS,
+  RUN_PROMPT_MAX_BYTES,
   SECTION_ORDER,
   TERMINAL,
   defuseRoutingLiterals,
+  dropLastSkillBody,
   effectiveProfileFor,
   effectiveProfileSpec,
   effectiveSkills,
@@ -23,6 +25,7 @@ import {
   renderHandoff,
   renderRunContext,
   stageOrder,
+  type FittedSkillBodies,
   type Manifest,
   type Runbook,
   type Section,
@@ -57,16 +60,25 @@ export const INJECTED_MARKER = '.slaveofai-injected.json'
  * mean three new branches saying what those three catches already say.
  */
 export class RunContextRefused extends Error {
-  /** The only refusal today (M37 §7): a profile longer than the cap, which is reachable only when
-   *  the cap was lowered after the text was written. */
-  readonly kind: 'profile_too_long'
+  /**
+   * `profile_too_long` (M37 §7): a profile longer than the cap, which is reachable only when the
+   * cap was lowered after the text was written. `limit` and `length` are CHARACTERS.
+   *
+   * `prompt_too_long` (final review I2): the whole rendered prompt is over
+   * {@link RUN_PROMPT_MAX_BYTES} even with every inlined skill body dropped -- the CLI would be
+   * spawned with an argument the kernel refuses (`E2BIG`). `limit` and `length` are UTF-8 BYTES.
+   */
+  readonly kind: 'profile_too_long' | 'prompt_too_long'
   readonly limit: number
   readonly length: number
 
-  constructor(kind: 'profile_too_long', detail: { readonly limit: number; readonly length: number }) {
+  constructor(kind: 'profile_too_long' | 'prompt_too_long', detail: { readonly limit: number; readonly length: number }) {
     super(
-      `run context refused (${kind}): the effective profile is ${String(detail.length)} characters, ` +
-        `over the ${String(detail.limit)} character limit`,
+      kind === 'profile_too_long'
+        ? `run context refused (${kind}): the effective profile is ${String(detail.length)} characters, ` +
+            `over the ${String(detail.limit)} character limit`
+        : `run context refused (${kind}): the prompt is ${String(detail.length)} bytes with no skill ` +
+            `instructions left to drop, over the ${String(detail.limit)} byte limit a single CLI argument can carry`,
     )
     this.name = 'RunContextRefused'
     this.kind = kind
@@ -373,7 +385,7 @@ function skillsSectionText(
   offered: readonly { readonly name: string; readonly description: string }[],
   named: readonly { readonly name: string; readonly description: string }[],
   injection: SkillInjection,
-  fitted: ReturnType<typeof fitSkillBodies>,
+  fitted: FittedSkillBodies,
 ): string {
   if (named.length === 0) return ''
   if (offered.length === 0) {
@@ -917,6 +929,13 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     skills: assigned,
     roots,
   })
+  // Kept for the byte budget at the end (final review I2): where the skills section sits in
+  // `sections`, the fit it was rendered from, and how to render it again from a smaller one.
+  let skills: {
+    readonly index: number
+    fitted: FittedSkillBodies
+    readonly sectionFor: (fitted: FittedSkillBodies) => Section
+  } | null = null
   if (order.includes('skills')) {
     const descriptionOf = new Map(assigned.map((skill) => [skill.name, skill.description]))
     // Both halves are discoverable by the runtime: one because this dispatch copied it, the other
@@ -941,7 +960,7 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     // is read from the WORKTREE's own committed copy, because that -- not this daemon's catalog
     // root -- is the text the repository actually ships and the runtime will actually discover.
     const installed = new Set([...injection.copied, ...injection.shadowedByRepo])
-    const fitted = fitSkillBodies(
+    const initialFit = fitSkillBodies(
       assigned
         .filter((skill) => installed.has(skill.name))
         .map((skill) => ({
@@ -956,7 +975,9 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
                 })(),
         })),
     )
-    sections.push({
+    // A function of the fit rather than one section, so the byte budget below can re-render it
+    // with fewer bodies inlined without repeating any of the gathering above.
+    const skillsSectionFor = (fitted: FittedSkillBodies): Section => ({
       kind: 'skills',
       text: skillsSectionText(offered, named, injection, fitted),
       source: {
@@ -976,6 +997,8 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
           : {}),
       },
     })
+    skills = { index: sections.length, fitted: initialFit, sectionFor: skillsSectionFor }
+    sections.push(skillsSectionFor(initialFit))
   }
 
   // 3b. How to do it, in order (conductor R6, spec R6). A persona's `workflow` field is a list of
@@ -1108,7 +1131,32 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     if (memory !== null) sections.push(memory)
   }
 
-  const { prompt, manifest } = renderRunContext(input.kind, sections)
+  // Final review I2: the prompt is ONE argv string to the CLI, and the kernel refuses an argument
+  // past `MAX_ARG_STRLEN` (`RUN_PROMPT_MAX_BYTES` says why 110k). Every section is capped on its
+  // own; nothing capped the sum, and a review run's profile + skills + diff can exceed it. The
+  // skills are shortened first -- inlined bodies dropped from the END of the fit's order, the
+  // person's grants before the persona's defaults, each still installed and still named on the
+  // "not shown here for length" line -- because they are the one large part a worker can still
+  // reach without the prompt (`.claude/skills/<name>`). Everything else is the run's own
+  // instructions, and cutting any of it would dispatch a different run than the one asked for, so
+  // a prompt still over with no body left to drop is refused, the way an over-long profile is
+  // above. The refusal comes after `injectSkills` has copied into the worktree, unlike the
+  // profile's; a redispatch re-injects idempotently (`INJECTED_MARKER`), so nothing is stranded.
+  let rendered = renderRunContext(input.kind, sections)
+  while (
+    Buffer.byteLength(rendered.prompt, 'utf8') > RUN_PROMPT_MAX_BYTES &&
+    skills !== null &&
+    skills.fitted.blocks.length > 0
+  ) {
+    skills.fitted = dropLastSkillBody(skills.fitted)
+    sections[skills.index] = skills.sectionFor(skills.fitted)
+    rendered = renderRunContext(input.kind, sections)
+  }
+  const promptBytes = Buffer.byteLength(rendered.prompt, 'utf8')
+  if (promptBytes > RUN_PROMPT_MAX_BYTES) {
+    throw new RunContextRefused('prompt_too_long', { limit: RUN_PROMPT_MAX_BYTES, length: promptBytes })
+  }
+  const { prompt, manifest } = rendered
 
   // The row, before the caller spawns anything (spec §1, "record before spawn"). Keyed on `runId`,
   // so a redispatch of the same run rewrites its one row instead of adding a second.

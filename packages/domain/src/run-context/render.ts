@@ -153,6 +153,26 @@ export const IMPLEMENTATION_WORK_RULES = [
 ].join('\n')
 
 /**
+ * The most a rendered prompt may weigh, in UTF-8 BYTES (final review I2).
+ *
+ * WHY a byte budget at all: both adapters hand the prompt to the CLI as ONE argv string (`-p
+ * <prompt>` for Claude, a positional for Cursor), and Linux refuses any single argument of
+ * `MAX_ARG_STRLEN` -- 32 pages, 131072 bytes -- or more with `E2BIG` (verified on this host). The
+ * spawn then fails outright, after the run row, the worktree and the recorded context all exist.
+ * Nothing else bounds the SUM: a review run can carry a profile up to `PROFILE_MAX_CHARS` (48k),
+ * skills up to `SKILL_BODIES_MAX_CHARS` (24k), a diff up to 60k, and the task and fixed text on
+ * top, each within its own cap and together over the kernel's.
+ *
+ * Bytes, not characters, because the kernel counts bytes and a prompt in any non-Latin script is
+ * two or three bytes a character. 110k, not 131072 less one, so the margin absorbs the NUL
+ * terminator and whatever an adapter may one day add around the prompt without a second change
+ * here. `buildRunContext` (`apps/orchestrator/src/runContext.ts`) enforces it: it drops inlined
+ * skill bodies first ({@link dropLastSkillBody}), and refuses the dispatch (`prompt_too_long`)
+ * only when the prompt is still over with none left.
+ */
+export const RUN_PROMPT_MAX_BYTES = 110_000
+
+/**
  * The one place a run's prompt text is assembled (M37 §1, "one builder"). Pure: no DB, no
  * filesystem, no `process.env` -- the orchestrator gathers `Section`s and calls this; everything
  * about ORDER and OMISSION lives here so it is testable without a database.

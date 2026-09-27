@@ -75,3 +75,30 @@ export function fitSkillBodies(skills: readonly SkillBodyInput[]): FittedSkillBo
   }
   return { blocks, inlined: blocks.map((block) => block.name), truncated, omitted, unreadable }
 }
+
+/**
+ * The same fit with its LAST inlined body taken out and moved to `omitted` (final review I2).
+ *
+ * `buildRunContext` calls this while the rendered prompt is over `RUN_PROMPT_MAX_BYTES`
+ * (`./render.ts`): the skills are the one part of a prompt that is both large and safe to shorten,
+ * because every one of them stays installed in the worktree and the prompt still names it. Last
+ * first, which is the reverse of the fit's own order -- the person's grants go before the persona's
+ * defaults, because the defaults are what the persona IS. The dropped name goes to the FRONT of
+ * `omitted`: it came before every name already there in the fit's order, and `omitted` keeps that
+ * order.
+ *
+ * Returns the input unchanged when nothing is inlined, so a caller can loop on it without a guard
+ * of its own.
+ */
+export function dropLastSkillBody(fitted: FittedSkillBodies): FittedSkillBodies {
+  const last = fitted.blocks.at(-1)
+  if (last === undefined) return fitted
+  const blocks = fitted.blocks.slice(0, -1)
+  return {
+    blocks,
+    inlined: blocks.map((block) => block.name),
+    truncated: fitted.truncated.filter((name) => name !== last.name),
+    omitted: [last.name, ...fitted.omitted],
+    unreadable: fitted.unreadable,
+  }
+}
