@@ -461,6 +461,29 @@ describe('acceptIntake', () => {
     expect((created.payload as { intakeId?: string }).intakeId).toBe(id)
   })
 
+  it('writes a large project s whole brief as the goal, and puts it whole on the goal event as the request', async (): Promise<void> => {
+    // INTAKE_TRANSCRIPT_MAX_CHARS (4000) used to cut the request, so the Supervisor conversation
+    // opened with the first fifth of a 19.5k-character brief.
+    const repo = makeRepo()
+    const brief = `${'Build the harlequin clone. '.repeat(750)}THE-END-OF-THE-BRIEF`
+    const intake = await openIntake()
+    if (!intake.ok) throw new Error('openIntake refused')
+    expect((await sendIntakeMessage(intake.value.id, brief)).ok).toBe(true)
+    // The status must be one `sendIntakeMessage` takes a second line in; `drafted` is what a
+    // model's answer would have left, and no model runs in this test.
+    await prisma.intake.update({ where: { id: intake.value.id }, data: { status: 'drafted' } })
+    expect((await sendIntakeMessage(intake.value.id, `the repository is at ${repo}`)).ok).toBe(true)
+    // The card's goal is the draft's, and a draft may carry the brief whole.
+    const accepted = await acceptIntake(intake.value.id, { ...draftFor(repo, 'Long Brief'), goal: brief })
+    if (!accepted.ok) throw new Error(`accept refused: ${accepted.error.kind}`)
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: accepted.value.workspaceId } })
+    expect(workspace.goal).toBe(brief)
+    const event = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: accepted.value.workspaceId, type: 'workspace_goal_set' },
+    })
+    expect((event.payload as { request?: string }).request).toBe(`${brief}\nthe repository is at ${repo}`)
+  })
+
   it('creates the repository first when there is none, under the configured root', async (): Promise<void> => {
     const root = mkdtempSync(join(tmpdir(), 'accept-root-'))
     await setInstallationSettings({ reposRoot: root })

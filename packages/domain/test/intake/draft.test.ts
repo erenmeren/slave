@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { intakeDraftSchema, intakeRepositoryPath, intakeRepositorySlug, intakeStepLogSchema, type IntakeDraft } from '../../src/index.js'
+import { INTAKE_BRIEF_MAX_CHARS, intakeDraftSchema, intakeRepositoryPath, intakeRepositorySlug, intakeStepLogSchema, type IntakeDraft } from '../../src/index.js'
 
 const draft: IntakeDraft = {
   name: 'Public API',
@@ -38,9 +38,17 @@ describe('IntakeDraft', () => {
     expect(parsed.success).toBe(true)
   })
 
-  it('refuses a name past 80 characters and a goal past 8000', () => {
+  it('refuses a name past 80 characters and a goal past INTAKE_BRIEF_MAX_CHARS', () => {
     expect(intakeDraftSchema.safeParse({ ...draft, name: 'x'.repeat(81) }).success).toBe(false)
-    expect(intakeDraftSchema.safeParse({ ...draft, goal: 'x'.repeat(8001) }).success).toBe(false)
+    expect(intakeDraftSchema.safeParse({ ...draft, goal: 'x'.repeat(INTAKE_BRIEF_MAX_CHARS + 1) }).success).toBe(false)
+  })
+
+  it('accepts a goal as long as a large project s brief, up to the line exactly', () => {
+    // The benchmark's large case is a 19.5k-character brief, and 8000 refused it: a project whose
+    // specification is longer than a short document could not be drafted at all.
+    expect(INTAKE_BRIEF_MAX_CHARS).toBe(32_000)
+    expect(intakeDraftSchema.safeParse({ ...draft, goal: 'x'.repeat(20_000) }).success).toBe(true)
+    expect(intakeDraftSchema.safeParse({ ...draft, goal: 'x'.repeat(INTAKE_BRIEF_MAX_CHARS) }).success).toBe(true)
   })
 
   it('accepts a new repository with no path -- accept resolves <root>/<slug> (R8)', () => {

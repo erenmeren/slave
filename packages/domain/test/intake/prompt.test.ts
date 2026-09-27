@@ -4,7 +4,9 @@ import {
   EXTERNAL_FENCE_OPEN,
   EXTERNAL_FENCE_PREAMBLE,
   INTAKE_ANSWER_MARKER,
+  INTAKE_BRIEF_MAX_CHARS,
   INTAKE_PROMPT_MESSAGES_MAX,
+  INTAKE_TEXT_MAX_CHARS,
   REVIEWER_ROLE,
   buildIntakePrompt,
   type IntakeFacts,
@@ -53,6 +55,28 @@ describe('buildIntakePrompt', () => {
     expect(prompt.indexOf('rate limiting')).toBeLessThan(prompt.indexOf('where is the repository?'))
     expect(prompt).toContain('PERSON: rate limiting')
     expect(prompt).toContain('YOU: where is the repository?')
+  })
+
+  it('shows the model a large project s whole brief, not its first four thousand characters', () => {
+    // The person's line used to be cut at INTAKE_TEXT_MAX_CHARS -- the cap on what the MODEL may
+    // say -- so a 19.5k-character brief reached the model as its first 4000 characters and the
+    // draft was written from a fifth of the specification.
+    const brief = `${'b'.repeat(20_000)}END-OF-BRIEF`
+    const prompt = buildIntakePrompt({ transcript: [{ role: 'human', text: brief }], facts: null, callsLeft: 11 })
+    expect(prompt).toContain(`PERSON: ${brief}`)
+  })
+
+  it('cuts a person s line at INTAKE_BRIEF_MAX_CHARS and the model s own at INTAKE_TEXT_MAX_CHARS', () => {
+    const prompt = buildIntakePrompt({
+      transcript: [
+        { role: 'human', text: 'h'.repeat(INTAKE_BRIEF_MAX_CHARS + 50) },
+        { role: 'assistant', text: 'a'.repeat(INTAKE_TEXT_MAX_CHARS + 50) },
+      ],
+      facts: null,
+      callsLeft: 11,
+    })
+    expect(/h{1000,}/u.exec(prompt)?.[0]).toHaveLength(INTAKE_BRIEF_MAX_CHARS)
+    expect(/a{1000,}/u.exec(prompt)?.[0]).toHaveLength(INTAKE_TEXT_MAX_CHARS)
   })
 
   it('carries no fence token a catalogue name could have forged', () => {

@@ -56,6 +56,18 @@ describe('tickIntakes', () => {
     expect(call?.model).toBe('claude-sonnet-5')
   })
 
+  it('shows the model a large project s whole brief', async (): Promise<void> => {
+    // The person's line reached the prompt cut at INTAKE_TEXT_MAX_CHARS (4000), so a 19.5k brief
+    // was drafted from its first fifth. The sentinel at the END is the part that used to be lost.
+    const brief = `${'Build the harlequin clone. '.repeat(750)}THE-END-OF-THE-BRIEF`
+    await waiting(brief)
+    const decider = answering({ kind: 'ask', text: 'go on' })
+    await tickIntakes({ now: new Date(), by: 'test', model: 'm', modelDecider: decider })
+    await drainIntakeCalls()
+    const call = (decider as unknown as { calls: { prompt: string }[] }).calls[0]
+    expect(call?.prompt).toContain(`PERSON: ${brief}`)
+  })
+
   it('shows the model the persona catalogue even when the conversation never named a path', async (): Promise<void> => {
     // The catalogue is INSTALLATION state, not a measurement of anything the person said, and the
     // prompt asks for a team "from the catalogue below". A conversation that starts a project from

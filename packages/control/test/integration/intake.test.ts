@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
-import { INTAKE_MAX_MODEL_CALLS, INTAKE_MAX_RUNTIME_ROLES } from '@slave-of-ai/domain'
+import { INTAKE_BRIEF_MAX_CHARS, INTAKE_MAX_MODEL_CALLS, INTAKE_MAX_RUNTIME_ROLES } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { MAX_RUNTIME_ROLES } from '../../src/profile.js'
 import { claimIntakes, openIntake, abandonIntake, readIntake, recordIntakeReply, sendIntakeMessage } from '../../src/intake.js'
@@ -59,6 +59,35 @@ describe('the intake conversation', () => {
     expect(missing.ok).toBe(false)
     if (missing.ok) throw new Error('unreachable')
     expect(missing.error.kind).toBe('intake_not_found')
+  })
+
+  it('stores a large project s whole brief as the person s line', async (): Promise<void> => {
+    // The benchmark's large case is a 19.5k-character brief; at 8000 it was refused outright, so a
+    // big project could not even begin its conversation.
+    const brief = `${'Build the harlequin clone. '.repeat(750)}THE END`
+    expect(brief.length).toBeGreaterThan(20_000)
+    const id = await open()
+    const sent = await sendIntakeMessage(id, brief)
+    expect(sent.ok).toBe(true)
+
+    const view = await readIntake(id)
+    if (!view.ok) throw new Error('unreachable')
+    expect(view.value.status).toBe('awaiting_reply')
+    expect(view.value.messages[0]).toMatchObject({ role: 'human', text: brief.trim() })
+  })
+
+  it('refuses a message past INTAKE_BRIEF_MAX_CHARS, saying how long it was', async (): Promise<void> => {
+    const id = await open()
+    const long = await sendIntakeMessage(id, 'x'.repeat(INTAKE_BRIEF_MAX_CHARS + 1))
+    expect(long.ok).toBe(false)
+    if (long.ok) throw new Error('unreachable')
+    expect(long.error).toEqual({
+      kind: 'invalid_message',
+      reason: `a message must be at most ${String(INTAKE_BRIEF_MAX_CHARS)} characters; this one is ${String(INTAKE_BRIEF_MAX_CHARS + 1)}`,
+    })
+    const view = await readIntake(id)
+    if (!view.ok) throw new Error('unreachable')
+    expect(view.value.messages).toEqual([])
   })
 
   it('writes the person s line, then what detection found, and waits for the daemon', async (): Promise<void> => {
