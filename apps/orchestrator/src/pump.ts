@@ -914,6 +914,16 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // same rule `classifyGateEvent` now applies on the Claude side -- fail-safe is treating an
         // unparseable prefixed reason as an ORDINARY permission-mode denial (falls through below),
         // never as a matrix refusal this pump cannot actually name the tool/capability for.
+        //
+        // Conductor R0, final review M1: a refused call is CLOSED, whichever branch below handles
+        // it. Cursor reports a rejected call as this event and never as a `tool_result`, so an id
+        // left in `openToolUses` stayed open for the rest of the run -- and an open call is exactly
+        // what exempts a silent run from the sweep's stall check. Done first, before any branch's
+        // `break`. A runtime that does send a `tool_result` afterwards (Claude's refusal can) finds
+        // the id gone, and `delete`'s false return keeps it from writing the column twice.
+        if (openToolUses.delete(event.toolUseId) && openToolUses.size === 0) {
+          await prisma.slaveRun.updateMany({ where: { id: runId, endedAt: null }, data: { toolCallOpenSince: null } })
+        }
         if (event.reason !== undefined && event.reason.startsWith(PERMISSION_DENY_REASON_PREFIX)) {
           const parsed = parsePermissionDenyReason(event.reason)
           if (parsed !== null) {

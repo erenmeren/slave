@@ -2214,6 +2214,27 @@ describe('pumpRun', () => {
       expect(closed.toolCallOpenSince).toBeNull()
     })
 
+    it('closes toolCallOpenSince when the call is refused: a rejected Cursor call never gets a tool_result', async (): Promise<void> => {
+      // Final review M1: Cursor reports a rejected call as `permission_denied` and nothing else.
+      // Left in the open set it would exempt the run from stall detection for the rest of its life.
+      const events = queueOf([
+        { kind: 'session_started', sessionId: 's1' },
+        { kind: 'tool_call', toolUseId: 'c1', toolName: 'shell', summary: 'shell rm -rf', argsHash: testArgsHash('shell rm -rf') },
+      ])
+      const pumping = pumpRun({ ...ids, events: events.events })
+      await events.drained()
+      expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })).toolCallOpenSince).not.toBeNull()
+
+      // Ended rather than drained: nothing at the stream's end touches the column (only
+      // `session_started`, `tool_call` and a closing event write it), so the row after the pump
+      // returns is the row right after the refusal.
+      events.push({ kind: 'permission_denied', toolName: 'shell', toolUseId: 'c1' })
+      events.end()
+      await pumping
+
+      expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })).toolCallOpenSince).toBeNull()
+    })
+
     it('a resumed pump clears a toolCallOpenSince left from before the pause', async (): Promise<void> => {
       // A tool call left open when a run paused died with the process that made it -- its
       // timestamp is stale, and a resumed pump that left it alone would shield a future real
