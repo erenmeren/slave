@@ -1209,6 +1209,12 @@ model SlaveRun {
   /// H9b (F11b): when the sweep last added to {@link observedWorkingMs}; null until the first pass
   /// that saw the run live, which measures from `startedAt`.
   observedAt        DateTime?
+  /// Conductor R0: when the pump last saw an event on this run's stream, written at most every
+  /// OUTPUT_BEAT_MS. Null until the first event. Read by the sweep's `run_stalled` guardrail.
+  lastOutputAt      DateTime?
+  /// Conductor R0: since when at least one tool call of this run has had no result; null when none
+  /// is open. A worker running a long command is silent on the stream and must not read as stalled.
+  toolCallOpenSince DateTime?
   /// H9b (F2): which PROCESS owns this run -- `<pid>/<uuid>`, minted once per process
   /// (`runs.ts`'s `OWNER_INSTANCE`) and written when the row is created and again when a resume
   /// spawns it. A live run whose owner is neither this process nor a live one has nobody reading

@@ -158,3 +158,17 @@ export const BREAKER_STEER_TEXT: Record<BreakerTripKind, (count: number) => stri
 export function steerTextFor(trip: BreakerTrip): string {
   return BREAKER_STEER_TEXT[trip.kind](trip.count)
 }
+
+/**
+ * Conductor R0: the most often the pump writes `SlaveRun.lastOutputAt`. A stream can produce
+ * hundreds of events a minute; the sweep only needs to know the stream is alive to this precision.
+ */
+export const OUTPUT_BEAT_MS = 30_000
+
+/**
+ * Conductor R0: a `working` run whose stream has produced nothing for this long, with no tool call
+ * open, is stalled and is ended (`run_stalled`) so the ordinary retry path takes over. Fifteen
+ * minutes: a model streams thinking and text continuously, so this much silence with nothing
+ * running is a dead connection, not a slow answer (large-1 multi rep 2 sat silent for 32 minutes).
+ */
+export const RUN_STALL_MS = 15 * 60_000

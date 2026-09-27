@@ -104,6 +104,82 @@ async function* fromArray(events: readonly RuntimeEvent[]): AsyncIterable<Runtim
   }
 }
 
+/**
+ * A pushable, endable event stream, for a test that must read the row WHILE the pump is still
+ * running on it -- `fromArray`'s whole list is fixed before the pump starts, which cannot express
+ * "check the row, then feed it one more event" (conductor R0's liveness-columns tests, below).
+ *
+ * `drained()` resolves once every event pushed so far has been fully processed by the pump loop --
+ * including that iteration's own awaited writes, since the for-await consumer only asks this
+ * generator for the next event after the previous loop body (and all its `await`s) has finished --
+ * so a caller that awaits it is reading the row exactly as it stood right after its last pushed
+ * event, and before anything pushed later.
+ */
+function queueOf(initial: readonly RuntimeEvent[]): {
+  readonly events: AsyncIterable<RuntimeEvent>
+  readonly push: (event: RuntimeEvent) => void
+  readonly end: () => void
+  readonly drained: () => Promise<void>
+} {
+  const queue: RuntimeEvent[] = [...initial]
+  let ended = false
+  let pushWaiter: (() => void) | null = null
+  let isDrained = false
+  let drainedWaiters: Array<() => void> = []
+
+  function markDrained(): void {
+    isDrained = true
+    const waiters = drainedWaiters
+    drainedWaiters = []
+    for (const resolve of waiters) resolve()
+  }
+
+  async function* generator(): AsyncGenerator<RuntimeEvent> {
+    for (;;) {
+      if (queue.length > 0) {
+        isDrained = false
+        const event = queue.shift() as RuntimeEvent
+        yield event
+        // Same reasoning as `fromArray`: yield to the event loop between events, so the pump's
+        // reaction to one event is genuinely observable before the next one arrives.
+        await Promise.resolve()
+        continue
+      }
+      if (ended) return
+      markDrained()
+      await new Promise<void>((resolve) => {
+        pushWaiter = resolve
+      })
+    }
+  }
+
+  return {
+    events: { [Symbol.asyncIterator]: (): AsyncIterator<RuntimeEvent> => generator() },
+    push: (event: RuntimeEvent): void => {
+      queue.push(event)
+      if (pushWaiter) {
+        const resolve = pushWaiter
+        pushWaiter = null
+        resolve()
+      }
+    },
+    end: (): void => {
+      ended = true
+      if (pushWaiter) {
+        const resolve = pushWaiter
+        pushWaiter = null
+        resolve()
+      }
+    },
+    drained: (): Promise<void> => {
+      if (isDrained) return Promise.resolve()
+      return new Promise<void>((resolve) => {
+        drainedWaiters.push(resolve)
+      })
+    },
+  }
+}
+
 const okOutcome: RunOutcome = {
   isError: false,
   terminalReason: 'completed',
@@ -2111,6 +2187,50 @@ describe('pumpRun', () => {
       // No checkpoint: `recordCursorPauseIfRequested` never claims -- the seeded status is
       // `starting`, not `pause_requested` -- so nothing had a reason to write one.
       await expect(prisma.checkpoint.findUnique({ where: { runId: ids.runId } })).resolves.toBeNull()
+    })
+  })
+
+  describe('liveness columns (conductor R0)', () => {
+    it('writes lastOutputAt on the first event and opens then closes toolCallOpenSince', async (): Promise<void> => {
+      const events = queueOf([
+        { kind: 'session_started', sessionId: 's1' },
+        { kind: 'tool_call', toolUseId: 't1', toolName: 'Bash', summary: 'Bash npm test', argsHash: testArgsHash('Bash npm test') },
+      ])
+      const pumping = pumpRun({ ...ids, events: events.events })
+      await events.drained()
+
+      // The stream has spoken (session_started) and a tool call is open (t1, no result yet) --
+      // both facts the sweep (Task 3) will read to tell a live-but-silent stream from a long
+      // shell command.
+      const open = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(open.lastOutputAt).not.toBeNull()
+      expect(open.toolCallOpenSince).not.toBeNull()
+
+      events.push({ kind: 'tool_result', toolUseId: 't1', toolName: '', outcome: 'ok', errorClass: null })
+      events.end()
+      await pumping
+
+      const closed = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(closed.toolCallOpenSince).toBeNull()
+    })
+
+    it('a resumed pump clears a toolCallOpenSince left from before the pause', async (): Promise<void> => {
+      // A tool call left open when a run paused died with the process that made it -- its
+      // timestamp is stale, and a resumed pump that left it alone would shield a future real
+      // stall from the sweep forever.
+      await prisma.slaveRun.update({
+        where: { id: ids.runId },
+        data: { status: 'resuming', toolCallOpenSince: new Date(Date.now() - 60 * 60_000) },
+      })
+
+      await pumpRun({
+        ...ids,
+        resumed: true,
+        events: fromArray([{ kind: 'session_started', sessionId: 's1' }]),
+      })
+
+      const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      expect(row.toolCallOpenSince).toBeNull()
     })
   })
 })
