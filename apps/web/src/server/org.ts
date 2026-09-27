@@ -22,6 +22,8 @@ import {
 } from '@slave-of-ai/control'
 import {
   deriveSlaveStatus,
+  err,
+  ok,
   needsYou,
   sumSpendFromGroups,
   INTAKE_PER_CALL_CAP_USD,
@@ -1125,6 +1127,33 @@ async function withPersonaSkills(rows: readonly CatalogRowView[]): Promise<reado
     skills: (chipsBy.get(row.id) ?? []).toSorted(byCardOrder),
     hiredCount: hiredBy.get(row.id) ?? 0,
   }))
+}
+
+/** One persona's default skills and hired count, read BY ID -- {@link withPersonaSkills}' two
+ *  columns for a single template. */
+export interface PersonaDefaultSkillsView {
+  readonly defaultSkillIds: readonly string[]
+  readonly hiredCount: number
+}
+
+/**
+ * The by-id read behind `GET /api/org/templates/[id]/skills` (Duplicates data-loss fix): the
+ * drawer's default-skills editor PATCHes the WHOLE set, so it must never start from a set it does
+ * not know. A persona opened from a drawer's Duplicates group is commonly not on the loaded catalog
+ * page; the drawer reads its set here instead of guessing `[]` -- a guess whose first Add wiped the
+ * persona's defaults, and with them everybody hired from it. Same order as the page read
+ * (`skillId` ascending), so the two never disagree about what the editor lists first.
+ */
+export async function readPersonaDefaultSkills(
+  templateId: string,
+): Promise<Result<PersonaDefaultSkillsView, ControlRefusal>> {
+  const template = await prisma.slaveTemplate.findUnique({ where: { id: templateId }, select: { id: true } })
+  if (template === null) return err({ kind: 'template_not_found', templateId })
+  const [links, hiredCount] = await Promise.all([
+    prisma.templateSkill.findMany({ where: { templateId }, select: { skillId: true }, orderBy: { skillId: 'asc' } }),
+    prisma.person.count({ where: { templateId } }),
+  ])
+  return ok({ defaultSkillIds: links.map((link) => link.skillId), hiredCount })
 }
 
 /** Every slave template, UNPAGED and unfiltered -- the shape `CompanyManager`'s member `<select>`,

@@ -16,7 +16,7 @@ import {
   type ProfileSpecField,
 } from '@slave-of-ai/domain'
 import type { TemplateProfileView } from '@slave-of-ai/control'
-import type { TemplateDuplicateRowView } from '../../server/org'
+import type { PersonaDefaultSkillsView, TemplateDuplicateRowView } from '../../server/org'
 import { sendControl } from '../../lib/postControl'
 import { Alert } from '../ui/Alert'
 import { Button } from '../ui/Button'
@@ -126,8 +126,8 @@ export function ProfileDrawer({
   mappedCapabilityKeys = NO_MAPPED,
   capabilityMapping = 'none',
   taxonomy,
-  defaultSkillIds = [],
-  hiredCount = 0,
+  defaultSkillIds,
+  hiredCount,
   skillCatalogue = [],
   onClose,
   onChanged,
@@ -150,8 +150,12 @@ export function ProfileDrawer({
    *  below the chips says which. */
   readonly capabilityMapping?: 'mapped' | 'stale' | 'none' | 'inactive'
   readonly taxonomy: readonly CapabilityRecord[]
-  readonly defaultSkillIds?: readonly string[]
-  readonly hiredCount?: number
+  /** The persona's default skills when the caller KNOWS them (the row is on its loaded page).
+   *  Absent means unknown, never empty: the drawer then reads them by id before it offers the
+   *  whole-set editor (Duplicates data-loss fix). */
+  readonly defaultSkillIds?: readonly string[] | undefined
+  /** Rides with `defaultSkillIds` -- absent, it comes from the same by-id read. */
+  readonly hiredCount?: number | undefined
   readonly skillCatalogue?: readonly { readonly skillId: string; readonly name: string; readonly providerName: string }[]
   readonly onClose: () => void
   readonly onChanged: () => void
@@ -227,6 +231,37 @@ export function ProfileDrawer({
   }
 
   useEffect(() => load(), [templateId])
+
+  /**
+   * The default-skills set when the caller does not know it (Duplicates data-loss fix). The editor
+   * PATCHes the WHOLE set, so seeding it with `[]` for a persona off the loaded page made its first
+   * Add wipe every default skill the persona had. `null` is "not read yet" and `'error'` is "could
+   * not be read" -- in both the editor is not offered at all. Read on open and again after each save
+   * the editor makes, because the caller's resync covers only its loaded page, which this persona
+   * is not on.
+   */
+  const [ownSkills, setOwnSkills] = useState<PersonaDefaultSkillsView | 'error' | null>(null)
+  const skillsKnown = defaultSkillIds !== undefined
+  const loadSkills = useCallback((): void => {
+    void fetch(`/api/org/templates/${templateId}/skills`)
+      .then(async (response) => (response.ok ? ((await response.json()) as unknown) : null))
+      .catch(() => null)
+      .then((body) => {
+        const ids = body !== null && typeof body === 'object' ? (body as { defaultSkillIds?: unknown }).defaultSkillIds : undefined
+        const hired = body !== null && typeof body === 'object' ? (body as { hiredCount?: unknown }).hiredCount : undefined
+        setOwnSkills(
+          Array.isArray(ids) && ids.every((id) => typeof id === 'string') && typeof hired === 'number'
+            ? { defaultSkillIds: ids as string[], hiredCount: hired }
+            : 'error',
+        )
+      })
+  }, [templateId])
+  useEffect(() => {
+    if (!skillsKnown) loadSkills()
+  }, [skillsKnown, loadSkills])
+  const skills: PersonaDefaultSkillsView | 'error' | null = skillsKnown
+    ? { defaultSkillIds, hiredCount: hiredCount ?? 0 }
+    : ownSkills
 
   /**
    * The pairs this row is in (M55 R6), a SECOND read beside the profile: the row's own chip carries
@@ -427,15 +462,25 @@ export function ProfileDrawer({
                 </span>
               </div>
             )}
-            {group === 'skills' && (
-              <TemplateSkillsEditor
-                templateId={templateId}
-                skillIds={defaultSkillIds}
-                catalogue={skillCatalogue}
-                hiredCount={hiredCount}
-                onChanged={onChanged}
-              />
-            )}
+            {group === 'skills' &&
+              (skills === null ? (
+                <LoadingState testId="template-skills-loading" message="reading this persona's default skills…" />
+              ) : skills === 'error' ? (
+                <span data-testid="template-skills-unknown" className="text-xs text-text-3">
+                  could not read this persona's default skills — open it from the list to edit them
+                </span>
+              ) : (
+                <TemplateSkillsEditor
+                  templateId={templateId}
+                  skillIds={skills.defaultSkillIds}
+                  catalogue={skillCatalogue}
+                  hiredCount={skills.hiredCount}
+                  onChanged={() => {
+                    if (!skillsKnown) loadSkills()
+                    onChanged()
+                  }}
+                />
+              ))}
             {group === 'duplicates' ? (
               duplicates === null ? (
                 <LoadingState testId="profile-duplicates-loading" message="reading what else looks like this…" />

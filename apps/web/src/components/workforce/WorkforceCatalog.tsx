@@ -56,8 +56,6 @@ interface OpenProfile {
   /** R8: the half of `capabilityKeys` a model chose, and whether that mapping is current. */
   readonly mappedCapabilityKeys: readonly string[]
   readonly capabilityMapping: 'mapped' | 'stale' | 'none' | 'inactive'
-  readonly defaultSkillIds: readonly string[]
-  readonly hiredCount: number
 }
 
 /** A catalog row as the drawer's argument -- one function, so the card body and the name button
@@ -68,8 +66,6 @@ const openOf = (row: CatalogRowView): OpenProfile => ({
   capabilityKeys: row.capabilityKeys,
   mappedCapabilityKeys: row.mappedCapabilityKeys,
   capabilityMapping: capabilityMappingOf(row),
-  defaultSkillIds: row.defaultSkillIds,
-  hiredCount: row.hiredCount,
 })
 
 /**
@@ -486,8 +482,12 @@ export function WorkforceCatalog({
           mappedCapabilityKeys={open.mappedCapabilityKeys}
           capabilityMapping={open.capabilityMapping}
           taxonomy={taxonomy}
-          defaultSkillIds={page.rows.find((row) => row.id === open.id)?.defaultSkillIds ?? open.defaultSkillIds}
-          hiredCount={page.rows.find((row) => row.id === open.id)?.hiredCount ?? open.hiredCount}
+          /* The LIVE row's skills, or nothing (Duplicates data-loss fix): the editor PATCHes the whole
+           * set, so a snapshot taken at open time -- or `[]` for a persona opened from Duplicates
+           * that is not on this page -- would be a guess its next save writes over the real links.
+           * Absent, the drawer reads this persona's set by id before it offers the editor. */
+          defaultSkillIds={page.rows.find((row) => row.id === open.id)?.defaultSkillIds}
+          hiredCount={page.rows.find((row) => row.id === open.id)?.hiredCount}
           skillCatalogue={skillCatalogue}
           onClose={() => setOpen(null)}
           // Re-reads the LOADED range, never page one (F2; final review, finding 1): a drawer open
@@ -514,8 +514,6 @@ export function WorkforceCatalog({
               capabilityKeys: candidate?.capabilityKeys ?? [],
               mappedCapabilityKeys: [],
               capabilityMapping: 'mapped',
-              defaultSkillIds: candidate?.defaultSkillIds ?? [],
-              hiredCount: candidate?.hiredCount ?? 0,
             })
           }}
         />

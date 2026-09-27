@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '@slave-of-ai/db/client'
 import { createPerson } from '@slave-of-ai/control'
-import { PATCH as templateSkillsRoute } from '../../src/app/api/org/templates/[templateId]/skills/route.js'
+import { GET as templateSkillsRead, PATCH as templateSkillsRoute } from '../../src/app/api/org/templates/[templateId]/skills/route.js'
 import { PATCH as personSkillsRoute } from '../../src/app/api/persons/[personId]/skills/route.js'
 import { addSkillWrite, removeSkillWrite, restoreSkillWrite, type SkillTarget, type SkillWrite } from '../../src/lib/skillWrites.js'
 import { truncateAll } from './helpers.js'
@@ -64,6 +64,25 @@ describe('persona skill writes from a card', () => {
     expect((await send({ url: `/api/org/templates/${templateId}/skills`, body: { skillIds: [pdf] } })).status).toBe(200)
     expect(await linked(templateId)).toEqual([pdf])
     expect((await send({ url: `/api/org/templates/${templateId}/skills`, body: {} })).status).toBe(400)
+  })
+})
+
+/** The by-id read the drawer takes for a persona off the loaded page (Duplicates data-loss fix):
+ *  it must answer the REAL linked set, since the editor's next save writes the whole of it back. */
+describe('reading one persona\'s default skills by id', () => {
+  const read = (templateId: string): Promise<Response> =>
+    templateSkillsRead(new Request(`http://localhost/api/org/templates/${templateId}/skills`), {
+      params: Promise.resolve({ templateId }),
+    })
+
+  it('answers the linked skill ids and the hired count, and 404 for a persona that does not exist', async () => {
+    const { pdf, sql, templateId } = await fixture()
+    await prisma.templateSkill.createMany({ data: [{ templateId, skillId: pdf }, { templateId, skillId: sql }] })
+
+    const response = await read(templateId)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ defaultSkillIds: [pdf, sql].toSorted(), hiredCount: 1 })
+    expect((await read('no-such-persona')).status).toBe(404)
   })
 })
 

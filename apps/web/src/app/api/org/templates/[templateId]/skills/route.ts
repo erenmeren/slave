@@ -1,11 +1,27 @@
-import { changeTemplateSkills, setTemplateSkills } from '@slave-of-ai/control'
+import { changeTemplateSkills, refusalText, setTemplateSkills } from '@slave-of-ai/control'
 import { optionalIdArray } from '../../../../../../server/idArrayField'
+import { readPersonaDefaultSkills } from '../../../../../../server/org'
 import { orgControlResponse } from '../../../../../../server/orgControlRoute'
 import { requirePrincipal } from '../../../../../../server/principal'
+import { refusalStatus } from '../../../../../../server/refusalStatus'
 
 export const dynamic = 'force-dynamic'
 
 const BODY = 'the body must be { "skillIds": string[] } or { "add"?: string[], "remove"?: string[] }'
+
+/** The persona's default skill ids and hired count, BY ID: what the drawer's editor starts from
+ *  when this persona is not on the loaded catalog page (Duplicates data-loss fix) -- a whole-set
+ *  editor must never start from a set it does not know. 200 or 404, the profile route's rule. */
+export async function GET(_request: Request, context: { params: Promise<{ templateId: string }> }): Promise<Response> {
+  const gate = await requirePrincipal()
+  if ('response' in gate) return gate.response
+  const { templateId } = await context.params
+  const result = await readPersonaDefaultSkills(templateId)
+  if (!result.ok) {
+    return Response.json({ error: refusalText(result.error) }, { status: refusalStatus(result.error.kind) })
+  }
+  return Response.json(result.value)
+}
 
 /**
  * M58 R25: the persona's DEFAULT skills -- and changing them changes every person hired from this

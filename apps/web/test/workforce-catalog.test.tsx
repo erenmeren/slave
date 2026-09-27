@@ -638,6 +638,11 @@ describe('ProfileDrawer', () => {
         const url = String(input)
         if (url.includes('/profile')) return new Response(JSON.stringify(withEffective), { status: 200 })
         if (url.includes('/duplicates')) return new Response(JSON.stringify([]), { status: 200 })
+        if (url.endsWith('/skills') && init?.method !== 'PATCH') {
+          // The by-id read a drawer takes for a persona that is not on the loaded page.
+          const ids = held.get(url.split('/')[4] ?? '') ?? []
+          return new Response(JSON.stringify({ defaultSkillIds: ids, hiredCount: 0 }), { status: 200 })
+        }
         if (url.endsWith('/skills')) {
           const id = url.split('/')[4] ?? ''
           const body = JSON.parse(String(init?.body)) as { skillIds?: string[]; add?: string[]; remove?: string[] }
@@ -722,6 +727,69 @@ describe('ProfileDrawer', () => {
 
       await drawerAdd('s-pdf')
       expect(bodies.at(-1)).toEqual({ skillIds: ['s-sql', 's-pdf'] })
+    })
+
+    /**
+     * The Duplicates data-loss repro: the drawer's Duplicates group opens the OTHER persona's
+     * drawer, and that persona is commonly not on the loaded page. Seeding its editor with `[]`
+     * made the first Add a whole-set PATCH of one skill -- wiping every default skill it had, and
+     * with them the effective skills of everybody hired from it.
+     */
+    it('keeps the existing default skills of a persona opened from Duplicates that is not on the loaded page', async () => {
+      const other = row({ id: 't9', name: 'Backend Architect', defaultSkillIds: ['s-sql', 's-git'], skills: [chipOf('s-sql'), chipOf('s-git')] })
+      const { bodies } = serve([row(), other], 1)
+      const base = fetchMock.getMockImplementation() as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+      const pair = {
+        id: 'p1', class: 'exact', basis: 'content_hash', score: 1, detectedAt: '2026-09-14T09:00:00.000Z',
+        dismissedAt: null, dismissedBy: null, aId: 't1', aName: 'Core Builder', bId: 't9', bName: 'Backend Architect',
+      }
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) =>
+        String(input).endsWith('/t1/duplicates') ? new Response(JSON.stringify([pair]), { status: 200 }) : base(input, init),
+      )
+      render(<WorkforceCatalog initial={{ ...view([row()]), total: 2, nextCursor: 't1' }} skillCatalogue={CATALOGUE} />)
+
+      await openCardDrawer('t1')
+      await act(async () => {
+        fireEvent.click(await screen.findByTestId('profile-duplicate-open-p1'))
+      })
+      expect(screen.queryByTestId('catalog-row-t9')).toBeNull()
+      // The editor shows the persona's REAL set before it offers an Add.
+      await screen.findByTestId('template-skill-s-git')
+      expect(screen.getByTestId('template-skill-s-sql')).toBeTruthy()
+
+      await drawerAdd('s-pdf')
+      expect(bodies.at(-1)).toEqual({ skillIds: ['s-sql', 's-git', 's-pdf'] })
+
+      // After the save the drawer re-reads the persona by id, so a second edit builds on the first.
+      await screen.findByTestId('template-skill-s-pdf')
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('template-skill-remove-s-sql'))
+      })
+      expect(bodies.at(-1)).toEqual({ skillIds: ['s-git', 's-pdf'] })
+    })
+
+    it('never offers the editor while the persona’s set is unknown, and says why when it cannot be read', async () => {
+      serve([row()])
+      const base = fetchMock.getMockImplementation() as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+      const pair = {
+        id: 'p1', class: 'exact', basis: 'content_hash', score: 1, detectedAt: '2026-09-14T09:00:00.000Z',
+        dismissedAt: null, dismissedBy: null, aId: 't1', aName: 'Core Builder', bId: 't9', bName: 'Backend Architect',
+      }
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (url.endsWith('/t1/duplicates')) return new Response(JSON.stringify([pair]), { status: 200 })
+        if (url.endsWith('/t9/skills')) return new Response('nope', { status: 500 })
+        return base(input, init)
+      })
+      render(<WorkforceCatalog initial={view([row()])} skillCatalogue={CATALOGUE} />)
+
+      await openCardDrawer('t1')
+      await act(async () => {
+        fireEvent.click(await screen.findByTestId('profile-duplicate-open-p1'))
+      })
+      await screen.findByTestId('template-skills-unknown')
+      expect(screen.queryByTestId('template-skills-editor')).toBeNull()
+      expect(screen.queryByTestId('template-skill-add-submit')).toBeNull()
     })
 
     // Task 8's deferred minor: `patchedSkills`' two other branches, at the catalog level.
