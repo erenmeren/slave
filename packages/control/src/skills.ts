@@ -4,7 +4,8 @@
  *
  * **Where the roots come from.** `skillRoots()` is the one answer, and it reads the environment
  * variable {@link SKILL_ROOTS_ENV} (`SLAVEOFAI_SKILL_ROOTS_JSON`, a JSON object with `personal`,
- * `pluginCache` and `project` paths) before falling back to the host's own `~/.claude` layout.
+ * `pluginCache` and `project` paths, and an optional `library`) before falling back to the host's
+ * own `~/.claude` layout plus `~/.slaveofai/skill-library`.
  * That seam exists for M37's gate, which drives a real daemon subprocess and can only reach it
  * through the environment; in-process callers pass roots as arguments instead.
  */
@@ -23,10 +24,17 @@ export interface SkillRoots {
   readonly pluginCache: string
   /** `<repo>/.claude/skills` -- provider `project`. */
   readonly project: string
+  /**
+   * `~/.slaveofai/skill-library` -- provider `library:<source>`, one directory per source
+   * (`<library>/<source>/<skill>/SKILL.md`). Skills installed FOR the workers, kept out of the
+   * operator's own `~/.claude` so they never load into the operator's sessions; a slave sees one
+   * only when it is granted. Absent means "no library": nothing is scanned or marked under it.
+   */
+  readonly library?: string | undefined
 }
 
-/** Which of the three roots a `SkippedRoot` names. */
-export type SkillRootName = 'personal' | 'pluginCache' | 'project'
+/** Which of the roots a `SkippedRoot` names. */
+export type SkillRootName = 'personal' | 'pluginCache' | 'project' | 'library'
 
 /**
  * A root the scan could not READ -- as opposed to one that is simply not there.
@@ -60,7 +68,16 @@ function defaultRoots(): SkillRoots {
     personal: join(homedir(), '.claude', 'skills'),
     pluginCache: join(homedir(), '.claude', 'plugins', 'cache'),
     project: join(process.cwd(), '.claude', 'skills'),
+    library: join(homedir(), '.slaveofai', 'skill-library'),
   }
+}
+
+const LIBRARY_PREFIX = 'library:'
+
+/** A library source is one directory name: no separators, no `.`/`..`, so a provider name read
+ *  back from the catalog can never resolve outside the library root. */
+function isSafeSourceName(source: string): boolean {
+  return /^[A-Za-z0-9._-]+$/.test(source) && source !== '.' && source !== '..'
 }
 
 /**
@@ -102,7 +119,18 @@ export function skillRoots(): SkillRoots {
     }
     return value
   }
-  return { personal: field('personal'), pluginCache: field('pluginCache'), project: field('project') }
+  // `library` is optional so the seams written before it existed keep working -- and when it is
+  // left out it stays OFF rather than falling back to the operator's real library.
+  const library = (parsed as Record<string, unknown>)['library']
+  if (library !== undefined && (typeof library !== 'string' || library === '')) {
+    throw new Error(`${SKILL_ROOTS_ENV} "library", when given, must be a non-empty path`)
+  }
+  return {
+    personal: field('personal'),
+    pluginCache: field('pluginCache'),
+    project: field('project'),
+    library: library as string | undefined,
+  }
 }
 
 interface Found {
@@ -278,6 +306,11 @@ export function highestPluginVersionDir(roots: SkillRoots, plugin: string): stri
 export function skillSourceDir(roots: SkillRoots, providerName: string, skillName: string): string | null {
   if (providerName === 'personal') return join(roots.personal, skillName)
   if (providerName === 'project') return join(roots.project, skillName)
+  if (providerName.startsWith(LIBRARY_PREFIX)) {
+    const source = providerName.slice(LIBRARY_PREFIX.length)
+    if (roots.library === undefined || !isSafeSourceName(source)) return null
+    return join(roots.library, source, skillName)
+  }
   if (providerName.startsWith('plugin:')) {
     const dir = highestPluginVersionDir(roots, providerName.slice('plugin:'.length))
     return dir === null ? null : join(dir, skillName)
@@ -293,6 +326,21 @@ function scanPluginCache(cacheDir: string): Scan {
   const found: Found[] = []
   for (const [plugin, dir] of best.dirs) {
     const scan = scanSkillsDir(dir, `plugin:${plugin}`)
+    if (scan.unreadable !== null) return { found: [], unreadable: scan.unreadable }
+    found.push(...scan.found)
+  }
+  return { found, unreadable: null }
+}
+
+/** `<library>/<source>/<skill>/SKILL.md` -- one `library:<source>` provider per source directory. */
+function scanLibrary(libraryDir: string): Scan {
+  const sources = readDirs(libraryDir)
+  if (!sources.ok) return { found: [], unreadable: sources.code }
+
+  const found: Found[] = []
+  for (const source of sources.dirs) {
+    if (!isSafeSourceName(source)) continue
+    const scan = scanSkillsDir(join(libraryDir, source), `${LIBRARY_PREFIX}${source}`)
     if (scan.unreadable !== null) return { found: [], unreadable: scan.unreadable }
     found.push(...scan.found)
   }
@@ -315,6 +363,11 @@ export async function syncSkillCatalog(roots?: Partial<SkillRoots>): Promise<Syn
     { root: 'personal', path: resolved.personal, scan: scanSkillsDir(resolved.personal, 'personal') },
     { root: 'pluginCache', path: resolved.pluginCache, scan: scanPluginCache(resolved.pluginCache) },
     { root: 'project', path: resolved.project, scan: scanSkillsDir(resolved.project, 'project') },
+    // No library configured is not an empty library: it is left out entirely, so its providers are
+    // neither scanned nor marked missing.
+    ...(resolved.library === undefined
+      ? []
+      : [{ root: 'library' as const, path: resolved.library, scan: scanLibrary(resolved.library) }]),
   ]
   const skippedRoots: readonly SkippedRoot[] = scans
     .filter((entry) => entry.scan.unreadable !== null)
@@ -354,6 +407,8 @@ export async function syncSkillCatalog(roots?: Partial<SkillRoots>): Promise<Syn
     // by prefix rather than by what this pass found, or a plugin that vanished entirely would
     // never be marked at all.
     readRoots.has('pluginCache') ? { name: { startsWith: 'plugin:' } } : null,
+    // Same for the library: a whole source directory that vanished is still marked.
+    readRoots.has('library') ? { name: { startsWith: LIBRARY_PREFIX } } : null,
   ].filter((filter) => filter !== null)
 
   let markedMissing = 0

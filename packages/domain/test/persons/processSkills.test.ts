@@ -37,6 +37,11 @@ describe('skillSourceOf', () => {
     expect(skillSourceOf('plugin:superpowers')).toEqual({ kind: 'plugin', plugin: 'superpowers' })
   })
 
+  it('reads library:<source> as the skill library and names the source', () => {
+    expect(skillSourceOf('library:trailofbits')).toEqual({ kind: 'library', library: 'trailofbits' })
+    expect(skillSourceOf('library:')).toEqual({ kind: 'local' })
+  })
+
   it('reads personal, project and anything unknown as local', () => {
     expect(skillSourceOf('personal')).toEqual({ kind: 'local' })
     expect(skillSourceOf('project')).toEqual({ kind: 'local' })

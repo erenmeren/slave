@@ -9,6 +9,12 @@ describe('skillSource', () => {
     expect(SKILL_SOURCE_GLYPH.plugin).toBe('🔌')
   })
 
+  it('marks a library skill 📚 and names its source', () => {
+    expect(skillGlyphOf('library:trailofbits')).toBe('📚')
+    expect(skillSourceTitle('library:trailofbits')).toBe('from the trailofbits library')
+    expect(skillGroupOf('library:trailofbits')).toEqual({ key: 'library:trailofbits', label: '📚 trailofbits', order: 3 })
+  })
+
   it('names the plugin in the tooltip', () => {
     expect(skillSourceTitle('plugin:superpowers')).toBe('from the superpowers plugin')
     expect(skillSourceTitle('personal')).toBe('from your skills')
@@ -19,6 +25,6 @@ describe('skillSource', () => {
     expect(skillGroupOf('personal')).toEqual({ key: 'personal', label: 'Your skills', order: 0 })
     expect(skillGroupOf('project')).toEqual({ key: 'project', label: 'Project', order: 1 })
     expect(skillGroupOf('plugin:superpowers')).toEqual({ key: 'plugin:superpowers', label: '🔌 superpowers', order: 2 })
-    expect(skillGroupOf('somewhere-else')).toEqual({ key: 'somewhere-else', label: 'somewhere-else', order: 3 })
+    expect(skillGroupOf('somewhere-else')).toEqual({ key: 'somewhere-else', label: 'somewhere-else', order: 4 })
   })
 })

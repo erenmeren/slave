@@ -24,8 +24,13 @@ function writeSkill(dir: string, name: string, description: string): void {
   )
 }
 
-function roots(): { personal: string; pluginCache: string; project: string } {
-  return { personal: join(root, 'personal'), pluginCache: join(root, 'plugins'), project: join(root, 'project') }
+function roots(): { personal: string; pluginCache: string; project: string; library: string } {
+  return {
+    personal: join(root, 'personal'),
+    pluginCache: join(root, 'plugins'),
+    project: join(root, 'project'),
+    library: join(root, 'library'),
+  }
 }
 
 describe('syncSkillCatalog', () => {
@@ -62,6 +67,40 @@ describe('syncSkillCatalog', () => {
     const plugin = providers.find((p) => p.name === 'plugin:superpowers')
     expect(plugin?.skills[0]?.name).toBe('writing-plans')
     expect(plugin?.skills[0]?.description).toBe('plans things')
+  })
+
+  it('reads the skill library as one provider per source, library:<source>', async (): Promise<void> => {
+    writeSkill(join(roots().library, 'trailofbits'), 'sharp-edges', 'finds footguns')
+    writeSkill(join(roots().library, 'sentry'), 'find-bugs', 'finds bugs')
+    writeSkill(roots().personal, 'my-notes', 'my own notes skill')
+
+    const result = await syncSkillCatalog(roots())
+    expect(result.upserted).toBe(3)
+    const providers = await prisma.skillProvider.findMany({ include: { skills: true }, orderBy: { name: 'asc' } })
+    expect(providers.map((p) => p.name)).toEqual(['library:sentry', 'library:trailofbits', 'personal'])
+    expect(providers.find((p) => p.name === 'library:trailofbits')?.skills[0]?.name).toBe('sharp-edges')
+  })
+
+  it('marks a library skill missing when its source directory is removed', async (): Promise<void> => {
+    writeSkill(join(roots().library, 'sentry'), 'find-bugs', 'finds bugs')
+    await syncSkillCatalog(roots())
+    rmSync(join(roots().library, 'sentry'), { recursive: true, force: true })
+
+    const result = await syncSkillCatalog(roots())
+    expect(result.markedMissing).toBe(1)
+    const skill = await prisma.skill.findFirstOrThrow({ where: { name: 'find-bugs' } })
+    expect(skill.missingSince).not.toBeNull()
+  })
+
+  it('leaves library skills alone when no library root is configured', async (): Promise<void> => {
+    writeSkill(join(roots().library, 'sentry'), 'find-bugs', 'finds bugs')
+    await syncSkillCatalog(roots())
+
+    const { library: _library, ...withoutLibrary } = roots()
+    const result = await syncSkillCatalog({ ...withoutLibrary, library: undefined })
+    expect(result.markedMissing).toBe(0)
+    const skill = await prisma.skill.findFirstOrThrow({ where: { name: 'find-bugs' } })
+    expect(skill.missingSince).toBeNull()
   })
 
   it('reads a quoted description as its text, without the quotes', async (): Promise<void> => {
@@ -213,6 +252,16 @@ describe('skillSourceDir', () => {
     expect(skillSourceDir(roots(), 'project', 'house-style')).toBe(join(roots().project, 'house-style'))
   })
 
+  it('resolves a library skill under its source, and nothing when no library root is configured', (): void => {
+    expect(skillSourceDir(roots(), 'library:trailofbits', 'sharp-edges')).toBe(
+      join(roots().library, 'trailofbits', 'sharp-edges'),
+    )
+    const { library: _library, ...withoutLibrary } = roots()
+    expect(skillSourceDir(withoutLibrary, 'library:trailofbits', 'sharp-edges')).toBeNull()
+    expect(skillSourceDir(roots(), 'library:', 'sharp-edges')).toBeNull()
+    expect(skillSourceDir(roots(), 'library:../escape', 'sharp-edges')).toBeNull()
+  })
+
   it('resolves a plugin skill to the highest version on disk, the same one the scan catalogued', async (): Promise<void> => {
     for (const version of ['9.9.9', '10.0.1']) {
       const dir = join(roots().pluginCache, 'marketplace/superpowers', version, 'skills')
@@ -252,6 +301,16 @@ describe('skillRoots', () => {
   it('falls back to the host layout when it is not set', (): void => {
     delete process.env[SKILL_ROOTS_ENV]
     expect(skillRoots().personal).toBe(join(homedir(), '.claude', 'skills'))
+    expect(skillRoots().library).toBe(join(homedir(), '.slaveofai', 'skill-library'))
+  })
+
+  it('reads an optional library root out of the environment, and never falls back to the real one', (): void => {
+    process.env[SKILL_ROOTS_ENV] = JSON.stringify({ personal: '/a', pluginCache: '/b', project: '/c', library: '/d' })
+    expect(skillRoots().library).toBe('/d')
+    process.env[SKILL_ROOTS_ENV] = JSON.stringify({ personal: '/a', pluginCache: '/b', project: '/c' })
+    expect(skillRoots().library).toBeUndefined()
+    process.env[SKILL_ROOTS_ENV] = JSON.stringify({ personal: '/a', pluginCache: '/b', project: '/c', library: '' })
+    expect(() => skillRoots()).toThrow('library')
   })
 
   it('throws rather than silently reading the operator\'s real skills when the value is malformed', (): void => {

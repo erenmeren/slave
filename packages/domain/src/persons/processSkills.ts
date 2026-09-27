@@ -36,16 +36,25 @@ export function isProcessSkill(skill: { readonly name: string; readonly provider
   return PROCESS_SKILL_NAMES.includes(bare)
 }
 
-/** Where a skill came from, as a card marks it: a plugin (named), or the operator's own disk. */
-export type SkillSource = { readonly kind: 'local' } | { readonly kind: 'plugin'; readonly plugin: string }
+/** Where a skill came from, as a card marks it: a plugin (named), the skill library (by source),
+ *  or the operator's own disk. */
+export type SkillSource =
+  | { readonly kind: 'local' }
+  | { readonly kind: 'plugin'; readonly plugin: string }
+  | { readonly kind: 'library'; readonly library: string }
 
 const PLUGIN_PREFIX = 'plugin:'
+const LIBRARY_PREFIX = 'library:'
 
-/** `plugin:<name>` is a plugin; `personal`, `project` and any provider this build does not know are
- *  local -- the honest reading of a name that says nothing about a plugin. A bare `plugin:` names
- *  no plugin, so it is local too. */
+/** `plugin:<name>` is a plugin and `library:<source>` the skill library; `personal`, `project` and
+ *  any provider this build does not know are local -- the honest reading of a name that says
+ *  nothing about either. A bare `plugin:` or `library:` names nothing, so it is local too. */
 export function skillSourceOf(providerName: string): SkillSource {
-  return providerName.startsWith(PLUGIN_PREFIX) && providerName.length > PLUGIN_PREFIX.length
-    ? { kind: 'plugin', plugin: providerName.slice(PLUGIN_PREFIX.length) }
-    : { kind: 'local' }
+  if (providerName.startsWith(PLUGIN_PREFIX) && providerName.length > PLUGIN_PREFIX.length) {
+    return { kind: 'plugin', plugin: providerName.slice(PLUGIN_PREFIX.length) }
+  }
+  if (providerName.startsWith(LIBRARY_PREFIX) && providerName.length > LIBRARY_PREFIX.length) {
+    return { kind: 'library', library: providerName.slice(LIBRARY_PREFIX.length) }
+  }
+  return { kind: 'local' }
 }
