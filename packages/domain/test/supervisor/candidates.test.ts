@@ -605,8 +605,11 @@ describe('candidates -- questions', () => {
         }),
       ],
       slaves: [slave({ id: 's1', name: 'Alex', runtimeRoles: ['backend'], busy: false }), IDLE_HOLDER, ASKER],
-      tasks: [ASKING_TASK],
+      // Alex has a task `decide()` could start, so Alex WILL run and see it: the ordinary
+      // `waiting_stale` case. An idle Alex with nothing to start is pilot fix A's case, below.
+      tasks: [ASKING_TASK, task({ id: 't5', status: 'ready', requiredRole: 'backend' })],
     })
+    expect(observe(w)[0]?.kind).toBe('waiting_stale')
     expect(kinds(offered(w))).toEqual(['answer_question', 'escalate_to_human', 'no_action'])
   })
 
@@ -651,6 +654,58 @@ describe('candidates -- questions', () => {
     expect(kinds(cands)).toEqual(['answer_question', 'reassign_question', 'escalate_to_human', 'no_action'])
     expect(cands[1]?.action).toEqual({ kind: 'reassign_question', messageId: 'm1', toSlaveId: 's2' })
     expect(cands[1]?.tier).toBe('applied')
+  })
+
+  /**
+   * Pilot fix A. The addressed slave is idle and its only task depends on the one that is waiting
+   * for its answer, so it will never run and never see the question. The re-address that is
+   * withheld from an idle addressee in the ordinary case is exactly the fix here -- to a holder who
+   * WILL run, never to one who is stuck the same way.
+   */
+  describe('a question nobody will pick up (pilot fix A)', () => {
+    const STUCK = slave({ id: 's2', name: 'Ops', role: 'Operator', runtimeRoles: ['backend'] })
+    const BLOCKED_ON_ASKER = task({ id: 't2', status: 'ready', dependenciesDone: false, requiredRole: 'backend' })
+    const strandedQuestion = question({ askerSlaveId: 's9', recipientRole: null, recipientSlaveId: 's2', holders: ['s2', 's3'] })
+
+    it('offers the answer first, then a re-address to a holder who will run, then escalation -- no staffing', () => {
+      const w = world({
+        questions: [strandedQuestion],
+        slaves: [
+          ASKER,
+          STUCK,
+          // Holds the asking task's role AND has frontend work it can start -- the next tick runs it.
+          slave({ id: 's3', name: 'Rin', runtimeRoles: ['backend', 'frontend'] }),
+        ],
+        tasks: [ASKING_TASK, BLOCKED_ON_ASKER, task({ id: 't3', status: 'ready', requiredRole: 'frontend' })],
+      })
+      expect(observe(w)[0]?.kind).toBe('unanswerable_question')
+      const cands = offered(w)
+      expect(kinds(cands)).toEqual(['answer_question', 'reassign_question', 'escalate_to_human', 'no_action'])
+      expect(cands[0]?.action).toEqual({ kind: 'answer_question', messageId: 'm1' })
+      expect(cands[1]?.action).toEqual({ kind: 'reassign_question', messageId: 'm1', toSlaveId: 's3' })
+      expect(cands[1]?.tier).toBe('applied')
+    })
+
+    it('does not re-address to a holder who is idle with nothing to start either', () => {
+      const w = world({
+        questions: [strandedQuestion],
+        slaves: [ASKER, STUCK, slave({ id: 's3', name: 'Rin', runtimeRoles: ['backend'] })],
+        tasks: [ASKING_TASK, BLOCKED_ON_ASKER],
+      })
+      expect(kinds(offered(w))).toEqual(['answer_question', 'escalate_to_human', 'no_action'])
+    })
+
+    it('offers no staffing for a role-addressed question whose holders are merely idle', () => {
+      // Somebody holds the role, so giving it to a third slave fixes nothing a re-address or an
+      // answer does not -- the staffing offers are for a role NOBODY holds.
+      const w = world({
+        questions: [question({ askerSlaveId: 's9', recipientRole: 'backend', holders: ['s2'] })],
+        slaves: [ASKER, STUCK, slave({ id: 's4', name: 'Kai', runtimeRoles: ['frontend'] })],
+        tasks: [ASKING_TASK, BLOCKED_ON_ASKER],
+      })
+      expect(observe(w)[0]?.kind).toBe('unanswerable_question')
+      expect(kinds(offered(w))).toEqual(['answer_question', 'escalate_to_human', 'no_action'])
+    })
   })
 
   it('offers nothing but the last resorts when the world no longer holds the question', () => {

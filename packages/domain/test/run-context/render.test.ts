@@ -118,6 +118,10 @@ describe('renderRunContext', () => {
         'Your final message must contain exactly one JSON object and nothing else on its line:',
         '{"tasks":[{"key":"short-unique-key","title":"...","description":"...","role":"backend","dependsOn":["other-key"],"needs":[]}]}',
         'Between 1 and 20 tasks. Keys are plan-local. dependsOn lists keys, no cycles.',
+        // Pilot fix B: the three sizing rules. See the test below for why each one is there.
+        'Size the graph to the work, not to the limit. If the whole GOAL fits one focused session -- one coherent change a single engineer would make in one sitting -- return exactly ONE task.',
+        'Split only along boundaries where each task can be built AND verified on its own.',
+        'Never create a separate task to document a change another task makes (README, docs, changelog): the task that changes the behaviour updates its own docs and tests.',
         // E R5: the one line this milestone adds, and the field it adds to the shape above. A
         // permission nobody asks for is a permission nobody grants -- the planner is the one who
         // knows a task has to read the web, and until now nothing invited it to say so.
@@ -140,6 +144,22 @@ describe('renderRunContext', () => {
     // CLI checks `"replan"` FIRST, so a first-plan prompt that merely mentioned the word would be
     // answered with a delta fixture -- and the one-sided assertion would not have noticed.
     expect(PLANNING_GRAPH_INSTRUCTIONS).not.toContain('replan')
+  })
+
+  /**
+   * Pilot fix B. The css-what pilot split one small feature into four tasks, one of them "document
+   * the nesting token in readme.md" -- which the parser task had already done, so that task's worker
+   * could only stop and ask, and the project stalled on the question. The planner had been told the
+   * range (1 to 20) and nothing about size.
+   */
+  it('tells the planner to size the graph to the work: one task for one session, no docs-only task', () => {
+    expect(PLANNING_GRAPH_INSTRUCTIONS).toContain('return exactly ONE task')
+    expect(PLANNING_GRAPH_INSTRUCTIONS).toContain('one coherent change a single engineer would make in one sitting')
+    expect(PLANNING_GRAPH_INSTRUCTIONS).toContain('can be built AND verified on its own')
+    expect(PLANNING_GRAPH_INSTRUCTIONS).toContain('Never create a separate task to document a change another task makes')
+    expect(PLANNING_GRAPH_INSTRUCTIONS).toContain('updates its own docs and tests')
+    // The schema's range is unchanged: the rule is about which end of it to use.
+    expect(PLANNING_GRAPH_INSTRUCTIONS).toContain('Between 1 and 20 tasks.')
   })
 
   // M40 t1 (spec erratum E2): the trailer, not the run kind, is what makes a re-plan a re-plan.

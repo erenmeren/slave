@@ -5,6 +5,7 @@ import {
   EXTERNAL_FENCE_PREAMBLE,
   INTAKE_ANSWER_MARKER,
   INTAKE_PROMPT_MESSAGES_MAX,
+  REVIEWER_ROLE,
   buildIntakePrompt,
   type IntakeFacts,
 } from '../../src/index.js'
@@ -71,6 +72,23 @@ describe('buildIntakePrompt', () => {
     // never does anything. The prompt has to say so, or the default outcome is an inert project.
     const prompt = buildIntakePrompt({ transcript: [{ role: 'human', text: 'hi' }], facts, callsLeft: 9 })
     expect(prompt).toContain('cannot be planned or reviewed')
+  })
+
+  /**
+   * Pilot fix B. "Propose the smallest team that can actually do the work" produced ONE seat on every
+   * pilot run, carrying the implementation role, `manager` and `reviewer` at once (`ensureStaffRoles`
+   * folds the two staff roles onto a lone seat) -- so nothing ran in parallel, and the only reviewer
+   * was the only implementer. The team is sized by independent workstreams instead, with the
+   * reviewer a seat of its own.
+   */
+  it('sizes the team by independent workstreams, with a reviewer who implements nothing', () => {
+    // Whitespace folded: the prompt wraps its sentences across lines, and a rule is a sentence.
+    const prompt = buildIntakePrompt({ transcript: [{ role: 'human', text: 'hi' }], facts, callsLeft: 9 }).replace(/\s+/gu, ' ')
+    expect(prompt).not.toContain('smallest')
+    expect(prompt).toContain('Size the team by independent workstreams')
+    expect(prompt).toContain('one implementation seat for each stream of work that can progress in parallel')
+    expect(prompt).toContain('A small goal is one workstream and gets ONE implementation seat')
+    expect(prompt).toContain(`Add one more seat holding "${REVIEWER_ROLE}" that implements nothing`)
   })
 
   it('tells the model how many turns are left, so it can stop asking and draft', () => {

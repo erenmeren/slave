@@ -3,6 +3,8 @@ import { slaveId, taskId } from '../../src/ids.js'
 import { DEFAULT_GUARDRAIL_LIMITS } from '../../src/guardrails/evaluate.js'
 import {
   decide,
+  hasStartableWork,
+  isDispatchable,
   type Command,
   type SchedulableSlave,
   type SchedulableTask,
@@ -237,5 +239,41 @@ describe('decide', () => {
     const commands = decide(testWorld)
     expect(commands).toHaveLength(1)
     expect(commands[0]).toEqual({ kind: 'start_run', taskId: 'TASK-1', slaveId: 'alex' })
+  })
+})
+
+/**
+ * The dispatch predicate, exported so the Supervisor can ask "will this seat run soon?" in the
+ * scheduler's own terms (pilot fix A) instead of re-deriving the dependency rule a second time.
+ */
+describe('isDispatchable / hasStartableWork', () => {
+  it('reads a task the way decide() filters it: ready or rework, dependencies done, not backing off', () => {
+    expect(isDispatchable(task('T', { status: 'ready' }))).toBe(true)
+    expect(isDispatchable(task('T', { status: 'rework' }))).toBe(true)
+    expect(isDispatchable(task('T', { status: 'waiting' }))).toBe(false)
+    expect(isDispatchable(task('T', { status: 'backlog' }))).toBe(false)
+    expect(isDispatchable(task('T', { dependenciesDone: false }))).toBe(false)
+    expect(isDispatchable(task('T', { backingOff: true }))).toBe(false)
+  })
+
+  it('says a seat has startable work only for a dispatchable task whose role it holds', () => {
+    expect(hasStartableWork(alex, [task('T')])).toBe(true)
+    // The pilot shape: the seat's only open task depends on the one that is waiting for it.
+    expect(hasStartableWork(alex, [task('T', { dependenciesDone: false })])).toBe(false)
+    expect(hasStartableWork(alex, [task('T', { requiredRole: 'frontend' })])).toBe(false)
+    expect(hasStartableWork(emma, [task('T', { requiredRole: 'frontend' })])).toBe(true)
+    expect(hasStartableWork(alex, [])).toBe(false)
+  })
+
+  it('agrees with decide(): every task decide() starts is one isDispatchable accepts', () => {
+    const tasks = [
+      task('A'),
+      task('B', { status: 'rework' }),
+      task('C', { dependenciesDone: false }),
+      task('D', { status: 'waiting' }),
+      task('E', { backingOff: true }),
+    ]
+    const started = startedTaskIds(decide(world({ tasks, slaves: [alex, { ...alex, id: slaveId('alex2') }] })))
+    expect(started.toSorted()).toEqual(tasks.filter(isDispatchable).map((t) => t.id as string).toSorted())
   })
 })

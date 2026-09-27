@@ -15,7 +15,7 @@ import {
   SUPERVISOR_DEFAULT_PROVIDER,
 } from './constants.js'
 import { readFailure, type FailureDiagnosis } from './diagnosis.js'
-import { rosterCapabilities, staffableSlaves } from './observe.js'
+import { questionIsStranded, rosterCapabilities, staffableSlaves, willNotRun } from './observe.js'
 import { mayAnswer, tierOf } from './policy.js'
 import type { Situation, SituationKind } from './situations.js'
 import type {
@@ -609,19 +609,28 @@ function actionOf(proposal: TeamProposal, capability: string, world: SupervisorW
  * the addressed slave is present and free, no re-address is offered at all (spec section 3, "to an
  * idle holder when the addressed one is busy").
  *
+ * Pilot fix A adds the one case where an idle addressee IS the problem: a STRANDED question
+ * ({@link questionIsStranded}), whose every recipient is idle with nothing `decide()` could start
+ * and so will never run to see it. Re-addressing that one is the fix, not a shuffle -- but only to
+ * somebody who will run, so on that path a target who is idle with nothing to start is excluded
+ * too ({@link willNotRun}); handing the question to a second stuck seat would re-create the very
+ * state being fixed. The ordinary path keeps its rule unchanged.
+ *
  * Ties break on slave id, so the same world always offers the same target.
  */
 function reassignTarget(question: SupervisorQuestion, world: SupervisorWorld): SupervisorSlave | undefined {
+  const stranded = questionIsStranded(world, question)
   const addressed =
     question.recipientSlaveId === null
       ? undefined
       : world.slaves.find((slave) => slave.id === question.recipientSlaveId)
-  if (addressed !== undefined && !addressed.busy) return undefined
+  if (addressed !== undefined && !addressed.busy && !stranded) return undefined
 
   return world.slaves
     .filter(
       (slave) =>
         !slave.busy &&
+        !(stranded && willNotRun(world, slave)) &&
         slave.id !== question.askerSlaveId &&
         slave.id !== question.recipientSlaveId &&
         question.holders.includes(slave.id) &&
@@ -857,7 +866,16 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
       // staffing offers are what actually fix it: give the role to somebody, and the next pass can
       // deliver the question normally. They come after the mailbox actions -- answering now beats
       // rewriting a roster to answer later.
-      if (situation.kind === 'unanswerable_question' && question.recipientRole !== null) {
+      //
+      // Pilot fix A: NOT for a stranded question. Its role HAS holders -- they are idle with nothing
+      // to start -- so a roster change fixes nothing the answer or the re-address above does not,
+      // and offering one would put "give Kai the backend role" in front of a person as the remedy
+      // for a question Ops will simply never see.
+      if (
+        situation.kind === 'unanswerable_question' &&
+        question.recipientRole !== null &&
+        !questionIsStranded(world, question)
+      ) {
         offers.push(...staffingCandidates(world, situation.kind, question.recipientRole))
       }
       break
