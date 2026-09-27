@@ -47,10 +47,12 @@ function excludeFileOf(worktreePath: string): string {
   return isAbsolute(reported) ? reported : resolve(worktreePath, reported)
 }
 
-/** A skill on disk, in the shape `skillSourceDir` resolves and `syncSkillCatalog` scans. */
-function writeSkillDir(root: string, name: string, description: string): void {
+/** A skill on disk, in the shape `skillSourceDir` resolves and `syncSkillCatalog` scans. `body`
+ *  defaults to a bare heading, which is all most of this file's tests need; a test asserting on
+ *  the INLINED TEXT itself (fix round 1) passes a distinctive sentence instead. */
+function writeSkillDir(root: string, name: string, description: string, body: string = `# ${name}`): void {
   mkdirSync(join(root, name), { recursive: true })
-  writeFileSync(join(root, name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`)
+  writeFileSync(join(root, name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}\n`)
 }
 
 interface Fixture {
@@ -141,7 +143,13 @@ async function seed(options: { readonly profile?: string } = {}): Promise<Fixtur
 async function assign(
   fixture: Fixture,
   name: string,
-  options: { readonly provider?: string; readonly description?: string; readonly onDisk?: boolean; readonly missing?: boolean } = {},
+  options: {
+    readonly provider?: string
+    readonly description?: string
+    readonly onDisk?: boolean
+    readonly missing?: boolean
+    readonly body?: string
+  } = {},
 ): Promise<string> {
   const providerName = options.provider ?? 'personal'
   const description = options.description ?? `does ${name}`
@@ -152,7 +160,7 @@ async function assign(
         : providerName.startsWith('library:')
           ? join(fixture.skillRoots.library, providerName.slice('library:'.length))
           : fixture.skillRoots.personal
-    writeSkillDir(root, name, description)
+    writeSkillDir(root, name, description, options.body)
   }
   const provider = await prisma.skillProvider.upsert({
     where: { name: providerName },
@@ -662,6 +670,35 @@ describe('buildRunContext', () => {
       expect(prompt).not.toContain(ASK_BLOCK_OPEN)
       expect(manifest.sections.map((section) => section.kind)).toEqual(['profile', 'skills', 'task', 'review_diff'])
       expect(manifest.sections).toContainEqual({ kind: 'review_diff', base: 'main', head: fixture.branch, capped: false })
+    })
+
+    // Fix round 1 (spec R6 amended): skill bodies are NOT implementation/rework-only. The
+    // controller's ruling is that every worker -- a reviewer included -- is called with its
+    // skills' instructions written into the prompt, so a reviewer's granted skill must reach the
+    // review prompt exactly the way an implementer's does.
+    it('carries a granted skill’s instructions into a review run too', async () => {
+      await assign(fixture, 'review-checklist', {
+        body: 'Check that every acceptance criterion in the task has a matching test before approving.',
+      })
+      const reviewRun = await prisma.slaveRun.create({
+        data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'starting', kind: 'review' },
+      })
+
+      const { prompt, manifest } = await buildRunContext({
+        runId: reviewRun.id,
+        kind: 'review',
+        slaveId: fixture.slaveId,
+        workspaceId: fixture.workspaceId,
+        taskId: fixture.taskId,
+        worktreePath: fixture.worktreePath,
+        provider: 'claude_code',
+        skillRoots: fixture.skillRoots,
+        reviewDiff: { text: 'diff --git a/x b/x\n+hello\n', base: 'main', head: fixture.branch, capped: false },
+      })
+
+      expect(prompt).toContain('SKILLS YOU MUST APPLY')
+      expect(prompt).toContain('Check that every acceptance criterion in the task has a matching test before approving.')
+      expect(skillsSource(manifest)).toMatchObject({ inlined: ['review-checklist'], truncated: [], omitted: [] })
     })
   })
 

@@ -104,7 +104,7 @@ the same template). A seat holds one package at a time. Intake no longer staffs 
 conducted workspace: the conductor is the Supervisor (not a seat), and intake staffs only the verifier seat
 (R8).
 
-**R6 — Skills and workflow are in the prompt.** For every implementation and rework run, the run context's
+**R6 — Skills and workflow are in the prompt.** For every implementation, rework and review run, the run context's
 SKILLS section carries, for each effective skill (template ∪ grants − revokes, as today), its `SKILL.md`
 **body** (front matter stripped), in a section headed as instructions the worker must apply; per-skill cap
 8,000 characters, total cap 24,000, skills ordered persona-default first, then grants; a skill cut by a cap

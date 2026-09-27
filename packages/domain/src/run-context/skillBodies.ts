@@ -1,8 +1,19 @@
 import { sliceCodePoints } from '../profile/spec.js'
 
-/** Conductor spec R6: one skill's inlined text at most. */
+/**
+ * Conductor spec R6: one skill's inlined text at most.
+ *
+ * Fix round 1: this bounds the skill's BODY as read off disk, before this module adds anything of
+ * its own. It does NOT bound the `[skill text cut at ...]` marker {@link fitSkillBodies} appends to
+ * a cut body (a truncated block's `text` can run a little over this number), and it says nothing
+ * about the `### <name>` heading `skillsSectionText` (`apps/orchestrator/src/runContext.ts`) wraps
+ * each block in -- that heading is rendered outside this module entirely, over the block this
+ * function already decided fits.
+ */
 export const SKILL_BODY_MAX_CHARS = 8_000
-/** Conductor spec R6: all inlined skill text of one run at most. */
+/** Conductor spec R6: all inlined skill text of one run at most -- the sum of each block's `text`,
+ *  cut marker included (the running `used` total below counts it), but still not the headings
+ *  `skillsSectionText` adds around every block once they leave this module. */
 export const SKILL_BODIES_MAX_CHARS = 24_000
 
 export interface SkillBodyInput {
