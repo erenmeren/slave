@@ -72,7 +72,8 @@
     "gate:m58-persons": "tsc --build && node --env-file=.env scripts/gate-m58-persons.mjs",
     "gate:m59-intake": "tsc --build && node --env-file=.env scripts/gate-m59-intake.mjs",
     "gate:m61-simple-mode": "tsc --build && node --env-file=.env scripts/gate-m61-simple-mode.mjs",
-    "gate:h9-restart-chaos": "tsc --build && node --env-file=.env scripts/gate-h9-restart-chaos.mjs"
+    "gate:h9-restart-chaos": "tsc --build && node --env-file=.env scripts/gate-h9-restart-chaos.mjs",
+    "equip:specialists": "tsc --build && node --env-file=.env scripts/equip-specialists.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",
