@@ -402,6 +402,7 @@ describe('buildRunContext', () => {
         inlined: ['writing-plans'],
         truncated: [],
         omitted: [],
+        unreadable: [],
       })
 
       const marker = JSON.parse(readFileSync(join(fixture.worktreePath, '.claude/skills/.slaveofai-injected.json'), 'utf8')) as unknown
@@ -634,6 +635,17 @@ describe('buildRunContext', () => {
       expect(prompt.indexOf('zz-persona-rule')).toBeLessThan(prompt.indexOf('aa-granted-rule'))
       expect(prompt).not.toContain('nothing here is compulsory')
       expect(skillsSource(manifest)).toMatchObject({ inlined: ['zz-persona-rule', 'aa-granted-rule'], truncated: [], omitted: [] })
+    })
+
+    it('says a skill with no instructions to show is installed, and never that it was cut for length', async () => {
+      // Final review M2: an empty SKILL.md body (front matter only) is not "not shown for length".
+      await assign(fixture, 'empty-rule', { body: '' })
+
+      const { prompt, manifest } = await buildImplementation(fixture)
+
+      expect(prompt).toContain('Installed, but with no instructions this prompt could show: empty-rule.')
+      expect(prompt).not.toContain('Not shown here for length')
+      expect(skillsSource(manifest)).toMatchObject({ inlined: [], omitted: [], unreadable: ['empty-rule'] })
     })
 
     it('still says a Cursor run has no skills, and inlines nothing for it', async () => {

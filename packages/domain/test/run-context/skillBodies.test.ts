@@ -29,7 +29,20 @@ describe('fitSkillBodies', () => {
       { name: 'gone', origin: 'person', body: null },
     ])
     expect(out.inlined).toEqual(['a', 'b', 'c'])
-    expect(out.omitted).toEqual(['d', 'gone'])
+    // Final review M2: a skill with nothing to show is not one left out "for length".
+    expect(out.omitted).toEqual(['d'])
+    expect(out.unreadable).toEqual(['gone'])
     expect(out.blocks.reduce((n, b) => n + b.text.length, 0)).toBeLessThanOrEqual(SKILL_BODIES_MAX_CHARS)
+  })
+
+  it('keeps an empty or unreadable body apart from one left out for length', () => {
+    const out = fitSkillBodies([
+      { name: 'blank', origin: 'persona', body: '   \n  ' },
+      { name: 'gone', origin: 'person', body: null },
+      { name: 'fine', origin: 'person', body: 'Do the thing.' },
+    ])
+    expect(out.inlined).toEqual(['fine'])
+    expect(out.omitted).toEqual([])
+    expect(out.unreadable).toEqual(['blank', 'gone'])
   })
 })

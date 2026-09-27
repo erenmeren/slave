@@ -105,6 +105,11 @@ export type SectionSource =
       readonly inlined?: readonly string[] | undefined
       readonly truncated?: readonly string[] | undefined
       readonly omitted?: readonly string[] | undefined
+      /** Final review M2: installed, but with no instructions to show (an empty or unreadable
+       *  SKILL.md) -- kept out of `omitted`, which means "left out for length". Optional on read
+       *  for the same reason as the three above, and for one more: rows written by the first
+       *  conductor build put these names in `omitted`. */
+      readonly unreadable?: readonly string[] | undefined
     }
   /** Conductor R6: the persona's workflow, rendered as its own section rather than folded into
    *  `profile`. `steps` is the COUNT, not the text -- `RunContext.prompt` already carries the words
@@ -208,6 +213,7 @@ const skillsSourceSchema = z.object({
   inlined: z.array(z.string()).optional(),
   truncated: z.array(z.string()).optional(),
   omitted: z.array(z.string()).optional(),
+  unreadable: z.array(z.string()).optional(),
 })
 
 // Conductor R6: NEW kind, so both fields REQUIRED by the `replan`/`capabilities` rule -- there is no

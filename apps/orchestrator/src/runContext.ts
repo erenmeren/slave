@@ -388,6 +388,11 @@ function skillsSectionText(
     '',
     ...fitted.blocks.flatMap((skill) => [`### ${skill.name}`, '', neutraliseMarkers(skill.text), '']),
     ...(fitted.omitted.length === 0 ? [] : [`Not shown here for length, but installed: ${fitted.omitted.join(', ')}.`]),
+    // Final review M2: said apart from the line above, which says "for length" -- of a skill whose
+    // SKILL.md had nothing after its front matter, or could not be read, that would be false.
+    ...(fitted.unreadable.length === 0
+      ? []
+      : [`Installed, but with no instructions this prompt could show: ${fitted.unreadable.join(', ')}.`]),
   ])
 }
 
@@ -962,7 +967,12 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
         // tell from `provider_unsupported` -- and would misleadingly imply bodies were ever
         // considered for a runtime that has no skills mechanism to put them in front of.
         ...(providerRunsSkills(input.provider)
-          ? { inlined: fitted.inlined, truncated: fitted.truncated, omitted: fitted.omitted }
+          ? {
+              inlined: fitted.inlined,
+              truncated: fitted.truncated,
+              omitted: fitted.omitted,
+              unreadable: fitted.unreadable,
+            }
           : {}),
       },
     })

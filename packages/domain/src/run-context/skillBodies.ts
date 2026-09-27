@@ -23,6 +23,20 @@ export interface SkillBodyInput {
   readonly body: string | null
 }
 
+/** What {@link fitSkillBodies} decided, in the shape `buildRunContext` renders and records. */
+export interface FittedSkillBodies {
+  readonly blocks: readonly { readonly name: string; readonly text: string; readonly truncated: boolean }[]
+  readonly inlined: readonly string[]
+  readonly truncated: readonly string[]
+  /** Left out whole FOR LENGTH -- the total had no room, or (`dropLastSkillBody`) the whole prompt
+   *  did not. The prompt says exactly that of these, so nothing else may land here. */
+  readonly omitted: readonly string[]
+  /** Installed, but with no instructions to show: the SKILL.md had nothing after its front matter,
+   *  or could not be read at all (final review M2). Kept apart from `omitted` because the prompt
+   *  line for `omitted` says "for length", which of these would be false. */
+  readonly unreadable: readonly string[]
+}
+
 /**
  * Which skill texts go into a worker's prompt, in what order, and cut where (conductor spec R6).
  *
@@ -32,23 +46,19 @@ export interface SkillBodyInput {
  * different skill). Its files stay copied in the worktree either way, so nothing is lost to a run
  * that goes looking.
  */
-export function fitSkillBodies(skills: readonly SkillBodyInput[]): {
-  readonly blocks: readonly { readonly name: string; readonly text: string; readonly truncated: boolean }[]
-  readonly inlined: readonly string[]
-  readonly truncated: readonly string[]
-  readonly omitted: readonly string[]
-} {
+export function fitSkillBodies(skills: readonly SkillBodyInput[]): FittedSkillBodies {
   const ordered = [...skills].toSorted(
     (a, b) => (a.origin === b.origin ? a.name.localeCompare(b.name) : a.origin === 'persona' ? -1 : 1),
   )
   const blocks: { name: string; text: string; truncated: boolean }[] = []
   const truncated: string[] = []
   const omitted: string[] = []
+  const unreadable: string[] = []
   let used = 0
   for (const skill of ordered) {
     const body = skill.body?.trim() ?? ''
     if (body === '') {
-      omitted.push(skill.name)
+      unreadable.push(skill.name)
       continue
     }
     const cut = body.length > SKILL_BODY_MAX_CHARS
@@ -63,5 +73,5 @@ export function fitSkillBodies(skills: readonly SkillBodyInput[]): {
     blocks.push({ name: skill.name, text, truncated: cut })
     if (cut) truncated.push(skill.name)
   }
-  return { blocks, inlined: blocks.map((block) => block.name), truncated, omitted }
+  return { blocks, inlined: blocks.map((block) => block.name), truncated, omitted, unreadable }
 }
