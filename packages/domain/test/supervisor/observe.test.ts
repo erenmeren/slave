@@ -299,11 +299,13 @@ describe('observe -- the blocked task says what broke (R3)', () => {
 describe('observe -- waiting_stale', () => {
   // The holder is `s2`, not the default `s1`: `s1` is the fixture's ASKER, and a role held only by
   // the asker has no holder who could answer (M39 residual R2 -- see the asker-exclusion cases in
-  // the `unanswerable_question` block below).
+  // the `unanswerable_question` block below). And `s2` is BUSY: an idle holder with nothing to start
+  // will never see the question, which is raised at once instead (pilot fix A, below) -- the
+  // thirty-minute threshold is for a recipient who will run.
   it('reports a question older than WAITING_STALE_MS whose recipient role has a holder', () => {
     const w = world({
       questions: [question({ createdAt: NOW - WAITING_STALE_MS - 1, recipientRole: 'backend' })],
-      slaves: [slave(), slave({ id: 's2', runtimeRoles: ['backend'] })],
+      slaves: [slave(), slave({ id: 's2', runtimeRoles: ['backend'], busy: true })],
     })
     expect(keys(observe(w))).toEqual([['waiting_stale', 'm1']])
   })
@@ -311,7 +313,7 @@ describe('observe -- waiting_stale', () => {
   it('stays silent at exactly WAITING_STALE_MS -- the threshold is strictly greater-than', () => {
     const w = world({
       questions: [question({ createdAt: NOW - WAITING_STALE_MS, recipientRole: 'backend' })],
-      slaves: [slave(), slave({ id: 's2', runtimeRoles: ['backend'] })],
+      slaves: [slave(), slave({ id: 's2', runtimeRoles: ['backend'], busy: true })],
     })
     expect(observe(w)).toEqual([])
   })
@@ -319,7 +321,7 @@ describe('observe -- waiting_stale', () => {
   it('reports a stale question addressed to a named slave that exists', () => {
     const w = world({
       questions: [question({ createdAt: NOW - WAITING_STALE_MS - 1, recipientRole: null, recipientSlaveId: 's2' })],
-      slaves: [slave({ id: 's2', runtimeRoles: [] })],
+      slaves: [slave({ id: 's2', runtimeRoles: [], busy: true })],
     })
     expect(keys(observe(w))).toEqual([['waiting_stale', 'm1']])
   })
@@ -360,7 +362,7 @@ describe('observe -- unanswerable_question', () => {
   it('stays silent for a fresh question whose role has a holder other than the asker', () => {
     const w = world({
       questions: [question({ recipientRole: 'backend' })],
-      slaves: [slave(), slave({ id: 's2', runtimeRoles: ['backend'] })],
+      slaves: [slave(), slave({ id: 's2', runtimeRoles: ['backend'], busy: true })],
     })
     expect(observe(w)).toEqual([])
   })
@@ -383,7 +385,7 @@ describe('observe -- unanswerable_question', () => {
   it('stays silent when the asker holds the role AND somebody else does too', () => {
     const w = world({
       questions: [question({ askerSlaveId: 's1', recipientRole: 'backend' })],
-      slaves: [slave({ id: 's1', runtimeRoles: ['backend'] }), slave({ id: 's2', runtimeRoles: ['backend'] })],
+      slaves: [slave({ id: 's1', runtimeRoles: ['backend'] }), slave({ id: 's2', runtimeRoles: ['backend'], busy: true })],
     })
     expect(observe(w)).toEqual([])
   })
@@ -425,13 +427,101 @@ describe('observe -- unanswerable_question', () => {
     const stale = observe(
       world({
         questions: [question({ createdAt: NOW - WAITING_STALE_MS - 1, taskId: null, holders: ['s1', 's2'] })],
-        slaves: [slave({ id: 's1' }), slave({ id: 's2' })],
+        slaves: [slave({ id: 's1' }), slave({ id: 's2', busy: true })],
       }),
     )[0]
     expect(stale?.kind).toBe('waiting_stale')
     expect(stale?.facts.taskId).toBeNull()
     expect(stale?.facts.holders).toBe(2)
     expect(stale?.facts.waitingMs).toBe(WAITING_STALE_MS + 1)
+  })
+})
+
+/**
+ * Pilot fix A. A slave reads its questions only inside its next IMPLEMENTATION run (`inboxSection`),
+ * so a question whose every recipient is idle AND has nothing `decide()` could start is a question
+ * nobody will ever see. The css-what pilot: the README task asked the one original seat, whose only
+ * other task depended on the README task -- the seat sat idle and the asker sat in `waiting` for the
+ * full thirty minutes before anything noticed. Waiting longer cannot help, so it is raised at once.
+ */
+describe('observe -- a question nobody will pick up (pilot fix A)', () => {
+  it('reports at once a question to a named slave that is idle and whose only task depends on the asker', () => {
+    const w = world({
+      tasks: [
+        task({ id: 't1', status: 'waiting', assigneeId: 's1' }),
+        task({ id: 't2', status: 'ready', dependenciesDone: false, assigneeId: 's2' }),
+      ],
+      questions: [question({ createdAt: NOW, askerSlaveId: 's1', recipientRole: null, recipientSlaveId: 's2' })],
+      slaves: [slave({ id: 's1', busy: true }), slave({ id: 's2', runtimeRoles: ['backend'] })],
+    })
+    const situations = observe(w)
+    expect(keys(situations)).toEqual([['unanswerable_question', 'm1']])
+    expect(situations[0]?.summary).toContain('nothing it can start')
+    expect(situations[0]?.facts.stranded).toBe(true)
+  })
+
+  it('reports at once a role-addressed question whose every holder is idle with nothing to start', () => {
+    const w = world({
+      questions: [question({ createdAt: NOW, askerSlaveId: 's1', recipientRole: 'backend', holders: ['s2', 's3'] })],
+      slaves: [slave({ id: 's1', busy: true }), slave({ id: 's2' }), slave({ id: 's3' })],
+    })
+    expect(keys(observe(w))).toEqual([['unanswerable_question', 'm1']])
+  })
+
+  it('stays silent while the idle recipient has a task decide() could start -- it will see its inbox next tick', () => {
+    for (const status of ['ready', 'rework'] as const) {
+      const w = world({
+        tasks: [task({ id: 't2', status })],
+        questions: [question({ createdAt: NOW, recipientRole: null, recipientSlaveId: 's2' })],
+        slaves: [slave({ id: 's1', busy: true }), slave({ id: 's2' })],
+      })
+      expect(observe(w)).toEqual([])
+    }
+  })
+
+  it('does not count a startable task for a role the recipient does not hold', () => {
+    const w = world({
+      tasks: [task({ id: 't2', status: 'ready', requiredRole: 'frontend' })],
+      questions: [question({ createdAt: NOW, recipientRole: null, recipientSlaveId: 's2' })],
+      slaves: [slave({ id: 's1', busy: true }), slave({ id: 's2', runtimeRoles: ['backend'] })],
+    })
+    // Nobody holds `frontend` either, which is a `ready_unstaffed` of its own; the question is the fact.
+    expect(keys(observe(w))).toContainEqual(['unanswerable_question', 'm1'])
+  })
+
+  it('keeps the ordinary thirty minutes for a BUSY recipient, whose next run may still come', () => {
+    const fresh = world({
+      questions: [question({ createdAt: NOW, recipientRole: null, recipientSlaveId: 's2' })],
+      slaves: [slave({ id: 's1', busy: true }), slave({ id: 's2', busy: true })],
+    })
+    expect(observe(fresh)).toEqual([])
+    const stale = world({
+      questions: [question({ createdAt: NOW - WAITING_STALE_MS - 1, recipientRole: null, recipientSlaveId: 's2' })],
+      slaves: [slave({ id: 's1', busy: true }), slave({ id: 's2', busy: true })],
+    })
+    expect(keys(observe(stale))).toEqual([['waiting_stale', 'm1']])
+  })
+
+  it('stays silent for a role-addressed question when ONE holder will run, however stuck the others are', () => {
+    const w = world({
+      // s2 can start the frontend task (and will read its inbox doing it); s3 has nothing at all.
+      tasks: [task({ id: 't2', status: 'ready', requiredRole: 'frontend' })],
+      questions: [question({ createdAt: NOW, askerSlaveId: 's1', recipientRole: 'backend' })],
+      slaves: [
+        slave({ id: 's1', busy: true, runtimeRoles: ['product'] }),
+        slave({ id: 's2', runtimeRoles: ['backend', 'frontend'] }),
+        slave({ id: 's3', runtimeRoles: ['backend'] }),
+      ],
+    })
+    expect(observe(w)).toEqual([])
+  })
+
+  it('leaves the no-holder shape of unanswerable_question without the stranded fact', () => {
+    const w = world({ questions: [question({ recipientRole: 'security' })], slaves: [slave()] })
+    const [situation] = observe(w)
+    expect(situation?.kind).toBe('unanswerable_question')
+    expect(situation?.facts).not.toHaveProperty('stranded')
+    expect(situation?.summary).toContain('which no slave in this workspace holds')
   })
 })
 

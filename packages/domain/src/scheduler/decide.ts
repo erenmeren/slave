@@ -63,6 +63,39 @@ export type Command =
 const STARTABLE: readonly TaskStatus[] = ['ready', 'rework']
 
 /**
+ * Would `decide()` hand this task to somebody, given a free seat that holds its role?
+ *
+ * The one reading of "startable" (pilot fix A). `decide()` filtered on this expression inline and
+ * nothing else could ask it; the Supervisor now has to, to tell a question whose recipient will run
+ * on the next tick -- and so see it in its inbox, which only an implementation run renders -- from
+ * one whose recipient never will. Two copies of the rule would be exactly how the Supervisor comes
+ * to wait thirty minutes for a seat the scheduler has already decided never to start.
+ *
+ * Structurally typed so a Supervisor task (which carries no `backingOff`, and reads as "not backing
+ * off") is accepted as it is. `dependenciesDone` is the loaders' SQL predicate -- done AND
+ * integrated -- and is deliberately not recomputed here.
+ */
+export function isDispatchable(
+  task: Pick<SchedulableTask, 'status' | 'dependenciesDone' | 'backingOff'>,
+): boolean {
+  return STARTABLE.includes(task.status) && task.dependenciesDone && task.backingOff !== true
+}
+
+/**
+ * Does this seat hold the role of at least one task `decide()` could start (pilot fix A)?
+ *
+ * Deliberately not "will `decide()` pick THIS seat": a free seat that holds a dispatchable task's
+ * role is started the moment a slot opens, and a tick waiting on the concurrency cap is a seat that
+ * WILL run -- the case the Supervisor's ordinary thirty-minute threshold is for.
+ */
+export function hasStartableWork(
+  seat: { readonly runtimeRoles: readonly string[] },
+  tasks: readonly Pick<SchedulableTask, 'status' | 'dependenciesDone' | 'backingOff' | 'requiredRole'>[],
+): boolean {
+  return tasks.some((task) => isDispatchable(task) && holdsRole(seat, task.requiredRole))
+}
+
+/**
  * Pure scheduling decision. No side effects, no I/O, fully deterministic:
  * the same world always produces the same commands.
  */
@@ -82,7 +115,7 @@ export function decide(world: World): readonly Command[] {
   if (slots <= 0) return [{ kind: 'wait', on: 'concurrency' }]
 
   const candidates = world.tasks
-    .filter((t) => STARTABLE.includes(t.status) && t.dependenciesDone && t.backingOff !== true)
+    .filter(isDispatchable)
     .toSorted((a, b) => (b.priority - a.priority) || a.id.localeCompare(b.id))
 
   const availableSlaves = new Map<SlaveId, SchedulableSlave>(

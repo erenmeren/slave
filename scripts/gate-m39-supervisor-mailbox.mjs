@@ -25,9 +25,10 @@
 // real story `unanswerable_question` is for: the one QA in the project stops being dispatchable as
 // one while the question is in flight. So each of the first three stages seeds `Qa` with the role,
 // lets Dev's run ask it a question, and then takes the role away with the operator's own
-// `set-runtime-roles --roles ''`. Nothing races: a fresh question whose role still has a holder
-// raises no situation at all (`waiting_stale` needs half an hour), so the situation appears when,
-// and only when, the roster changes.
+// `set-runtime-roles --roles ''`. Since pilot fix A the situation may appear even before that:
+// `Qa` is idle and holds the role of no task the scheduler could start, so it would never run to
+// see the question, and `observe` raises `unanswerable_question` at once for it. Either way the
+// kind and the subject are the same, and so is the decision every stage below waits for.
 //
 // WHY STAGE 6 GETS A DAEMON OF ITS OWN. Stages 4 and 5 are tick-only (below), so there is no
 // daemon alive by the time stage 6 starts -- and a conversation turn is answered by the DAEMON's
@@ -66,7 +67,10 @@
 //      happened.
 //   4. A question can be re-addressed instead of answered. A `backend`-addressed question from
 //      Dev's parked run, aged past the staleness threshold, with Dev busy and a second `backend`
-//      holder idle: the rules apply `reassign_question` themselves, the QUESTION ROW moves
+//      holder idle who WILL run -- it has a `ready` task of its own, held back only by the
+//      concurrency cap (pilot fix A: an idle holder with nothing to start would never see the
+//      question, which is `unanswerable_question` and not this stage's story): the rules apply
+//      `reassign_question` themselves, the QUESTION ROW moves
 //      (`recipientSlaveId` set, `recipientRole` cleared) and `slave.message_reassigned` names the
 //      decision behind it.
 //   5. Decisions are history, and history is not kept forever -- except the ones that are money.
@@ -118,6 +122,7 @@ const WORKSPACE_NAME = 'M39 Gate Project'
 const SOURCED_TASK_TITLE = 'M39 Gate Sourced Task'
 const DRAFT_TASK_TITLE = 'M39 Gate Draft Task'
 const CRITICAL_TASK_TITLE = 'M39 Gate Critical Task'
+const OPS_TASK_TITLE = 'M39 Gate Ops Task'
 
 /** The sentence `supervisor-answer.ndjson` cites, verbatim. It is in every gate task's description
  *  because that is what makes stage 1 a MEASUREMENT: `verifySources` looks the quote up in the
@@ -827,6 +832,19 @@ try {
   if (devNow.status !== 'paused') await fail(`stage 4 needs Dev busy on its parked run, but that run is ${devNow.status}`)
   if (opsRuns !== 0) await fail(`stage 4 needs Ops idle, but it has ${String(opsRuns)} run(s)`)
 
+  // Pilot fix A: Ops must be a holder who WILL run, or the question is stranded -- an idle worker
+  // with nothing the scheduler could start never renders its inbox, and `observe` raises that as
+  // `unanswerable_question` at once rather than as this stage's `waiting_stale`. So Ops gets a
+  // `ready` task of its own, and the workspace's run cap is lowered to the one run Dev's parked
+  // session already holds: the tick WAITS on concurrency instead of dispatching Ops (which would make
+  // Ops busy and leave nobody idle to re-address to), and Ops is the colleague who can reply as soon
+  // as a slot opens. Both are undone straight after the stage so stage 6's daemon never runs it.
+  const opsTask = await prisma.task.create({
+    data: { workspaceId, title: OPS_TASK_TITLE, description: TASK_DESCRIPTION, status: 'ready', requiredRole: 'backend', maxAttempts: 5 },
+  })
+  await prisma.workspace.update({ where: { id: workspaceId }, data: { maxConcurrentRuns: 1 } })
+  console.log(`stage 4: Ops has ready task ${opsTask.id}; maxConcurrentRuns lowered to 1 (Dev's parked run holds it)`)
+
   // A one-shot tick: no decider, so the RULES decide -- and the rules take the one routine action
   // the catalogue offers, which for a stale question with an idle holder is the re-address.
   const tickOutput = runCli(['tick', '--workspace', workspaceId])
@@ -883,6 +901,13 @@ try {
   if (reassignEvent.actor !== 'system') {
     await fail(`stage 4's event says actor ${reassignEvent.actor}, expected system for a Supervisor-applied action`)
   }
+
+  const opsRunsAfter = await prisma.slaveRun.count({ where: { slaveId: ops.id } })
+  console.log(`stage 4: Ops has ${String(opsRunsAfter)} run(s) after the tick`)
+  if (opsRunsAfter !== 0) await fail(`stage 4's tick dispatched Ops (${String(opsRunsAfter)} run(s)) -- the run cap did not hold it back`)
+  // Cancelled rather than deleted: the tick may already have written rows that name it.
+  await prisma.task.update({ where: { id: opsTask.id }, data: { status: 'cancelled' } })
+  await prisma.workspace.update({ where: { id: workspaceId }, data: { maxConcurrentRuns: 3 } })
 
   const stage4Answers = await answersTo(staleQuestion.id)
   console.log(`stage 4 answers: ${String(stage4Answers.length)}`)

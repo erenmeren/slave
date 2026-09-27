@@ -497,6 +497,12 @@ describe('supervise', () => {
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
     const asker = await prisma.slave.create({ data: { teamId: team.id, role: 'product', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
     await prisma.slave.create({ data: { teamId: team.id, role: 'QA', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Robin' } })).id } })
+    // Robin has work `decide()` could start, so Robin WILL run and see the question: the ordinary
+    // `waiting_stale` shape. An idle Robin with nothing to start would be pilot fix A's stranded
+    // question instead, raised at once as `unanswerable_question`.
+    await prisma.task.create({
+      data: { workspaceId: workspace.id, title: 'Check the release notes', description: 'read them', status: 'ready', requiredRole: 'reviewer', maxAttempts: 3 },
+    })
     const askerRun = await prisma.slaveRun.create({
       data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' },
     })
@@ -562,8 +568,9 @@ describe('supervise', () => {
  * A project holding one STALE QUESTION whose answer is in the asking task's description.
  *
  * The shape every mailbox case below is measured on: the asker is parked `waiting_for_answer`, the
- * question is addressed to the `reviewer` ROLE, and exactly one idle slave holds it -- so the
- * situation is `waiting_stale` and the catalogue is
+ * question is addressed to the `reviewer` ROLE, and exactly one idle slave holds it, with a task of
+ * its own it could start (so it will run and see the question) -- so the situation is
+ * `waiting_stale` and the catalogue is
  * `[answer_question (proposed), reassign_question (applied), escalate_to_human (escalated),
  * no_action (noop)]`. Candidate 0 is the answer, which is what every script below picks.
  */
@@ -581,6 +588,12 @@ async function seedQuestion(
   const fixture = await seed({ blockedTasks: options.blockedTasks ?? 0 })
   const asker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'product', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
   const holder = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'QA', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Robin' } })).id } })
+  // Robin has something `decide()` could start, so the question is one Robin WILL see: `waiting_stale`
+  // rather than pilot fix A's stranded `unanswerable_question`, which an idle Robin with nothing to
+  // start would raise at once.
+  await prisma.task.create({
+    data: { workspaceId: fixture.workspaceId, title: 'Check the release notes', description: 'read them', status: 'ready', requiredRole: 'reviewer', maxAttempts: 3 },
+  })
   const task = await prisma.task.create({
     data: {
       workspaceId: fixture.workspaceId,

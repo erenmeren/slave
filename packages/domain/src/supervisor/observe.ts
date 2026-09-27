@@ -6,6 +6,7 @@ import { isReleasable } from '../lifecycle/release.js'
 import { PERMISSION_KINDS, PERMISSION_LABEL, type PermissionKind } from '../permission/kinds.js'
 import { PLANNING_RETRY_CAP } from '../planning/constants.js'
 import { recommendRunbooks } from '../runbook/recommend.js'
+import { hasStartableWork } from '../scheduler/decide.js'
 import { TERMINAL } from '../task/state.js'
 import { isStaffableTask } from './candidates.js'
 import { readsAsPlatform } from './diagnosis.js'
@@ -76,6 +77,50 @@ function questionHasRecipient(world: SupervisorWorld, question: SupervisorQuesti
   // question has nobody who can answer it, which is exactly what `unanswerable_question` means.
   if (question.recipientRole !== null) return roleHasHolder(world, question.recipientRole, question.askerSlaveId)
   return false
+}
+
+/**
+ * Pilot fix A: can the question be delivered, but will nobody it is delivered to ever SEE it?
+ *
+ * A slave reads the questions addressed to it only inside its next IMPLEMENTATION run
+ * (`inboxSection`, `apps/orchestrator/src/inbox.ts`) -- there is no other way a question reaches
+ * one. So a recipient that is idle and holds the role of no task `decide()` could start will not run
+ * at all, and the question waits for it forever. The css-what pilot was exactly this: the README
+ * task asked the only original seat, whose one remaining task DEPENDED on the README task, and the
+ * asker sat in `waiting` for the whole of {@link WAITING_STALE_MS} before `waiting_stale` noticed --
+ * thirty minutes in which waiting could not possibly have helped.
+ *
+ * Stranded means EVERY recipient is in that state: the named slave, or every holder of the named
+ * role other than the asker (the same set {@link questionHasRecipient} counts). One recipient who is
+ * busy, or who has something to start, will run, and the ordinary threshold is for that case -- a
+ * busy recipient's next run may still come, and a free one with work is started on the next tick
+ * with the question in its prompt.
+ *
+ * "Could start" is the scheduler's own predicate ({@link hasStartableWork}, built on the filter
+ * `decide()` applies) over the same `dependenciesDone` the loaders compute in SQL, so the Supervisor
+ * cannot come to a different answer about the dependency graph than dispatch does. Two deliberate
+ * blind spots, both on the side of waiting: a task backing off a provider refusal carries no
+ * `backingOff` here and so reads as startable, and a seat whose startable work is held up only by
+ * the concurrency cap reads as a seat that will run -- both do, just not this tick.
+ *
+ * Exported for `candidates`, whose re-address offer has to know the same thing about the question.
+ */
+export function questionIsStranded(world: SupervisorWorld, question: SupervisorQuestion): boolean {
+  const recipients =
+    question.recipientSlaveId !== null
+      ? world.slaves.filter((slave) => slave.id === question.recipientSlaveId && !slave.released)
+      : question.recipientRole !== null
+        ? world.slaves.filter(
+            (slave) => slave.id !== question.askerSlaveId && slave.runtimeRoles.includes(question.recipientRole ?? ''),
+          )
+        : []
+  return recipients.length > 0 && recipients.every((slave) => willNotRun(world, slave))
+}
+
+/** Idle, and nothing `decide()` could start is in its role list -- a slave that will not run, and so
+ *  will never render its inbox, until the board changes under it. */
+export function willNotRun(world: SupervisorWorld, slave: SupervisorSlave): boolean {
+  return !slave.busy && !hasStartableWork(slave, world.tasks)
 }
 
 /** Who a question was addressed to, for a summary a human reads. */
@@ -402,6 +447,22 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
         subjectId: question.messageId,
         summary: `A question is addressed to ${recipientLabel(question)}, which no slave in this workspace holds.`,
         facts: questionFacts(question, world),
+      })
+    } else if (questionIsStranded(world, question)) {
+      // Pilot fix A: somebody can answer it, but nobody who can will run -- so, like the case above,
+      // waiting longer cannot help and there is no threshold. The SAME kind rather than a sibling:
+      // the remedies are the same (the Supervisor's sourced answer first, a re-address to somebody
+      // who will run, else a person), the panel's label -- "Question nobody can answer" -- is true
+      // of it, and a new kind would be a Postgres enum value and a migration for a distinction the
+      // `stranded` fact and the summary already carry. `candidates` reads the same predicate to
+      // withhold the staffing offers, which fix a missing role and not an idle one.
+      add({
+        kind: 'unanswerable_question',
+        subjectId: question.messageId,
+        summary:
+          `A question is addressed to ${recipientLabel(question)}, and nobody who can answer it will see it: ` +
+          'every recipient is idle with nothing it can start, and a slave reads its questions only when it next works on a task.',
+        facts: { ...questionFacts(question, world), stranded: true },
       })
     } else if (world.now - question.createdAt > WAITING_STALE_MS) {
       const waitedMinutes = Math.floor((world.now - question.createdAt) / 60_000)

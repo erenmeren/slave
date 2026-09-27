@@ -10,6 +10,7 @@ import {
   ANSWER_BLOCK_OPEN,
   ASK_BLOCK_OPEN,
   IMPLEMENTATION_WORK_RULES,
+  WAITING_STALE_MS,
   runId as brandRunId,
   workspaceId as brandWorkspaceId,
   runContextManifestSchema,
@@ -750,6 +751,89 @@ describe('tick', () => {
     await tick(deps)
     const stillOnce = await prisma.slaveRun.findUniqueOrThrow({ where: { id: activeRun.id } })
     expect(stillOnce.status).toBe('pause_requested')
+  })
+
+  /**
+   * Pilot fix A, reproduced from the css-what multi rep2 run. A slave reads its questions only in
+   * its next IMPLEMENTATION run, and the one seat the question named was idle with nothing it could
+   * start: its only other task depended on the very task whose worker was waiting for the answer.
+   * The Supervisor used to see nothing until `WAITING_STALE_MS` (thirty minutes) had passed; the
+   * question has to be a situation on the very next tick.
+   */
+  describe('a question nobody will pick up is raised on the next tick (pilot fix A)', () => {
+    it('raises unanswerable_question at once when the named seat is idle and its only task depends on the asker', async (): Promise<void> => {
+      const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+      const asker = await prisma.slave.create({ data: { teamId: team.id, role: 'writer', runtimeRoles: ['docs'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
+      // The README task: its worker asked Alex and is parked on the answer, exactly as `ask.ts`
+      // leaves it -- the run `paused waiting_for_answer`, the task `waiting`.
+      const readme = await prisma.task.create({
+        data: { workspaceId: fixture.workspaceId, title: 'Document the token', description: 'readme row', status: 'waiting', requiredRole: 'docs', maxAttempts: 3 },
+      })
+      const askerRun = await prisma.slaveRun.create({
+        data: { slaveId: asker.id, taskId: readme.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' },
+      })
+      await prisma.task.update({ where: { id: readme.id }, data: { activeRunId: askerRun.id } })
+      // Alex's one remaining task is `ready` -- but it depends on the README task, so `decide()`
+      // will never start it while the question stands.
+      await prisma.taskDependency.create({ data: { taskId: fixture.taskId, dependsOnTaskId: readme.id } })
+      const question = await prisma.slaveMessage.create({
+        data: {
+          slaveId: asker.id,
+          workspaceId: fixture.workspaceId,
+          taskId: readme.id,
+          senderRunId: askerRun.id,
+          recipientSlaveId: fixture.slaveId,
+          threadId: 'thread-readme',
+          kind: 'question',
+          body: 'The parser task already added the readme row -- is there anything left for me to document?',
+          actor: 'slave',
+          expectsReply: true,
+        },
+      })
+      const recorder = recordingAdapter()
+
+      const report = await tick({ ...deps, registry: singleAdapterRegistry(recorder.adapter) })
+
+      // Nobody ran, so nobody saw the question -- the whole of the failure.
+      expect(recorder.starts).toHaveLength(0)
+      expect(report.started).toEqual([])
+      // And yet the Supervisor has it on the first tick, seconds after it was asked.
+      const rows = await prisma.supervisorDecision.findMany({ where: { workspaceId: fixture.workspaceId } })
+      expect(rows.map((row) => [row.situationKind, row.subjectId])).toEqual([['unanswerable_question', question.id]])
+      const facts = (rows[0]?.situation as { facts: { stranded?: boolean; waitingMs: number } }).facts
+      expect(facts.stranded).toBe(true)
+      expect(facts.waitingMs).toBeLessThan(WAITING_STALE_MS)
+      // No model wired, no colleague who will run: the rules hand it to a person rather than wait.
+      expect(rows[0]).toMatchObject({ decidedBy: 'rules', action: { kind: 'escalate_to_human' } })
+    })
+
+    it('stays quiet about the same question when the seat can start its task -- that run shows it the question', async (): Promise<void> => {
+      const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+      const asker = await prisma.slave.create({ data: { teamId: team.id, role: 'writer', runtimeRoles: ['docs'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
+      const askerRun = await prisma.slaveRun.create({
+        data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' },
+      })
+      await prisma.slaveMessage.create({
+        data: {
+          slaveId: asker.id,
+          workspaceId: fixture.workspaceId,
+          senderRunId: askerRun.id,
+          recipientSlaveId: fixture.slaveId,
+          threadId: 'thread-readme',
+          kind: 'question',
+          body: 'Anything left to document?',
+          actor: 'slave',
+          expectsReply: true,
+        },
+      })
+      const recorder = recordingAdapter()
+
+      await tick({ ...deps, registry: singleAdapterRegistry(recorder.adapter) })
+
+      expect(recorder.starts).toHaveLength(1)
+      expect(recorder.starts[0]?.prompt).toContain('Anything left to document?')
+      expect(await prisma.supervisorDecision.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
+    })
   })
 
   /**
