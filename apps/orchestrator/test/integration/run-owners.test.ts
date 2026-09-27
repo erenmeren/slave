@@ -474,6 +474,26 @@ describe('every unfinished record has an owner (H9b)', () => {
       expect(observed).toBeLessThanOrEqual(4 * 60_000 + 2_000)
     })
 
+    it('caps the first pass of a restarted process at one beat, even four minutes since observedAt', async (): Promise<void> => {
+      // Fix round 1 (2026-09-27): a fresh process has no previous pass of its OWN to measure a gap
+      // from, so `observedFrom` (the row) can reach back through real downtime the same as a clock
+      // jump would -- crediting that gap in full, like an ordinary pass does, would push a run near
+      // its limit over it and blame the worker for time nobody watched. `resetTickObservation()`
+      // makes this explicit, though `beforeEach` already leaves every test with no previous pass.
+      resetTickObservation()
+      const { runId } = await taskHeldBy(fixture, {
+        pid: process.pid,
+        startedAt: minutesAgo(10),
+        observedWorkingMs: 0,
+        observedAt: minutesAgo(4),
+      })
+
+      await sweep(fixture.deps)
+
+      const observed = (await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })).observedWorkingMs
+      expect(observed).toBe(BREAKER_BEAT_MS)
+    })
+
     it('keeps what it observed across a restart rather than starting the run over', async (): Promise<void> => {
       const { runId } = await taskHeldBy(fixture, {
         pid: process.pid,

@@ -580,6 +580,12 @@ export async function reconcileStrandedClaims(
 export async function sweep(deps: SweepDeps): Promise<SweepReport> {
   // H9b R1 (F11a): first, before any read -- the gap is between PASSES, and a pass that throws
   // halfway is still a pass this process was awake for.
+  //
+  // Read BEFORE `noteSweepAt` below records this pass, and without touching that function's return
+  // contract (every other caller wants "was this a clock jump", not "is this the first pass"): a
+  // fresh process has no entry for this workspace yet, and its first pass must cap the same way a
+  // clock jump does (fix round 1, 2026-09-27) -- the accrual block below states why.
+  const firstPassOfProcess = !lastSweepAt.has(deps.workspaceId)
   const clockJumped = noteSweepAt(deps.workspaceId, Date.now())
   const workspace = await db.workspace.findUniqueOrThrow({ where: { id: deps.workspaceId } })
   // `slave: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
@@ -661,15 +667,19 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
       continue
     }
 
-    // OBSERVED working time (H9b, F11b), not wall-clock time. Each pass adds the gap since the
-    // previous one that saw this run live -- in full on a normal pass, since the sweep runs after
-    // every tick and a gap that is not a clock jump is real work (Large-1 multi rep 2, 2026-09-27:
-    // crediting a four-minute merge-verify gap one beat let a run outlive its limit by eleven
-    // minutes). Only a pass that IS a clock jump caps the gap at one beat -- so a host that slept for
-    // fifteen hours, or a daemon that was frozen or dead, adds a minute at most rather than the
-    // whole gap. On 2026-09-22 the host slept from 14:54 to 06:17 and the pass that woke timed out
-    // three runs whose workers had done nothing wrong. Persisted on the row (`observedWorkingMs`),
-    // so a restart neither resets a run's allowance nor charges it for the downtime.
+    // OBSERVED working time (H9b, F11b), not wall-clock time. THE GUARANTEE: an ordinary pass
+    // credits the run the whole gap since the previous one that saw it live, up to CLOCK_JUMP_MS --
+    // so a slow pass (a long merge, a broker call) still credits in full (Large-1 multi rep 2,
+    // 2026-09-27: crediting a four-minute merge-verify gap one beat let a run outlive its limit by
+    // eleven minutes). Two kinds of pass cap the gap at one beat instead: one that IS a clock jump
+    // (the host slept, or the daemon was frozen for a long stretch), and the FIRST pass a process
+    // makes of a workspace (fix round 1, 2026-09-27) -- a daemon that just restarted has no previous
+    // pass of ITS OWN to measure from, `observedFrom` reaches back through the downtime same as a
+    // clock jump would, and crediting that whole gap risked pushing a run near its limit over it and
+    // blaming the worker for time nobody watched. On 2026-09-22 the host slept from 14:54 to 06:17
+    // and the pass that woke timed out three runs whose workers had done nothing wrong. Persisted on
+    // the row (`observedWorkingMs`), so a restart neither resets a run's allowance nor charges it for
+    // the downtime.
     //
     // Never past the H8 WORKING time -- wall clock less the spans the run sat `paused`, the ones
     // closed into `pausedMs` by each resume claim and the one still open on a row the sweep
@@ -679,10 +689,8 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     const openPauseMs = run.pausedAt === null ? 0 : Math.max(0, now - run.pausedAt.getTime())
     const wallWorkingMs = Math.max(0, now - run.startedAt.getTime() - run.pausedMs - openPauseMs)
     const observedFrom = (run.observedAt ?? run.startedAt).getTime()
-    // A normal pass credits the whole gap since this run was last observed: the sweep runs after
-    // each tick, and a tick that spends minutes in a merge's verify is not a sleep. Only a pass that
-    // IS a clock jump (the host slept) caps the gap at one beat -- the 2026-09-22 rule, unchanged.
-    const gapCap = clockJumped ? BREAKER_BEAT_MS : CLOCK_JUMP_MS
+    // The guarantee is stated in full in the block comment above.
+    const gapCap = clockJumped || firstPassOfProcess ? BREAKER_BEAT_MS : CLOCK_JUMP_MS
     const step = Math.min(Math.max(0, now - observedFrom), gapCap)
     // Clamped to the column: an INTEGER of milliseconds is twenty-four days, far past any limit.
     const workingMs = Math.min(run.observedWorkingMs + step, wallWorkingMs, OBSERVED_MS_MAX)
