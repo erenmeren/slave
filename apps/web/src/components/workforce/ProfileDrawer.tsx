@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   capabilityIndex,
   duplicateBasisLabel,
@@ -239,14 +239,22 @@ export function ProfileDrawer({
    * not be read" -- in both the editor is not offered at all. Read on open and again after each save
    * the editor makes, because the caller's resync covers only its loaded page, which this persona
    * is not on.
+   *
+   * `latestSkillsRead` numbers each read and only the newest may land: the re-read after a first
+   * save can answer AFTER the one after a second save, and its older set would otherwise become the
+   * base of the next whole-set write.
    */
   const [ownSkills, setOwnSkills] = useState<PersonaDefaultSkillsView | 'error' | null>(null)
+  const latestSkillsRead = useRef(0)
   const skillsKnown = defaultSkillIds !== undefined
   const loadSkills = useCallback((): void => {
+    latestSkillsRead.current += 1
+    const mine = latestSkillsRead.current
     void fetch(`/api/org/templates/${templateId}/skills`)
       .then(async (response) => (response.ok ? ((await response.json()) as unknown) : null))
       .catch(() => null)
       .then((body) => {
+        if (mine !== latestSkillsRead.current) return
         const ids = body !== null && typeof body === 'object' ? (body as { defaultSkillIds?: unknown }).defaultSkillIds : undefined
         const hired = body !== null && typeof body === 'object' ? (body as { hiredCount?: unknown }).hiredCount : undefined
         setOwnSkills(
@@ -256,8 +264,12 @@ export function ProfileDrawer({
         )
       })
   }, [templateId])
+  // Back to "not read yet" whenever the caller stops knowing the set: an answer read before the
+  // caller knew it is from before whatever the caller's rows saw since.
   useEffect(() => {
-    if (!skillsKnown) loadSkills()
+    if (skillsKnown) return
+    setOwnSkills(null)
+    loadSkills()
   }, [skillsKnown, loadSkills])
   const skills: PersonaDefaultSkillsView | 'error' | null = skillsKnown
     ? { defaultSkillIds, hiredCount: hiredCount ?? 0 }

@@ -768,6 +768,51 @@ describe('ProfileDrawer', () => {
       expect(bodies.at(-1)).toEqual({ skillIds: ['s-git', 's-pdf'] })
     })
 
+    it('lets the newest by-id read win when an older one lands after it', async () => {
+      const other = row({ id: 't9', name: 'Backend Architect', defaultSkillIds: ['s-sql'], skills: [chipOf('s-sql')] })
+      const { bodies } = serve([row(), other], 1)
+      const base = fetchMock.getMockImplementation() as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+      const pair = {
+        id: 'p1', class: 'exact', basis: 'content_hash', score: 1, detectedAt: '2026-09-14T09:00:00.000Z',
+        dismissedAt: null, dismissedBy: null, aId: 't1', aName: 'Core Builder', bId: 't9', bName: 'Backend Architect',
+      }
+      // The SECOND by-id read (after the first save) is held until the third has landed.
+      let reads = 0
+      let releaseSecond: () => void = () => {}
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (url.endsWith('/t1/duplicates')) return new Response(JSON.stringify([pair]), { status: 200 })
+        if (url.endsWith('/t9/skills') && init?.method !== 'PATCH') {
+          reads += 1
+          const answer = await base(input, init)
+          if (reads === 2) await new Promise<void>((resolve) => (releaseSecond = resolve))
+          return answer
+        }
+        return base(input, init)
+      })
+      render(<WorkforceCatalog initial={{ ...view([row()]), total: 2, nextCursor: 't1' }} skillCatalogue={CATALOGUE} />)
+
+      await openCardDrawer('t1')
+      await act(async () => {
+        fireEvent.click(await screen.findByTestId('profile-duplicate-open-p1'))
+      })
+      await screen.findByTestId('template-skill-s-sql')
+      await drawerAdd('s-pdf')
+      await drawerAdd('s-git')
+      expect(bodies.at(-1)).toEqual({ skillIds: ['s-sql', 's-pdf', 's-git'] })
+      await waitFor(() => expect(reads).toBe(3))
+      await act(async () => {
+        releaseSecond()
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      })
+      // The stale second answer ([s-sql, s-pdf]) must not have replaced the third.
+      expect(screen.getByTestId('template-skill-s-git')).toBeTruthy()
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('template-skill-remove-s-sql'))
+      })
+      expect(bodies.at(-1)).toEqual({ skillIds: ['s-pdf', 's-git'] })
+    })
+
     it('never offers the editor while the persona’s set is unknown, and says why when it cannot be read', async () => {
       serve([row()])
       const base = fetchMock.getMockImplementation() as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
