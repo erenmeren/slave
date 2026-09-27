@@ -82,6 +82,14 @@ export const REVIEW_VERDICT_INSTRUCTIONS = [
  * PROMPT, not a fixture -- what is pinned about it is the two routing literals below and the
  * deviation named next, both of which the appended line leaves untouched.
  *
+ * Pilot fix B added the three SIZING lines after the range. The benchmark pilot's planner, told
+ * only "between 1 and 20", split one small parser change into four tasks, one of them "document
+ * the token in the README" -- which the parser task had already done, so that worker had nothing to
+ * do but stop and ask, and the project stalled on its question. One session's work is one task; a
+ * split has to be one each side of which can be built and checked alone; and docs travel with the
+ * change they describe. The range stays: the schema still accepts 1 to 20, and the rule is about
+ * which end of it a goal belongs at. None of the three may carry a routing literal either.
+ *
  * **The one word that is NOT verbatim** (spec erratum E6, final review): `below` is `above` here.
  * `buildPlanningPrompt` put the goal after this text; {@link SECTION_ORDER}`.planning` puts the
  * `planning_goal` section BEFORE the trailer, so a prompt still saying "the GOAL below" would end
@@ -95,6 +103,9 @@ export const PLANNING_GRAPH_INSTRUCTIONS = [
   'Your final message must contain exactly one JSON object and nothing else on its line:',
   '{"tasks":[{"key":"short-unique-key","title":"...","description":"...","role":"backend","dependsOn":["other-key"],"needs":[]}]}',
   'Between 1 and 20 tasks. Keys are plan-local. dependsOn lists keys, no cycles.',
+  'Size the graph to the work, not to the limit. If the whole GOAL fits one focused session -- one coherent change a single engineer would make in one sitting -- return exactly ONE task.',
+  'Split only along boundaries where each task can be built AND verified on its own.',
+  'Never create a separate task to document a change another task makes (README, docs, changelog): the task that changes the behaviour updates its own docs and tests.',
   'A task that must read the web carries "needs": ["network_fetch"]; one that must run commands beyond the repository\'s own scripts carries "run_commands"; most tasks carry neither.',
 ].join('\n')
 

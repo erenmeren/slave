@@ -4,6 +4,7 @@ import {
   sanitiseExternalText,
 } from '../external/fence.js'
 import { neutraliseMarkers } from '../run-context/markers.js'
+import { REVIEWER_ROLE } from '../supervisor/constants.js'
 import { INTAKE_MAX_SEATS_PER_TEMPLATE, INTAKE_PROMPT_MESSAGES_MAX, INTAKE_TEXT_MAX_CHARS, type IntakeRole } from './constants.js'
 import type { IntakeFacts } from './facts.js'
 
@@ -113,9 +114,21 @@ export function buildIntakePrompt(input: {
     // and nothing else will leave it out, and an inert project is the worst default this
     // conversation can produce.
     'A project with nobody on it cannot be planned or reviewed: work is dispatched to the team, so',
-    'an empty team leaves the project idle until a person staffs it by hand. Propose the smallest',
-    'team that can actually do the work, and leave it empty only when the person has said they will',
-    'staff it themselves.',
+    'an empty team leaves the project idle until a person staffs it by hand. Leave it empty only',
+    'when the person has said they will staff it themselves.',
+    '',
+    // Pilot fix B. "Propose the smallest team that can actually do the work" gave every benchmark
+    // pilot run ONE seat, and `ensureStaffRoles` then folded `manager` and `reviewer` onto it: no
+    // work could run in parallel, and the only reviewer was the only implementer -- which the
+    // dispatcher refuses (a worker never reviews its own work), so every review waited on a hire.
+    // The count that matters is how many streams of work can move at once, and the reviewer is a
+    // seat of its own. `ensureStaffRoles` is unchanged: it still adds `manager` to an engineering
+    // seat, and still folds `reviewer` onto one when a model proposes no reviewer at all.
+    'Size the team by independent workstreams: one implementation seat for each stream of work that',
+    'can progress in parallel with the others. A small goal is one workstream and gets ONE',
+    'implementation seat; more seats on one stream only wait on each other.',
+    `Add one more seat holding "${REVIEWER_ROLE}" that implements nothing: nobody reviews their own work,`,
+    'so a reviewer who is also the only implementer leaves every review waiting.',
     '',
     // Final review, Important 8. The schema refuses a fourth seat from one persona, so a model that
     // does not know the rule loses its whole draft to a validation error it cannot see the reason
