@@ -785,6 +785,13 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     // class alone, `verifyConcludedRun` gives the task its attempt back, and the breaker leaves the
     // run out of its streak. A tool-call ceiling is the worker's whatever the clock did, so a run
     // over its cap as well as its time keeps the worker's class.
+    //
+    // A stall (conductor R0) is NEVER platform, on purpose, however long the silence: `platform`
+    // failures cost no attempt and the breaker never counts them, which is right for a clock jump
+    // (a bounded, one-off event this daemon can name) but wrong for a stream that has simply gone
+    // dead -- a provider that stalls persistently would then fail forever for free, retried without
+    // limit and without ever tripping the failure-streak breaker meant to catch exactly that. Ruling
+    // it the worker's is what gives a genuinely broken provider a cap.
     const platformTimeout = clockJumped && timedOutNow && !overCapNow
     const claimed = await db.slaveRun.updateMany({
       where: { id: run.id, status: { in: [...SWEEPABLE] } },

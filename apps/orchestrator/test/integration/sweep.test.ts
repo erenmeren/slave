@@ -387,13 +387,31 @@ describe('sweep and reconcileOrphans', () => {
       expect(cancelled).toEqual([run.id])
       const tripped = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'guardrail_tripped' } })
       expect((tripped.payload as { guardrail: string }).guardrail).toBe('run_stalled')
+      // Fix round 1, controller ruling: a stall stays the WORKER's failure -- `platform` costs no
+      // attempt and the breaker never counts it, and a provider that stalls persistently would then
+      // fail forever for free. `null` here, not `'worker'`: it is what the claim leaves an ordinary
+      // (non-clock-jump) timeout with too -- see `platformTimeout` a few lines above this claim --
+      // and only `run.failureClass === 'platform'` is ever treated specially downstream
+      // (`releaseTaskAfterFailure`'s caller in `verify.ts`), so `null` counts as the worker's exactly
+      // as `'worker'` would.
+      expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).failureClass).toBeNull()
     })
 
     it('leaves a silent run alone while a tool call is open: a long command is not a stall', async (): Promise<void> => {
       await givenRun({ status: 'working', pid: process.pid, startedAt: minutesAgo(20), lastOutputAt: minutesAgo(16), toolCallOpenSince: minutesAgo(16) })
+      // A SECOND run, silent exactly as long, with no tool call open: proof this pass actually
+      // judges stalls on this tick and that the open call above is what spares the first run, not
+      // an accident of every run being spared by the same gate (fix round 1, Important finding 1 --
+      // without the warm-up below this was the process's first pass, `stalledNow` read false for
+      // BOTH runs regardless of `toolCallOpenSince`, and the suite stayed green even with that
+      // condition deleted).
+      const withoutOpenCall = await givenRun({ status: 'working', pid: process.pid, startedAt: minutesAgo(20), lastOutputAt: minutesAgo(16) })
+      noteSweepAt(deps.workspaceId, secondsAgo(1).getTime())
+
       const report = await sweep(deps)
-      expect(report.stalled).toEqual([])
-      expect(cancelled).toEqual([])
+
+      expect(report.stalled).toEqual([withoutOpenCall.id])
+      expect(cancelled).toEqual([withoutOpenCall.id])
     })
 
     it('leaves a run that spoke recently alone, and measures a run that never spoke from its start', async (): Promise<void> => {
