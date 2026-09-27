@@ -89,6 +89,17 @@ export type SectionSource =
       readonly shadowedByRepo: readonly string[]
       readonly provider_unsupported: boolean
       readonly no_worktree: boolean
+      /**
+       * Conductor R6: which installed skills' instructions actually reached the prompt, which were
+       * cut at the per-skill cap, and which were left out whole because the total no longer had
+       * room. OPTIONAL on read, by the `task.sha256` rule (M40 t1 fix round 1): every `RunContext`
+       * row written before this milestone carries none of the three, and both readers must still
+       * show that history rather than crash on it. The write site (`buildRunContext`) always sets
+       * them for a provider that runs skills at all.
+       */
+      readonly inlined?: readonly string[] | undefined
+      readonly truncated?: readonly string[] | undefined
+      readonly omitted?: readonly string[] | undefined
     }
   | { readonly kind: 'inbox'; readonly messageIds: readonly string[] }
   | { readonly kind: 'ask_protocol' }
@@ -177,6 +188,11 @@ const skillsSourceSchema = z.object({
   shadowedByRepo: z.array(z.string()),
   provider_unsupported: z.boolean(),
   no_worktree: z.boolean(),
+  // Optional on read, same rule as `task.sha256` just below: a pre-conductor row carries none of
+  // these, and a reader must still show it rather than refuse the whole manifest.
+  inlined: z.array(z.string()).optional(),
+  truncated: z.array(z.string()).optional(),
+  omitted: z.array(z.string()).optional(),
 })
 
 const inboxSourceSchema = z.object({

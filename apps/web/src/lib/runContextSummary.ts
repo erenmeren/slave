@@ -58,6 +58,11 @@ export function sectionLine(source: SectionSource): SectionLine {
       // (spec erratum E4).
       if (source.provider_unsupported) parts.push('this runtime takes no injected skills')
       if (source.no_worktree) parts.push('no worktree to inject into')
+      // Conductor R6: which of the installed skills actually reached the prompt as text, and which
+      // were cut for length -- optional on read (a pre-conductor row carries neither), so both are
+      // only added when the row has something to say.
+      if (source.inlined?.length) parts.push(`instructions in the prompt: ${source.inlined.join(', ')}`)
+      if (source.truncated?.length) parts.push(`cut for length: ${source.truncated.join(', ')}`)
       return { kind: source.kind, detail: parts.join(' · '), missing: source.missing }
     }
     case 'inbox':

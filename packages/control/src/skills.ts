@@ -155,6 +155,21 @@ function parseFrontmatter(text: string): { name: string; description: string } |
   return { name, description: field('description') ?? '' }
 }
 
+/**
+ * Conductor R6: the instructions of one skill -- its `SKILL.md` after the front matter -- for a
+ * worker's prompt. `null` when there is no readable file; a file with no front matter is all body.
+ */
+export function readSkillBody(skillDir: string): string | null {
+  let text: string
+  try {
+    text = readFileSync(join(skillDir, 'SKILL.md'), 'utf8')
+  } catch {
+    return null
+  }
+  const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(text)
+  return (match === null ? text : text.slice(match[0].length)).trim()
+}
+
 /** The errnos that mean "there is nothing here", as opposed to "I could not look". */
 const ABSENT = new Set(['ENOENT', 'ENOTDIR'])
 

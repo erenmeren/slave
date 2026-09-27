@@ -97,6 +97,30 @@ describe('runContextManifestSchema', () => {
     if (parsed.success) expect(parsed.data.sections[0]).toEqual({ kind: 'task', taskId: 't1' })
   })
 
+  // Conductor R6: the three new fields on the `skills` source are optional on read but parse when
+  // present -- a run whose worker had its skills' instructions inlined into the prompt.
+  it('accepts a skills source carrying inlined, truncated and omitted', () => {
+    const manifest = {
+      kind: 'implementation',
+      sections: [
+        {
+          kind: 'skills',
+          copied: ['code-review', 'long-skill', 'over-budget'],
+          missing: [],
+          shadowedByRepo: [],
+          provider_unsupported: false,
+          no_worktree: false,
+          inlined: ['code-review', 'long-skill'],
+          truncated: ['long-skill'],
+          omitted: ['over-budget'],
+        },
+      ],
+    }
+    const parsed = runContextManifestSchema.safeParse(manifest)
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data).toEqual(manifest)
+  })
+
   it('accepts a pre-M40 planning_goal source with no version', () => {
     const preM40 = { kind: 'planning', sections: [{ kind: 'planning_goal', sha256: 'c'.repeat(64) }] }
     const parsed = runContextManifestSchema.safeParse(preM40)

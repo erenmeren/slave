@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { cpSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { runbookForWorkspace, skillRoots, skillSourceDir, type SkillRoots } from '@slave-of-ai/control'
+import { readSkillBody, runbookForWorkspace, skillRoots, skillSourceDir, type SkillRoots } from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   PROFILE_MAX_CHARS,
@@ -11,7 +11,8 @@ import {
   TERMINAL,
   defuseRoutingLiterals,
   effectiveProfileFor,
-  effectiveSkillIds,
+  effectiveSkills,
+  fitSkillBodies,
   handoffCanonicalJson,
   neutraliseMarkers,
   parseHandoffContract,
@@ -120,6 +121,10 @@ export interface AssignedSkill {
   readonly description: string
   readonly providerName: string
   readonly missingSince: Date | null
+  /** Conductor R6: persona defaults are inlined into the prompt ahead of the person's own grants,
+   *  so the builder needs this to order and to record which skills the run was told it MUST apply
+   *  as opposed to merely may use -- the persona is who the worker IS. */
+  readonly origin: 'persona' | 'person'
 }
 
 /** What one dispatch's injection did, in the shape the `skills` section source records. */
@@ -340,7 +345,7 @@ const block = (heading: string, body: readonly string[]): string => [heading, ''
 const singleLine = (text: string): string => text.replace(/\s+/g, ' ').trim()
 
 /**
- * What the slave is told about its skills.
+ * What the slave is told about its skills (conductor spec R6).
  *
  * Empty -- and therefore absent from both the prompt and the manifest -- only when the slave has no
  * assigned skills at all. When it HAS some and none of them could be installed (all missing, or a
@@ -354,26 +359,32 @@ const singleLine = (text: string): string => text.replace(/\s+/g, ' ').trim()
  * (spec §9), and telling that run its skills "are not installed in this checkout" invites it to go
  * looking for a mechanism that does not exist. The wording matches the operator-facing one in
  * `apps/web/src/lib/runContextSummary.ts`, so the prompt and the run page say the same thing.
+ *
+ * Once something IS installed, the body of each -- not just its name and one-line blurb -- is
+ * written straight into the prompt (R6's whole point: a benchmark run measured before this change
+ * never once opened a skill it was merely told the name of). `fitted` decides the order (persona
+ * defaults first), the per-skill cut and the whole-skill omission; this function only renders what
+ * it was handed.
  */
 function skillsSectionText(
   offered: readonly { readonly name: string; readonly description: string }[],
-  assigned: readonly { readonly name: string; readonly description: string }[],
+  named: readonly { readonly name: string; readonly description: string }[],
   injection: SkillInjection,
+  fitted: ReturnType<typeof fitSkillBodies>,
 ): string {
-  if (assigned.length === 0) return ''
+  if (named.length === 0) return ''
   if (offered.length === 0) {
     if (injection.provider_unsupported) {
       return block('SKILLS', ['This runtime has no skills mechanism, so none were installed for you. Work without them.'])
     }
     return block('SKILLS', ['None of the skills assigned to you are installed in this checkout. Work without them.'])
   }
-  return block('SKILLS AVAILABLE IN THIS CHECKOUT', [
-    'These are installed under `.claude/skills` in the worktree you are working in. Invoke one by',
-    'name when it fits what you are doing; nothing here is compulsory.',
+  return block('SKILLS YOU MUST APPLY', [
+    'These skills are part of how you work on this task. Follow their instructions where they apply;',
+    'each is also installed under `.claude/skills/<name>` with any files it refers to.',
     '',
-    // Another party's text: a skill description is written wherever the skill came from, so it
-    // cannot be allowed to carry a live protocol marker (M37 §1).
-    ...offered.map((skill) => `- ${skill.name}: ${neutraliseMarkers(skill.description)}`),
+    ...fitted.blocks.flatMap((skill) => [`### ${skill.name}`, '', neutraliseMarkers(skill.text), '']),
+    ...(fitted.omitted.length === 0 ? [] : [`Not shown here for length, but installed: ${fitted.omitted.join(', ')}.`]),
   ])
 }
 
@@ -869,11 +880,11 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
       (skill) => [skill.id, skill] as const,
     ),
   )
-  const assigned: readonly AssignedSkill[] = effectiveSkillIds({
+  const assigned: readonly AssignedSkill[] = effectiveSkills({
     templateSkillIds: templateSkills.map((row) => row.skillId),
     granted: slave.person.skills.filter((row) => row.mode === 'granted').map((row) => row.skillId),
     revoked: slave.person.skills.filter((row) => row.mode === 'revoked').map((row) => row.skillId),
-  }).flatMap((skillId) => {
+  }).flatMap(({ skillId, origin }) => {
     const skill = skillRowById.get(skillId)
     return skill === undefined
       ? []
@@ -882,13 +893,18 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
           description: skill.description,
           providerName: skill.provider.name,
           missingSince: skill.missingSince,
+          origin,
         }]
   })
+  // Resolved once, and shared with the body-reading below: the injection and the body reader must
+  // agree on where a skill's files live, or a run could be told to trust a body neither its
+  // worktree nor its catalog root actually holds.
+  const roots = input.skillRoots ?? skillRoots()
   const injection = await injectSkills({
     worktreePath: input.worktreePath,
     provider: input.provider,
     skills: assigned,
-    roots: input.skillRoots ?? skillRoots(),
+    roots,
   })
   if (order.includes('skills')) {
     const descriptionOf = new Map(assigned.map((skill) => [skill.name, skill.description]))
@@ -908,10 +924,41 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
       .filter((skill) => skill.missingSince === null)
       .toSorted((a, b) => a.name.localeCompare(b.name))
       .map((skill) => ({ name: skill.name, description: skill.description }))
+    // Conductor R6: a skill's INSTRUCTIONS, not just its name, reach the prompt -- but only for what
+    // is actually installed (`copied` or `shadowedByRepo`; `installed` is empty on a provider with
+    // no skills mechanism at all, so this costs nothing extra for Cursor). A shadowed skill's body
+    // is read from the WORKTREE's own committed copy, because that -- not this daemon's catalog
+    // root -- is the text the repository actually ships and the runtime will actually discover.
+    const installed = new Set([...injection.copied, ...injection.shadowedByRepo])
+    const fitted = fitSkillBodies(
+      assigned
+        .filter((skill) => installed.has(skill.name))
+        .map((skill) => ({
+          name: skill.name,
+          origin: skill.origin,
+          body:
+            injection.shadowedByRepo.includes(skill.name) && input.worktreePath !== null
+              ? readSkillBody(join(input.worktreePath, SKILLS_DIR, skill.name))
+              : (() => {
+                  const dir = skillSourceDir(roots, skill.providerName, skill.name)
+                  return dir === null ? null : readSkillBody(dir)
+                })(),
+        })),
+    )
     sections.push({
       kind: 'skills',
-      text: skillsSectionText(offered, named, injection),
-      source: { kind: 'skills', ...injection },
+      text: skillsSectionText(offered, named, injection, fitted),
+      source: {
+        kind: 'skills',
+        ...injection,
+        // Only for a provider that actually runs skills: on Cursor `installed` above is always
+        // empty, so this would be three empty arrays that say nothing a reader could not already
+        // tell from `provider_unsupported` -- and would misleadingly imply bodies were ever
+        // considered for a runtime that has no skills mechanism to put them in front of.
+        ...(providerRunsSkills(input.provider)
+          ? { inlined: fitted.inlined, truncated: fitted.truncated, omitted: fitted.omitted }
+          : {}),
+      },
     })
   }
 

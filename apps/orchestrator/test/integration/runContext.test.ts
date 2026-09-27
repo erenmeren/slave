@@ -171,6 +171,22 @@ async function assign(
   return skill.id
 }
 
+/** Gives the fixture's PERSONA (not the person directly) a skill with a real body, wiring up a
+ *  `SlaveTemplate` the first time it is called for a fixture that has none yet (conductor R6: a
+ *  persona default's instructions must be inlined ahead of a person's own grant). */
+async function giveToPersona(fixture: Fixture, name: string, body: string): Promise<void> {
+  mkdirSync(join(fixture.skillRoots.personal, name), { recursive: true })
+  writeFileSync(join(fixture.skillRoots.personal, name, 'SKILL.md'), `---\nname: ${name}\ndescription: does ${name}\n---\n\n${body}\n`)
+  const provider = await prisma.skillProvider.upsert({ where: { name: 'personal' }, update: {}, create: { name: 'personal' } })
+  const skill = await prisma.skill.create({ data: { providerId: provider.id, name, description: `does ${name}` } })
+  let person = await prisma.person.findUniqueOrThrow({ where: { id: fixture.personId } })
+  if (person.templateId === null) {
+    const template = await prisma.slaveTemplate.create({ data: { name: `Persona ${fixture.personId.slice(0, 6)}`, role: 'engineering', profile: 'You are a persona.' } })
+    person = await prisma.person.update({ where: { id: fixture.personId }, data: { templateId: template.id } })
+  }
+  await prisma.templateSkill.create({ data: { templateId: person.templateId!, skillId: skill.id } })
+}
+
 async function buildImplementation(fixture: Fixture): Promise<{ prompt: string; manifest: Manifest }> {
   return buildRunContext({
     runId: fixture.runId,
@@ -216,7 +232,8 @@ describe('buildRunContext', () => {
       expect(prompt).toContain('You are Alex.')
       expect(prompt).toContain('Maya')
       expect(prompt).toContain('writing-plans')
-      expect(prompt).toContain('plans things')
+      // Conductor R6: a skill's instructions are IN the prompt now, not just its name and blurb.
+      expect(prompt).toContain('SKILLS YOU MUST APPLY')
       // The task is the last SECTION; the implementation work rules (H9 F9) are the fixed text after it.
       expect(prompt.endsWith(`Task: Add the thing\n\nmake it work\n\n${IMPLEMENTATION_WORK_RULES}`)).toBe(true)
       expect(prompt.indexOf('You are Alex.')).toBeLessThan(prompt.indexOf('Maya'))
@@ -367,6 +384,9 @@ describe('buildRunContext', () => {
         shadowedByRepo: [],
         provider_unsupported: false,
         no_worktree: false,
+        inlined: ['writing-plans'],
+        truncated: [],
+        omitted: [],
       })
 
       const marker = JSON.parse(readFileSync(join(fixture.worktreePath, '.claude/skills/.slaveofai-injected.json'), 'utf8')) as unknown
@@ -582,10 +602,33 @@ describe('buildRunContext', () => {
         worktreePath: null,
         provider: 'claude_code',
         roots: fixture.skillRoots,
-        skills: [{ name: 'writing-plans', description: 'plans things', providerName: 'personal', missingSince: null }],
+        skills: [{ name: 'writing-plans', description: 'plans things', providerName: 'personal', missingSince: null, origin: 'person' }],
       })
 
       expect(result).toMatchObject({ no_worktree: true, copied: [], missing: [], shadowedByRepo: [] })
+    })
+
+    it('puts each skill’s instructions in the prompt, persona defaults first, and says they must be applied', async () => {
+      await giveToPersona(fixture, 'zz-persona-rule', 'Always write the failing test first.')
+      await assign(fixture, 'aa-granted-rule', { description: 'granted' })
+
+      const { prompt, manifest } = await buildImplementation(fixture)
+
+      expect(prompt).toContain('SKILLS YOU MUST APPLY')
+      expect(prompt).toContain('Always write the failing test first.')
+      expect(prompt.indexOf('zz-persona-rule')).toBeLessThan(prompt.indexOf('aa-granted-rule'))
+      expect(prompt).not.toContain('nothing here is compulsory')
+      expect(skillsSource(manifest)).toMatchObject({ inlined: ['zz-persona-rule', 'aa-granted-rule'], truncated: [], omitted: [] })
+    })
+
+    it('still says a Cursor run has no skills, and inlines nothing for it', async () => {
+      await giveToPersona(fixture, 'persona-rule', 'Never inline me for cursor.')
+      const { prompt } = await buildRunContext({
+        runId: fixture.runId, kind: 'implementation', slaveId: fixture.slaveId, workspaceId: fixture.workspaceId,
+        taskId: fixture.taskId, worktreePath: fixture.worktreePath, provider: 'cursor', skillRoots: fixture.skillRoots,
+      })
+      expect(prompt).toContain('This runtime has no skills mechanism')
+      expect(prompt).not.toContain('Never inline me for cursor.')
     })
   })
 
