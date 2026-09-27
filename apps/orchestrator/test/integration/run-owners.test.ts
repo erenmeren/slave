@@ -455,6 +455,25 @@ describe('every unfinished record has an owner (H9b)', () => {
       expect(row.observedWorkingMs).toBe(BREAKER_BEAT_MS)
     })
 
+    it('counts a long pass in full: a four-minute tick does not steal three minutes from the run', async (): Promise<void> => {
+      // Large-1 multi rep 2 (2026-09-27): the sweep runs after each tick, a tick that spends minutes
+      // in a merge's verify leaves a gap that is NOT a sleep, and crediting it one beat let a silent
+      // run outlive its thirty-minute limit by eleven minutes.
+      const { runId } = await taskHeldBy(fixture, {
+        pid: process.pid,
+        startedAt: minutesAgo(10),
+        observedWorkingMs: 0,
+        observedAt: minutesAgo(4),
+      })
+      noteSweepAt(fixture.deps.workspaceId, Date.now() - 4 * 60_000)
+
+      await sweep(fixture.deps)
+
+      const observed = (await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })).observedWorkingMs
+      expect(observed).toBeGreaterThanOrEqual(4 * 60_000 - 1_000)
+      expect(observed).toBeLessThanOrEqual(4 * 60_000 + 2_000)
+    })
+
     it('keeps what it observed across a restart rather than starting the run over', async (): Promise<void> => {
       const { runId } = await taskHeldBy(fixture, {
         pid: process.pid,

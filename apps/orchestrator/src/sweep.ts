@@ -662,7 +662,10 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     }
 
     // OBSERVED working time (H9b, F11b), not wall-clock time. Each pass adds the gap since the
-    // previous one that saw this run live, capped at one breaker beat -- so a host that slept for
+    // previous one that saw this run live -- in full on a normal pass, since the sweep runs after
+    // every tick and a gap that is not a clock jump is real work (Large-1 multi rep 2, 2026-09-27:
+    // crediting a four-minute merge-verify gap one beat let a run outlive its limit by eleven
+    // minutes). Only a pass that IS a clock jump caps the gap at one beat -- so a host that slept for
     // fifteen hours, or a daemon that was frozen or dead, adds a minute at most rather than the
     // whole gap. On 2026-09-22 the host slept from 14:54 to 06:17 and the pass that woke timed out
     // three runs whose workers had done nothing wrong. Persisted on the row (`observedWorkingMs`),
@@ -676,7 +679,11 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     const openPauseMs = run.pausedAt === null ? 0 : Math.max(0, now - run.pausedAt.getTime())
     const wallWorkingMs = Math.max(0, now - run.startedAt.getTime() - run.pausedMs - openPauseMs)
     const observedFrom = (run.observedAt ?? run.startedAt).getTime()
-    const step = Math.min(Math.max(0, now - observedFrom), BREAKER_BEAT_MS)
+    // A normal pass credits the whole gap since this run was last observed: the sweep runs after
+    // each tick, and a tick that spends minutes in a merge's verify is not a sleep. Only a pass that
+    // IS a clock jump (the host slept) caps the gap at one beat -- the 2026-09-22 rule, unchanged.
+    const gapCap = clockJumped ? BREAKER_BEAT_MS : CLOCK_JUMP_MS
+    const step = Math.min(Math.max(0, now - observedFrom), gapCap)
     // Clamped to the column: an INTEGER of milliseconds is twenty-four days, far past any limit.
     const workingMs = Math.min(run.observedWorkingMs + step, wallWorkingMs, OBSERVED_MS_MAX)
     await db.slaveRun.updateMany({
