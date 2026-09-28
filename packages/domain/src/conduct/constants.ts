@@ -42,3 +42,40 @@ export const REPO_MAP_MAX_CHARS = 40_000
 
 /** The catalogue summary's size in the conductor prompt. */
 export const CONDUCT_CATALOGUE_MAX_CHARS = 30_000
+
+/**
+ * The runtime role a verification run's seat holds (Plan 4b decision D4). Never a package role: a
+ * verifier implemented nothing in the goal version it verifies.
+ */
+export const VERIFIER_ROLE = 'verifier'
+
+/** Verification runs of one round that produced no usable verdict before the round is given up on
+ *  and the version goes `needs_human` (plan D7). */
+export const VERIFICATION_RUN_RETRY_CAP = 3
+
+/** `Workspace.verificationRoundCap`'s own default (spec R9) -- a version this many rounds deep with
+ *  no acceptance goes `needs_human`. */
+export const VERIFICATION_ROUND_CAP_DEFAULT = 3
+
+/** One requirement's check text, as a person reads it back (spec R8) -- long enough for a real
+ *  command or a short script, not a second copy of the repository. */
+export const VERIFICATION_CHECK_MAX_CHARS = 8000
+
+/** The evidence a person reads; a test run's full log stays in the scratch directory. */
+export const VERIFICATION_OUTPUT_MAX_CHARS = 4000
+
+/** One requirement's `fail`/`unverifiable` reason -- long enough to say why, short enough that a
+ *  report of sixty items stays a report. */
+export const VERIFICATION_REASON_MAX_CHARS = 2000
+
+/** The integrated diff summary in the verification prompt -- the same order of size as the
+ *  repository map, for the same reason: a diff worth verifying is not a paragraph. */
+export const VERIFICATION_DIFF_STAT_MAX_CHARS = 20_000
+
+/** The verifier's check, output and reason as they ride on a package's rework prompt (plan D5) --
+ *  smaller than the verification prompt's own budget, because a worker reads this once per item. */
+export const VERIFICATION_REWORK_MAX_CHARS = 6000
+
+/** The tag a verification run's output is wrapped in (spec R8), the `SLAVE_REPORT_TAG` precedent:
+ *  paired with `MARKERS` so quoted text in a transcript cannot forge or close one. */
+export const SLAVE_VERIFICATION_TAG = 'slave-verification'

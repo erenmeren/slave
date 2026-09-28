@@ -143,6 +143,9 @@ model Workspace {
   maxToolCallsPerRun      Int    @default(200)
   maxAttempts             Int    @default(3)
   consecutiveFailureLimit Int    @default(3)
+  /// Plan 4b (spec R9): the mode's `reviewRetryCap`-like cap on a goal version's verification
+  /// rounds, counted from `GoalDelivery.roundBase`. A cap ends the loop `needs_human`.
+  verificationRoundCap    Int    @default(3)
 
   createdAt DateTime @default(now())
 
@@ -186,6 +189,8 @@ model Workspace {
   /// Conductor Plan 4a (spec R9): one row per conducted goal version, tracking its integration
   /// branch and where it stands.
   goalDeliveries  GoalDelivery[]
+  /// Conductor Plan 4b (spec R8): the per-requirement evidence every verification round wrote.
+  verificationResults VerificationResult[]
 
   @@index([adoptedFromSimulationId])
 }
@@ -1471,13 +1476,18 @@ model ConductorCall {
 }
 
 /// Conductor Plan 4a (spec R9): where one conducted goal version stands. `integrating` while its
-/// packages are merged into `integrationBranch`; `accepted` once the version passed its gate
-/// (4a: every package integrated; 4b: every requirement verified); `abandoned` when the person
-/// moved on. `mergedAt` is when the integration branch reached the base branch -- the next goal
-/// version is conducted only after it (or an abandon).
+/// packages are merged into `integrationBranch`; `verifying` (Plan 4b) once every package is
+/// integrated and a verification round is judging the requirements; `accepted` once the version
+/// passed its gate (4a: every package integrated; 4b: every requirement verified); `needs_human`
+/// (Plan 4b) when the verification loop ends without acceptance -- a round cap, an unverifiable
+/// requirement, a failing requirement nobody can rework, or a final merge that failed; `abandoned`
+/// when the person moved on. `mergedAt` is when the integration branch reached the base branch --
+/// the next goal version is conducted only after it (or an abandon).
 enum GoalDeliveryStatus {
   integrating
+  verifying
   accepted
+  needs_human
   abandoned
 }
 
@@ -1494,11 +1504,68 @@ model GoalDelivery {
   mergedAt          DateTime?
   /// A final merge git refused (plan D9): left for a person to merge by hand and confirm.
   mergeError        String?
+  /// Plan 4b (plan D7/D9): the verification round this version is on, counting from 1 at the first
+  /// round; 0 before any round has run.
+  round             Int                @default(0)
+  /// Plan 4b (plan D9): where the round cap counts from after a person's `retry-goal` -- a fresh
+  /// window, not a reset `round` back to 0 (rounds already spent stay spent in the report).
+  roundBase         Int                @default(0)
+  /// Plan 4b (plan D7): verification runs of the CURRENT round that produced no usable verdict (no
+  /// or malformed `<slave-verification>`, a changed worktree, a process failure, a stranded claim).
+  /// At `VERIFICATION_RUN_RETRY_CAP` the version goes `needs_human` without spending a round.
+  roundRunFailures  Int                @default(0)
+  /// Plan 4b (plan D3): the claim on the live verification run, the `Task.activeRunId` idiom for a
+  /// task-less run -- `updateMany where activeRunId: null` claims it.
+  activeRunId       String?            @unique
+  /// Plan 4b (plan D6/D7): why the loop ended without acceptance, for the person's report.
+  needsHumanReason  String?
+  /// Plan 4b (plan D4): the seat staffed as this version's verifier, recorded so dispatch only
+  /// re-staffs when it is gone or ineligible.
+  verifierSlaveId   String?
+  /// Controller ruling Q6: the integration tip the latest PASSING verification checked. The final
+  /// merge lands only this commit (spec ruling 5), never a later tip nothing has verified.
+  verifiedCommit    String?
   createdAt         DateTime           @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  results   VerificationResult[]
 
   @@unique([workspaceId, goalVersion])
+}
+
+/// Plan 4b (spec R8): one requirement's verdict in one verification round.
+enum VerificationStatus {
+  pass
+  fail
+  unverifiable
+}
+
+/// Plan 4b (spec R8): the evidence a verifier wrote for one requirement of one round -- the check
+/// it wrote (a command, script or test in the scratch directory), its trimmed output, and its
+/// reason. `@@unique([runId, key])` is the write gate: a run reports each requirement key at most
+/// once. Cascades from both `Workspace` and `GoalDelivery` -- this table holds no history a
+/// deleted project or a deleted delivery must survive.
+model VerificationResult {
+  id             String             @id @default(uuid())
+  workspaceId    String
+  goalDeliveryId String
+  goalVersion    Int
+  round          Int
+  /// A plain column in this task -- Task 2 adds the `SlaveRun` relation with the `verification`
+  /// run kind.
+  runId          String
+  key            String
+  status         VerificationStatus
+  check          String
+  output         String
+  reason         String
+  createdAt      DateTime           @default(now())
+
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  goalDelivery GoalDelivery @relation(fields: [goalDeliveryId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, key])
+  @@index([goalDeliveryId, round])
 }
 
 /// M53 R3: ONE ROW PER CONCLUDED RUN, and the whole of what this organisation knows about how its
@@ -1925,6 +1992,13 @@ enum SupervisorSituationKind {
   // Conductor R2: the size decision of one goal version. Not produced by observe; written by the
   // conductor. Subject "<workspaceId>:v<version>".
   conduct
+  /// Conductor Plan 4b (spec R11, R9): a goal version's verification round found requirements not
+  /// met, and their packages are back in rework. INFORMATIONAL (plan D10): the loop is already
+  /// acting. Subject is `<workspaceId>:v<n>:r<round>`.
+  verification_failed
+  /// Conductor Plan 4b (spec R11, R9): a goal version's loop ended without acceptance, or its final
+  /// merge into the base branch failed. Subject is `<workspaceId>:v<n>`.
+  goal_needs_human
 }
 
 /// What happens to a chosen action -- fixed in code by `tierOf`, never chosen by the model.
@@ -2287,6 +2361,18 @@ enum EventType {
   workspace_goal_merged       @map("workspace.goal_merged")
   /// Conductor Plan 4a: the person moved on from a goal version; its unfinished packages were cancelled.
   workspace_goal_abandoned    @map("workspace.goal_abandoned")
+  /// Conductor Plan 4b (spec R8): a verification round started -- the round it belongs to and the
+  /// run judging it.
+  workspace_verification_started @map("workspace.verification_started")
+  /// Conductor Plan 4b (spec R8/R9): a verification round concluded -- how many requirements
+  /// passed, failed or were unverifiable, and (bounded) which keys failed.
+  workspace_verified             @map("workspace.verified")
+  /// Conductor Plan 4b (plan D6/D7): the verification loop ended without acceptance, or the
+  /// version's final merge failed -- `reason` is what a person reads.
+  workspace_goal_needs_human     @map("workspace.goal_needs_human")
+  /// Conductor Plan 4b (plan D9): a person moved a `needs_human` version back to `integrating`
+  /// with `retry-goal`, giving it a fresh round window.
+  workspace_goal_retried         @map("workspace.goal_retried")
   workspace_plan_created      @map("workspace.plan_created")
   /// M40 §2: the goal moved on a board that already had tasks, so the tick started a DELTA re-plan
   /// run (`workspace.replan_started`, whose `version` is the dedup key for "one re-plan per goal

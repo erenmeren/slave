@@ -100,6 +100,9 @@ describe('parseActivityFilters', () => {
       'workspace.goal_abandoned',
       'workspace.goal_accepted',
       'workspace.goal_merged',
+      // Conductor Plan 4b (spec R8/R9): the goal version's verification loop, beside its delivery.
+      'workspace.goal_needs_human',
+      'workspace.goal_retried',
       'workspace.goal_set',
       'workspace.goal_waiting',
       'workspace.plan_created',
@@ -111,6 +114,8 @@ describe('parseActivityFilters', () => {
       'workspace.restored',
       'workspace.runbook_adopted',
       'workspace.settings_changed',
+      'workspace.verification_started',
+      'workspace.verified',
     ])
   })
   it('returns EMPTY-shaped filters for no params', () => {

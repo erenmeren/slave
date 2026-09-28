@@ -52,6 +52,9 @@ export const LANE_LABEL: Record<TimelineLane, string> = {
 export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> = {
   // USER REQUEST
   'workspace.goal_set': 'user_request',
+  // Conductor Plan 4b (plan D9): a person's `retry-goal` is their own call, the same lane
+  // `workspace.goal_set` sits on.
+  'workspace.goal_retried': 'user_request',
   // INTERPRETATION -- the delta IS the interpretation; no stored sentence exists (spec §3).
   'workspace.replan_started': 'interpretation',
   'workspace.replanned': 'interpretation',
@@ -68,6 +71,9 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   // Conductor Plan 4a (plan D10): the person moved on from a goal version -- a plan change, the
   // same lane `workspace.conducted` sits on.
   'workspace.goal_abandoned': 'plan_change',
+  // Conductor Plan 4b: a verification round starting is work in progress, the same lane
+  // `task.verifying` sits on.
+  'workspace.verification_started': 'work',
   // M48: how the work will be done changed. Not `user_request` even when a person adopted it --
   // what changed is the plan's shape, and `laneFor`'s actor override exists only for task creation.
   'workspace.runbook_adopted': 'plan_change',
@@ -98,6 +104,9 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   // shown as the pending `SupervisorDecision` row, and showing both would double every entry.
   'supervisor.applied': 'decision',
   'supervisor.resolved': 'decision',
+  // Conductor Plan 4b (plan D6/D7): the verification loop ended without acceptance, or the
+  // version's final merge failed -- something a person now has to answer.
+  'workspace.goal_needs_human': 'decision',
   // M49: knowledge the organisation actually verified. The DEFAULT is non-null deliberately (plan
   // erratum E5): `apps/web/src/server/timeline.ts` only QUERIES types whose entry here is non-null,
   // so a lane that exists only inside `laneFor` would never be fetched. `laneFor` narrows this to
@@ -116,6 +125,9 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   // `task.verify_passed` and `task.integrated` sit on.
   'workspace.goal_accepted': 'verified',
   'workspace.goal_merged': 'verified',
+  // Conductor Plan 4b: a verification round's verdict is a verified result, the same lane
+  // `task.verify_passed` sits on.
+  'workspace.verified': 'verified',
   // Everything else: real, kept, and not on this timeline.
   // H4a: a planning reset is `supervisor.applied`'s own story -- the Supervisor gave the planner
   // its attempts back, and that event is already on the `decision` lane above. A second line saying

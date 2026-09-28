@@ -62,6 +62,10 @@ export const HAPPENING_TYPES: readonly DomainEventType[] = [
   // `workspace.goal_abandoned` stay off it -- a wait is not an event a person needs pushed at them,
   // and an abandon is the person's own doing.
   'workspace.goal_accepted', 'workspace.goal_merged',
+  // Conductor Plan 4b (controller ruling Q13): a goal version's verification loop ending without
+  // acceptance is news for the whole workspace, the same standing `workspace.goal_accepted` has on
+  // this feed -- a person is the only remedy left.
+  'workspace.goal_needs_human',
 ]
 
 /**
@@ -198,6 +202,9 @@ const SENTENCE: Partial<Record<DomainEventType, (p: Record<string, unknown>, n: 
   // version and (for a merge) where it landed are the whole story.
   'workspace.goal_accepted': (p) => `Goal v${numStr(p, 'version')} was accepted`,
   'workspace.goal_merged': (p) => `Goal v${numStr(p, 'version')} was merged into ${str(p, 'into') ?? 'the base branch'}`,
+  // Conductor Plan 4b (controller ruling Q13): the verification loop ended without acceptance --
+  // `reason` is the whole story, the same shape `guardrail.tripped`'s card gives a person.
+  'workspace.goal_needs_human': (p) => `Goal v${numStr(p, 'version')} needs you: ${str(p, 'reason') ?? 'a person to look at it'}`,
 }
 
 /** One HAPPENING_TYPES event, said as a sentence a person reads without knowing the vocabulary

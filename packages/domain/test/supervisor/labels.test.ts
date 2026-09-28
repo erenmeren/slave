@@ -89,6 +89,13 @@ describe('every union a person reads has a label (M44 R5)', () => {
     expect(SITUATION_LABEL.no_planner).toBe('No planner')
   })
 
+  // Conductor Plan 4b: the twenty-third and twenty-fourth situations, asserted BY NAME for
+  // `engagement_over`'s own reason.
+  it('names the twenty-third and twenty-fourth situations the way a person says them', () => {
+    expect(SITUATION_LABEL.verification_failed).toBe('A verification round failed')
+    expect(SITUATION_LABEL.goal_needs_human).toBe('A goal needs you')
+  })
+
   it('covers every tier, decision status and decider', () => {
     expect(Object.keys(TIER_LABEL).sort()).toEqual([...TIERS].sort())
     expect(Object.keys(DECISION_STATUS_LABEL).sort()).toEqual([...DECISION_STATUSES].sort())

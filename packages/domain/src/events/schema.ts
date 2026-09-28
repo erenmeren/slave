@@ -86,7 +86,13 @@ export const executionEventSchema = z.discriminatedUnion('type', [
   z.object({
     ...envelope,
     type: z.literal('task.rework'),
-    payload: z.object({ reason: z.string(), attempt: z.number().int().positive() }),
+    payload: z.object({
+      reason: z.string(),
+      // Conductor Plan 4b (D5): a verification rework charges no attempt, so it carries the task's
+      // CURRENT attempt, which is 0 for a package that passed verify and review first time.
+      attempt: z.number().int().nonnegative(),
+      verificationRound: z.number().int().positive().optional(),
+    }),
   }),
   z.object({ ...envelope, type: z.literal('run.started'), payload: z.object({ sessionId: z.string() }) }),
   z.object({
@@ -476,6 +482,52 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     ...envelope,
     type: z.literal('workspace.goal_abandoned'),
     payload: z.object({ version: z.number().int().positive(), cancelled: z.array(z.string().min(1)).max(50) }),
+  }),
+  // Conductor Plan 4b (spec R8): a verification round started, in a fresh worktree of the goal
+  // version's integration branch.
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.verification_started'),
+    payload: z.object({
+      version: z.number().int().positive(),
+      round: z.number().int().positive(),
+      runId: z.string().min(1),
+    }),
+  }),
+  // Conductor Plan 4b (spec R8/R9): a verification round concluded. `failedKeys` is bounded the
+  // same way `workspace.goal_abandoned`'s `cancelled` is -- the stored `VerificationResult` rows
+  // are the whole record.
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.verified'),
+    payload: z.object({
+      version: z.number().int().positive(),
+      round: z.number().int().positive(),
+      runId: z.string().min(1),
+      pass: z.number().int().nonnegative(),
+      fail: z.number().int().nonnegative(),
+      unverifiable: z.number().int().nonnegative(),
+      failedKeys: z.array(z.string().min(1)).max(60),
+    }),
+  }),
+  // Conductor Plan 4b (plan D6/D7): the verification loop ended without acceptance, or the
+  // version's final merge failed -- `reason` is what a person reads in the report.
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.goal_needs_human'),
+    payload: z.object({
+      version: z.number().int().positive(),
+      // `VERIFICATION_REASON_MAX_CHARS` (`conduct/constants.ts`), spelled here the way this file
+      // spells every other stored bound (`workspace.goal_abandoned`'s `cancelled`, above).
+      reason: z.string().max(2000),
+    }),
+  }),
+  // Conductor Plan 4b (plan D9): a person's `retry-goal` moved a `needs_human` version back to
+  // `integrating`, with a fresh round window.
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.goal_retried'),
+    payload: z.object({ version: z.number().int().positive(), round: z.number().int().nonnegative() }),
   }),
   // M40 §4: `cancelTask` took a task off the board -- an operator's own call, or an approved
   // `stale_task` proposal. `goalVersion` is the task's own stamp (null for a hand-made task), so

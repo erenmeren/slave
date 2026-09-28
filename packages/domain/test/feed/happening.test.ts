@@ -149,6 +149,22 @@ describe('happeningSentence', () => {
     expect(HAPPENING_TYPES).toContain('workspace.goal_merged')
   })
 
+  // Conductor Plan 4b (controller ruling Q13): the verification loop ending without acceptance
+  // joins Home's feed, beside `workspace.goal_accepted`.
+  it('says a goal version needs a person, and why', () => {
+    expect(
+      happeningSentence(
+        'workspace.goal_needs_human',
+        { version: 2, reason: 'the verification round cap (3) was reached' },
+        { actor: null, taskTitle: null },
+      ),
+    ).toBe('Goal v2 needs you: the verification round cap (3) was reached')
+  })
+
+  it('includes workspace.goal_needs_human among HAPPENING_TYPES', () => {
+    expect(HAPPENING_TYPES).toContain('workspace.goal_needs_human')
+  })
+
   it('never leaks a bare event type', () => {
     for (const type of HAPPENING_TYPES) {
       expect(happeningSentence(type, {}, { actor: null, taskTitle: null })).not.toMatch(/^[a-z_]+\.[a-z_]+$/)

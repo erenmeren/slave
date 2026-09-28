@@ -306,6 +306,39 @@ function titleFor(
       const version = payload['version']
       return `abandoned goal v${typeof version === 'number' ? String(version) : '?'}`
     }
+    // Conductor Plan 4b (spec R8): a verification round starting. The payload carries no `title`,
+    // so without a case of its own this would read as its own type name on the WORK lane.
+    case 'workspace.verification_started': {
+      const version = payload['version']
+      const round = payload['round']
+      const v = typeof version === 'number' ? String(version) : '?'
+      const r = typeof round === 'number' ? String(round) : '?'
+      return `verifying goal v${v} (round ${r})`
+    }
+    // Conductor Plan 4b (spec R8/R9): a verification round's verdict. The payload carries no
+    // `title`, so without a case of its own this would read as its own type name on the VERIFIED
+    // lane.
+    case 'workspace.verified': {
+      const version = payload['version']
+      const round = payload['round']
+      const fail = payload['fail']
+      const v = typeof version === 'number' ? String(version) : '?'
+      const r = typeof round === 'number' ? String(round) : '?'
+      const f = typeof fail === 'number' ? fail : 0
+      return `verified goal v${v} round ${r}: ${f} failed`
+    }
+    // Conductor Plan 4b (plan D6/D7): the verification loop ended without acceptance, or the
+    // version's final merge failed. `reason` is the second line (`detailFor`'s field loop already
+    // reads it).
+    case 'workspace.goal_needs_human': {
+      const version = payload['version']
+      return `goal v${typeof version === 'number' ? String(version) : '?'} needs a person`
+    }
+    // Conductor Plan 4b (plan D9): a person's retry-goal, with a fresh round window.
+    case 'workspace.goal_retried': {
+      const version = payload['version']
+      return `retried goal v${typeof version === 'number' ? String(version) : '?'}`
+    }
     // M48 R5/R7: a runbook adopted, or stopped. The payload's `title` is not a field this event
     // carries, so without a case of its own it would read as its own type name on the PLAN CHANGE
     // lane -- and this is the one entry that says how the project decided to work.

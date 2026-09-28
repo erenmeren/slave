@@ -65,7 +65,10 @@ export async function goalEventSaid(
 
 export interface GoalDeliveryView {
   readonly goalVersion: number
-  readonly status: 'integrating' | 'accepted' | 'abandoned'
+  // Conductor Plan 4b: widened with the verification loop's two states -- `verifying` while a
+  // round is in flight, `needs_human` where a cap or an unverifiable item ends it without
+  // acceptance (plan D6/D7).
+  readonly status: 'integrating' | 'verifying' | 'accepted' | 'needs_human' | 'abandoned'
   readonly integrationBranch: string
   readonly baseCommit: string
   readonly acceptedAt: string | null

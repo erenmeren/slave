@@ -105,6 +105,12 @@ export const TYPES_BY_KIND = {
     'workspace.goal_accepted',
     'workspace.goal_merged',
     'workspace.goal_abandoned',
+    // Conductor Plan 4b (spec R8/R9): the goal version's verification loop, beside its delivery --
+    // workspace lifecycle for the same reason, task-less (plan D3).
+    'workspace.verification_started',
+    'workspace.verified',
+    'workspace.goal_needs_human',
+    'workspace.goal_retried',
     'workspace.plan_created',
     // M40 t1: a goal change on a non-empty board starts a delta re-plan, and both ends of that are
     // workspace lifecycle for the same reason `workspace.plan_created` is -- neither carries a

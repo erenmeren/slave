@@ -92,6 +92,12 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'workspace.goal_accepted': { version: 1, rounds: 0 },
   'workspace.goal_merged': { version: 1, branch: 'slaveofai/goal-v1-0c1d2e3f', into: 'main', commit: 'abc1234', by: 'system' },
   'workspace.goal_abandoned': { version: 1, cancelled: ['t1', 't2'] },
+  // Conductor Plan 4b: the goal version's verification loop, from a round starting to a person
+  // being needed or a retry.
+  'workspace.verification_started': { version: 1, round: 1, runId: 'r1' },
+  'workspace.verified': { version: 1, round: 1, runId: 'r1', pass: 1, fail: 1, unverifiable: 0, failedKeys: ['R2'] },
+  'workspace.goal_needs_human': { version: 1, reason: 'the verification round cap (3) was reached' },
+  'workspace.goal_retried': { version: 1, round: 3 },
   'workspace.plan_created': {
     goal: 'Ship the checkout flow',
     goalVersion: 1,
@@ -501,6 +507,14 @@ describe('targeted card bodies', () => {
     const Card = ACTIVITY_CARDS['task.rework']
     render(<Card event={fixtureFor('task.rework')} {...CARD_PROPS} />)
     expect(screen.getByTestId('rework-reason').textContent).toBe('tests failed on attempt 1')
+  })
+
+  // Conductor Plan 4b (plan D5): a verification rework names the round it came from.
+  it('task.rework shows the verification round when the payload carries one', () => {
+    const Card = ACTIVITY_CARDS['task.rework']
+    const event = baseEvent('task.rework', { reason: 'requirement R2 was not met', attempt: 0, verificationRound: 2 })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('rework-verification-round').textContent).toContain('verification round 2')
   })
 
   it('task.review_rejected shows the reason and the attempt number', () => {
