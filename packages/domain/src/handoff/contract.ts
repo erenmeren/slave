@@ -82,6 +82,9 @@ export function parseHandoffContract(value: unknown): Result<HandoffContract, st
  * model's feed sentences into a prompt. Any of those carrying a literal envelope would be somebody
  * else writing this system's control word -- and the chat is the one prompt where such text sits
  * beside an instruction asking for exactly that object.
+ *
+ * `requirementsAnswer`/`conductAnswer` join them for the conductor (Conductor Plan 2): a goal quoting either
+ * must not steer the conductor's own calls.
  */
 export const ROUTING_LITERALS = [
   'candidateIndex',
@@ -90,6 +93,8 @@ export const ROUTING_LITERALS = [
   'task graph',
   'verdict',
   'supervisorReply',
+  'requirementsAnswer',
+  'conductAnswer',
 ] as const
 
 /**
