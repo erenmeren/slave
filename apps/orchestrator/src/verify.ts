@@ -12,6 +12,7 @@ import {
   type TaskId,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { baseRefFor } from './goalBranch.js'
 import { promote } from './memory.js'
 import { auditOwnership, ownershipRuleForTask } from './ownership.js'
 import { concludePlanning } from './planning.js'
@@ -482,9 +483,14 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
   // ownership after its leftover work is committed (so the audit sees everything the run changed)
   // and before its report is filed -- a run that changed someone else's files is sent back, and
   // neither its report nor verify is looked at. A task with no package is untouched.
+  // Plan 4a (D12): against the branch the task was cut from.
   if (
     task.workPackageId !== null &&
-    !(await auditOwnership(run, { id: task.id, workspaceId: task.workspaceId, branch: task.branch }, task.workspace))
+    !(await auditOwnership(
+      run,
+      { id: task.id, workspaceId: task.workspaceId, branch: task.branch },
+      { repoPath: task.workspace.repoPath, baseBranch: await baseRefFor(task.id, task.workspace.baseBranch) },
+    ))
   ) {
     return
   }

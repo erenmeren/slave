@@ -36,6 +36,7 @@ import {
 } from '@slave-of-ai/providers'
 import { conduct, type ConductStep } from './conductor.js'
 import { deliverAnswers } from './deliver.js'
+import { baseRefFor } from './goalBranch.js'
 import { runMergePass } from './merge.js'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { permissionOwnership } from './ownership.js'
@@ -872,7 +873,9 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
 
     const worktree = await acquireWorktree({
       repoPath: workspace.repoPath,
-      baseBranch: workspace.baseBranch,
+      // Plan 4a (D12): a package of a delivered goal version is cut from its integration branch,
+      // so it starts with its dependencies' merged work. A rework adopts its tree and ignores this.
+      baseBranch: await baseRefFor(task.id, workspace.baseBranch),
       taskKey,
       slug,
       branch,

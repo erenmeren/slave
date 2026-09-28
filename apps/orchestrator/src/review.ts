@@ -22,6 +22,7 @@ import {
 import { prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
 import { checkpointRunFiles, runTokenHash, type SlaveRuntimeAdapter, type RunHandle } from '@slave-of-ai/providers'
+import { baseRefFor } from './goalBranch.js'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
@@ -538,7 +539,10 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     // Built per file (`reviewDiff.ts`), never as one `git diff` read: a branch carrying screenshots
     // or generated reports used to overflow the child's stdout buffer before the reviewer was
     // spawned, and two such failures in a row blocked the task for a human (2026-09-20).
-    const reviewDiff = await buildReviewDiff(workspace.repoPath, workspace.baseBranch, task.branch)
+    // Plan 4a (D12): against the branch the task was cut from -- a package's integration branch --
+    // so the dependency work already merged there is not put in front of the reviewer as this task's.
+    const base = await baseRefFor(task.id, workspace.baseBranch)
+    const reviewDiff = await buildReviewDiff(workspace.repoPath, base, task.branch)
     const diff = reviewDiff.text
 
     await appendEvent({
@@ -587,7 +591,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
       taskId: task.id,
       worktreePath: latestImpl.worktreePath,
       provider: resolved.provider,
-      reviewDiff: { text: diff, base: workspace.baseBranch, head: task.branch, capped: reviewDiff.capped },
+      reviewDiff: { text: diff, base, head: task.branch, capped: reviewDiff.capped },
     })
 
     handle = await runAdapter.start({
