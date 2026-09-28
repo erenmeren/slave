@@ -198,7 +198,7 @@ export type SectionSource =
 /** The manifest stored (as `Json`) on `RunContext.sections` -- an ordered record of what produced
  *  the prompt, without the prompt text itself. */
 export interface Manifest {
-  readonly kind: 'implementation' | 'review' | 'planning'
+  readonly kind: 'implementation' | 'review' | 'planning' | 'verification'
   readonly sections: readonly SectionSource[]
 }
 
@@ -351,6 +351,6 @@ const sectionSourceSchema = z.discriminatedUnion('kind', [
  * -- there is no history of it to be tolerant of.
  */
 export const runContextManifestSchema: z.ZodType<Manifest> = z.object({
-  kind: z.enum(['implementation', 'review', 'planning']),
+  kind: z.enum(['implementation', 'review', 'planning', 'verification']),
   sections: z.array(sectionSourceSchema),
 })

@@ -543,9 +543,11 @@ export async function reconcileStrandedClaims(
     if (run.taskId !== task.id) continue
     if (deps.livePumpRunIds?.has(run.id) === true) continue
     if (run.terminalAt === null) continue
-    // A `planning` run never holds a task's claim (M8b) -- reaching one here would be bad data,
-    // not a claim to reconcile, and this is also what narrows `run.kind` for `strandedClaimGraceMs`.
-    if (run.kind === 'planning') continue
+    // A `planning` run never holds a task's claim (M8b), nor does a `verification` run (Plan 4b
+    // D3: it claims `GoalDelivery.activeRunId`, released by the goal pass) -- reaching one here
+    // would be bad data, not a claim to reconcile, and this is also what narrows `run.kind` for
+    // `strandedClaimGraceMs`.
+    if (run.kind === 'planning' || run.kind === 'verification') continue
     if (now - run.terminalAt.getTime() < strandedClaimGraceMs(run.kind, grace)) continue
 
     const toRework = run.kind !== 'review' && task.status === 'running'
@@ -1062,7 +1064,7 @@ async function beatBreaker(
     readonly slaveId: string
     /** `SlaveRun.kind`, read for one reason only: `no_progress` judges an implementation run and no
      *  other (`NO_PROGRESS_RUN_KINDS`). Passed through to the detector, never branched on here. */
-    readonly kind: 'implementation' | 'review' | 'planning'
+    readonly kind: 'implementation' | 'review' | 'planning' | 'verification'
     readonly status: RunStatus
     readonly provider: string | null
     readonly worktreePath: string | null
@@ -1398,7 +1400,7 @@ async function concludeDeadRun(
     readonly taskId: string | null
     readonly slaveId: string
     readonly pid: number | null
-    readonly kind: 'implementation' | 'review' | 'planning'
+    readonly kind: 'implementation' | 'review' | 'planning' | 'verification'
     readonly ownerInstance: string | null
   },
   cause: DeadRunCause,
@@ -1485,7 +1487,7 @@ interface StoppingRun {
   readonly taskId: string | null
   readonly slaveId: string
   readonly pid: number | null
-  readonly kind: 'implementation' | 'review' | 'planning'
+  readonly kind: 'implementation' | 'review' | 'planning' | 'verification'
   readonly stopRequestedAt: Date | null
   readonly stopRequestedBy: string | null
   readonly failureClass: 'worker' | 'platform' | null

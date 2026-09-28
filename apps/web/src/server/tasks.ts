@@ -16,9 +16,9 @@ import { buildShellFacts, type ShellFacts } from './shell'
 /**
  * `SlaveRun.kind`, spelled as a union rather than imported (M51 R7): the generated `RunKind` lives
  * in `@slave-of-ai/db`, whose barrel is a server module, and this DTO is rendered by a client
- * component. Three members, the same three the schema has.
+ * component. Four members, the same four the schema has (Conductor Plan 4b added `verification`).
  */
-export type TaskRunKind = 'implementation' | 'review' | 'planning'
+export type TaskRunKind = 'implementation' | 'review' | 'planning' | 'verification'
 
 export interface TaskRunSummary {
   readonly id: string

@@ -49,6 +49,9 @@ export const SECTION_ORDER: Readonly<Record<Manifest['kind'], readonly SectionKi
   // of the two -- a role that matches no seat is a task that can be dispatched to nobody -- so it
   // comes first.
   planning: ['profile', 'planning_goal', 'replan', 'roles', 'capabilities', 'runbook', 'handoff_protocol', 'memory'],
+  // Conductor Plan 4b: the verifier's profile for now; Task 3 adds the goal (requirements + the
+  // integrated diff summary) and the protocol that asks for the `<slave-verification>` block.
+  verification: ['profile'],
 }
 
 // The markers and their defusing live in `./markers.js` (M48 t1) and are re-exported here, so
@@ -82,6 +85,15 @@ export const REVIEW_VERDICT_INSTRUCTIONS = [
   'Your final message must contain exactly one JSON object and nothing else on its line:',
   '{"verdict":"approve","reason":"one paragraph"} or {"verdict":"reject","reason":"one paragraph"}',
 ].join('\n')
+
+/**
+ * The verification kind's trailer (Conductor Plan 4b, spec R8): the last thing a verifier reads.
+ * The block's shape and the rule for writing checks are the `verification_protocol` section's
+ * (Task 3); this line only says where the block goes and what happens when it is missing, so a
+ * verifier that forgets it knows the run is simply repeated rather than counted as a verdict.
+ */
+export const VERIFICATION_INSTRUCTIONS =
+  'Finish with the <slave-verification> block described above as the last thing in your final message. A missing or malformed block means this verification is run again.'
 
 /**
  * The planning kind's graph instructions, moved verbatim (M37 t1, fix round 1) from
@@ -188,7 +200,8 @@ export const RUN_PROMPT_MAX_BYTES = 110_000
  * profile" and "no pending inbox" are the ordinary shape of most runs, not a blank paragraph. The
  * review and planning kinds append their fixed instruction text ({@link REVIEW_VERDICT_INSTRUCTIONS},
  * {@link PLANNING_GRAPH_INSTRUCTIONS}, or `REPLAN_INSTRUCTIONS` when the planning run carries a
- * `replan` section) after their sections, and the implementation kind appends
+ * `replan` section) after their sections, the verification kind appends
+ * {@link VERIFICATION_INSTRUCTIONS}, and the implementation kind appends
  * {@link IMPLEMENTATION_WORK_RULES}; that text is not itself a section and carries no manifest
  * entry -- it is fixed and static, not something a debugger needs a provenance record for.
  */
@@ -220,7 +233,9 @@ export function renderRunContext(
         ? replanning
           ? REPLAN_INSTRUCTIONS
           : PLANNING_GRAPH_INSTRUCTIONS
-        : IMPLEMENTATION_WORK_RULES
+        : kind === 'verification'
+          ? VERIFICATION_INSTRUCTIONS
+          : IMPLEMENTATION_WORK_RULES
 
   const parts = present.map((section) => section.text)
   const prompt = [...parts, trailer].join('\n\n')

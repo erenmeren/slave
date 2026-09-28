@@ -594,7 +594,7 @@ async function concludeFailedResume(
     readonly id: string
     readonly taskId: string | null
     readonly slaveId: string
-    readonly kind: 'implementation' | 'review' | 'planning'
+    readonly kind: 'implementation' | 'review' | 'planning' | 'verification'
   },
   error: unknown,
 ): Promise<void> {

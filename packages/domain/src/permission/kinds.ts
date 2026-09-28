@@ -54,16 +54,16 @@ export const PERMISSION_PROVIDERS = PROVIDER_KINDS
 export type PermissionProvider = ProviderKind
 
 /**
- * The three run kinds a baseline is keyed on -- `RunKind`'s members, spelled here for
+ * The four run kinds a baseline is keyed on -- `RunKind`'s members, spelled here for
  * {@link PERMISSION_PROVIDERS}' reason and pinned against the Postgres enum by
  * `packages/db/test/integration/enum-parity.test.ts` (M52 fix round 1, review m6).
  *
  * The pin is not decorative. {@link BASELINE_GRANTS} is a total `Record` over this union, and a
- * fourth `RunKind` member that reached Prisma and not this list would make `BASELINE_GRANTS[runKind]`
+ * fifth `RunKind` member that reached Prisma and not this list would make `BASELINE_GRANTS[runKind]`
  * `undefined`, `new Set(undefined)` empty, and every run of that kind silently deny-all -- a whole
  * class of run unable to read its own repository, with nothing in TypeScript to say so.
  */
-export const PERMISSION_RUN_KINDS = ['implementation', 'review', 'planning'] as const
+export const PERMISSION_RUN_KINDS = ['implementation', 'review', 'planning', 'verification'] as const
 export type PermissionRunKind = (typeof PERMISSION_RUN_KINDS)[number]
 
 /**
@@ -206,6 +206,11 @@ export const BASELINE_GRANTS: Record<PermissionRunKind, readonly PermissionKind[
   implementation: ['read_repo', 'write_repo', 'run_commands'],
   review: ['read_repo', 'run_commands'],
   planning: ['read_repo'],
+  // Conductor Plan 4b (D1): a verifier writes its checks with the write tools, into its scratch
+  // directory. `write_repo` is granted and CONFINED by the ownership rule every verification run's
+  // permissions file carries -- it owns nothing inside the worktree, so a write there is denied as
+  // `foreign_file`, and the scratch directory is outside it.
+  verification: ['read_repo', 'write_repo', 'run_commands'],
 }
 
 /**

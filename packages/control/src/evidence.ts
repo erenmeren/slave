@@ -247,7 +247,7 @@ async function applySettle(
   runId: string,
   settle: EvidenceSettle,
   attempt: number,
-  runKind: 'implementation' | 'review' | 'planning',
+  runKind: 'implementation' | 'review' | 'planning' | 'verification',
 ): Promise<void> {
   if (runKind !== 'implementation') return
 

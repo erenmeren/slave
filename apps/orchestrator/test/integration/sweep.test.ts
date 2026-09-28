@@ -129,7 +129,7 @@ describe('sweep and reconcileOrphans', () => {
     pausedAt?: Date
     worktreePath?: string
     taskId?: string
-    kind?: 'implementation' | 'review' | 'planning'
+    kind?: 'implementation' | 'review' | 'planning' | 'verification'
     lastOutputAt?: Date
     toolCallOpenSince?: Date
   }) =>
@@ -1124,7 +1124,7 @@ describe('the breaker beat (M51 R2)', () => {
   const probeReturning = (value: string | null): WorktreeProbe => ({ fingerprint: async () => value })
 
   const givenBreakerRun = async (data: {
-    kind?: 'implementation' | 'review' | 'planning'
+    kind?: 'implementation' | 'review' | 'planning' | 'verification'
     status?: 'working' | 'pause_requested' | 'paused'
     pid?: number | null
     toolCalls?: number

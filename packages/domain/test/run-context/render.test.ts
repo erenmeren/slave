@@ -9,6 +9,7 @@ import {
   PLANNING_GRAPH_INSTRUCTIONS,
   REVIEW_VERDICT_INSTRUCTIONS,
   SECTION_ORDER,
+  VERIFICATION_INSTRUCTIONS,
   neutraliseMarkers,
   renderRunContext,
 } from '../../src/run-context/render.js'
@@ -46,7 +47,28 @@ describe('SECTION_ORDER', () => {
       ],
       review: ['profile', 'skills', 'task', 'handoff', 'review_diff'],
       planning: ['profile', 'planning_goal', 'replan', 'roles', 'capabilities', 'runbook', 'handoff_protocol', 'memory'],
+      verification: ['profile'],
     })
+  })
+
+  it('has a verification order that starts with the profile (Conductor Plan 4b; Task 3 adds its sections)', () => {
+    expect(SECTION_ORDER.verification[0]).toBe('profile')
+  })
+})
+
+describe('VERIFICATION_INSTRUCTIONS (Conductor Plan 4b)', () => {
+  it('is the verification trailer, verbatim', () => {
+    expect(VERIFICATION_INSTRUCTIONS).toBe(
+      'Finish with the <slave-verification> block described above as the last thing in your final message. A missing or malformed block means this verification is run again.',
+    )
+  })
+
+  it('ends a verification render', () => {
+    const { prompt, manifest } = renderRunContext('verification', [
+      section('profile', 'You are Maya.', { kind: 'profile', origin: 'slave', sha256: 'a'.repeat(64) }),
+    ])
+    expect(prompt).toBe(`You are Maya.\n\n${VERIFICATION_INSTRUCTIONS}`)
+    expect(manifest.kind).toBe('verification')
   })
 })
 

@@ -31,7 +31,7 @@ export type TaskStatusName = TaskStatus
  */
 export interface TaskFailure {
   /** The kind of run the row names: for a rejection, the `review` run that judged the work. */
-  readonly runKind: 'implementation' | 'review' | 'planning'
+  readonly runKind: 'implementation' | 'review' | 'planning' | 'verification'
   /** The run's recorded reason -- for a rejection, the REVIEWER's reason, which is the steer. */
   readonly reason: string
   readonly at: number
@@ -77,7 +77,7 @@ export interface TaskFailure {
  */
 export interface BreakerFailure {
   readonly runId: string
-  readonly runKind: 'implementation' | 'review' | 'planning'
+  readonly runKind: 'implementation' | 'review' | 'planning' | 'verification'
   /** The task the run worked on; null for a planning run, which has none. */
   readonly taskTitle: string | null
   /** The newest `run.failed` reason the run recorded, or null when it recorded none. */

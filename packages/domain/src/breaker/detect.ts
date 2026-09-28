@@ -100,7 +100,7 @@ export interface BreakerWindow {
    * `RunKind`'s members, spelled inline as `../run-context/sections.ts` and `../supervisor/world.ts`
    * spell them, so this package states the union it reads rather than importing a Prisma type.
    */
-  readonly kind: 'implementation' | 'review' | 'planning'
+  readonly kind: 'implementation' | 'review' | 'planning' | 'verification'
   readonly level: BreakerLevel
   /** `SlaveRun.breakerTrips` -- every rung this run has ever climbed. Read for the event's own
    *  bookkeeping, never by a trip rule. */

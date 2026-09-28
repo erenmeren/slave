@@ -1060,6 +1060,9 @@ enum RunKind {
   implementation
   review
   planning
+  /// Conductor Plan 4b (spec R8): a task-less run that verifies a goal version's integrated work
+  /// against its requirement set; `SlaveRun.goalDeliveryId` names the version.
+  verification
 }
 
 enum PauseReason {
@@ -1362,12 +1365,16 @@ model SlaveRun {
   providerError     Boolean       @default(false)
   pid               Int?
   worktreePath      String?
+  /// Conductor Plan 4b (plan D3): the goal version a `verification` run verifies. Null on every
+  /// other run kind. SetNull, not Cascade: the run's own history outlives a deleted delivery row.
+  goalDeliveryId    String?
   startedAt         DateTime      @default(now())
   terminalAt        DateTime?
   endedAt           DateTime?
 
-  task       Task?       @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  slave      Slave       @relation(fields: [slaveId], references: [id], onDelete: Cascade)
+  task         Task?         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  goalDelivery GoalDelivery? @relation(fields: [goalDeliveryId], references: [id], onDelete: SetNull)
+  slave        Slave         @relation(fields: [slaveId], references: [id], onDelete: Cascade)
   checkpoint Checkpoint?
   /// The recorded run-context row (M37 §2) -- exists before the child process starts (`buildRunContext`,
   /// Task 2); a run without one never spawned.
@@ -1376,8 +1383,11 @@ model SlaveRun {
   memories   Memory[]
   /// Conductor R7: the structured report this run's final message carried, if it worked a package.
   report     RunReport?
+  /// Conductor Plan 4b (spec R8): the per-requirement evidence a `verification` run wrote.
+  verificationResults VerificationResult[]
 
   @@index([taskId])
+  @@index([goalDeliveryId])
   @@index([slaveId, status])
 }
 
@@ -1529,6 +1539,8 @@ model GoalDelivery {
 
   workspace Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   results   VerificationResult[]
+  /// Plan 4b (plan D3): the verification runs of this version.
+  runs      SlaveRun[]
 
   @@unique([workspaceId, goalVersion])
 }
@@ -1551,8 +1563,7 @@ model VerificationResult {
   goalDeliveryId String
   goalVersion    Int
   round          Int
-  /// A plain column in this task -- Task 2 adds the `SlaveRun` relation with the `verification`
-  /// run kind.
+  /// The `verification` run that wrote this verdict (Plan 4b Task 2 added the relation).
   runId          String
   key            String
   status         VerificationStatus
@@ -1563,6 +1574,7 @@ model VerificationResult {
 
   workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   goalDelivery GoalDelivery @relation(fields: [goalDeliveryId], references: [id], onDelete: Cascade)
+  run          SlaveRun     @relation(fields: [runId], references: [id], onDelete: Cascade)
 
   @@unique([runId, key])
   @@index([goalDeliveryId, round])

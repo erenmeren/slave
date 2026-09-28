@@ -284,6 +284,25 @@ describe('writePermissionsFile: ownership (Task 2)', () => {
     expect(verdict.ownership).toEqual(OWNERSHIP)
   })
 
+  // Conductor Plan 4b (D1): a verification run's file grants the write tools and carries the
+  // ownership rule that owns nothing, so the gate confines those writes to outside the worktree.
+  it('writes a verification run with Write allowed and the empty ownership rule verbatim', () => {
+    const ownership = { worktreeRoot: '/w', owned: [], excluded: [] }
+    const runDir = mkdtempSync(join(tmpdir(), 'slaveofai-permissions-v2-'))
+    const filePath = writePermissionsFile(runDir, {
+      rows: [],
+      provider: 'claude_code',
+      runKind: 'verification',
+      runId: 'run-1',
+      runToken: TOKEN,
+      ownership,
+    })
+    const verdict = JSON.parse(readFileSync(filePath, 'utf8')) as Verdict
+    expect(verdict.allow).toContainEqual({ tool: 'Write', kind: 'write_repo' })
+    expect(verdict.grants).toEqual(['read_repo', 'write_repo', 'run_commands'])
+    expect(verdict.ownership).toEqual(ownership)
+  })
+
   it('leaves the ownership key absent entirely when the caller passes none', () => {
     const { verdict } = write([], 'claude_code')
     expect('ownership' in verdict).toBe(false)

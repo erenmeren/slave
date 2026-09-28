@@ -244,7 +244,7 @@ async function streakHead(
 /** One failed run the circuit breaker counted, as a person has to be told about it (H9c). */
 export interface CountedFailure {
   readonly runId: string
-  readonly runKind: 'implementation' | 'review' | 'planning'
+  readonly runKind: 'implementation' | 'review' | 'planning' | 'verification'
   /** The task the run worked on; null for a planning run, which has none. */
   readonly taskTitle: string | null
   /** The newest `run.failed` reason the run recorded, or null when it recorded none. */
