@@ -123,7 +123,7 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   // `supervisor.decided` are off this timeline too.
   'workspace.planning_reset': null,
   // Conductor Plan 4a (plan D6): the wait itself is not news on this timeline -- its card is in
-  // the Home feed (P7), and the timeline already carries the acceptance/merge/abandon that ends it.
+  // the Activity feed, and the timeline already carries the acceptance/merge/abandon that ends it.
   'workspace.goal_waiting': null,
   'task.rework': null,
   'task.failed': null,
