@@ -144,20 +144,35 @@ export async function commitUncommittedWork(input: {
  * `--no-renames` lists a staged rename as both of its paths, so each side is judged on its own.
  */
 async function changedPaths(git: (args: readonly string[]) => Promise<string>): Promise<readonly string[]> {
+  const paths = (await changedEntries(git)).map((entry) => entry.path)
+  return [...new Set(paths)].toSorted()
+}
+
+/** One `git status` entry: its path, and whether git lists it as untracked (`??`). */
+export interface ChangedEntry {
+  readonly path: string
+  readonly untracked: boolean
+}
+
+/**
+ * Every uncommitted change as `git status` lists it, in its order. A path can appear twice -- a
+ * file removed from the index but still on disk is `D ` and `??` -- which {@link changedPaths}
+ * folds and `setAside.ts` needs to see.
+ */
+export async function changedEntries(git: (args: readonly string[]) => Promise<string>): Promise<readonly ChangedEntry[]> {
   const out = await git(['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all'])
   // One path per NUL-terminated entry, `XY path`, is what makes `slice(3)` safe, and `--no-renames`
   // is what guarantees it: a rename entry would be `R  new` followed by a SECOND field, `old`, with
   // no status prefix, which this parse would cut three characters off and misjudge.
-  const paths = out
+  return out
     .split('\0')
     .filter((entry) => entry.length > 3)
-    .map((entry) => entry.slice(3))
-  return [...new Set(paths)].toSorted()
+    .map((entry) => ({ path: entry.slice(3), untracked: entry.startsWith('??') }))
 }
 
 /** The paths to stage, NUL-separated in a private temporary file: argv has a length limit, a tree
  *  of leftover work does not. */
-async function withPathspecFile(paths: readonly string[], use: (file: string) => Promise<void>): Promise<void> {
+export async function withPathspecFile(paths: readonly string[], use: (file: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), 'slaveofai-wip-'))
   try {
     const file = join(dir, 'pathspec')
