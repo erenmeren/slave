@@ -272,6 +272,26 @@ function titleFor(
         titles,
       )
     }
+    // Conductor R1 (2026-09-28): a goal version's requirements, extracted. The payload carries no
+    // `title`, so without a case of its own this would read as its own type name on the
+    // INTERPRETATION lane.
+    case 'workspace.requirements_set': {
+      const version = payload['version']
+      const count = payload['count']
+      const v = typeof version === 'number' ? String(version) : '?'
+      const n = typeof count === 'number' ? count : 0
+      return `set the requirements for goal v${v} (${n} item${n === 1 ? '' : 's'})`
+    }
+    // Conductor R2/R3: the size decision recorded, its packages materialised as tasks -- the
+    // conductor's own `workspace.plan_created`.
+    case 'workspace.conducted': {
+      const version = payload['version']
+      const v = typeof version === 'number' ? String(version) : '?'
+      const mode = payload['mode']
+      const packages = asIds(payload['packages'])
+      const what = mode === 'partitioned' ? `partitioned into ${packages.length} package${packages.length === 1 ? '' : 's'}` : 'kept as a single package'
+      return `conducted goal v${v}: ${what}`
+    }
     // M48 R5/R7: a runbook adopted, or stopped. The payload's `title` is not a field this event
     // carries, so without a case of its own it would read as its own type name on the PLAN CHANGE
     // lane -- and this is the one entry that says how the project decided to work.

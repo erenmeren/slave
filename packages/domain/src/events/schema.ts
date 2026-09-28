@@ -408,6 +408,31 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       runbook: runbookAdherence.optional(),
     }),
   }),
+  // Conductor R1 (2026-09-28): a goal version's requirement set was extracted. `count` is the
+  // number of items, `setId` the `RequirementSet` row -- the report reads the items from there.
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.requirements_set'),
+    payload: z.object({
+      version: z.number().int().positive(),
+      count: z.number().int().positive(),
+      setId: z.string().min(1),
+    }),
+  }),
+  // Conductor R2/R3: a goal version was conducted -- the size decision recorded, its packages
+  // materialised as tasks. `fallback` is true when the conductor's answers were unusable and the
+  // version went `single` by default (plan decision D4).
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.conducted'),
+    payload: z.object({
+      version: z.number().int().positive(),
+      mode: z.enum(['single', 'partitioned']),
+      packages: z.array(z.string().min(1)).min(1),
+      decisionId: z.string().min(1),
+      fallback: z.boolean(),
+    }),
+  }),
   // M40 §4: `cancelTask` took a task off the board -- an operator's own call, or an approved
   // `stale_task` proposal. `goalVersion` is the task's own stamp (null for a hand-made task), so
   // the log says which requirement's work was dropped.

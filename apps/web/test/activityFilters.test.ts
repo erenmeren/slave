@@ -91,6 +91,9 @@ describe('parseActivityFilters', () => {
       'supervisor.resolved',
       'workspace.archived',
       'workspace.company_assigned',
+      // Conductor R1/R2/R3 (2026-09-28): a conducted goal version's requirements and its size
+      // decision, beside `workspace.goal_set` and `workspace.plan_created`.
+      'workspace.conducted',
       'workspace.created',
       'workspace.goal_set',
       'workspace.plan_created',
@@ -98,6 +101,7 @@ describe('parseActivityFilters', () => {
       'workspace.planning_reset',
       'workspace.replan_started',
       'workspace.replanned',
+      'workspace.requirements_set',
       'workspace.restored',
       'workspace.runbook_adopted',
       'workspace.settings_changed',

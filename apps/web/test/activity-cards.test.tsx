@@ -78,6 +78,14 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   // here so the registry is exercised against the payload the schema now allows -- the card reads
   // the goal and is unaffected by it, which is the point (spec erratum E24).
   'workspace.goal_set': { goal: 'Ship the checkout flow', request: 'add Apple Pay' },
+  'workspace.requirements_set': { version: 2, count: 7, setId: 'rs-1' },
+  'workspace.conducted': {
+    version: 2,
+    mode: 'partitioned',
+    packages: ['cli', 'report', 'integration'],
+    decisionId: 'd1',
+    fallback: false,
+  },
   'workspace.plan_created': {
     goal: 'Ship the checkout flow',
     goalVersion: 1,

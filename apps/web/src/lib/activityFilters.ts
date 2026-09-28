@@ -92,6 +92,11 @@ export const TYPES_BY_KIND = {
   workspace: [
     'workspace.created',
     'workspace.goal_set',
+    // Conductor R1/R2/R3 (2026-09-28): a conducted goal version's requirements and its size
+    // decision are workspace lifecycle, the same chip `workspace.goal_set` and
+    // `workspace.plan_created` sit under -- neither carries a taskId or a runId.
+    'workspace.requirements_set',
+    'workspace.conducted',
     'workspace.plan_created',
     // M40 t1: a goal change on a non-empty board starts a delta re-plan, and both ends of that are
     // workspace lifecycle for the same reason `workspace.plan_created` is -- neither carries a

@@ -684,6 +684,43 @@ function WorkspaceReplannedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+/** Conductor R1 (2026-09-28): a goal version's requirements were extracted -- `idle`, the same
+ *  tone `workspace.plan_created` carries: nothing is running, a fact was recorded. */
+function WorkspaceRequirementsSetCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; count: number; setId: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition
+        tone="idle"
+        label={`set the requirements for goal v${String(payload.version)} (${plural(payload.count, 'item')})`}
+      />
+    </ActivityCard>
+  )
+}
+
+/** Conductor R2/R3: a goal version's size decision and its packages -- the conductor's own
+ *  `workspace.plan_created`. `fallback` says the conductor's own answer was unusable and the
+ *  version went `single` by default (plan decision D4). */
+function WorkspaceConductedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    version: number
+    mode: 'single' | 'partitioned'
+    packages: readonly string[]
+    fallback: boolean
+  }
+  const what =
+    payload.mode === 'partitioned'
+      ? `partitioned into ${plural(payload.packages.length, 'package')}`
+      : 'kept as a single package'
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label={`conducted goal v${String(payload.version)}: ${what}${payload.fallback ? ' (fallback)' : ''}`}>
+        {payload.mode === 'partitioned' && <span data-testid="conducted-packages">{payload.packages.join(', ')}</span>}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 /**
  * A task taken off the board (M40 §4) -- by a human, or by a human approving the Supervisor's
  * `cancel_task` proposal.
@@ -1540,6 +1577,8 @@ export const ACTIVITY_CARDS = {
   'task.integrated': TaskIntegratedCard,
   'task.unblocked': TaskUnblockedCard,
   'workspace.goal_set': WorkspaceGoalSetCard,
+  'workspace.requirements_set': WorkspaceRequirementsSetCard,
+  'workspace.conducted': WorkspaceConductedCard,
   'workspace.plan_created': WorkspacePlanCreatedCard,
   'workspace.replan_started': WorkspaceReplanStartedCard,
   'workspace.replanned': WorkspaceReplannedCard,
