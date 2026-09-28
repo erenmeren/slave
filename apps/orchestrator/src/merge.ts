@@ -11,6 +11,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { ensureIntegrationWorktree, integrationTargetFor } from './goalBranch.js'
+import { mergeOrAbort, primaryCheckoutReady } from './gitMerge.js'
 import { ownershipRuleForTask } from './ownership.js'
 import { logSetAside, setAsideDirFor, setAsideForeignChanges } from './setAside.js'
 import { rejectTask, runVerify, stageGatesFor } from './verify.js'
@@ -31,6 +32,9 @@ const taskKeyFor = (id: string): string => `T-${id.slice(0, 8)}`
  * reach `merging` without having passed verify once (`advance()` sets it there), so a `null` here
  * is a caller bug -- surfaced loudly rather than merging a task onto no branch at all.
  */
+/** A thrown value as the text a `task.merge_failed` reason carries, cut to what a payload holds. */
+const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error)).slice(0, 2000)
+
 function requireBranch(task: { readonly id: string; readonly branch: string | null }): string {
   if (task.branch === null) {
     throw new Error(`task ${task.id} reached the merge pass with no branch recorded`)
@@ -324,13 +328,13 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
     await gitIn(worktreePath, 'rebase', into)
   } catch (error) {
     await gitIn(worktreePath, 'rebase', '--abort').catch(() => {})
-    const message = (error instanceof Error ? error.message : String(error)).slice(0, 2000)
     await failMerge({
       taskId: task.id,
       workspaceId,
       taskKey,
-      reason: `rebase onto ${into} conflicted: ${message}`,
-      // The branch no longer applies to the base branch. That is the work -- so it is JUDGED. It
+      reason: `rebase onto ${into} conflicted: ${errorText(error)}`,
+      // The branch no longer applies to the branch it merges into (`into`: the goal version's
+      // integration branch, or the base branch). That is the work -- so it is JUDGED. It
       // still settles nothing unless this failure spent the task's last attempt (E24): the task
       // goes back to rework, the conflict is resolved and the work merges, and a `false` written
       // here could never be taken back.
@@ -386,21 +390,33 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
     // changes only when the goal version is accepted (spec §5). `--no-ff` and `--no-verify` for the
     // base-branch merge's reasons below.
     //
-    // `integrationPath` is hoisted so the catch can abort a merge git left half-done: a conflicted
-    // merge left in this worktree would refuse every later package's merge until the next
-    // `ensureIntegrationWorktree` cleared it.
-    let integrationPath: string | null = null
+    // Two failures, told apart (controller ruling T4-1). A worktree that cannot be prepared is this
+    // machine's fault -- a stale directory, a registration `worktree add` refuses -- so it is NOT
+    // judged: charging the worker would, on a second occurrence, block every package of the
+    // version for something no worker did. A merge git refuses is the branch not fitting, which is
+    // judged like the rebase above; `mergeOrAbort` aborts it so the next package's merge is not
+    // refused by this one's leftovers.
+    let integrationPath: string
     try {
       integrationPath = await ensureIntegrationWorktree(workspace.repoPath, target, workspaceId)
-      await gitIn(integrationPath, 'merge', '--no-ff', '--no-verify', branch, '-m', `merge(${taskKey}): ${task.title}`)
     } catch (error) {
-      if (integrationPath !== null) await gitIn(integrationPath, 'merge', '--abort').catch(() => {})
-      const message = (error instanceof Error ? error.message : String(error)).slice(0, 2000)
       await failMerge({
         taskId: task.id,
         workspaceId,
         taskKey,
-        reason: `merge of ${branch} into ${target.branch} failed: ${message}`,
+        reason: `could not prepare the integration worktree for ${target.branch}: ${errorText(error)}`,
+        judged: false,
+        goalVersion,
+      })
+      return
+    }
+    const merged = await mergeOrAbort(integrationPath, ['--no-ff', '--no-verify', branch, '-m', `merge(${taskKey}): ${task.title}`])
+    if (!merged.ok) {
+      await failMerge({
+        taskId: task.id,
+        workspaceId,
+        taskKey,
+        reason: `merge of ${branch} into ${target.branch} failed: ${merged.error}`,
         judged: true,
         goalVersion,
       })
@@ -418,12 +434,9 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
     return
   }
 
-  // Guard the primary checkout before touching it: it is shared by every task in this workspace,
-  // and merging onto anything other than a clean base branch would land the work somewhere no one
-  // asked for or lose someone else's uncommitted state.
-  const currentBranch = await gitIn(workspace.repoPath, 'rev-parse', '--abbrev-ref', 'HEAD')
-  const status = await gitIn(workspace.repoPath, 'status', '--porcelain')
-  if (currentBranch !== workspace.baseBranch || status !== '') {
+  // Guard the primary checkout before touching it: it is shared by every task in this workspace
+  // (`primaryCheckoutReady` is the one rule, shared with the goal pass's final merge).
+  if (!(await primaryCheckoutReady(workspace.repoPath, workspace.baseBranch))) {
     await failMerge({
       taskId: task.id,
       workspaceId,
@@ -439,23 +452,19 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
 
   // `--no-ff`: the merge commit is what a `git revert -m 1` undoes as one unit, and what makes this
   // task's contribution visible in `git log` as one entry rather than disappearing into a
-  // fast-forward. Wrapped like the rebase above: a merge can still fail here -- `main` moved
-  // between the rebase and this command, or a lock collision with concurrent provisioning -- and
-  // an uncaught throw would wedge the primary checkout mid-merge and stall the whole workspace's
-  // merge queue (the stuck claim silences every later pass) until a restart. `--no-verify`, for the
+  // fast-forward. A merge can still fail here -- `main` moved between the rebase and this command,
+  // or a lock collision with concurrent provisioning -- and `mergeOrAbort` aborts it: a primary
+  // checkout wedged mid-merge would stall the whole workspace's merge queue. `--no-verify`, for the
   // WIP commit's reason (`wipCommit.ts`): the repository's own commit hooks are the worker's to
   // satisfy on its own commits, and a `commit-msg` hook enforcing a message convention (commitlint
   // installed by `npm ci`) would otherwise refuse this commit's subject on every task, forever.
-  try {
-    await gitIn(workspace.repoPath, 'merge', '--no-ff', '--no-verify', branch, '-m', `merge(${taskKey}): ${task.title}`)
-  } catch (error) {
-    await gitIn(workspace.repoPath, 'merge', '--abort').catch(() => {})
-    const message = (error instanceof Error ? error.message : String(error)).slice(0, 2000)
+  const merged = await mergeOrAbort(workspace.repoPath, ['--no-ff', '--no-verify', branch, '-m', `merge(${taskKey}): ${task.title}`])
+  if (!merged.ok) {
     await failMerge({
       taskId: task.id,
       workspaceId,
       taskKey,
-      reason: `merge of ${branch} onto ${workspace.baseBranch} failed: ${message}`,
+      reason: `merge of ${branch} onto ${workspace.baseBranch} failed: ${merged.error}`,
       // The same class as the rebase above: the branch would not go onto the base branch, and the
       // same E24 rule applies -- `main` moving under a task is not a verdict on the worker.
       judged: true,

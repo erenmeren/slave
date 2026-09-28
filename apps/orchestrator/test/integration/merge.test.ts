@@ -1236,4 +1236,59 @@ describe('into the integration branch', () => {
     expect(isAncestor(workspace.repoPath, 'stray', target.branch)).toBe(false)
     expect(git(['status', '--porcelain'], path)).toBe('')
   })
+
+  it('aborts the integration merge git refused, leaving the integration worktree clean with no MERGE_HEAD', async (): Promise<void> => {
+    // The rebase onto the integration branch succeeds (it has no a.txt yet); the post-rebase verify
+    // then commits a clashing a.txt onto the integration branch -- the branch moving between the
+    // rebase and the merge -- so the failure lands on `git merge` itself, mid-merge, in its catch.
+    const workspace = await seedWorkspace({ autoMerge: true })
+    const target = await deliver(workspace)
+    const path = await ensureIntegrationWorktree(workspace.repoPath, target, workspace.id)
+    await prisma.workspace.update({
+      where: { id: workspace.id },
+      data: {
+        verifyCommands: [
+          `if [ ! -f ${path}/a.txt ]; then printf 'moved\\n' > ${path}/a.txt && git -C ${path} add a.txt && git -C ${path} commit -q -m moved; fi`,
+        ],
+      },
+    })
+    const { taskId } = await seedMergingTask(workspace, { fileName: 'a.txt', content: 'the task says this\n' })
+    await packageTask(workspace, taskId, 'feature')
+    const implRun = await prisma.slaveRun.findFirstOrThrow({ where: { taskId, kind: 'implementation' } })
+    await recordRunEvidence(implRun.id)
+    const integrationBefore = git(['rev-parse', target.branch], workspace.repoPath)
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+    expect(task.status).toBe('rework')
+    expect(task.mergeClaimedAt).toBeNull()
+    const failure = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_merge_failed' } })
+    expect((failure.payload as { reason: string }).reason).toContain(`into ${target.branch} failed`)
+    expect(git(['rev-parse', target.branch], workspace.repoPath)).not.toBe(integrationBefore)
+    expect(git(['status', '--porcelain'], path)).toBe('')
+    expect(existsSync(join(git(['rev-parse', '--git-dir'], path), 'MERGE_HEAD'))).toBe(false)
+  })
+
+  it('charges no judgement when the integration worktree cannot be prepared -- the machine failed, not the work', async (): Promise<void> => {
+    // A directory at the integration worktree's path that is not a worktree of this repository:
+    // `ensureIntegrationWorktree` refuses it before any merge. With one attempt left, a JUDGED
+    // failure would settle `integrated: false` on the worker (E24); an unjudged one settles nothing.
+    const workspace = await seedWorkspace({ autoMerge: true })
+    await deliver(workspace)
+    mkdirSync(integrationWorktreePath(workspace.repoPath, 1, workspace.id), { recursive: true })
+    const { taskId } = await seedMergingTask(workspace, { maxAttempts: 1 })
+    await packageTask(workspace, taskId, 'feature')
+    const implRun = await prisma.slaveRun.findFirstOrThrow({ where: { taskId, kind: 'implementation' } })
+    await recordRunEvidence(implRun.id)
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+    expect(task.status).toBe('failed')
+    expect(task.mergeClaimedAt).toBeNull()
+    const failure = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_merge_failed' } })
+    expect((failure.payload as { reason: string }).reason).toMatch(/integration worktree/u)
+    expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRun.id } })).integrated).toBeNull()
+  })
 })
