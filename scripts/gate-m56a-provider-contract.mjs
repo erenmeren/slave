@@ -27,7 +27,7 @@
 //
 // TWELVE STAGES, each measuring one thing the milestone claims:
 //   1.  Two manifests, complete, and nobody holds a second copy of the union.
-//   2.  The permission verdict is byte-identical -- twelve files, byte for byte -- and the two
+//   2.  The permission verdict is byte-identical -- sixteen files, byte for byte -- and the two
 //       per-vendor tables that feed it now derive from the manifests (R5's inversion, from the
 //       tables' own side).
 //   3.  The argv is byte-identical, and the two silent failures are still refused.
@@ -149,7 +149,7 @@ const HOOK_PLANE_SCRIPTS = [
 ]
 
 // The fixed inputs `scripts/fixtures/m56a-goldens/permissions-*.json` were captured with, so the
-// twelve comparisons are total rather than field-wise (spec §3 stage 2).
+// sixteen comparisons are total rather than field-wise (spec §3 stage 2).
 const GOLDEN_RUN_ID = '00000000-0000-4000-8000-000000000m56'
 const GOLDEN_RUN_TOKEN = 'm56a-golden-token-not-a-secret'
 // Claude's governed vocabulary, as a count somebody can re-run (M56a erratum E22). The `mcp__*`
@@ -521,7 +521,7 @@ try {
   console.log('stage 1 complete: two measured manifests, one union literal, one array literal')
 
   // ================= Stage 2: the permission verdict, byte for byte ===============================
-  console.log('\n=== stage 2: the permission verdict is byte-identical -- twelve files, byte for byte')
+  console.log('\n=== stage 2: the permission verdict is byte-identical -- sixteen files, byte for byte')
 
   const grantSets = { baseline: [], granted: PERMISSION_KINDS.map((kind) => ({ kind, mode: 'allow' })) }
   let compared = 0
@@ -559,7 +559,7 @@ try {
       }
     }
   }
-  if (compared !== 12) await fail(`stage 2: compared ${compared} permission files, expected twelve`)
+  if (compared !== 16) await fail(`stage 2: compared ${compared} permission files, expected sixteen`)
 
   // R5's inversion, from the tables' own side: the two per-vendor tables still hold what they held,
   // and each one now DERIVES from the manifest it was inverted into.
@@ -590,7 +590,7 @@ try {
   }
   const prefixes = readGolden('permissions-claude_code-implementation-granted.json').prefixes
   await assertEqual(prefixes, [{ prefix: 'mcp__', kind: 'network_fetch' }], 'the one prefix rule the vocabulary cannot enumerate')
-  console.log('stage 2 complete: twelve verdicts byte for byte, and both per-vendor tables derive from the manifests')
+  console.log('stage 2 complete: sixteen verdicts byte for byte, and both per-vendor tables derive from the manifests')
 
   // ================= Stage 3: the argv, byte for byte =============================================
   console.log('\n=== stage 3: the argv is byte-identical, and the two silent failures are still refused')
@@ -1306,7 +1306,7 @@ try {
   console.log('stage 12 complete: two catalogues, one lane map, one enum, no migration, twelve names, five scripts, one clean tree')
 
   console.log(
-    '\nPASS: nothing a provider does changed, and here are the bytes -- twelve permission verdicts byte for byte, five argv ' +
+    '\nPASS: nothing a provider does changed, and here are the bytes -- sixteen permission verdicts byte for byte, five argv ' +
       'shapes element for element, both capability rows two different ways, one paused run per provider whose two checkpoint ' +
       'columns hold the two files its adapter actually wrote, and a grep that fails the build the moment a second copy of the ' +
       'provider list appears anywhere in the tree',
