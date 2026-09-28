@@ -89,10 +89,13 @@ export async function changedFiles(repoPath: string, base: string, branch: strin
  * How a worker undoes a foreign change it COMMITTED (final review I1): the write tools are denied
  * on those files, so the reason has to name the git commands that still work -- restore a modified
  * or deleted file from the base, remove one it added -- and the commit that makes it the branch's.
+ * The restore names the MERGE-BASE, not the base branch's tip: the audit's three-dot range compares
+ * against where the branch left the base, and a file the base branch changed since would otherwise
+ * be "restored" to a version that is itself a change on this branch.
  */
 export function undoInstruction(base: string): string {
   return (
-    `To undo committed changes to files you do not own, run \`git checkout ${base} -- <file>\` for each one you modified or deleted ` +
+    `To undo committed changes to files you do not own, run \`git checkout $(git merge-base ${base} HEAD) -- <file>\` for each one you modified or deleted ` +
     'and `git rm <file>` (or `git rm --cached <file>` to keep it on disk) for each one you added, then commit; ' +
     'Edit and Write on those files are denied.'
   )

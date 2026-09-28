@@ -394,7 +394,7 @@ describe('the diff audit', () => {
     expect(task.lastRejectionReason).toContain('m8a-work.txt')
     // Final review I1: the reason says how to undo it, and that the write tools will not.
     expect(task.lastRejectionReason).toContain('m8a-work.txt. To undo committed changes to files you do not own')
-    expect(task.lastRejectionReason).toContain(`git checkout main -- <file>`)
+    expect(task.lastRejectionReason).toContain(`git checkout $(git merge-base main HEAD) -- <file>`)
     expect(task.lastRejectionReason).toContain('git rm')
     expect(task.lastRejectionReason).toContain('Edit and Write on those files are denied')
     expect(task.attempt).toBe(1)
