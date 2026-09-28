@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, rmSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { recordRunEvidence } from '@slave-of-ai/control'
+import { confirmGoalMerge, recordRunEvidence } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
@@ -297,6 +297,79 @@ describe('runGoalPass', () => {
     expect(trips[0]).toContain('confirm-goal-merge')
     // The worktree stays for the person's hand merge.
     expect(existsSync(f.integrationPath)).toBe(true)
+  })
+
+  it('attributes a hand merge after the base-moved wait to the person, and confirm-goal-merge still succeeds', async (): Promise<void> => {
+    const f = await seed()
+    await integrateAll(f)
+    commitIn(f.repoPath, 'mine.txt', 'the person works here\n', 'person works on main')
+    await pass(f)
+    // The person does what the trip told them: merge by hand, then (later) confirm.
+    git(['merge', '-q', '--no-ff', '--no-edit', f.branch], f.repoPath)
+    const tip = git(['rev-parse', 'main'], f.repoPath)
+
+    await pass(f)
+
+    const merged = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_goal_merged' } })
+    expect(merged).toHaveLength(1)
+    expect(merged[0]?.actor).toBe('human')
+    expect(merged[0]?.payload).toEqual({ version: 1, branch: f.branch, into: 'main', commit: tip, by: 'human' })
+    expect((await delivery(f)).mergedAt).not.toBeNull()
+
+    expect(await confirmGoalMerge(f.workspaceId, 1)).toEqual({ ok: true, value: { commit: tip } })
+    expect(await prisma.executionEvent.count({ where: { workspaceId: f.workspaceId, type: 'workspace_goal_merged' } })).toBe(1)
+  })
+
+  it('announces a confirmed hand merge once, as the person\'s, when the pass runs after the confirm', async (): Promise<void> => {
+    const f = await seed()
+    await integrateAll(f)
+    commitIn(f.repoPath, 'mine.txt', 'the person works here\n', 'person works on main')
+    await pass(f)
+    git(['merge', '-q', '--no-ff', '--no-edit', f.branch], f.repoPath)
+    const tip = git(['rev-parse', 'main'], f.repoPath)
+
+    expect(await confirmGoalMerge(f.workspaceId, 1)).toEqual({ ok: true, value: { commit: tip } })
+    await pass(f)
+
+    const merged = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_goal_merged' } })
+    expect(merged.map((event) => (event.payload as { by: string }).by)).toEqual(['human'])
+    expect(existsSync(f.integrationPath)).toBe(false)
+  })
+
+  it('says once that an accepted version waits for a hand merge when autoMerge is off', async (): Promise<void> => {
+    const f = await seed({ autoMerge: false })
+    await integrateAll(f)
+
+    await pass(f)
+    await pass(f)
+
+    const trips = await mergeTrips(f.workspaceId)
+    expect(trips).toHaveLength(1)
+    expect(trips[0]).toContain('goal v1 is accepted and autoMerge is off')
+    expect(trips[0]).toContain(`confirm-goal-merge --workspace ${f.workspaceId} --version 1`)
+    expect((await delivery(f)).mergedAt).toBeNull()
+  })
+
+  it('goes on to the open versions when a merged version\'s integration branch is gone', async (): Promise<void> => {
+    const f = await seed()
+    await integrateAll(f)
+    // A stamped, unannounced row whose branch somebody deleted: the recovery cannot name its commit.
+    await prisma.goalDelivery.create({
+      data: {
+        workspaceId: f.workspaceId,
+        goalVersion: 7,
+        integrationBranch: 'slaveofai/goal-gone',
+        baseCommit: 'abc',
+        status: 'accepted',
+        acceptedAt: new Date(),
+        mergedAt: new Date(),
+      },
+    })
+
+    await pass(f)
+
+    expect((await delivery(f)).mergedAt).not.toBeNull()
+    expect(git(['rev-parse', 'main'], f.repoPath)).toBe(git(['rev-parse', f.branch], f.repoPath))
   })
 
   it('records a merge git refuses, leaves the checkout clean, and never retries it by itself', async (): Promise<void> => {

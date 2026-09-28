@@ -31,7 +31,17 @@ export async function runGoalPass(workspaceId: WorkspaceId): Promise<void> {
       // The commit that reached the base branch is not recorded anywhere a crash could not lose;
       // the integration tip is the one commit known to be in it (a fast-forward lands exactly it,
       // a hand merge contains it).
-      const commit = await gitIn(workspace.repoPath, 'rev-parse', delivery.integrationBranch)
+      //
+      // Final wave M4: a branch somebody deleted since cannot name it. That row is left
+      // unannounced (and said in the log) rather than thrown out of the pass: the open versions
+      // below must still be reached.
+      let commit: string
+      try {
+        commit = await gitIn(workspace.repoPath, 'rev-parse', delivery.integrationBranch)
+      } catch (error) {
+        console.warn(`[goal] cannot announce goal v${String(delivery.goalVersion)}'s merge: ${String(error)}`)
+        continue
+      }
       await withDeliveryLock(delivery.id, async (tx) =>
         announceOnce(tx, workspaceId, delivery.goalVersion, delivery.integrationBranch, workspace.baseBranch, commit, 'system'),
       )
@@ -49,7 +59,17 @@ export async function runGoalPass(workspaceId: WorkspaceId): Promise<void> {
       // Plan D8: until Plan 4b the per-task verify and review are the gate.
       if (!(await acceptGoal(delivery.id, 0))) continue
     }
-    if (workspace.autoMerge) await mergeGoalIntoBase(delivery.id, 'system')
+    if (workspace.autoMerge) {
+      await mergeGoalIntoBase(delivery.id)
+    } else {
+      // Final wave I2: the version waits for the person, and so does every later version (D6) --
+      // said once, the same trip as the other waits (ruling P7), or the wait is silent.
+      await tripOnce(
+        workspaceId,
+        `goal v${String(delivery.goalVersion)} is accepted and autoMerge is off: ` +
+          handMergeInstruction(delivery.integrationBranch, workspace.baseBranch, workspaceId, delivery.goalVersion),
+      )
+    }
   }
 }
 
@@ -101,7 +121,7 @@ export async function acceptGoal(deliveryId: string, rounds: number): Promise<bo
  * tried again next tick. A merge git refuses anyway is aborted, recorded on `mergeError` and left
  * for the person; nothing retries it.
  */
-export async function mergeGoalIntoBase(deliveryId: string, by: 'system'): Promise<'merged' | 'waiting' | 'failed'> {
+export async function mergeGoalIntoBase(deliveryId: string): Promise<'merged' | 'waiting' | 'failed'> {
   return withDeliveryLock(deliveryId, async (tx) => {
     // Read under the lock: an overlapping pass may have merged it, or recorded a refusal, meanwhile.
     const delivery = await tx.goalDelivery.findUniqueOrThrow({
@@ -111,9 +131,7 @@ export async function mergeGoalIntoBase(deliveryId: string, by: 'system'): Promi
     if (delivery.mergeError !== null) return 'failed'
     const { repoPath, baseBranch } = delivery.workspace
     const version = delivery.goalVersion
-    const handMerge =
-      `Merge ${delivery.integrationBranch} into ${baseBranch} by hand, then run ` +
-      `confirm-goal-merge --workspace ${delivery.workspaceId} --version ${String(version)}`
+    const handMerge = handMergeInstruction(delivery.integrationBranch, baseBranch, delivery.workspaceId, version)
 
     const baseTip = await gitIn(repoPath, 'rev-parse', `refs/heads/${baseBranch}`)
     // Already in the base branch: a pass that crashed after the fast-forward and before the stamp,
@@ -124,7 +142,16 @@ export async function mergeGoalIntoBase(deliveryId: string, by: 'system'): Promi
       () => true,
       () => false,
     )
-    if (contained) return landed(tx, delivery, baseTip, by)
+    //
+    // Final wave I1: WHO merged it. This pass only ever fast-forwards, which lands exactly the
+    // integration tip; a base tip that is anything else is the person's hand merge after a wait
+    // (base moved, or a refused merge), and is recorded as theirs -- their `confirm-goal-merge`
+    // then finds it recorded. A person who fast-forwarded by hand lands the same tree this pass
+    // would have, so `system` is true enough of it.
+    if (contained) {
+      const integrationTip = await gitIn(repoPath, 'rev-parse', delivery.integrationBranch)
+      return landed(tx, delivery, baseTip, baseTip === integrationTip ? 'system' : 'human')
+    }
     if (baseTip !== delivery.baseCommit) {
       await tripOnce(
         delivery.workspaceId,
@@ -150,8 +177,22 @@ export async function mergeGoalIntoBase(deliveryId: string, by: 'system'): Promi
       )
       return 'failed'
     }
-    return landed(tx, delivery, await gitIn(repoPath, 'rev-parse', 'HEAD'), by)
+    return landed(tx, delivery, await gitIn(repoPath, 'rev-parse', 'HEAD'), 'system')
   })
+}
+
+/** Who put a goal version into the base branch: this pass's fast-forward, or a person's hand merge. */
+type MergedBy = 'system' | 'human'
+
+/**
+ * What a person does when a goal version waits for them (base moved, a merge git refused,
+ * `autoMerge` off): one wording, so the three waits cannot drift apart.
+ */
+function handMergeInstruction(integrationBranch: string, baseBranch: string, workspaceId: string, version: number): string {
+  return (
+    `Merge ${integrationBranch} into ${baseBranch} by hand, then run ` +
+    `confirm-goal-merge --workspace ${workspaceId} --version ${String(version)}`
+  )
 }
 
 interface LandingDelivery {
@@ -168,7 +209,7 @@ interface LandingDelivery {
  * unstamped, and the next pass comes back here (the branch is contained) and finds the event
  * already written.
  */
-async function landed(tx: Prisma.TransactionClient, delivery: LandingDelivery, commit: string, by: 'system'): Promise<'merged'> {
+async function landed(tx: Prisma.TransactionClient, delivery: LandingDelivery, commit: string, by: MergedBy): Promise<'merged'> {
   await announceOnce(tx, delivery.workspaceId, delivery.goalVersion, delivery.integrationBranch, delivery.workspace.baseBranch, commit, by)
   await tx.goalDelivery.updateMany({ where: { id: delivery.id, mergedAt: null }, data: { mergedAt: new Date() } })
   await removeIntegrationWorktree(delivery.workspace.repoPath, delivery.goalVersion, delivery.workspaceId)
@@ -184,11 +225,11 @@ async function announceOnce(
   branch: string,
   into: string,
   commit: string,
-  by: 'system',
+  by: MergedBy,
 ): Promise<void> {
   if (await goalEventSaid(tx, workspaceId, 'workspace_goal_merged', version)) return
   await settleGoalEvidence(workspaceId, version)
-  await appendEvent({ type: 'workspace.goal_merged', workspaceId, actor: 'system', payload: { version, branch, into, commit, by } })
+  await appendEvent({ type: 'workspace.goal_merged', workspaceId, actor: by, payload: { version, branch, into, commit, by } })
 }
 
 /** The goal versions of the workspace that already have their `goal_merged` -- an unlocked
