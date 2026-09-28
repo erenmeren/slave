@@ -132,7 +132,7 @@ export async function rejectRunBack(
   task: { readonly id: string; readonly workspaceId: string },
   reason: string,
   failDetail: string,
-  exhaustedReason: (attempt: number) => string = (attempt) => `${failDetail} (after ${String(attempt)} attempts)`,
+  exhaustedReason: (attempt: number) => string,
 ): Promise<boolean> {
   const counted = await rejectOwnedTask(task.id, run.id, reason)
   if (counted !== null) {
