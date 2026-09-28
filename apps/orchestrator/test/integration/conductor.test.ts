@@ -17,6 +17,7 @@ import {
   CONDUCT_PER_CALL_CAP_USD,
   CONDUCT_RETRY_CAP,
   PACKAGE_WORKER_ROLE,
+  integrationBranchName,
   workspaceId as brandWorkspaceId,
 } from '@slave-of-ai/domain'
 import { ClaudeCodeAdapter, type AdapterRegistry } from '@slave-of-ai/providers'
@@ -331,19 +332,82 @@ describe('conduct: the size decision', () => {
     expect(conducted.payload).toEqual(expect.objectContaining({ mode: 'single', fallback: true }))
   })
 
-  it('waits while an older version still has live work (D5)', async () => {
+  it('waits while a board left over from planned delivery still has live work (D5), said once as goal_waiting', async () => {
     const f = await seedWithRequirements()
     await prisma.task.create({ data: { workspaceId: f.workspaceId, title: 'old', description: 'old', status: 'running', maxAttempts: 3, requiredRole: 'backend' } })
     const calls = await prisma.conductorCall.count({ where: { workspaceId: f.workspaceId } })
     expect(await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) }).decider))).toBe('waiting')
     expect(await prisma.conductorCall.count({ where: { workspaceId: f.workspaceId } })).toBe(calls)
     expect(await prisma.workPackage.count({ where: { workspaceId: f.workspaceId } })).toBe(0)
-    // Final review M5: the wait is said, once, and is not a halt.
-    await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) }).decider))
+    // Plan D6: the wait is said once, with its own event, and is neither a halt nor a guardrail.
+    expect(await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) }).decider))).toBe('waiting')
+    const waits = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_goal_waiting' } })
+    expect(waits.map((w) => w.payload)).toEqual([{ version: 1, waitingOn: null }])
+    expect(await prisma.executionEvent.count({ where: { workspaceId: f.workspaceId, type: 'guardrail_tripped' } })).toBe(0)
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })).haltedReason).toBeNull()
+  })
+
+  it('conducts the next goal version only once the earlier one is merged (D6), saying the wait once', async () => {
+    const f = await seedWithRequirements()
+    await prisma.goalDelivery.create({
+      data: { workspaceId: f.workspaceId, goalVersion: 1, integrationBranch: integrationBranchName(1, f.workspaceId), baseCommit: 'abc', status: 'accepted', acceptedAt: new Date() },
+    })
+    const moved = await setGoal(f.workspaceId, 'Add a CSV mode. Add a JSON mode. Add a YAML mode.')
+    if (!moved.ok) throw new Error('the second goal was refused')
+    const { decider, prompts } = scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) })
+    expect(await conduct(depsFor(f, decider))).toBe('waiting')
+    expect(await conduct(depsFor(f, decider))).toBe('waiting')
+    expect(prompts).toHaveLength(0)
+    const waits = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_goal_waiting' } })
+    expect(waits.map((w) => w.payload)).toEqual([{ version: 2, waitingOn: 1 }])
+    expect(await prisma.executionEvent.count({ where: { workspaceId: f.workspaceId, type: 'guardrail_tripped' } })).toBe(0)
+    await prisma.goalDelivery.update({ where: { workspaceId_goalVersion: { workspaceId: f.workspaceId, goalVersion: 1 } }, data: { mergedAt: new Date() } })
+    expect(await conduct(depsFor(f, decider))).toBe('requirements_set')
+    expect(await prisma.requirementSet.count({ where: { workspaceId: f.workspaceId, goalVersion: 2 } })).toBe(1)
+  })
+
+  it('does not hold the next goal version behind an abandoned one (D6)', async () => {
+    const f = await seedWithRequirements()
+    await prisma.goalDelivery.create({
+      data: { workspaceId: f.workspaceId, goalVersion: 1, integrationBranch: integrationBranchName(1, f.workspaceId), baseCommit: 'abc', status: 'abandoned' },
+    })
+    const moved = await setGoal(f.workspaceId, 'Add a CSV mode. Add a JSON mode. Add a YAML mode.')
+    if (!moved.ok) throw new Error('the second goal was refused')
+    expect(await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) }).decider))).toBe('requirements_set')
+    expect(await prisma.executionEvent.count({ where: { workspaceId: f.workspaceId, type: 'workspace_goal_waiting' } })).toBe(0)
+  })
+
+  it("cuts the version's integration branch from the base branch and records its delivery row", async () => {
+    const f = await seedWithRequirements()
+    expect(await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) }).decider))).toBe('conducted')
+    const { repoPath } = await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })
+    const branch = integrationBranchName(1, f.workspaceId)
+    const tip = git(['rev-parse', 'main'], repoPath)
+    const deliveries = await prisma.goalDelivery.findMany({ where: { workspaceId: f.workspaceId } })
+    expect(deliveries).toEqual([
+      expect.objectContaining({ goalVersion: 1, status: 'integrating', integrationBranch: branch, baseCommit: tip, acceptedAt: null, mergedAt: null }),
+    ])
+    expect(git(['rev-parse', branch], repoPath)).toBe(tip)
+  })
+
+  it('says once and writes nothing when the integration branch cannot be cut', async () => {
+    const f = await seedWithRequirements()
+    const { repoPath } = await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })
+    const branch = integrationBranchName(1, f.workspaceId)
+    git(['checkout', '-q', '-b', branch], repoPath)
+    writeFileSync(join(repoPath, 'foreign.txt'), 'foreign\n')
+    git(['add', '-A'], repoPath)
+    git(['commit', '-q', '-m', 'foreign'], repoPath)
+    git(['checkout', '-q', 'main'], repoPath)
+    const { decider } = scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) })
+    expect(await conduct(depsFor(f, decider))).toBe('conduct_failed')
+    expect(await conduct(depsFor(f, decider))).toBe('conduct_failed')
+    expect(await prisma.workPackage.count({ where: { workspaceId: f.workspaceId } })).toBe(0)
+    expect(await prisma.goalDelivery.count({ where: { workspaceId: f.workspaceId } })).toBe(0)
     const trips = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'guardrail_tripped' } })
     expect(trips).toHaveLength(1)
-    expect((trips[0]?.payload as { detail: string }).detail).toContain('goal v1 waits')
-    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })).haltedReason).toBeNull()
+    expect(trips[0]?.payload).toEqual(expect.objectContaining({ guardrail: 'conductor_failed' }))
+    expect((trips[0]?.payload as { detail: string }).detail).toContain(branch)
   })
 
   it('says once, without halting, when the repository cannot be read for the size decision', async () => {

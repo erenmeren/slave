@@ -9,6 +9,7 @@ import {
   buildRequirementsPrompt,
   candidateSchema,
   conductPlanSchema,
+  integrationBranchName,
   parseConductAnswer,
   parseRequirementsAnswer,
   requirementItemsSchema,
@@ -22,6 +23,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { loadConductCatalogue, loadRepositoryFacts } from './conductFacts.js'
+import { ensureIntegrationBranch } from './goalBranch.js'
 import { modelSeam } from './supervisor.js'
 import type { TickDeps } from './tick.js'
 
@@ -69,13 +71,13 @@ export async function conduct(deps: TickDeps): Promise<ConductStep> {
   if ((await prisma.workPackage.count({ where: { workspaceId: deps.workspaceId, goalVersion: version } })) > 0) return 'none'
   const call = resolveConductorCall(deps)
   if (call === null) return 'none'
-  if (await boardIsBusy(deps.workspaceId, version)) {
-    // Said once (final review M5): a goal that is not being conducted must say why, or a person
-    // watching the board sees nothing happen and no reason. Not a halt: the wait ends by itself.
-    await tripConductor(
-      deps.workspaceId,
-      `goal v${version} waits: the board still has live work from an earlier goal, and this goal is conducted once that work is finished, cancelled or failed`,
-    )
+  // Plan D6: an earlier goal version still on its way to the base branch, or a board left over from
+  // planned delivery, holds this one. Said once (final review M5): a goal that is not being
+  // conducted must say why, or a person watching the board sees nothing happen and no reason. Not
+  // a halt: the wait ends by itself.
+  const waitingOn = await earlierGoalOpen(deps.workspaceId, version)
+  if (waitingOn !== undefined) {
+    await goalWaiting(deps.workspaceId, version, waitingOn)
     return 'waiting'
   }
 
@@ -202,8 +204,22 @@ async function decideAndMaterialise(
     await tripConductor(workspaceId, `staffing goal v${version}: ${seats.error}`)
     return 'conduct_failed'
   }
+  // Spec R9: the version's own integration branch, cut before the transaction below (git is not
+  // transactional) -- `ensureIntegrationBranch` reuses it when a crash left it without its row.
+  const integrationBranch = integrationBranchName(version, workspaceId)
+  let cut: { readonly baseCommit: string }
   try {
-    await materialise(workspaceId, version, workspace.maxAttempts, plan, fallback, seats.value, items)
+    cut = await ensureIntegrationBranch(workspace.repoPath, workspace.baseBranch, integrationBranch)
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split('\n')[0] ?? error.message : String(error)
+    await tripConductor(workspaceId, `goal v${version} could not cut its integration branch: ${message}`)
+    return 'conduct_failed'
+  }
+  try {
+    await materialise(workspaceId, version, workspace.maxAttempts, plan, fallback, seats.value, items, {
+      integrationBranch,
+      baseCommit: cut.baseCommit,
+    })
   } catch (error) {
     if (error instanceof AlreadyConducted) return 'none'
     throw error
@@ -278,7 +294,9 @@ function taskDescription(pkg: PackageSpec, items: readonly { readonly key: strin
  * ONE transaction (plan decision D7): the `conduct` decision is recorded already applied, and its
  * packages, their pinned tasks and their dependency edges are written with it -- a decision row
  * with no packages behind it, or packages no decision explains, can never be observed. The events
- * follow the commit (`appendEvent` owns its own transaction on the shared client).
+ * follow the commit (`appendEvent` owns its own transaction on the shared client). The version's
+ * `GoalDelivery` row (plan D5: the switch onto the integration branch) is written in the same
+ * transaction, so packages never exist without the branch they merge into being on record.
  *
  * Returns the decision's id.
  */
@@ -290,6 +308,7 @@ async function materialise(
   fallback: boolean,
   seats: ReadonlyMap<string, string>,
   items: readonly { readonly key: string; readonly text: string }[],
+  delivery: { readonly integrationBranch: string; readonly baseCommit: string },
 ): Promise<string> {
   const subjectId = `${workspaceId}:v${version}`
   const packageKeys = plan.packages.map((p) => p.key)
@@ -307,6 +326,9 @@ async function materialise(
     // second finds the first's packages and throws -- rolling back, never committing a duplicate.
     await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
     if ((await tx.workPackage.count({ where: { workspaceId, goalVersion: version } })) > 0) throw new AlreadyConducted()
+    await tx.goalDelivery.create({
+      data: { workspaceId, goalVersion: version, integrationBranch: delivery.integrationBranch, baseCommit: delivery.baseCommit },
+    })
 
     const decision = await tx.supervisorDecision.create({
       data: {
@@ -409,6 +431,9 @@ function resolveConductorCall(deps: TickDeps): ConductorCallTarget | null {
  * unless it is finished (`failed`, `cancelled`, or `done` AND integrated) or it already belongs to
  * this version's own packages. Conducting v2 over v1's running work would hand two plans the same
  * files.
+ *
+ * Plan 4a: consulted after the goal-delivery rule (`earlierGoalOpen`), for a board left over from
+ * planned delivery.
  */
 async function boardIsBusy(workspaceId: string, version: number): Promise<boolean> {
   const live = await prisma.task.count({
@@ -422,6 +447,39 @@ async function boardIsBusy(workspaceId: string, version: number): Promise<boolea
     },
   })
   return live > 0
+}
+
+/**
+ * Plan D6: what goal version `version` waits for, or `undefined` when it may be conducted. An
+ * earlier goal version that has not reached the base branch (and was not abandoned) comes first:
+ * its number. Else a board left over from planned delivery (Plan 2 D5's `boardIsBusy`): `null`.
+ * Accepted is not enough: this version's branch is cut from the base branch, which lacks the
+ * earlier version's work until its merge.
+ */
+async function earlierGoalOpen(workspaceId: string, version: number): Promise<number | null | undefined> {
+  const open = await prisma.goalDelivery.findFirst({
+    where: { workspaceId, goalVersion: { lt: version }, status: { not: 'abandoned' }, mergedAt: null },
+    orderBy: { goalVersion: 'asc' },
+    select: { goalVersion: true },
+  })
+  if (open !== null) return open.goalVersion
+  return (await boardIsBusy(workspaceId, version)) ? null : undefined
+}
+
+/**
+ * Says the wait once per (version, what it waits on) -- its own event, not the `conductor_failed`
+ * guardrail it used to borrow (plan D6: the Home feed read that as "a task is blocked and needs
+ * you"). Deduplicated against the log, so a daemon restart does not repeat it.
+ */
+async function goalWaiting(workspaceId: string, version: number, waitingOn: number | null): Promise<void> {
+  // Filtered by `version` in SQL and compared on `waitingOn` here: a JSON-path `equals: null` does
+  // not match a JSON null in Prisma, and the handful of rows per version costs nothing to read.
+  const said = await prisma.executionEvent.findMany({
+    where: { workspaceId, type: 'workspace_goal_waiting', payload: { path: ['version'], equals: version } },
+    select: { payload: true },
+  })
+  if (said.some((row) => (row.payload as { readonly waitingOn?: unknown }).waitingOn === waitingOn)) return
+  await appendEvent({ type: 'workspace.goal_waiting', workspaceId, actor: 'system', payload: { version, waitingOn } })
 }
 
 /**
