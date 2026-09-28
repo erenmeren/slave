@@ -69,6 +69,8 @@ export function task(overrides: Partial<SupervisorTask> = {}): SupervisorTask {
     failureCount: 0,
     // R3: nobody has retried this task yet.
     retries: 0,
+    // Conductor Plan 3: no audit has sent this task back for foreign files.
+    ownershipViolations: 0,
     ...overrides,
   }
 }

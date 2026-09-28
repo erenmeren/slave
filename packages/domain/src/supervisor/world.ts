@@ -185,6 +185,17 @@ export interface SupervisorTask {
    *  twice this way is not retried a third time (Task 3): the candidate set becomes
    *  `escalate_to_human` only. `Task.retries` verbatim. */
   readonly retries: number
+  /**
+   * Conductor Plan 3 (R11): how many times the audit before verify sent this task back for changing
+   * files another worker owns. Read by exactly one predicate, `foreign_file`, which trips at
+   * `FOREIGN_FILE_TRIP_COUNT`: the first violation is the rework loop's to answer, the second says
+   * the rework loop is not working.
+   *
+   * LOADER CONTRACT: the number of `task.ownership_violated` events for this task no older than the
+   * task itself. The audit writes one only when its rejection applied, so a replayed conclusion is
+   * not a second violation.
+   */
+  readonly ownershipViolations: number
 }
 
 export interface SupervisorSlave {

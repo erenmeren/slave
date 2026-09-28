@@ -568,6 +568,33 @@ async function loadFailureCounts(
 }
 
 /**
+ * How many times the audit before verify sent each task back for changing files another worker
+ * owns (Conductor Plan 3, R11) -- the count `foreign_file` trips on.
+ *
+ * Only events no older than the task itself: a violation is a fact about THIS task's runs, and a
+ * row that predates the task is not one it earned. The audit writes an event only when its
+ * rejection applied, so this counts rejections, not audits. Bounded to the caller's task ids for
+ * {@link loadStatusSince}'s reason.
+ */
+async function loadOwnershipViolations(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  taskIds: readonly string[],
+): Promise<ReadonlyMap<string, number>> {
+  const rows = await tx.$queryRaw<{ readonly taskId: string; readonly count: number }[]>`
+    SELECT e."taskId" AS "taskId", COUNT(*)::int AS count
+    FROM "ExecutionEvent" e
+    JOIN "Task" t ON t.id = e."taskId"
+    WHERE e."workspaceId" = ${workspaceId}
+      AND e."taskId" = ANY(${[...taskIds]}::text[])
+      AND e.type::text = 'task.ownership_violated'
+      AND e.ts >= t."createdAt"
+    GROUP BY e."taskId"
+  `
+  return new Map(rows.map((row) => [row.taskId, row.count] as const))
+}
+
+/**
  * The newest `run.breaker` per run (M51 R3) -- the trip the Supervisor's sentence is built from.
  *
  * Bounded to the caller's run ids for {@link loadStatusSince}'s reason, and NOT CALLED AT ALL when
@@ -972,6 +999,7 @@ export async function loadSupervisorWorld(
       const failures = await loadLatestFailures(tx, workspaceId, taskIds)
       const deniedCapabilities = await loadDeniedCapabilities(tx, workspaceId, taskIds)
       const failureCounts = await loadFailureCounts(tx, taskIds)
+      const ownershipViolations = await loadOwnershipViolations(tx, workspaceId, taskIds)
 
       // M51 R3 / plan erratum E9: the workspace's NON-TERMINAL runs, the first run-derived rows the
       // world has ever carried. `slave -> team -> workspaceId`, not `task`, because a `planning` run
@@ -1299,6 +1327,7 @@ export async function loadSupervisorWorld(
           deniedKinds: deniedCapabilities.get(row.id) ?? [],
           failureCount: failureCounts.get(row.id) ?? 0,
           retries: row.retries,
+          ownershipViolations: ownershipViolations.get(row.id) ?? 0,
         })
       }
 

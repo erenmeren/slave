@@ -635,6 +635,42 @@ describe('observe -- package_seat_lost', () => {
   })
 })
 
+describe('observe -- foreign_file (Conductor Plan 3, R11)', () => {
+  // A worker holding the task's role, so the only thing this world can be about is the violations.
+  const holder = slave({ id: 's1', runtimeRoles: ['implementer'] })
+  const sentBack = (over: Partial<Parameters<typeof task>[0]> = {}): ReturnType<typeof task> =>
+    task({ id: 't1', title: 'Wire the API', status: 'rework', requiredRole: 'implementer', ownershipViolations: 2, ...over })
+
+  it('puts a task sent back a second time for foreign files in front of a person, by title and count', () => {
+    const situations = observe(world({ tasks: [sentBack()], slaves: [holder] }))
+    expect(keys(situations)).toEqual([['foreign_file', 't1']])
+    expect(situations[0]?.summary).toContain('Wire the API')
+    expect(situations[0]?.summary).toContain('2')
+    expect(situations[0]?.facts).toEqual({ taskId: 't1', violations: 2 })
+  })
+
+  it('stays silent after ONE violation -- the rework loop is the first answer', () => {
+    expect(observe(world({ tasks: [sentBack({ ownershipViolations: 1 })], slaves: [holder] }))).toEqual([])
+  })
+
+  it('stays silent for a task that is over, however many times it wrote foreign files', () => {
+    for (const status of ['failed', 'done', 'cancelled'] as const) {
+      const situations = observe(world({ tasks: [sentBack({ status, ownershipViolations: 3 })], slaves: [holder] }))
+      expect(situations.filter((s) => s.kind === 'foreign_file')).toEqual([])
+    }
+  })
+
+  it('never reads a denied write to a foreign file as a permission a person could grant', () => {
+    // The gate spells an ownership refusal `foreign_file` on `run.tool_denied`; it is not one of the
+    // six kinds, so no grant is ever proposed for it however often it is met.
+    const w = world({
+      denials: [{ slaveId: 's1', kind: 'foreign_file', count: 3, latestRunId: 'run-1' }],
+      slaves: [holder],
+    })
+    expect(observe(w).some((entry) => entry.kind === 'permission_blocked')).toBe(false)
+  })
+})
+
 describe('observe -- done_not_integrated_stale', () => {
   it('reports a done, unintegrated task with dependents that has sat past INTEGRATED_STALE_MS', () => {
     const w = world({

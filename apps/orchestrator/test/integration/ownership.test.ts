@@ -9,7 +9,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { PACKAGE_WORKER_ROLE, globToRegExp, runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import { ClaudeCodeAdapter, permissionsFilePathFor } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { changedFiles, ownershipRuleForTask, permissionOwnership } from '../../src/ownership.js'
+import { auditOwnership, changedFiles, ownershipRuleForTask, permissionOwnership } from '../../src/ownership.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 import { worktreeRootFor } from '../../src/worktree.js'
 
@@ -364,6 +364,30 @@ describe('the diff audit', () => {
     expect(payload.files).toContain('m8a-work.txt')
     expect(payload.total).toBe(payload.files.length)
     expect(await prisma.runReport.count()).toBe(0)
+  }, 60_000)
+
+  /** Controller ruling 3: `foreign_file` counts these events, so a conclusion audited twice -- a
+   *  replay after the task already went back -- must not write a second one or spend an attempt. */
+  it('records one violation per rejection: auditing the same run again after rework writes nothing', async (): Promise<void> => {
+    const c = await seedConducted()
+    const report = await seedPackage(c, 'report', ['src/report/**'])
+    await tickUntil(depsWithReport(c.workspaceId), async () => (await taskStatus(report)) === 'rework')
+    const before = await prisma.task.findUniqueOrThrow({ where: { id: report } })
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: report, kind: 'implementation' } })
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: c.workspaceId } })
+    expect(before.branch).not.toBeNull()
+
+    const verifyMayGoOn = await auditOwnership(
+      { id: run.id, slaveId: run.slaveId },
+      { id: report, workspaceId: c.workspaceId, branch: before.branch ?? '' },
+      { repoPath: workspace.repoPath, baseBranch: workspace.baseBranch },
+    )
+
+    expect(verifyMayGoOn).toBe(false)
+    expect(await prisma.executionEvent.count({ where: { taskId: report, type: 'task_ownership_violated' } })).toBe(1)
+    const after = await prisma.task.findUniqueOrThrow({ where: { id: report } })
+    expect(after.attempt).toBe(before.attempt)
+    expect(after.status).toBe('rework')
   }, 60_000)
 
   it('lets a run that changed only its own files go on to its report and review', async (): Promise<void> => {
