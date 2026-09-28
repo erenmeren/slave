@@ -69,7 +69,15 @@ export async function conduct(deps: TickDeps): Promise<ConductStep> {
   if ((await prisma.workPackage.count({ where: { workspaceId: deps.workspaceId, goalVersion: version } })) > 0) return 'none'
   const call = resolveConductorCall(deps)
   if (call === null) return 'none'
-  if (await boardIsBusy(deps.workspaceId, version)) return 'waiting'
+  if (await boardIsBusy(deps.workspaceId, version)) {
+    // Said once (final review M5): a goal that is not being conducted must say why, or a person
+    // watching the board sees nothing happen and no reason. Not a halt: the wait ends by itself.
+    await tripConductor(
+      deps.workspaceId,
+      `goal v${version} waits: the board still has live work from an earlier goal, and this goal is conducted once that work is finished, cancelled or failed`,
+    )
+    return 'waiting'
+  }
 
   const set = await prisma.requirementSet.findUnique({
     where: { workspaceId_goalVersion: { workspaceId: deps.workspaceId, goalVersion: version } },
@@ -150,7 +158,20 @@ async function decideAndMaterialise(
         `the conductor's answer was unusable ${failures.length} times (last: ${failures.at(-1)?.reason ?? 'unknown'}); single by default`,
       )
     } else {
-      const repo = await loadRepositoryFacts(workspace.repoPath, workspace.baseBranch)
+      let repo: Awaited<ReturnType<typeof loadRepositoryFacts>>
+      try {
+        repo = await loadRepositoryFacts(workspace.repoPath, workspace.baseBranch)
+      } catch (error) {
+        // Final review M5: an unreadable repository (an empty one, a base branch that is gone) used
+        // to throw into the tick's log and nowhere else. Said once, no halt, no model call: a
+        // person's first commit or a fixed base branch makes the next tick work.
+        const message = error instanceof Error ? error.message.split('\n')[0] ?? error.message : String(error)
+        await tripConductor(
+          workspaceId,
+          `the conductor could not read the repository for goal v${version} (base branch ${workspace.baseBranch}): ${message}`,
+        )
+        return 'conduct_failed'
+      }
       const decided = await callConductor(
         call,
         workspaceId,
@@ -238,11 +259,17 @@ async function tripConductor(workspaceId: string, detail: string): Promise<void>
 
 /**
  * What a package task's description says: the requirements it delivers, word for word, or -- for
- * an integration package with none of its own -- what it wires together. The full contract (owned
- * paths, interfaces) is the run context's job (Conductor Task 8), not the description's.
+ * a package with none of its own -- what it is for: the integration package wires the others
+ * together, any other package delivers its own contract. Keyed on `isIntegration` (final review
+ * M4): an ordinary package with no requirement used to read "Wire the packages together: .". The
+ * full contract (owned paths, interfaces) is the run context's job (Conductor Task 8).
  */
 function taskDescription(pkg: PackageSpec, items: readonly { readonly key: string; readonly text: string }[]): string {
-  if (pkg.requirementKeys.length === 0) return `Wire the packages together: ${pkg.dependsOn.join(', ')}.`
+  if (pkg.requirementKeys.length === 0) {
+    return pkg.isIntegration
+      ? `Wire the packages together: ${pkg.dependsOn.join(', ')}.`
+      : `${pkg.title}: no requirement is this package's alone. Deliver what its contract describes, so the packages that depend on it can build on it.`
+  }
   const textOf = new Map(items.map((item) => [item.key, item.text] as const))
   return `Requirements:\n${pkg.requirementKeys.map((k) => `${k}: ${textOf.get(k) ?? ''}`).join('\n')}`
 }

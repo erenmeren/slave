@@ -195,6 +195,22 @@ describe('conduct: requirements', () => {
     expect(prompts).toHaveLength(CONDUCT_RETRY_CAP + 1)
   })
 
+  /** Final review M1 (Ruling 7): a decider that throws was a call made and never priced. */
+  it('logs a throwing call as failed and unmeasured, and counts it toward the cap', async () => {
+    const f = await seed({ delivery: 'conducted', goal: 'x' })
+    const decider: ModelDecider = async () => {
+      throw new Error('the socket closed')
+    }
+    for (let i = 0; i < CONDUCT_RETRY_CAP; i += 1) expect(await conduct(depsFor(f, decider))).toBe('requirements_failed')
+    const calls = await prisma.conductorCall.findMany({ where: { workspaceId: f.workspaceId } })
+    expect(calls).toHaveLength(CONDUCT_RETRY_CAP)
+    for (const call of calls) {
+      expect(call).toEqual(expect.objectContaining({ stage: 'requirements', outcome: 'failed', unmeasured: true, modelCostUsd: null }))
+      expect(call.reason).toContain('the model call threw: the socket closed')
+    }
+    expect(await conduct(depsFor(f, decider))).toBe('halted')
+  })
+
   it('keeps keys across goal versions', async () => {
     const f = await seed({ delivery: 'conducted', goal: 'Add a CSV mode. Add a JSON mode.' })
     await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => failed('') }).decider))
@@ -322,6 +338,49 @@ describe('conduct: the size decision', () => {
     expect(await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) }).decider))).toBe('waiting')
     expect(await prisma.conductorCall.count({ where: { workspaceId: f.workspaceId } })).toBe(calls)
     expect(await prisma.workPackage.count({ where: { workspaceId: f.workspaceId } })).toBe(0)
+    // Final review M5: the wait is said, once, and is not a halt.
+    await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) }).decider))
+    const trips = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'guardrail_tripped' } })
+    expect(trips).toHaveLength(1)
+    expect((trips[0]?.payload as { detail: string }).detail).toContain('goal v1 waits')
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })).haltedReason).toBeNull()
+  })
+
+  it('says once, without halting, when the repository cannot be read for the size decision', async () => {
+    const f = await seedWithRequirements()
+    // A base branch that does not exist reads like an empty repository: `git ls-tree` refuses it.
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { baseBranch: 'no-such-branch' } })
+    const { decider, prompts } = scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) })
+    expect(await conduct(depsFor(f, decider))).toBe('conduct_failed')
+    expect(await conduct(depsFor(f, decider))).toBe('conduct_failed')
+    expect(prompts).toHaveLength(0)
+    const trips = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'guardrail_tripped' } })
+    expect(trips).toHaveLength(1)
+    expect((trips[0]?.payload as { detail: string }).detail).toContain('could not read the repository for goal v1')
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })).haltedReason).toBeNull()
+  })
+
+  /** Final review M4: only the integration package wires the others together. */
+  it('describes a non-integration package with no requirements by its own contract, not as the wiring', async () => {
+    const f = await seedWithRequirements()
+    const withCli = JSON.stringify({
+      conductAnswer: {
+        mode: 'partitioned',
+        reason: 'three parts',
+        integrationTemplateId: 't-docs',
+        packages: [
+          { key: 'cli', title: 'CLI flags', requirementKeys: [], ownedPaths: ['src/cli.py'], interface: 'parse(argv)', templateId: 't-backend' },
+          { key: 'report', title: 'Report', requirementKeys: ['R1'], ownedPaths: ['src/report/**'], templateId: 't-backend' },
+          { key: 'config', title: 'Config', requirementKeys: ['R2'], ownedPaths: ['src/config.py'], templateId: 't-backend' },
+        ],
+      },
+    })
+    expect(await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(withCli) }).decider))).toBe('conducted')
+    const packages = await prisma.workPackage.findMany({ where: { workspaceId: f.workspaceId }, include: { tasks: true } })
+    const cli = packages.find((p) => p.key === 'cli')?.tasks[0]?.description
+    expect(cli).not.toContain('Wire the packages together')
+    expect(cli).toContain('CLI flags')
+    expect(packages.find((p) => p.key === 'integration')?.tasks[0]?.description).toBe('Wire the packages together: cli, report, config.')
   })
 
   it('staffs a bought plan again without buying it twice when the pool ran out, and says so once', async () => {
