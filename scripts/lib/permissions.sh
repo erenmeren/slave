@@ -211,9 +211,13 @@ read_permission_verdict() {
       // foreign-file write through before this ever ran. NO APOSTROPHES IN THIS COMMENT BLOCK: it is
       // bash single-quoted around the whole `node -e` string, and a literal quote here ends it.
       if (file.ownership !== undefined) {
+        // Hoisted (fix round 1, controller Ruling 1, finding 2): needed by the worktreeRoot shape
+        // guard itself now, not only by the resolution below.
+        const path = require("node:path");
         const own = file.ownership;
         const okList = (v) => Array.isArray(v) && v.every((s) => typeof s === "string");
         if (own === null || typeof own !== "object" || typeof own.worktreeRoot !== "string" ||
+            !path.isAbsolute(own.worktreeRoot) ||
             !(own.owned === null || okList(own.owned)) || !okList(own.excluded)) {
           process.stdout.write("BADFILE"); return;
         }
@@ -225,15 +229,25 @@ read_permission_verdict() {
         const writeKind = tool !== null && Object.prototype.hasOwnProperty.call(vocabulary, tool) &&
           String(vocabulary[tool]) === "write_repo";
         const input = isObject && payload.tool_input !== null && typeof payload.tool_input === "object" ? payload.tool_input : {};
-        const target = typeof input.file_path === "string" ? input.file_path
-          : typeof input.notebook_path === "string" ? input.notebook_path : null;
-        if (writeKind && target !== null) {
-          const path = require("node:path");
-          const rel = path.relative(own.worktreeRoot, path.resolve(own.worktreeRoot, target)).split(path.sep).join("/");
-          const inside = rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
-          if (inside) {
-            const mine = (owned === null || owned.some((r) => r.test(rel))) && !excluded.some((r) => r.test(rel));
-            if (!mine) { process.stdout.write("DENY\t" + field(tool) + "\tforeign_file"); return; }
+        // Fix round 1, finding 3: EVERY string path key the call carries, not just the first one
+        // present -- a NotebookEdit names both file_path and notebook_path, and either one landing
+        // outside the owned set is the denial (a worker cannot launder a foreign notebook_path by
+        // pointing file_path at its own subtree).
+        const targets = [input.file_path, input.notebook_path].filter((v) => typeof v === "string");
+        if (writeKind) {
+          for (const target of targets) {
+            const rel = path.relative(own.worktreeRoot, path.resolve(own.worktreeRoot, target)).split(path.sep).join("/");
+            // Fix round 1, finding 1: a REAL in-worktree name can still start with the two
+            // characters "..", e.g. W/..env or W/...x/y -- neither is a traversal, and the old
+            // `!rel.startsWith("..")` treated both as outside the worktree, skipping the ownership
+            // check entirely and falling through to the ordinary allow-list ALLOW (fail OPEN). Only
+            // an ACTUAL escape -- rel is exactly ".." or begins with the traversal segment "../" --
+            // is outside; `rel` is already `/`-joined, so this is the one separator to check.
+            const inside = rel !== "" && rel !== ".." && !rel.startsWith("../") && !path.isAbsolute(rel);
+            if (inside) {
+              const mine = (owned === null || owned.some((r) => r.test(rel))) && !excluded.some((r) => r.test(rel));
+              if (!mine) { process.stdout.write("DENY\t" + field(tool) + "\tforeign_file"); return; }
+            }
           }
         }
       }

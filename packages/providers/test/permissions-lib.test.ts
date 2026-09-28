@@ -620,6 +620,45 @@ describe('scripts/lib/permissions.sh: read_permission_verdict (M52 R2: default-D
       expect(result.capability).toBe('foreign_file')
     })
 
+    // Fix round 1 (controller Ruling 1, finding 1): a REAL in-worktree name can still start with
+    // the two characters ".." -- `path.relative` gives literal `..env`/`...x/y` for these, which is
+    // not a traversal. The old check treated any `rel` starting with ".." as outside the worktree
+    // and skipped the ownership test entirely, ALLOWING both (fail OPEN). Both are inside the
+    // worktree, outside the owned subtree, and must deny.
+    it('denies a Write to a dotfile-shaped name that merely starts with ".." -- not a traversal', async () => {
+      const file = writeRunFile({ worktreeRoot: WORKTREE, ...REPORT_PATTERNS })
+      const result = await runVerdict(JSON.stringify({ tool_name: 'Write', tool_input: { file_path: `${WORKTREE}/..env` } }), file)
+      expect(result.code).toBe(0)
+      expect(result.status).toBe(0)
+      expect(result.capability).toBe('foreign_file')
+    })
+
+    it('denies a Write under a directory whose name starts with "..." -- likewise not a traversal', async () => {
+      const file = writeRunFile({ worktreeRoot: WORKTREE, ...REPORT_PATTERNS })
+      const result = await runVerdict(JSON.stringify({ tool_name: 'Write', tool_input: { file_path: `${WORKTREE}/...x/y` } }), file)
+      expect(result.code).toBe(0)
+      expect(result.status).toBe(0)
+      expect(result.capability).toBe('foreign_file')
+    })
+
+    // Fix round 1, finding 3: EVERY string path key on the call is judged, not just the first one
+    // present. A worker could otherwise launder a foreign `notebook_path` by pointing an owned
+    // `file_path` at its own subtree on the same call.
+    it('denies a NotebookEdit whose file_path is owned but whose notebook_path is foreign', async () => {
+      const file = writeRunFile({ worktreeRoot: WORKTREE, ...REPORT_PATTERNS })
+      const result = await runVerdict(
+        JSON.stringify({
+          tool_name: 'NotebookEdit',
+          tool_input: { file_path: `${WORKTREE}/src/report/owned.py`, notebook_path: `${WORKTREE}/nb/x.ipynb` },
+        }),
+        file,
+      )
+      expect(result.code).toBe(0)
+      expect(result.status).toBe(0)
+      expect(result.tool).toBe('NotebookEdit')
+      expect(result.capability).toBe('foreign_file')
+    })
+
     it('allows a Read of a foreign file -- reads are not governed by ownership', async () => {
       const file = writeRunFile({ worktreeRoot: WORKTREE, ...REPORT_PATTERNS })
       const result = await runVerdict(JSON.stringify({ tool_name: 'Read', tool_input: { file_path: `${WORKTREE}/src/config.py` } }), file)
@@ -671,6 +710,40 @@ describe('scripts/lib/permissions.sh: read_permission_verdict (M52 R2: default-D
 
       it('an owned pattern is not a valid regex source', async () => {
         const file = writePermissionsFile(v2({ ownership: { worktreeRoot: WORKTREE, owned: ['('], excluded: [] } }))
+        const result = await runVerdict('{"tool_name":"Read"}', file)
+        expect(result.code).toBe(2)
+      })
+
+      // Fix round 1, finding 2: worktreeRoot must be an ABSOLUTE path -- a relative one cannot be
+      // resolved against unambiguously, and an armed run should never carry one.
+      it('worktreeRoot is relative', async () => {
+        const file = writePermissionsFile(v2({ ownership: { worktreeRoot: 'work/pkg-report', owned: [], excluded: [] } }))
+        const result = await runVerdict('{"tool_name":"Read"}', file)
+        expect(result.code).toBe(2)
+      })
+
+      it('worktreeRoot is empty', async () => {
+        const file = writePermissionsFile(v2({ ownership: { worktreeRoot: '', owned: [], excluded: [] } }))
+        const result = await runVerdict('{"tool_name":"Read"}', file)
+        expect(result.code).toBe(2)
+      })
+
+      // Fix round 1, finding 4: the remaining malformed shapes the brief enumerated but the first
+      // pass left untested.
+      it('ownership itself is null', async () => {
+        const file = writePermissionsFile(v2({ ownership: null }))
+        const result = await runVerdict('{"tool_name":"Read"}', file)
+        expect(result.code).toBe(2)
+      })
+
+      it('excluded is null (owned is the only nullable half)', async () => {
+        const file = writePermissionsFile(v2({ ownership: { worktreeRoot: WORKTREE, owned: [], excluded: null } }))
+        const result = await runVerdict('{"tool_name":"Read"}', file)
+        expect(result.code).toBe(2)
+      })
+
+      it('a list element is not a string', async () => {
+        const file = writePermissionsFile(v2({ ownership: { worktreeRoot: WORKTREE, owned: [1], excluded: [] } }))
         const result = await runVerdict('{"tool_name":"Read"}', file)
         expect(result.code).toBe(2)
       })
