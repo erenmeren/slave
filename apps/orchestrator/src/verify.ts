@@ -462,7 +462,14 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
   if (wip.kind === 'skipped' || wip.kind === 'failed') {
     console.warn(`[verify] run ${run.id} left uncommitted work that could not be committed for it (${wip.kind}): ${wip.reason}`)
   }
-  if (rule !== null) {
+  // Round 4 (re-review m4): `setAsideForeignChanges` restores a foreign tracked path "to HEAD",
+  // which is only right when HEAD is the task's own branch tip -- exactly what `wip.kind ===
+  // 'skipped'` means is NOT true (detached, or HEAD on some other branch). Running it anyway would
+  // restore or delete a foreign path against a tree that has nothing to do with this task's branch.
+  // `failed` is left alone: that is `commitUncommittedWork`'s own `git status` call failing before
+  // HEAD is even read, and `setAsideForeignChanges` fails the very same way on its own `git status`
+  // and touches nothing.
+  if (rule !== null && wip.kind !== 'skipped') {
     const aside = await setAsideForeignChanges({
       worktreePath: run.worktreePath,
       owns: (path: string): boolean => isOwned(rule, path),
