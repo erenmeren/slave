@@ -760,6 +760,11 @@ export async function hireFromTemplate(
      *  back to `createPerson` when the managed pool has nothing eligible even after one sync and
      *  retry. Unset -- the CLI's default -- keeps today's on-demand creation. */
     readonly requirePool?: boolean
+    /** Conductor Plan 2: the conductor staffs one seat per package and does its own reuse; the
+     *  verb's reuse-by-persona would put two packages on one seat. Set, the `existing` lookup is
+     *  skipped and the hire always seats a new person -- from the pool, under `requirePool`'s rule
+     *  like any other hire. */
+    readonly newSeat?: boolean
   },
 ): Promise<
   Result<
@@ -837,12 +842,17 @@ export async function hireFromTemplate(
   const attempt = async (poolCandidateId: string | null, poolRefusal: ControlRefusal | null, last: boolean) =>
     prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
-      const existing = await tx.slave.findFirst({
-        // M58 R2: an OPEN seat held by somebody hired from this persona. `releasedAt: null` (M50
-        // R2): a released person's engagement is over and nothing re-hires them.
-        where: { person: { templateId, releasedAt: null }, team: { workspaceId }, closedAt: null },
-        orderBy: { id: 'asc' },
-      })
+      // Conductor Plan 2: `newSeat` never reuses -- the workspace lock above still serialises the
+      // pool pick below against another hire, so two new seats cannot take one person.
+      const existing =
+        opts.newSeat === true
+          ? null
+          : await tx.slave.findFirst({
+              // M58 R2: an OPEN seat held by somebody hired from this persona. `releasedAt: null` (M50
+              // R2): a released person's engagement is over and nothing re-hires them.
+              where: { person: { templateId, releasedAt: null }, team: { workspaceId }, closedAt: null },
+              orderBy: { id: 'asc' },
+            })
       if (existing !== null) {
         // The Slave row under `FOR UPDATE`, and the merge computed off THAT read (M47 final review,
         // Important 1). The workspace lock above serialises this branch against another hire; it does

@@ -20,6 +20,12 @@ export interface SchedulableTask {
    * with no refusal behind it -- every test fixture, and nearly every task -- has nothing to say.
    */
   readonly backingOff?: boolean
+  /**
+   * Conductor Plan 2 (D3): the seat a package task belongs to. A pinned task is started only on
+   * that seat; the role still has to be held (every package seat holds `PACKAGE_WORKER_ROLE`), so
+   * a seat whose role was taken away stops receiving its package rather than running it anyway.
+   */
+  readonly pinnedSlaveId?: SlaveId | null
 }
 
 export interface SchedulableSlave {
@@ -87,12 +93,23 @@ export function isDispatchable(
  * Deliberately not "will `decide()` pick THIS seat": a free seat that holds a dispatchable task's
  * role is started the moment a slot opens, and a tick waiting on the concurrency cap is a seat that
  * WILL run -- the case the Supervisor's ordinary thirty-minute threshold is for.
+ *
+ * A pinned task (Conductor Plan 2) counts only for its own seat, as in `decide()`: another holder
+ * of the role will never be handed it. A seat passed without an `id` has no pinned work.
  */
 export function hasStartableWork(
-  seat: { readonly runtimeRoles: readonly string[] },
-  tasks: readonly Pick<SchedulableTask, 'status' | 'dependenciesDone' | 'backingOff' | 'requiredRole'>[],
+  seat: { readonly id?: string; readonly runtimeRoles: readonly string[] },
+  tasks: readonly Pick<
+    SchedulableTask,
+    'status' | 'dependenciesDone' | 'backingOff' | 'requiredRole' | 'pinnedSlaveId'
+  >[],
 ): boolean {
-  return tasks.some((task) => isDispatchable(task) && holdsRole(seat, task.requiredRole))
+  return tasks.some(
+    (task) =>
+      isDispatchable(task) &&
+      holdsRole(seat, task.requiredRole) &&
+      ((task.pinnedSlaveId ?? null) === null || task.pinnedSlaveId === seat.id),
+  )
 }
 
 /**
@@ -130,7 +147,12 @@ export function decide(world: World): readonly Command[] {
     // `holdsRole`, not a second copy of the expression (H2): `chooseAssignee` names a task's holder
     // at creation and this hands the run out, and the two disagreeing about what holding a role
     // means is a card naming one person while the work goes to another.
-    const slave = [...availableSlaves.values()].find((a) => holdsRole(a, candidate.requiredRole))
+    // Conductor Plan 2 (D3): a pinned task waits for its own seat, however many others are free.
+    const pinned = candidate.pinnedSlaveId ?? null
+    const slave =
+      pinned !== null
+        ? pinnedSeat(availableSlaves, pinned, candidate.requiredRole)
+        : [...availableSlaves.values()].find((a) => holdsRole(a, candidate.requiredRole))
     if (slave === undefined) continue
 
     commands.push({ kind: 'start_run', taskId: candidate.id, slaveId: slave.id })
@@ -139,4 +161,14 @@ export function decide(world: World): readonly Command[] {
   }
 
   return commands
+}
+
+/** The pinned seat, if it is free this tick and still holds the task's role. */
+function pinnedSeat(
+  availableSlaves: ReadonlyMap<SlaveId, SchedulableSlave>,
+  pinned: SlaveId,
+  requiredRole: string,
+): SchedulableSlave | undefined {
+  const seat = availableSlaves.get(pinned)
+  return seat !== undefined && holdsRole(seat, requiredRole) ? seat : undefined
 }

@@ -291,6 +291,23 @@ describe('loadWorld', () => {
     expect(commands).toEqual([])
   })
 
+  it('Conductor Plan 2: pins a package task to its assignee, and leaves an ordinary assigned task free', async (): Promise<void> => {
+    const pkg = await prisma.workPackage.create({
+      data: { workspaceId: fixture.workspaceId, goalVersion: 1, key: 'api', title: 'api', requirementKeys: [], ownedPaths: ['src/**'], interface: '', templateId: 't' },
+    })
+    const packaged = await prisma.task.create({
+      data: { workspaceId: fixture.workspaceId, title: 'packaged', description: 'x', status: 'ready', requiredRole: 'backend', maxAttempts: 3, assigneeId: fixture.idleSlaveId, workPackageId: pkg.id },
+    })
+    const assigned = await prisma.task.create({
+      data: { workspaceId: fixture.workspaceId, title: 'assigned', description: 'x', status: 'ready', requiredRole: 'backend', maxAttempts: 3, assigneeId: fixture.idleSlaveId },
+    })
+
+    const { world } = await loadWorld(workspaceId(fixture.workspaceId))
+
+    expect(world.tasks.find((t) => t.id === taskId(packaged.id))?.pinnedSlaveId).toBe(slaveId(fixture.idleSlaveId))
+    expect(world.tasks.find((t) => t.id === taskId(assigned.id))?.pinnedSlaveId).toBeUndefined()
+  })
+
   it('reports stats.emergencyStopped from Workspace.haltedReason, never a hardcoded value', async (): Promise<void> => {
     const { world: unhalted } = await loadWorld(workspaceId(fixture.workspaceId))
     expect(unhalted.stats.emergencyStopped).toBe(false)
