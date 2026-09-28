@@ -34,6 +34,22 @@ export function setAsideDirFor(runId: string, label: 'leftover' | 'merge'): stri
 }
 
 /**
+ * Says what a set-aside did, in the log: how many paths, the first of them, and where they were
+ * saved. Not an event -- nothing about the task changed, and no event type fits; the saved files
+ * are the audit trail.
+ */
+export function logSetAside(who: string, outcome: SetAsideOutcome): void {
+  if (outcome.kind === 'set_aside') {
+    const { total, paths } = outcome.setAside
+    console.warn(
+      `${who} left ${String(total)} uncommitted change(s) to files its package does not own; set aside to ${outcome.savedTo}: ${paths.join(', ')}${total > paths.length ? ' ...' : ''}`,
+    )
+  } else if (outcome.kind === 'failed') {
+    console.warn(`${who}: changes to files its package does not own could not be set aside and are still in the worktree: ${outcome.reason}`)
+  }
+}
+
+/**
  * Takes a governed package task's uncommitted changes to paths its package does NOT own out of its
  * worktree, after saving them (Conductor Plan 3, fix round 3, controller Ruling 7).
  *

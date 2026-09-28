@@ -17,6 +17,7 @@ import { auditOwnership, ownershipRuleForTask } from './ownership.js'
 import { concludePlanning } from './planning.js'
 import { fileRunReport } from './report.js'
 import { concludeReview } from './review.js'
+import { logSetAside, setAsideDirFor, setAsideForeignChanges } from './setAside.js'
 import { describeOutcome, runShellCommand } from './shell.js'
 import { releaseTaskAfterFailure } from './taskRelease.js'
 import { emailLocalPart, taskKeyFor } from './tick.js'
@@ -440,8 +441,10 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
   //
   // A governed package run's leftover commit stages only what its package owns (final review I1,
   // controller Ruling 5): setup and tooling dirty files nobody in the package owns, and committed
-  // under the worker's name they would fail the audit below on every attempt. They stay in the
-  // worktree, uncommitted; the worker's own commits are still audited in full.
+  // under the worker's name they would fail the audit below on every attempt. What it leaves is
+  // then SET ASIDE (controller Ruling 7): saved under the run's state directory and removed from
+  // the worktree, so the tree verify judges is the branch that lands. The worker's own commits are
+  // still audited in full.
   const rule = task.workPackageId === null ? null : await ownershipRuleForTask(task.id)
   const wip = await commitUncommittedWork({
     worktreePath: run.worktreePath,
@@ -456,14 +459,16 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
   if (wip.kind === 'committed') {
     console.warn(`[verify] run ${run.id} left uncommitted work; committed it on the worker's behalf as ${wip.sha.slice(0, 12)} (${wip.message})`)
   }
-  if (wip.kind === 'committed' || wip.kind === 'nothing_owned') {
-    if (wip.leftOut !== undefined) {
-      console.warn(
-        `[verify] run ${run.id} left ${String(wip.leftOut.total)} uncommitted change(s) to files its package does not own; not committed: ${wip.leftOut.paths.join(', ')}${wip.leftOut.total > wip.leftOut.paths.length ? ' ...' : ''}`,
-      )
-    }
-  } else if (wip.kind !== 'clean') {
+  if (wip.kind === 'skipped' || wip.kind === 'failed') {
     console.warn(`[verify] run ${run.id} left uncommitted work that could not be committed for it (${wip.kind}): ${wip.reason}`)
+  }
+  if (rule !== null) {
+    const aside = await setAsideForeignChanges({
+      worktreePath: run.worktreePath,
+      owns: (path: string): boolean => isOwned(rule, path),
+      saveDir: setAsideDirFor(run.id, 'leftover'),
+    })
+    logSetAside(`[verify] run ${run.id}`, aside)
   }
 
   // Conductor Plan 3 (spec R4, plan D7): a package run's branch is audited against its package's
