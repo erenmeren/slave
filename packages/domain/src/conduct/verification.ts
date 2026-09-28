@@ -52,27 +52,52 @@ export function trimEvidence(text: string, max: number): string {
  * `check` (what was run), `fail`/`unverifiable` need a non-empty `reason` (why); `unverifiable`
  * alone may have no check -- there is none to show. The error names each gap, because it is what
  * the run is failed with (plan D7) and, for a `fail`, what a package reads back on rework (D5).
+ *
+ * NOT a plain `lastIndexOf(open)` + `indexOf(close, start)` (ruling V2, fix round 1): an honest
+ * verifier's own `check`/`output`/`reason` may legitimately quote the tag substring back (it grepped
+ * for it, or echoed the block it was asked to produce), which plants extra `open`/`close` substrings
+ * INSIDE the real JSON string. Those can only ever sit before the genuine closing tag (they are
+ * nested inside the object the genuine tags wrap), so `end` is always the LAST `close` in the text.
+ * Working from there, every `open` before it -- earliest first -- is a candidate; the genuine one is
+ * either the very first candidate (an untouched block) or the one whose slice is exactly the JSON
+ * (two real blocks, where an earlier one's slice spans into the next and fails to parse on its own).
+ * A quoted mention in prose or inside a string value is not JSON by itself and is skipped the same
+ * way. If nothing parses, the block is reported not valid JSON, same as a single malformed one.
  */
 export function parseSlaveVerification(text: string, requirementKeys: readonly string[]): Result<readonly VerificationItem[], string> {
   const open = `<${SLAVE_VERIFICATION_TAG}>`
   const close = `</${SLAVE_VERIFICATION_TAG}>`
-  const start = text.lastIndexOf(open)
-  if (start === -1) return err(`the final message has no ${open} block`)
-  const end = text.indexOf(close, start)
+  if (!text.includes(open)) return err(`the final message has no ${open} block`)
+  const end = text.lastIndexOf(close)
   if (end === -1) return err(`the ${open} block is not closed`)
-  let value: unknown
-  try {
-    value = JSON.parse(text.slice(start + open.length, end))
-  } catch {
-    return err(`the ${open} block is not valid JSON`)
+
+  const opens: number[] = []
+  for (let i = text.indexOf(open); i !== -1 && i < end; i = text.indexOf(open, i + open.length)) {
+    opens.push(i)
   }
-  const parsed = verificationSchema.safeParse(value)
-  if (!parsed.success) {
-    const issues = parsed.error.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.message}`)
+  if (opens.length === 0) return err(`the ${open} block is not closed`)
+
+  let value: unknown
+  let matched = false
+  for (const candidateStart of opens) {
+    try {
+      value = JSON.parse(text.slice(candidateStart + open.length, end))
+      matched = true
+      break
+    } catch {
+      // An earlier `open` was prose or a quoted mention inside the real block's own evidence --
+      // not JSON on its own. Try the next candidate before giving up (ruling V2).
+    }
+  }
+  if (!matched) return err(`the ${open} block is not valid JSON`)
+
+  const schemaParsed = verificationSchema.safeParse(value)
+  if (!schemaParsed.success) {
+    const issues = schemaParsed.error.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.message}`)
     return err(`the ${open} block's shape is wrong: ${issues.join('; ')}`)
   }
 
-  const items = parsed.data.items.map((item) => ({
+  const items = schemaParsed.data.items.map((item) => ({
     key: item.key,
     status: item.status,
     check: item.check.trim(),
@@ -121,7 +146,10 @@ export interface VerificationGoalInput {
 /**
  * The `verification_goal` run-context section's text: which round this is, every requirement the
  * verifier must check (through {@link sanitisePersonText} -- another party's text is data), and
- * the integrated diff summary it is checking against.
+ * the integrated diff summary it is checking against. The diff stat goes through the same defuse
+ * (fix round 1, C1): its file names and hunk headers are chosen by package workers, so a path a
+ * worker named `<slave-report>...` (or containing a routing literal) must not reopen or steer this
+ * run's own prompt.
  */
 export function renderVerificationGoal(input: VerificationGoalInput): string {
   return [
@@ -132,7 +160,7 @@ export function renderVerificationGoal(input: VerificationGoalInput): string {
     ...input.requirements.map((r) => `${r.key}: ${sanitisePersonText(r.text)}`),
     '',
     'What was built for this goal (git diff --stat from where the goal started):',
-    input.diffStat.trim() === '' ? '(no changes)' : input.diffStat,
+    input.diffStat.trim() === '' ? '(no changes)' : sanitisePersonText(input.diffStat),
     ...(input.diffCapped ? ['(the summary was cut; read the repository for the rest)'] : []),
   ].join('\n')
 }
@@ -168,11 +196,20 @@ export function renderVerificationProtocol(requirementKeys: readonly string[], v
  * the same rejection channel a review's own reason rides. Bounded by
  * {@link VERIFICATION_REWORK_MAX_CHARS}: a worker reads this once per item, and each item's own
  * `output` is cut first (1500 characters) so one long log cannot crowd out the others.
+ *
+ * Every field goes through {@link sanitisePersonText} (fix round 1, C1): `check`/`output`/`reason`
+ * are VERIFIER-authored, but this text lands in a DIFFERENT run's prompt -- the package worker's --
+ * so a check's output that happens to contain a literal `<slave-report>`/`<slave-ask>` marker or a
+ * routing literal must not be able to forge or steer that other run, the same "another party's text
+ * is data" rule {@link renderVerificationGoal} already applies to the requirement text.
  */
 export function renderVerificationRework(round: number, failed: readonly (VerificationItem & { readonly text: string })[]): string {
   const header = `Verification round ${String(round)} found requirement(s) your package owns not met. Fix them, then finish as your instructions describe.`
   const body = failed
-    .map((item) => `\n\n${item.key}: ${item.text}\ncheck: ${item.check}\noutput: ${trimEvidence(item.output, 1500)}\nreason: ${item.reason}`)
+    .map((item) => {
+      const output = trimEvidence(sanitisePersonText(item.output), 1500)
+      return `\n\n${item.key}: ${sanitisePersonText(item.text)}\ncheck: ${sanitisePersonText(item.check)}\noutput: ${output}\nreason: ${sanitisePersonText(item.reason)}`
+    })
     .join('')
   return trimEvidence(header + body, VERIFICATION_REWORK_MAX_CHARS)
 }
