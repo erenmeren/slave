@@ -8,7 +8,9 @@ import {
   ERROR_STORM_COUNT,
   NO_PROGRESS_BEATS,
   NO_PROGRESS_RUN_KINDS,
+  OUTPUT_BEAT_MS,
   REPEAT_TRIP_COUNT,
+  RUN_STALL_MS,
   STEERS_PER_RUN_MAX,
   steerTextFor,
 } from '../../src/breaker/constants.js'
@@ -54,6 +56,11 @@ describe('the breaker constants', () => {
     // The reason the override exists, asserted rather than described: fifteen minutes is far too
     // coarse for a loop that burns five dollars in three.
     expect(BREAKER_COOLDOWN_MS).toBeLessThan(COOLDOWN_MS)
+  })
+
+  it('writes liveness at most every thirty seconds and stalls a silent run after fifteen minutes (conductor R0)', () => {
+    expect(OUTPUT_BEAT_MS).toBe(30_000)
+    expect(RUN_STALL_MS).toBe(15 * 60_000)
   })
 })
 

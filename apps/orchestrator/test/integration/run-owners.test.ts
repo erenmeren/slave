@@ -455,6 +455,45 @@ describe('every unfinished record has an owner (H9b)', () => {
       expect(row.observedWorkingMs).toBe(BREAKER_BEAT_MS)
     })
 
+    it('counts a long pass in full: a four-minute tick does not steal three minutes from the run', async (): Promise<void> => {
+      // Large-1 multi rep 2 (2026-09-27): the sweep runs after each tick, a tick that spends minutes
+      // in a merge's verify leaves a gap that is NOT a sleep, and crediting it one beat let a silent
+      // run outlive its thirty-minute limit by eleven minutes.
+      const { runId } = await taskHeldBy(fixture, {
+        pid: process.pid,
+        startedAt: minutesAgo(10),
+        observedWorkingMs: 0,
+        observedAt: minutesAgo(4),
+      })
+      noteSweepAt(fixture.deps.workspaceId, Date.now() - 4 * 60_000)
+
+      await sweep(fixture.deps)
+
+      const observed = (await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })).observedWorkingMs
+      expect(observed).toBeGreaterThanOrEqual(4 * 60_000 - 1_000)
+      expect(observed).toBeLessThanOrEqual(4 * 60_000 + 2_000)
+    })
+
+    it('caps the first pass of a restarted process at one beat, even four minutes since observedAt', async (): Promise<void> => {
+      // Fix round 1 (2026-09-27): a fresh process has no previous pass of its OWN to measure a gap
+      // from, so `observedFrom` (the row) can reach back through real downtime the same as a clock
+      // jump would -- crediting that gap in full, like an ordinary pass does, would push a run near
+      // its limit over it and blame the worker for time nobody watched. `resetTickObservation()`
+      // makes this explicit, though `beforeEach` already leaves every test with no previous pass.
+      resetTickObservation()
+      const { runId } = await taskHeldBy(fixture, {
+        pid: process.pid,
+        startedAt: minutesAgo(10),
+        observedWorkingMs: 0,
+        observedAt: minutesAgo(4),
+      })
+
+      await sweep(fixture.deps)
+
+      const observed = (await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })).observedWorkingMs
+      expect(observed).toBe(BREAKER_BEAT_MS)
+    })
+
     it('keeps what it observed across a restart rather than starting the run over', async (): Promise<void> => {
       const { runId } = await taskHeldBy(fixture, {
         pid: process.pid,

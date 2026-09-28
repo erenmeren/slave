@@ -43,11 +43,12 @@
 // STAGES
 //   1. What the implementation run was told. The daemon starts the task's run; the run finishes.
 //      Then, with nothing able to touch that worktree: the prompt carries the WORKER's profile and
-//      not the template's it overrode, names `alpha` and never `ghost`; the manifest says profile
-//      origin `slave`, `skills.copied = ['alpha']`, `skills.missing = ['ghost']`;
-//      `<worktree>/.claude/skills/alpha/SKILL.md` is really on disk; `git status --porcelain` in
-//      that worktree is EMPTY; and the file `git rev-parse --git-path info/exclude` names carries
-//      `/.claude/skills/alpha/`, which is why it is empty.
+//      not the template's it overrode, carries a "SKILLS YOU MUST APPLY" section with `### alpha`
+//      and alpha's own SKILL.md body, and never names `ghost`; the manifest says profile origin
+//      `slave`, `skills.copied = ['alpha']`, `skills.missing = ['ghost']`, `skills.inlined =
+//      ['alpha']`; `<worktree>/.claude/skills/alpha/SKILL.md` is really on disk; `git status
+//      --porcelain` in that worktree is EMPTY; and the file `git rev-parse --git-path info/exclude`
+//      names carries `/.claude/skills/alpha/`, which is why it is empty.
 //   2. Runtime roles, not the title. The task is `reviewing`, no review run exists, and a
 //      `no_reviewer` guardrail event says why. The real CLI grants `reviewer` to Bram; a review run
 //      appears on Bram; its `RunContext` is `kind: review`, carries BRAM's own profile, carries
@@ -117,6 +118,10 @@ const PRESENT_SKILL = 'alpha'
 const MISSING_SKILL = 'ghost'
 const PRESENT_SKILL_DESCRIPTION = "the gate's temp-root skill: proof that an assigned skill reaches a run"
 const MISSING_SKILL_DESCRIPTION = 'a catalogued skill whose files are not on disk'
+// The SKILL.md body below its front matter -- conductor R6 puts this straight into the prompt, not
+// just the name and description above, so the assertion on stage 1's prompt has to look for this
+// sentence rather than for the old one-line listing.
+const PRESENT_SKILL_BODY = 'Do the smallest correct thing.'
 
 /** Same as `gate-m36-messaging.mjs`'s `makeRepo` -- a real repository, because the tick provisions
  *  a real worktree in it and the fake CLI commits into that worktree. */
@@ -147,7 +152,7 @@ function makeSkillRoots() {
   mkdirSync(roots.project, { recursive: true })
   writeFileSync(
     join(roots.personal, PRESENT_SKILL, 'SKILL.md'),
-    `---\nname: ${PRESENT_SKILL}\ndescription: ${PRESENT_SKILL_DESCRIPTION}\n---\n\nDo the smallest correct thing.\n`,
+    `---\nname: ${PRESENT_SKILL}\ndescription: ${PRESENT_SKILL_DESCRIPTION}\n---\n\n${PRESENT_SKILL_BODY}\n`,
   )
   return { dir, roots }
 }
@@ -544,10 +549,17 @@ try {
   // `seat`, which is what this run is.
   if (profileSource.origin !== 'seat') await fail(`the manifest says the profile came from ${profileSource.origin}, expected seat`)
 
-  // ---- The skills it was offered, and the one it was not ----
-  const namesPresent = implContext.prompt.includes(`- ${PRESENT_SKILL}: `)
+  // ---- The skills it was applied to, and the one it was not ----
+  // Conductor R6: no more one-line listing under a catalog heading -- the section is headed
+  // "SKILLS YOU MUST APPLY" and carries each installed skill as its own `### <name>` heading
+  // followed by its SKILL.md body (front matter stripped), so the assertion has to find the
+  // heading, alpha's own `###` and its body sentence, not the old `- alpha: <description>` line.
+  const namesPresent =
+    implContext.prompt.includes('SKILLS YOU MUST APPLY') &&
+    implContext.prompt.includes(`### ${PRESENT_SKILL}`) &&
+    implContext.prompt.includes(PRESENT_SKILL_BODY)
   const namesMissing = implContext.prompt.includes(MISSING_SKILL)
-  console.log(`prompt offers "${PRESENT_SKILL}": ${String(namesPresent)}; mentions "${MISSING_SKILL}" anywhere: ${String(namesMissing)}`)
+  console.log(`prompt applies "${PRESENT_SKILL}": ${String(namesPresent)}; mentions "${MISSING_SKILL}" anywhere: ${String(namesMissing)}`)
   if (!namesPresent) await fail(`the prompt does not offer the installed skill ${PRESENT_SKILL}`)
   if (namesMissing) await fail(`the prompt names ${MISSING_SKILL}, a skill that is not in the worktree`)
   const skillsSource = sourceOfKind(implManifest, 'skills')
@@ -558,6 +570,11 @@ try {
   }
   if (JSON.stringify(skillsSource.missing) !== JSON.stringify([MISSING_SKILL])) {
     await fail(`the manifest's missing list is ${JSON.stringify(skillsSource.missing)}, expected ${JSON.stringify([MISSING_SKILL])}`)
+  }
+  // The manifest's own record of what was actually inlined into the prompt (fix round: `copied`
+  // says what reached the worktree, not what the model was shown the body of).
+  if (JSON.stringify(skillsSource.inlined) !== JSON.stringify([PRESENT_SKILL])) {
+    await fail(`the manifest's inlined list is ${JSON.stringify(skillsSource.inlined)}, expected ${JSON.stringify([PRESENT_SKILL])}`)
   }
 
   // ---- The files, on disk, in the worktree the run actually used ----

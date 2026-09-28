@@ -9,6 +9,11 @@ export type SectionKind =
   | 'profile'
   | 'roster'
   | 'skills'
+  /** Conductor R6: the persona's own `workflow` list (`ProfileSpec.workflow`,
+   *  `packages/domain/src/profile/spec.ts`), rendered as a numbered checklist the worker is told to
+   *  report against in its final message -- today those same steps only ever reached a run as
+   *  bullets buried inside the rendered profile Markdown, indistinguishable from every other list. */
+  | 'workflow'
   | 'inbox'
   | 'ask_protocol'
   | 'answer_protocol'
@@ -89,7 +94,33 @@ export type SectionSource =
       readonly shadowedByRepo: readonly string[]
       readonly provider_unsupported: boolean
       readonly no_worktree: boolean
+      /**
+       * Conductor R6: which installed skills' instructions actually reached the prompt, which were
+       * cut at the per-skill cap, and which were left out whole because the total no longer had
+       * room. OPTIONAL on read, by the `task.sha256` rule (M40 t1 fix round 1): every `RunContext`
+       * row written before this milestone carries none of the three, and both readers must still
+       * show that history rather than crash on it. The write site (`buildRunContext`) always sets
+       * them for a provider that runs skills at all.
+       */
+      readonly inlined?: readonly string[] | undefined
+      readonly truncated?: readonly string[] | undefined
+      readonly omitted?: readonly string[] | undefined
+      /** Final review M2: installed, but with no instructions to show (an empty or unreadable
+       *  SKILL.md) -- kept out of `omitted`, which means "left out for length". Optional on read
+       *  for the same reason as the three above, and for one more: rows written by the first
+       *  conductor build put these names in `omitted`. */
+      readonly unreadable?: readonly string[] | undefined
     }
+  /** Conductor R6: the persona's workflow, rendered as its own section rather than folded into
+   *  `profile`. `steps` is the COUNT, not the text -- `RunContext.prompt` already carries the words
+   *  once, the same reason `capabilities.keys` and `roles.roles` stay text but `memory.memoryIds`
+   *  and `review_diff` stay counts and ids. `origin` is always `'template'` today: a workflow lives
+   *  on `SlaveTemplate.profileSpec`/`profileOverrides` and nowhere else a persona's fields do (a
+   *  seat or a person carry no `profileSpec` of their own), so there is exactly one place this
+   *  section's text can have come from -- but it is still named, the `profile.origin` idiom, rather
+   *  than left implicit, so a reader asking "where did THIS come from" never has to know that by
+   *  other means. */
+  | { readonly kind: 'workflow'; readonly steps: number; readonly origin: 'template' }
   | { readonly kind: 'inbox'; readonly messageIds: readonly string[] }
   | { readonly kind: 'ask_protocol' }
   | { readonly kind: 'answer_protocol' }
@@ -177,6 +208,20 @@ const skillsSourceSchema = z.object({
   shadowedByRepo: z.array(z.string()),
   provider_unsupported: z.boolean(),
   no_worktree: z.boolean(),
+  // Optional on read, same rule as `task.sha256` just below: a pre-conductor row carries none of
+  // these, and a reader must still show it rather than refuse the whole manifest.
+  inlined: z.array(z.string()).optional(),
+  truncated: z.array(z.string()).optional(),
+  omitted: z.array(z.string()).optional(),
+  unreadable: z.array(z.string()).optional(),
+})
+
+// Conductor R6: NEW kind, so both fields REQUIRED by the `replan`/`capabilities` rule -- there is no
+// history of a `workflow` row written without them to be tolerant of.
+const workflowSourceSchema = z.object({
+  kind: z.literal('workflow'),
+  steps: z.number().int().nonnegative(),
+  origin: z.literal('template'),
 })
 
 const inboxSourceSchema = z.object({
@@ -251,6 +296,7 @@ const sectionSourceSchema = z.discriminatedUnion('kind', [
   profileSourceSchema,
   rosterSourceSchema,
   skillsSourceSchema,
+  workflowSourceSchema,
   inboxSourceSchema,
   askProtocolSourceSchema,
   answerProtocolSourceSchema,

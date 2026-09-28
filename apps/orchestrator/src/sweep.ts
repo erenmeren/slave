@@ -19,6 +19,7 @@ import {
   detectBehaviour,
   type GuardrailKind,
   runId as brandRunId,
+  RUN_STALL_MS,
   steerTextFor,
   type RunId,
   type RunStatus,
@@ -55,6 +56,10 @@ export interface SweepDeps {
 
 export interface SweepReport {
   readonly timedOut: readonly RunId[]
+  /** Conductor R0: a `working` (or `pause_requested`) run whose stream said nothing for
+   *  `RUN_STALL_MS` with no tool call open -- a dead connection, not a slow answer. Ended the same way a timeout is: claimed,
+   *  cancelled and announced (`run_stalled`), so the ordinary retry path takes over. */
+  readonly stalled: readonly RunId[]
   readonly overToolCap: readonly RunId[]
   readonly deadPids: readonly RunId[]
   /** Task ids whose `activeRunId` pointed at a run that was already over (M42 t1, spec R6a). */
@@ -580,6 +585,12 @@ export async function reconcileStrandedClaims(
 export async function sweep(deps: SweepDeps): Promise<SweepReport> {
   // H9b R1 (F11a): first, before any read -- the gap is between PASSES, and a pass that throws
   // halfway is still a pass this process was awake for.
+  //
+  // Read BEFORE `noteSweepAt` below records this pass, and without touching that function's return
+  // contract (every other caller wants "was this a clock jump", not "is this the first pass"): a
+  // fresh process has no entry for this workspace yet, and its first pass must cap the same way a
+  // clock jump does (fix round 1, 2026-09-27) -- the accrual block below states why.
+  const firstPassOfProcess = !lastSweepAt.has(deps.workspaceId)
   const clockJumped = noteSweepAt(deps.workspaceId, Date.now())
   const workspace = await db.workspace.findUniqueOrThrow({ where: { id: deps.workspaceId } })
   // `slave: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
@@ -591,6 +602,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
   })
 
   const timedOut: RunId[] = []
+  const stalled: RunId[] = []
   const overToolCap: RunId[] = []
   const deadPids: RunId[] = []
   const stoppingConcluded: RunId[] = []
@@ -661,12 +673,19 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
       continue
     }
 
-    // OBSERVED working time (H9b, F11b), not wall-clock time. Each pass adds the gap since the
-    // previous one that saw this run live, capped at one breaker beat -- so a host that slept for
-    // fifteen hours, or a daemon that was frozen or dead, adds a minute at most rather than the
-    // whole gap. On 2026-09-22 the host slept from 14:54 to 06:17 and the pass that woke timed out
-    // three runs whose workers had done nothing wrong. Persisted on the row (`observedWorkingMs`),
-    // so a restart neither resets a run's allowance nor charges it for the downtime.
+    // OBSERVED working time (H9b, F11b), not wall-clock time. THE GUARANTEE: an ordinary pass
+    // credits the run the whole gap since the previous one that saw it live, up to CLOCK_JUMP_MS --
+    // so a slow pass (a long merge, a broker call) still credits in full (Large-1 multi rep 2,
+    // 2026-09-27: crediting a four-minute merge-verify gap one beat let a run outlive its limit by
+    // eleven minutes). Two kinds of pass cap the gap at one beat instead: one that IS a clock jump
+    // (the host slept, or the daemon was frozen for a long stretch), and the FIRST pass a process
+    // makes of a workspace (fix round 1, 2026-09-27) -- a daemon that just restarted has no previous
+    // pass of ITS OWN to measure from, `observedFrom` reaches back through the downtime same as a
+    // clock jump would, and crediting that whole gap risked pushing a run near its limit over it and
+    // blaming the worker for time nobody watched. On 2026-09-22 the host slept from 14:54 to 06:17
+    // and the pass that woke timed out three runs whose workers had done nothing wrong. Persisted on
+    // the row (`observedWorkingMs`), so a restart neither resets a run's allowance nor charges it for
+    // the downtime.
     //
     // Never past the H8 WORKING time -- wall clock less the spans the run sat `paused`, the ones
     // closed into `pausedMs` by each resume claim and the one still open on a row the sweep
@@ -676,7 +695,9 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     const openPauseMs = run.pausedAt === null ? 0 : Math.max(0, now - run.pausedAt.getTime())
     const wallWorkingMs = Math.max(0, now - run.startedAt.getTime() - run.pausedMs - openPauseMs)
     const observedFrom = (run.observedAt ?? run.startedAt).getTime()
-    const step = Math.min(Math.max(0, now - observedFrom), BREAKER_BEAT_MS)
+    // The guarantee is stated in full in the block comment above.
+    const gapCap = clockJumped || firstPassOfProcess ? BREAKER_BEAT_MS : CLOCK_JUMP_MS
+    const step = Math.min(Math.max(0, now - observedFrom), gapCap)
     // Clamped to the column: an INTEGER of milliseconds is twenty-four days, far past any limit.
     const workingMs = Math.min(run.observedWorkingMs + step, wallWorkingMs, OBSERVED_MS_MAX)
     await db.slaveRun.updateMany({
@@ -689,11 +710,42 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     // A constrained run really is past its tool-call ceiling; giving the same fact a second name is
     // how a filter comes to miss half of it.
     const overCapNow = run.toolCalls > (run.toolCallCap ?? workspace.maxToolCallsPerRun)
+    // Conductor R0: a working (or `pause_requested`, below) run whose stream has said nothing for
+    // RUN_STALL_MS with no tool call open is a dead connection, not a slow answer. Wall clock since the last output -- the stream
+    // either spoke or it did not -- and never on a clock-jump pass, whose silence is the host's.
+    //
+    // ALSO never on this process's first pass of the workspace (controller ruling, fix round 1): a
+    // freshly restarted daemon cannot know whether the stream was silent while it was down or spoke
+    // right up until the process died -- `lastOutputAt`/`startedAt` reach back through the downtime
+    // exactly as `observedFrom` does above, and the first pass has no reading of its own to trust
+    // instead. The accrual block above caps the SAME two passes at one beat for the same reason.
+    //
+    // `pause_requested` too, not `working` alone (final review I1): the breaker's `no_progress` arm
+    // steers a silent implementation run at about five minutes, and a steer is a `requestPause` --
+    // the run moves to `pause_requested`, and a Claude pause lands only through the PreToolUse hook
+    // on the run's NEXT tool call. A dead stream never makes one, so a `working`-only check let the
+    // breaker's own steer carry exactly the runs this check exists for past it, to sit there until
+    // `runTimeoutMs`. A pause that cannot land because the stream is silent with no tool call open
+    // is itself proof of the stall. This does not contradict H6 (`beatBreaker`'s docstring): H6
+    // refuses to cancel a steered run for making no tool CALL, which a thinking run does for
+    // minutes; this cancels it for saying nothing AT ALL for fifteen, which a thinking run does not
+    // -- every line the stream prints, a thinking block included (it reaches the pump as `ignored`),
+    // resets `lastOutputAt`. Nothing double-acts: `beatBreaker` returns
+    // at once for any status but `working`, and the claim below takes the run out of both.
+    const silentFrom = (run.lastOutputAt ?? run.startedAt).getTime()
+    const stalledNow =
+      !timedOutNow &&
+      !overCapNow &&
+      !clockJumped &&
+      !firstPassOfProcess &&
+      (run.status === 'working' || run.status === 'pause_requested') &&
+      run.toolCallOpenSince === null &&
+      now - silentFrom > RUN_STALL_MS
     // M51 R2/E6. The breaker is evaluated here, INSIDE the branch that used to `continue`, which is
     // also exactly what "after the hard limits" means: a run past its timeout or its ceiling is
     // stopped for THAT reason and never reaches the breaker, so one run is never stopped twice
     // under two names. Everything below this line is the hard-limit path, untouched.
-    if (!timedOutNow && !overCapNow) {
+    if (!timedOutNow && !overCapNow && !stalledNow) {
       // The one `try` in this loop, and it is the breaker's whole "nothing here may throw" promise
       // made good at the boundary rather than asserted inside: this pass spawns git, reads the
       // event log and calls two control verbs, and one of them (`requestPause`, through
@@ -728,6 +780,9 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
       const ceiling = run.toolCallCap ?? workspace.maxToolCallsPerRun
       breaches.push(`it has made ${run.toolCalls} tool calls, past the ceiling of ${ceiling}`)
     }
+    if (stalledNow) {
+      breaches.push(`silent for ${Math.round((now - silentFrom) / 60_000)} min with no tool call open`)
+    }
 
     // Claim the run before cancelling it, exactly as the tick claims a task. `cancel` awaits the
     // child's exit, so by the time it returns the pump has very plausibly written the terminal row
@@ -743,6 +798,13 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     // class alone, `verifyConcludedRun` gives the task its attempt back, and the breaker leaves the
     // run out of its streak. A tool-call ceiling is the worker's whatever the clock did, so a run
     // over its cap as well as its time keeps the worker's class.
+    //
+    // A stall (conductor R0) is NEVER platform, on purpose, however long the silence: `platform`
+    // failures cost no attempt and the breaker never counts them, which is right for a clock jump
+    // (a bounded, one-off event this daemon can name) but wrong for a stream that has simply gone
+    // dead -- a provider that stalls persistently would then fail forever for free, retried without
+    // limit and without ever tripping the failure-streak breaker meant to catch exactly that. Ruling
+    // it the worker's is what gives a genuinely broken provider a cap.
     const platformTimeout = clockJumped && timedOutNow && !overCapNow
     const claimed = await db.slaveRun.updateMany({
       where: { id: run.id, status: { in: [...SWEEPABLE] } },
@@ -752,6 +814,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
 
     if (timedOutNow) timedOut.push(brandRunId(run.id))
     if (overCapNow) overToolCap.push(brandRunId(run.id))
+    if (stalledNow) stalled.push(brandRunId(run.id))
 
     // A failure here makes the event louder rather than silencing it -- the third time this
     // milestone has needed saying.
@@ -789,7 +852,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
       runId: run.id,
       actor: 'system',
       payload: {
-        guardrail: (timedOutNow ? 'run_timeout' : 'tool_call_ceiling') satisfies GuardrailKind,
+        guardrail: (timedOutNow ? 'run_timeout' : overCapNow ? 'tool_call_ceiling' : 'run_stalled') satisfies GuardrailKind,
         detail:
           `cancelling this run: ${breaches.join('; ')}` +
           (cancelError === null
@@ -806,6 +869,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
 
   return {
     timedOut,
+    stalled,
     overToolCap,
     deadPids,
     strandedClaims,

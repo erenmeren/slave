@@ -576,7 +576,8 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
 
     // M37 Task 2: the one builder, given the diff this function just computed. Inside the same
     // `try` as the diff itself and for the same reason -- a `RunContextRefused` (a reviewer profile
-    // over the cap) is a review that could not be produced, and the catch below is where that is
+    // over the cap, or profile + skills + diff over the byte budget one CLI argument can carry --
+    // the review run is the likeliest to reach it) is a review that could not be produced, and the catch below is where that is
     // already recorded. Skills are injected into the implementation worktree the reviewer reads.
     const built = await buildRunContext({
       runId,

@@ -3,22 +3,29 @@ import { createHash } from 'node:crypto'
 import { cpSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { runbookForWorkspace, skillRoots, skillSourceDir, type SkillRoots } from '@slave-of-ai/control'
+import { readSkillBody, runbookForWorkspace, skillRoots, skillSourceDir, type SkillRoots } from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   PROFILE_MAX_CHARS,
+  RUN_PROMPT_MAX_BYTES,
   SECTION_ORDER,
   TERMINAL,
   defuseRoutingLiterals,
+  dropLastSkillBody,
   effectiveProfileFor,
-  effectiveSkillIds,
+  effectiveProfileSpec,
+  effectiveSkills,
+  fitSkillBodies,
   handoffCanonicalJson,
   neutraliseMarkers,
   parseHandoffContract,
+  profileOverridesSchema,
+  profileSpecSchema,
   providerRunsSkills,
   renderHandoff,
   renderRunContext,
   stageOrder,
+  type FittedSkillBodies,
   type Manifest,
   type Runbook,
   type Section,
@@ -53,16 +60,25 @@ export const INJECTED_MARKER = '.slaveofai-injected.json'
  * mean three new branches saying what those three catches already say.
  */
 export class RunContextRefused extends Error {
-  /** The only refusal today (M37 §7): a profile longer than the cap, which is reachable only when
-   *  the cap was lowered after the text was written. */
-  readonly kind: 'profile_too_long'
+  /**
+   * `profile_too_long` (M37 §7): a profile longer than the cap, which is reachable only when the
+   * cap was lowered after the text was written. `limit` and `length` are CHARACTERS.
+   *
+   * `prompt_too_long` (final review I2): the whole rendered prompt is over
+   * {@link RUN_PROMPT_MAX_BYTES} even with every inlined skill body dropped -- the CLI would be
+   * spawned with an argument the kernel refuses (`E2BIG`). `limit` and `length` are UTF-8 BYTES.
+   */
+  readonly kind: 'profile_too_long' | 'prompt_too_long'
   readonly limit: number
   readonly length: number
 
-  constructor(kind: 'profile_too_long', detail: { readonly limit: number; readonly length: number }) {
+  constructor(kind: 'profile_too_long' | 'prompt_too_long', detail: { readonly limit: number; readonly length: number }) {
     super(
-      `run context refused (${kind}): the effective profile is ${String(detail.length)} characters, ` +
-        `over the ${String(detail.limit)} character limit`,
+      kind === 'profile_too_long'
+        ? `run context refused (${kind}): the effective profile is ${String(detail.length)} characters, ` +
+            `over the ${String(detail.limit)} character limit`
+        : `run context refused (${kind}): the prompt is ${String(detail.length)} bytes with no skill ` +
+            `instructions left to drop, over the ${String(detail.limit)} byte limit a single CLI argument can carry`,
     )
     this.name = 'RunContextRefused'
     this.kind = kind
@@ -120,6 +136,10 @@ export interface AssignedSkill {
   readonly description: string
   readonly providerName: string
   readonly missingSince: Date | null
+  /** Conductor R6: persona defaults are inlined into the prompt ahead of the person's own grants,
+   *  so the builder needs this to order and to record which skills the run was told it MUST apply
+   *  as opposed to merely may use -- the persona is who the worker IS. */
+  readonly origin: 'persona' | 'person'
 }
 
 /** What one dispatch's injection did, in the shape the `skills` section source records. */
@@ -340,7 +360,7 @@ const block = (heading: string, body: readonly string[]): string => [heading, ''
 const singleLine = (text: string): string => text.replace(/\s+/g, ' ').trim()
 
 /**
- * What the slave is told about its skills.
+ * What the slave is told about its skills (conductor spec R6).
  *
  * Empty -- and therefore absent from both the prompt and the manifest -- only when the slave has no
  * assigned skills at all. When it HAS some and none of them could be installed (all missing, or a
@@ -354,26 +374,57 @@ const singleLine = (text: string): string => text.replace(/\s+/g, ' ').trim()
  * (spec §9), and telling that run its skills "are not installed in this checkout" invites it to go
  * looking for a mechanism that does not exist. The wording matches the operator-facing one in
  * `apps/web/src/lib/runContextSummary.ts`, so the prompt and the run page say the same thing.
+ *
+ * Once something IS installed, the body of each -- not just its name and one-line blurb -- is
+ * written straight into the prompt (R6's whole point: a benchmark run measured before this change
+ * never once opened a skill it was merely told the name of). `fitted` decides the order (persona
+ * defaults first), the per-skill cut and the whole-skill omission; this function only renders what
+ * it was handed.
  */
 function skillsSectionText(
   offered: readonly { readonly name: string; readonly description: string }[],
-  assigned: readonly { readonly name: string; readonly description: string }[],
+  named: readonly { readonly name: string; readonly description: string }[],
   injection: SkillInjection,
+  fitted: FittedSkillBodies,
 ): string {
-  if (assigned.length === 0) return ''
+  if (named.length === 0) return ''
   if (offered.length === 0) {
     if (injection.provider_unsupported) {
       return block('SKILLS', ['This runtime has no skills mechanism, so none were installed for you. Work without them.'])
     }
     return block('SKILLS', ['None of the skills assigned to you are installed in this checkout. Work without them.'])
   }
-  return block('SKILLS AVAILABLE IN THIS CHECKOUT', [
-    'These are installed under `.claude/skills` in the worktree you are working in. Invoke one by',
-    'name when it fits what you are doing; nothing here is compulsory.',
+  return block('SKILLS YOU MUST APPLY', [
+    // Final review I3: first, before any skill's own words. These bodies are THIRD-PARTY text (a
+    // library skill that says "do not make changes, just report findings", another with an output
+    // format of its own) rendered above the run's own rules, and a model reads what comes first
+    // as what governs. The sentence names what the prompt owns and says it wins. It must carry no
+    // routing literal (`ROUTING_LITERALS`, `@slave-of-ai/domain`): this section renders into
+    // implementation prompts, where the fake CLI would route on one -- hence "the answer format
+    // this prompt asks for", not the review kind's own word for it.
+    // One line, not three: a sentence is the unit a reader (and the test) matches.
+    'Where a skill’s instructions conflict with this prompt’s own rules — your task, how to ask, how to report, ' +
+      'the answer format this prompt asks for — this prompt wins; parts of a skill that expect a human partner ' +
+      'in the conversation do not apply here.',
     '',
-    // Another party's text: a skill description is written wherever the skill came from, so it
-    // cannot be allowed to carry a live protocol marker (M37 §1).
-    ...offered.map((skill) => `- ${skill.name}: ${neutraliseMarkers(skill.description)}`),
+    'These skills are part of how you work on this task. Follow their instructions where they apply;',
+    'each is also installed under `.claude/skills/<name>` with any files it refers to.',
+    '',
+    // Final review M5: `defuseRoutingLiterals` as well as `neutraliseMarkers`, the pair a runbook
+    // stage and a memory already go through -- a third-party skill that quotes a routing literal
+    // (a JSON example with a `"verdict"` key) would otherwise steer the fake CLI in the gates.
+    ...fitted.blocks.flatMap((skill) => [
+      `### ${skill.name}`,
+      '',
+      defuseRoutingLiterals(neutraliseMarkers(skill.text)),
+      '',
+    ]),
+    ...(fitted.omitted.length === 0 ? [] : [`Not shown here for length, but installed: ${fitted.omitted.join(', ')}.`]),
+    // Final review M2: said apart from the line above, which says "for length" -- of a skill whose
+    // SKILL.md had nothing after its front matter, or could not be read, that would be false.
+    ...(fitted.unreadable.length === 0
+      ? []
+      : [`Installed, but with no instructions this prompt could show: ${fitted.unreadable.join(', ')}.`]),
   ])
 }
 
@@ -780,7 +831,10 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     include: {
       person: {
         include: {
-          template: { select: { profile: true } },
+          // `profileSpec`/`profileOverrides` ride along for the `workflow` section below (conductor
+          // R6): the checklist is the persona's own `ProfileSpec.workflow`, which lives on the
+          // template and nowhere the seat -> person chain also carries a `profile` string.
+          template: { select: { profile: true, profileSpec: true, profileOverrides: true } },
           skills: { include: { skill: { include: { provider: true } } } },
         },
       },
@@ -869,11 +923,11 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
       (skill) => [skill.id, skill] as const,
     ),
   )
-  const assigned: readonly AssignedSkill[] = effectiveSkillIds({
+  const assigned: readonly AssignedSkill[] = effectiveSkills({
     templateSkillIds: templateSkills.map((row) => row.skillId),
     granted: slave.person.skills.filter((row) => row.mode === 'granted').map((row) => row.skillId),
     revoked: slave.person.skills.filter((row) => row.mode === 'revoked').map((row) => row.skillId),
-  }).flatMap((skillId) => {
+  }).flatMap(({ skillId, origin }) => {
     const skill = skillRowById.get(skillId)
     return skill === undefined
       ? []
@@ -882,14 +936,26 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
           description: skill.description,
           providerName: skill.provider.name,
           missingSince: skill.missingSince,
+          origin,
         }]
   })
+  // Resolved once, and shared with the body-reading below: the injection and the body reader must
+  // agree on where a skill's files live, or a run could be told to trust a body neither its
+  // worktree nor its catalog root actually holds.
+  const roots = input.skillRoots ?? skillRoots()
   const injection = await injectSkills({
     worktreePath: input.worktreePath,
     provider: input.provider,
     skills: assigned,
-    roots: input.skillRoots ?? skillRoots(),
+    roots,
   })
+  // Kept for the byte budget at the end (final review I2): where the skills section sits in
+  // `sections`, the fit it was rendered from, and how to render it again from a smaller one.
+  let skills: {
+    readonly index: number
+    fitted: FittedSkillBodies
+    readonly sectionFor: (fitted: FittedSkillBodies) => Section
+  } | null = null
   if (order.includes('skills')) {
     const descriptionOf = new Map(assigned.map((skill) => [skill.name, skill.description]))
     // Both halves are discoverable by the runtime: one because this dispatch copied it, the other
@@ -908,11 +974,90 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
       .filter((skill) => skill.missingSince === null)
       .toSorted((a, b) => a.name.localeCompare(b.name))
       .map((skill) => ({ name: skill.name, description: skill.description }))
-    sections.push({
+    // Conductor R6: a skill's INSTRUCTIONS, not just its name, reach the prompt -- but only for what
+    // is actually installed (`copied` or `shadowedByRepo`; `installed` is empty on a provider with
+    // no skills mechanism at all, so this costs nothing extra for Cursor). A shadowed skill's body
+    // is read from the WORKTREE's own committed copy, because that -- not this daemon's catalog
+    // root -- is the text the repository actually ships and the runtime will actually discover.
+    const installed = new Set([...injection.copied, ...injection.shadowedByRepo])
+    const initialFit = fitSkillBodies(
+      assigned
+        .filter((skill) => installed.has(skill.name))
+        .map((skill) => ({
+          name: skill.name,
+          origin: skill.origin,
+          body:
+            injection.shadowedByRepo.includes(skill.name) && input.worktreePath !== null
+              ? readSkillBody(join(input.worktreePath, SKILLS_DIR, skill.name))
+              : (() => {
+                  const dir = skillSourceDir(roots, skill.providerName, skill.name)
+                  return dir === null ? null : readSkillBody(dir)
+                })(),
+        })),
+    )
+    // A function of the fit rather than one section, so the byte budget below can re-render it
+    // with fewer bodies inlined without repeating any of the gathering above.
+    const skillsSectionFor = (fitted: FittedSkillBodies): Section => ({
       kind: 'skills',
-      text: skillsSectionText(offered, named, injection),
-      source: { kind: 'skills', ...injection },
+      text: skillsSectionText(offered, named, injection, fitted),
+      source: {
+        kind: 'skills',
+        ...injection,
+        // Only for a provider that actually runs skills: on Cursor `installed` above is always
+        // empty, so this would be three empty arrays that say nothing a reader could not already
+        // tell from `provider_unsupported` -- and would misleadingly imply bodies were ever
+        // considered for a runtime that has no skills mechanism to put them in front of.
+        ...(providerRunsSkills(input.provider)
+          ? {
+              inlined: fitted.inlined,
+              truncated: fitted.truncated,
+              omitted: fitted.omitted,
+              unreadable: fitted.unreadable,
+            }
+          : {}),
+      },
     })
+    skills = { index: sections.length, fitted: initialFit, sectionFor: skillsSectionFor }
+    sections.push(skillsSectionFor(initialFit))
+  }
+
+  // 3b. How to do it, in order (conductor R6, spec R6). A persona's `workflow` field is a list of
+  // steps like any other in `ProfileSpec` (`profile/spec.ts`), and before this it reached a run only
+  // as bullets inside the rendered `WHO YOU ARE` Markdown -- indistinguishable from `capabilities` or
+  // `expertise`, and nothing told the worker to actually follow it or account for having done so.
+  // Read straight off the template's own columns rather than the rendered `profile` string:
+  // `effectiveProfileFor` above composes seat -> person -> template into ONE piece of prose meant to
+  // be read as a whole, and picking a `## Workflow` heading back out of that Markdown would be
+  // parsing a rendering this function itself produced. `profileSpec`/`profileOverrides` are the
+  // structured source those words came from, and `effectiveProfileSpec` is the one function that
+  // already knows how to combine them (R1 upstream + local rule) -- reusing it here is the same
+  // rule `renderProfileSpec` follows, applied to one field instead of all of them.
+  if (order.includes('workflow')) {
+    // READ-tolerant like every other manifest source (`sections.ts`'s idiom): a hand-edited column,
+    // or simply no `SlaveTemplate` at all (`template?` above), parses as "nothing to say" rather
+    // than refusing the whole dispatch over a field this run does not even use.
+    const spec = profileSpecSchema.safeParse(slave.person.template?.profileSpec)
+    const overrides = profileOverridesSchema.safeParse(slave.person.template?.profileOverrides ?? {})
+    const steps = spec.success
+      ? effectiveProfileSpec(spec.data, overrides.success ? overrides.data : {})
+          .workflow.map((step) => step.trim())
+          .filter((step) => step !== '')
+      : []
+    // A spec with a `workflow` field of all-blank strings is "no workflow" (final review), the same
+    // as `renderProfileSpec`'s `sectionText` treating an empty list as nothing to render -- a
+    // section that names zero steps is not a checklist, it is noise.
+    if (steps.length > 0) {
+      sections.push({
+        kind: 'workflow',
+        text: block('YOUR WORKFLOW', [
+          'Work through these steps in order. In your final message, say for each step whether you did it',
+          'and, if you skipped one, why.',
+          '',
+          ...steps.map((step, index) => `${index + 1}. ${neutraliseMarkers(step)}`),
+        ]),
+        source: { kind: 'workflow', steps: steps.length, origin: 'template' },
+      })
+    }
   }
 
   // 4. What it is being asked to do.
@@ -1006,7 +1151,32 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     if (memory !== null) sections.push(memory)
   }
 
-  const { prompt, manifest } = renderRunContext(input.kind, sections)
+  // Final review I2: the prompt is ONE argv string to the CLI, and the kernel refuses an argument
+  // past `MAX_ARG_STRLEN` (`RUN_PROMPT_MAX_BYTES` says why 110k). Every section is capped on its
+  // own; nothing capped the sum, and a review run's profile + skills + diff can exceed it. The
+  // skills are shortened first -- inlined bodies dropped from the END of the fit's order, the
+  // person's grants before the persona's defaults, each still installed and still named on the
+  // "not shown here for length" line -- because they are the one large part a worker can still
+  // reach without the prompt (`.claude/skills/<name>`). Everything else is the run's own
+  // instructions, and cutting any of it would dispatch a different run than the one asked for, so
+  // a prompt still over with no body left to drop is refused, the way an over-long profile is
+  // above. The refusal comes after `injectSkills` has copied into the worktree, unlike the
+  // profile's; a redispatch re-injects idempotently (`INJECTED_MARKER`), so nothing is stranded.
+  let rendered = renderRunContext(input.kind, sections)
+  while (
+    Buffer.byteLength(rendered.prompt, 'utf8') > RUN_PROMPT_MAX_BYTES &&
+    skills !== null &&
+    skills.fitted.blocks.length > 0
+  ) {
+    skills.fitted = dropLastSkillBody(skills.fitted)
+    sections[skills.index] = skills.sectionFor(skills.fitted)
+    rendered = renderRunContext(input.kind, sections)
+  }
+  const promptBytes = Buffer.byteLength(rendered.prompt, 'utf8')
+  if (promptBytes > RUN_PROMPT_MAX_BYTES) {
+    throw new RunContextRefused('prompt_too_long', { limit: RUN_PROMPT_MAX_BYTES, length: promptBytes })
+  }
+  const { prompt, manifest } = rendered
 
   // The row, before the caller spawns anything (spec §1, "record before spawn"). Keyed on `runId`,
   // so a redispatch of the same run rewrites its one row instead of adding a second.

@@ -58,8 +58,24 @@ export function sectionLine(source: SectionSource): SectionLine {
       // (spec erratum E4).
       if (source.provider_unsupported) parts.push('this runtime takes no injected skills')
       if (source.no_worktree) parts.push('no worktree to inject into')
+      // Conductor R6: which of the installed skills actually reached the prompt as text, and which
+      // were cut for length -- optional on read (a pre-conductor row carries neither), so both are
+      // only added when the row has something to say.
+      if (source.inlined?.length) parts.push(`instructions in the prompt: ${source.inlined.join(', ')}`)
+      if (source.truncated?.length) parts.push(`cut for length: ${source.truncated.join(', ')}`)
+      // Final review M3: and which did NOT reach it -- left out whole for length (the total cap, or
+      // the prompt's byte budget), or installed with nothing to show. Without these a skill that was
+      // dropped read exactly like one that was never assigned. The same words the prompt uses. A row
+      // written by the first conductor build put the second kind in `omitted` too; it says "for
+      // length" of them, which is what that build's prompt told the run.
+      if (source.omitted?.length) parts.push(`left out for length: ${source.omitted.join(', ')}`)
+      if (source.unreadable?.length) parts.push(`no instructions to show: ${source.unreadable.join(', ')}`)
       return { kind: source.kind, detail: parts.join(' · '), missing: source.missing }
     }
+    // Conductor R6: the COUNT of steps, not the checklist text -- `RunContext.prompt` already
+    // carries the words once, the same rule `memory` and `capabilities` follow for their own lists.
+    case 'workflow':
+      return { kind: source.kind, detail: plural(source.steps, 'workflow step'), missing: [] }
     case 'inbox':
       return { kind: source.kind, detail: plural(source.messageIds.length, 'message'), missing: [] }
     case 'ask_protocol':

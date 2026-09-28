@@ -188,7 +188,8 @@ describe('the run context (R18)', () => {
     })
     expect(built.prompt).toContain('pdf')
     expect(built.prompt).not.toContain('writes sql')
-    expect(built.prompt).toContain('SKILLS AVAILABLE IN THIS CHECKOUT')
+    // Conductor R6: a skill's instructions are IN the prompt now, not just its name and blurb.
+    expect(built.prompt).toContain('SKILLS YOU MUST APPLY')
     expect(built.prompt).not.toContain('Work without them.')
   })
 

@@ -218,6 +218,10 @@ export async function startWorkspaceLoop(deps: WorkspaceLoopDeps): Promise<Works
       // runs.
       if (
         swept.timedOut.length > 0 ||
+        // Conductor R0: a run the sweep ended for going silent gets the same stdout line every
+        // other guardrail action does -- an operator (and a gate) reading this log must not find a
+        // `run_stalled` event in the database with nothing here to explain it.
+        swept.stalled.length > 0 ||
         swept.overToolCap.length > 0 ||
         swept.deadPids.length > 0 ||
         swept.strandedClaims.length > 0 ||

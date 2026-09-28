@@ -5,6 +5,7 @@ import { killWithEscalation, recordRunEvidence } from '@slave-of-ai/control'
 import { toExecutionEvent } from '@slave-of-ai/db'
 import { Prisma, prisma } from '@slave-of-ai/db/client'
 import {
+  OUTPUT_BEAT_MS,
   SKILL_TOOL,
   estimateCostUsd,
   providerRunsSkills,
@@ -719,8 +720,17 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   let unparsableLines = 0
   let paused = false
   let gateFailed = false
+  /** Conductor R0: tool calls with no result yet, so the sweep can tell a long command from a stall. */
+  const openToolUses = new Set<string>()
+  let lastOutputWrite = 0
 
   for await (const event of input.events) {
+    // Conductor R0: the stream is alive. Throttled -- the sweep needs minutes of precision, not a
+    // write per line.
+    if (Date.now() - lastOutputWrite >= OUTPUT_BEAT_MS) {
+      lastOutputWrite = Date.now()
+      await prisma.slaveRun.updateMany({ where: { id: runId, endedAt: null }, data: { lastOutputAt: new Date(lastOutputWrite) } })
+    }
     switch (event.kind) {
       case 'session_started': {
         // Spec §5.4: not at spawn. `run.started`'s payload carries the session id, and there is no
@@ -751,6 +761,10 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
           where: { id: runId, endedAt: null, status: { in: ['starting', 'resuming'] } },
           data: { status: 'working' },
         })
+        // A resumed session starts with nothing open: a call left open when the run paused died
+        // with its process, and its stale timestamp would shield a later stall forever.
+        await prisma.slaveRun.updateMany({ where: { id: runId, endedAt: null }, data: { toolCallOpenSince: null } })
+        openToolUses.clear()
         sessionId = event.sessionId
         if (input.resumed !== true) await emit('run.started', 'slave', { sessionId: event.sessionId })
         break
@@ -776,6 +790,10 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // arrived without a tool name. Bounded exactly as `hookBindings` is, and by the same
         // quantity: at most one entry per tool call of this run.
         toolNames.set(event.toolUseId, event.toolName)
+        openToolUses.add(event.toolUseId)
+        if (openToolUses.size === 1) {
+          await prisma.slaveRun.updateMany({ where: { id: runId, endedAt: null }, data: { toolCallOpenSince: new Date() } })
+        }
         await prisma.slaveRun.updateMany({ where: { id: runId, endedAt: null }, data: { toolCalls: { increment: 1 } } })
         // `summary` is the readable form the parser derives from the tool_use block's `input`
         // (M4 spec §1) -- e.g. `Write note3.txt` rather than the opaque `toolUseId`. It falls
@@ -819,6 +837,9 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
           outcome: event.outcome,
           errorClass: event.errorClass,
         })
+        if (openToolUses.delete(event.toolUseId) && openToolUses.size === 0) {
+          await prisma.slaveRun.updateMany({ where: { id: runId, endedAt: null }, data: { toolCallOpenSince: null } })
+        }
         break
       }
 
@@ -893,6 +914,16 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // same rule `classifyGateEvent` now applies on the Claude side -- fail-safe is treating an
         // unparseable prefixed reason as an ORDINARY permission-mode denial (falls through below),
         // never as a matrix refusal this pump cannot actually name the tool/capability for.
+        //
+        // Conductor R0, final review M1: a refused call is CLOSED, whichever branch below handles
+        // it. Cursor reports a rejected call as this event and never as a `tool_result`, so an id
+        // left in `openToolUses` stayed open for the rest of the run -- and an open call is exactly
+        // what exempts a silent run from the sweep's stall check. Done first, before any branch's
+        // `break`. A runtime that does send a `tool_result` afterwards (Claude's refusal can) finds
+        // the id gone, and `delete`'s false return keeps it from writing the column twice.
+        if (openToolUses.delete(event.toolUseId) && openToolUses.size === 0) {
+          await prisma.slaveRun.updateMany({ where: { id: runId, endedAt: null }, data: { toolCallOpenSince: null } })
+        }
         if (event.reason !== undefined && event.reason.startsWith(PERMISSION_DENY_REASON_PREFIX)) {
           const parsed = parsePermissionDenyReason(event.reason)
           if (parsed !== null) {

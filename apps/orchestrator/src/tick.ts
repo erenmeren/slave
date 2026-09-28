@@ -876,7 +876,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
     // here, what was asked of it, which skills it has and where they now sit in its worktree, its
     // task and the rejection that sent it back -- is assembled and RECORDED here, after the
     // worktree exists and before anything is spawned (spec §4). A `RunContextRefused` (a profile
-    // over the cap) lands in this function's own `catch` and is recorded as a run that failed to
+    // over the cap, or a whole prompt over the byte budget one CLI argument can carry) lands in this function's own `catch` and is recorded as a run that failed to
     // start, exactly like an unprovisionable worktree.
     const built = await buildRunContext({
       runId,

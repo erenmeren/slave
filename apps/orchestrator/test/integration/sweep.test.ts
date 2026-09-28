@@ -18,6 +18,8 @@ import type { SlaveRuntimeAdapter } from '@slave-of-ai/providers'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   BREAKER_RESUME_GRACE_MS,
+  CLOCK_JUMP_MS,
+  noteSweepAt,
   noteTickRan,
   reconcileOrphans,
   resetTickObservation,
@@ -89,6 +91,7 @@ async function eventTypesFor(workspaceId: string): Promise<readonly DomainEventT
 
 const hoursAgo = (n: number): Date => new Date(Date.now() - n * 60 * 60 * 1000)
 const secondsAgo = (n: number): Date => new Date(Date.now() - n * 1000)
+const minutesAgo = (m: number): Date => new Date(Date.now() - m * 60_000)
 
 /**
  * H9b (F11b): a run seeded with a `startedAt` in the past is a run the sweep has been WATCHING all
@@ -127,6 +130,8 @@ describe('sweep and reconcileOrphans', () => {
     worktreePath?: string
     taskId?: string
     kind?: 'implementation' | 'review' | 'planning'
+    lastOutputAt?: Date
+    toolCallOpenSince?: Date
   }) =>
     prisma.slaveRun.create({
       data: {
@@ -140,6 +145,8 @@ describe('sweep and reconcileOrphans', () => {
         ...(data.pausedMs === undefined ? {} : { pausedMs: data.pausedMs }),
         ...(data.pausedAt === undefined ? {} : { pausedAt: data.pausedAt }),
         ...(data.worktreePath === undefined ? {} : { worktreePath: data.worktreePath }),
+        ...(data.lastOutputAt === undefined ? {} : { lastOutputAt: data.lastOutputAt }),
+        ...(data.toolCallOpenSince === undefined ? {} : { toolCallOpenSince: data.toolCallOpenSince }),
         ...observedSince(data),
       },
     })
@@ -358,6 +365,107 @@ describe('sweep and reconcileOrphans', () => {
   })
 
   /**
+   * Conductor R0: a benchmark worker sat `working` and silent for 32 minutes with nothing running --
+   * neither timed out (well under `runTimeoutMs`) nor over its tool-call ceiling, so nothing ended it
+   * until an operator noticed. A stream that has said nothing for `RUN_STALL_MS` with no tool call
+   * open is a dead connection, not a slow answer, and the sweep ends it the same way it ends a
+   * timeout: claim, cancel, announce -- so the ordinary retry path takes over.
+   */
+  describe('a stalled stream (conductor R0)', () => {
+    it('ends a working run whose stream has been silent past RUN_STALL_MS with no tool call open', async (): Promise<void> => {
+      const run = await givenRun({ status: 'working', pid: process.pid, startedAt: minutesAgo(20), lastOutputAt: minutesAgo(16) })
+      // An ORDINARY tick, not this process's first ever: the beforeEach above resets the
+      // observation map for every test's isolation, so a bare first `sweep()` call would otherwise
+      // read as the daemon's very first pass and skip the stall judgment below it (the fresh-process
+      // case has its own test, right under this describe).
+      noteSweepAt(deps.workspaceId, secondsAgo(1).getTime())
+
+      const report = await sweep(deps)
+
+      expect(report.stalled).toEqual([run.id])
+      expect(report.timedOut).toEqual([])
+      expect(cancelled).toEqual([run.id])
+      const tripped = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'guardrail_tripped' } })
+      expect((tripped.payload as { guardrail: string }).guardrail).toBe('run_stalled')
+      // Fix round 1, controller ruling: a stall stays the WORKER's failure -- `platform` costs no
+      // attempt and the breaker never counts it, and a provider that stalls persistently would then
+      // fail forever for free. `null` here, not `'worker'`: it is what the claim leaves an ordinary
+      // (non-clock-jump) timeout with too -- see `platformTimeout` a few lines above this claim --
+      // and only `run.failureClass === 'platform'` is ever treated specially downstream
+      // (`releaseTaskAfterFailure`'s caller in `verify.ts`), so `null` counts as the worker's exactly
+      // as `'worker'` would.
+      expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).failureClass).toBeNull()
+    })
+
+    it('leaves a silent run alone while a tool call is open: a long command is not a stall', async (): Promise<void> => {
+      await givenRun({ status: 'working', pid: process.pid, startedAt: minutesAgo(20), lastOutputAt: minutesAgo(16), toolCallOpenSince: minutesAgo(16) })
+      // A SECOND run, silent exactly as long, with no tool call open: proof this pass actually
+      // judges stalls on this tick and that the open call above is what spares the first run, not
+      // an accident of every run being spared by the same gate (fix round 1, Important finding 1 --
+      // without the warm-up below this was the process's first pass, `stalledNow` read false for
+      // BOTH runs regardless of `toolCallOpenSince`, and the suite stayed green even with that
+      // condition deleted).
+      const withoutOpenCall = await givenRun({ status: 'working', pid: process.pid, startedAt: minutesAgo(20), lastOutputAt: minutesAgo(16) })
+      noteSweepAt(deps.workspaceId, secondsAgo(1).getTime())
+
+      const report = await sweep(deps)
+
+      expect(report.stalled).toEqual([withoutOpenCall.id])
+      expect(cancelled).toEqual([withoutOpenCall.id])
+    })
+
+    it('leaves a run that spoke recently alone, and measures a run that never spoke from its start', async (): Promise<void> => {
+      await givenRun({ status: 'working', pid: process.pid, startedAt: minutesAgo(20), lastOutputAt: minutesAgo(2) })
+      const quiet = await givenRun({ status: 'working', pid: process.pid, startedAt: minutesAgo(16) })
+      // An ordinary tick, same as the test above -- not the daemon's first ever pass.
+      noteSweepAt(deps.workspaceId, secondsAgo(1).getTime())
+      const report = await sweep(deps)
+      expect(report.stalled).toEqual([quiet.id])
+    })
+
+    it('ends a pause_requested run whose stream went silent with no tool call open: its pause can never land', async (): Promise<void> => {
+      // Final review I1: the breaker's `no_progress` arm steers a silent implementation run at
+      // about five minutes, which puts it in `pause_requested` -- and a Claude pause lands only
+      // through the PreToolUse hook on the NEXT tool call, which a dead stream never makes. Judging
+      // `working` alone left exactly the runs this check exists for parked there until the
+      // workspace's run timeout.
+      const run = await givenRun({ status: 'pause_requested', pid: process.pid, startedAt: minutesAgo(20), lastOutputAt: minutesAgo(16) })
+      noteSweepAt(deps.workspaceId, secondsAgo(1).getTime())
+
+      const report = await sweep(deps)
+
+      expect(report.stalled).toEqual([run.id])
+      expect(report.timedOut).toEqual([])
+      expect(cancelled).toEqual([run.id])
+      const tripped = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'guardrail_tripped' } })
+      expect((tripped.payload as { guardrail: string }).guardrail).toBe('run_stalled')
+      expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('stopping')
+    })
+
+    it('leaves a pause_requested run alone while a tool call is open: that call is where its pause lands', async (): Promise<void> => {
+      await givenRun({ status: 'pause_requested', pid: process.pid, startedAt: minutesAgo(20), lastOutputAt: minutesAgo(16), toolCallOpenSince: minutesAgo(16) })
+      noteSweepAt(deps.workspaceId, secondsAgo(1).getTime())
+      const report = await sweep(deps)
+      expect(report.stalled).toEqual([])
+      expect(cancelled).toEqual([])
+    })
+
+    it('does not call a run stalled on the pass after a clock jump', async (): Promise<void> => {
+      await givenRun({ status: 'working', pid: process.pid, startedAt: minutesAgo(20), lastOutputAt: minutesAgo(16) })
+      noteSweepAt(deps.workspaceId, Date.now() - CLOCK_JUMP_MS - 60_000)
+      const report = await sweep(deps)
+      expect(report.stalled).toEqual([])
+    })
+
+    it('does not call a run stalled on a fresh process\'s first pass: it cannot know the stream was silent while it was down', async (): Promise<void> => {
+      resetTickObservation()
+      await givenRun({ status: 'working', pid: process.pid, startedAt: minutesAgo(20), lastOutputAt: minutesAgo(16) })
+      const report = await sweep(deps)
+      expect(report.stalled).toEqual([])
+    })
+  })
+
+  /**
    * H8. On 2026-09-21 three runs that had worked for four minutes were killed together the moment
    * they were resumed: they had sat `paused` for four hours behind a halt, and `startedAt` was the
    * only clock the timeout read. `runTimeoutMs` bounds WORKING time, and the time a run sat is
@@ -452,6 +560,7 @@ describe('sweep and reconcileOrphans', () => {
 
     expect(report).toEqual({
       timedOut: [],
+      stalled: [],
       overToolCap: [],
       deadPids: [],
       strandedClaims: [],
@@ -560,6 +669,7 @@ describe('sweep and reconcileOrphans', () => {
     // issued and nothing announces one.
     expect(report).toEqual({
       timedOut: [],
+      stalled: [],
       overToolCap: [],
       deadPids: [],
       strandedClaims: [],
@@ -645,6 +755,7 @@ describe('sweep and reconcileOrphans', () => {
 
     expect(report).toEqual({
       timedOut: [],
+      stalled: [],
       overToolCap: [],
       deadPids: [],
       strandedClaims: [],
@@ -731,6 +842,7 @@ describe('sweep and reconcileOrphans', () => {
 
     expect(report).toEqual({
       timedOut: [],
+      stalled: [],
       overToolCap: [],
       deadPids: [],
       strandedClaims: [],

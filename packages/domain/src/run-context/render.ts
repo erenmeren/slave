@@ -10,7 +10,21 @@ export const SECTION_ORDER: Readonly<Record<Manifest['kind'], readonly SectionKi
   // `memory` sits directly after the contract and BEFORE the rejection (M49 R3, plan decision D2):
   // what the organisation knows is context for the work, and the last attempt's rejection is the
   // instruction to act on -- so the rejection stays the last thing the worker reads.
-  implementation: ['profile', 'roster', 'skills', 'inbox', 'ask_protocol', 'task', 'handoff', 'memory', 'rejection'],
+  // `workflow` sits directly after `skills` (conductor R6): both are "how to do this", one is what
+  // the worker may reach for and the other is the order to do it in, and the checklist reads better
+  // right after the tools than buried between the roster and the inbox.
+  implementation: [
+    'profile',
+    'roster',
+    'skills',
+    'workflow',
+    'inbox',
+    'ask_protocol',
+    'task',
+    'handoff',
+    'memory',
+    'rejection',
+  ],
   review: ['profile', 'skills', 'task', 'handoff', 'review_diff'],
   // `replan` is present only when the goal CHANGED on a non-empty board (M40 §3). It comes last,
   // after the new goal it is about, so the prompt reads "here is the goal, here is what changed
@@ -137,6 +151,26 @@ export const IMPLEMENTATION_WORK_RULES = [
   'need an answer from someone, ask through the protocol above when one is offered; otherwise make',
   'the most reasonable assumption, say so in your final message, and finish the task.',
 ].join('\n')
+
+/**
+ * The most a rendered prompt may weigh, in UTF-8 BYTES (final review I2).
+ *
+ * WHY a byte budget at all: both adapters hand the prompt to the CLI as ONE argv string (`-p
+ * <prompt>` for Claude, a positional for Cursor), and Linux refuses any single argument of
+ * `MAX_ARG_STRLEN` -- 32 pages, 131072 bytes -- or more with `E2BIG` (verified on this host). The
+ * spawn then fails outright, after the run row, the worktree and the recorded context all exist.
+ * Nothing else bounds the SUM: a review run can carry a profile up to `PROFILE_MAX_CHARS` (48k),
+ * skills up to `SKILL_BODIES_MAX_CHARS` (24k), a diff up to 60k, and the task and fixed text on
+ * top, each within its own cap and together over the kernel's.
+ *
+ * Bytes, not characters, because the kernel counts bytes and a prompt in any non-Latin script is
+ * two or three bytes a character. 110k, not 131072 less one, so the margin absorbs the NUL
+ * terminator and whatever an adapter may one day add around the prompt without a second change
+ * here. `buildRunContext` (`apps/orchestrator/src/runContext.ts`) enforces it: it drops inlined
+ * skill bodies first ({@link dropLastSkillBody}), and refuses the dispatch (`prompt_too_long`)
+ * only when the prompt is still over with none left.
+ */
+export const RUN_PROMPT_MAX_BYTES = 110_000
 
 /**
  * The one place a run's prompt text is assembled (M37 §1, "one builder"). Pure: no DB, no
