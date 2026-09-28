@@ -46,6 +46,17 @@ describe('parseSlaveVerification', () => {
     expect(parsed.ok && parsed.value[0]?.output).toContain('characters cut')
   })
 
+  // Ruling V2b (fix round 2, replaces V2): anchoring on the LAST close in the WHOLE text (V2's
+  // fix) breaks a valid, closed block followed by later text that happens to mention the closing
+  // tag -- a recap, a later turn (the orchestrator joins the whole run's output). The genuine
+  // block's OWN close is the nearest one after its open, not necessarily the last in the text.
+  it('parses a valid block followed by trailing text that mentions the closing tag', () => {
+    const text = `${block([pass('R1')])}\nEcho for the record: this run's block ended in a literal </slave-verification>.`
+    const parsed = parseSlaveVerification(text, ['R1'])
+    expect(parsed.ok).toBe(true)
+    expect(parsed.ok && parsed.value[0]?.status).toBe('pass')
+  })
+
   // Ruling V2 (fix round 1): a naive lastIndexOf(open) + indexOf(close, start) lands INSIDE the
   // JSON string when the verifier's own check/output legitimately quotes the tag back, and reads
   // the wrong (invalid) slice. The genuine block is the one whose slice up to the LAST close
