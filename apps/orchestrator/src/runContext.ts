@@ -23,7 +23,10 @@ import {
   profileSpecSchema,
   providerRunsSkills,
   renderHandoff,
+  renderPackageContract,
+  renderReportProtocol,
   renderRunContext,
+  requirementItemsSchema,
   stageOrder,
   type FittedSkillBodies,
   type Manifest,
@@ -639,6 +642,55 @@ function handoffSection(task: { readonly id: string; readonly handoff: unknown }
   }
 }
 
+/**
+ * A package task's `package` and `report_protocol` sections (Conductor Plan 2).
+ *
+ * The requirements shown are the package's own keys, read out of its goal version's
+ * `RequirementSet`; the dependencies are the packages it `dependsOn`, in that order, from the same
+ * workspace and version. A key the set does not hold (a hand-edited row) is still listed -- the
+ * report must cover every key the package owns, so the contract names every one. A package row that
+ * is gone (the task's `workPackageId` is `SetNull` on delete, so this is a race) renders nothing.
+ */
+async function packageSections(workPackageId: string, workflowSteps: number): Promise<readonly Section[]> {
+  const pkg = await prisma.workPackage.findUnique({ where: { id: workPackageId } })
+  if (pkg === null) return []
+  const [set, dependencyRows] = await Promise.all([
+    prisma.requirementSet.findUnique({
+      where: { workspaceId_goalVersion: { workspaceId: pkg.workspaceId, goalVersion: pkg.goalVersion } },
+      select: { items: true },
+    }),
+    prisma.workPackage.findMany({
+      where: { workspaceId: pkg.workspaceId, goalVersion: pkg.goalVersion, key: { in: pkg.dependsOn } },
+      select: { key: true, interface: true },
+    }),
+  ])
+  // `.parse`, as `conductor.ts` reads the same column: a set the conductor wrote that no longer
+  // parses is a broken invariant, not a shape to tolerate.
+  const items = set === null ? [] : requirementItemsSchema.parse(set.items)
+  const itemByKey = new Map(items.map((item) => [item.key, item] as const))
+  const requirements = pkg.requirementKeys.map(
+    (key) => itemByKey.get(key) ?? { key, text: '(no text recorded for this requirement)', source: '' },
+  )
+  const dependencyByKey = new Map(dependencyRows.map((row) => [row.key, row] as const))
+  const dependencies = pkg.dependsOn.flatMap((key) => {
+    const row = dependencyByKey.get(key)
+    return row === undefined ? [] : [row]
+  })
+  const text = renderPackageContract({ pkg, requirements, dependencies })
+  return [
+    {
+      kind: 'package',
+      text,
+      source: { kind: 'package', workPackageId: pkg.id, requirements: requirements.length, sha256: sha256(text) },
+    },
+    {
+      kind: 'report_protocol',
+      text: renderReportProtocol(pkg.requirementKeys, workflowSteps),
+      source: { kind: 'report_protocol', requirements: requirements.length, workflowSteps },
+    },
+  ]
+}
+
 /** The shape both planning sections ask for, spelt once. Deliberately NOT inside
  *  `PLANNING_GRAPH_INSTRUCTIONS`: that constant is byte-pinned against its pre-M37 source, and the
  *  literal `"task graph"` in it is what the fake CLI's planning arm selects on. */
@@ -857,7 +909,16 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
           // M48 R4: `handoff` rides along for the section below. `stage` deliberately does NOT --
           // a stage is a label, and naming it to a worker would invite it to reason about a
           // process it cannot change.
-          select: { id: true, title: true, description: true, lastRejectionReason: true, handoff: true },
+          // Conductor Plan 2: `workPackageId` says whether this is a package task -- the contract and
+          // report sections below, and the conductor line in the ask protocol, key on it.
+          select: {
+            id: true,
+            title: true,
+            description: true,
+            lastRejectionReason: true,
+            handoff: true,
+            workPackageId: true,
+          },
         })
   const workspace =
     input.kind === 'planning'
@@ -909,9 +970,13 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     if (roster !== null) sections.push(roster)
     const inbox = await inboxSection(input.slaveId)
     if (inbox !== null) sections.push(inbox)
-    // Offered only alongside a roster: with nobody to address, `recipientCanAnswer` refuses every
-    // recipient the slave could name, and an offer the system always turns down is worse than none.
-    if (roster !== null) sections.push(askProtocolSection())
+    // Offered only when somebody can be asked: with nobody to address, `recipientCanAnswer` refuses
+    // every recipient the slave could name, and an offer the system always turns down is worse than
+    // none. A package worker can always ask the conductor (spec R7), roster or not.
+    const packageTask = task?.workPackageId !== null && task?.workPackageId !== undefined
+    if (roster !== null || packageTask) {
+      sections.push(askProtocolSection({ roster: roster !== null, conductor: packageTask }))
+    }
   }
 
   // 3. What it can do. Injected for every kind (the flags are part of the record), but rendered
@@ -1032,6 +1097,9 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
   // structured source those words came from, and `effectiveProfileSpec` is the one function that
   // already knows how to combine them (R1 upstream + local rule) -- reusing it here is the same
   // rule `renderProfileSpec` follows, applied to one field instead of all of them.
+  // How many steps the `workflow` section rendered, for the package report protocol below: the
+  // report is asked for one entry per step, so the two counts must be the same number.
+  let workflowSteps = 0
   if (order.includes('workflow')) {
     // READ-tolerant like every other manifest source (`sections.ts`'s idiom): a hand-edited column,
     // or simply no `SlaveTemplate` at all (`template?` above), parses as "nothing to say" rather
@@ -1057,6 +1125,7 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
         ]),
         source: { kind: 'workflow', steps: steps.length, origin: 'template' },
       })
+      workflowSteps = steps.length
     }
   }
 
@@ -1075,6 +1144,11 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     if (order.includes('handoff')) {
       const handoff = handoffSection(task)
       if (handoff !== null) sections.push(handoff)
+    }
+    // Conductor Plan 2: a package task's contract and the report it must end with. Only where the
+    // order has a place for them (implementation), and only for a task the conductor made.
+    if (task.workPackageId !== null && order.includes('package')) {
+      sections.push(...(await packageSections(task.workPackageId, workflowSteps)))
     }
     // The whole point of spec §8's loop: a rework is supposed to act on why the last attempt was
     // rejected, and one that arrives without it is just a retry. Never on a review run, whose

@@ -1,4 +1,5 @@
 import { STEERS_PER_RUN_MAX } from '../breaker/constants.js'
+import { CONDUCTOR_ROLE } from '../conduct/constants.js'
 import { BREAKER_TRIP_LABEL } from '../breaker/detect.js'
 import { PERMISSION_TRIP_COUNT } from '../broker/operations.js'
 import { capabilityIndex, projectRoles } from '../capability/taxonomy.js'
@@ -126,6 +127,9 @@ export function willNotRun(world: SupervisorWorld, slave: SupervisorSlave): bool
 /** Who a question was addressed to, for a summary a human reads. */
 function recipientLabel(question: SupervisorQuestion): string {
   if (question.recipientSlaveId !== null) return `slave ${question.recipientSlaveId}`
+  // Conductor R7: a role no seat holds by design, so "the \"conductor\" role" would read as a
+  // staffing gap to the person reading the escalation.
+  if (question.recipientRole === CONDUCTOR_ROLE) return 'the conductor'
   if (question.recipientRole !== null) return `the "${question.recipientRole}" role`
   return 'nobody'
 }

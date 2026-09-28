@@ -148,6 +148,20 @@ export function sectionLine(source: SectionSource): SectionLine {
         missing: [],
       }
     }
+    // Conductor Plan 2: the package this worker was bound to, and what its report had to cover --
+    // the counts the report is checked against, as the run saw them.
+    case 'package':
+      return {
+        kind: source.kind,
+        detail: `Work package ${short(source.workPackageId)}: ${plural(source.requirements, 'requirement')} (sha ${short(source.sha256)})`,
+        missing: [],
+      }
+    case 'report_protocol':
+      return {
+        kind: source.kind,
+        detail: `Report required: ${plural(source.requirements, 'requirement')}, ${source.workflowSteps === 0 ? 'no workflow' : plural(source.workflowSteps, 'workflow step')}`,
+        missing: [],
+      }
     // M40 t1, minimal: a re-plan run's own section. Task 4 gives it the diff a human reads.
     case 'replan':
       return {

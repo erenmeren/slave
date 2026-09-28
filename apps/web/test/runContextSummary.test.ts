@@ -27,3 +27,21 @@ describe('sectionLine — skills', () => {
     expect(sectionLine(base).detail).toBe('copied a, b, c, d')
   })
 })
+
+// Conductor Plan 2: a package worker's contract and the report it was asked for.
+describe('sectionLine — package and report_protocol', () => {
+  it('names the work package, its requirement count and the contract hash', () => {
+    const line = sectionLine({ kind: 'package', workPackageId: 'wp-123456789', requirements: 2, sha256: 'abcdef0123456789' })
+    expect(line.detail).toBe('Work package wp-12345: 2 requirements (sha abcdef01)')
+    expect(line.missing).toEqual([])
+  })
+
+  it('says what the report must cover', () => {
+    expect(sectionLine({ kind: 'report_protocol', requirements: 1, workflowSteps: 3 }).detail).toBe(
+      'Report required: 1 requirement, 3 workflow steps',
+    )
+    expect(sectionLine({ kind: 'report_protocol', requirements: 2, workflowSteps: 0 }).detail).toBe(
+      'Report required: 2 requirements, no workflow',
+    )
+  })
+})

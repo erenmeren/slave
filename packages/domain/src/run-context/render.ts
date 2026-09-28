@@ -13,6 +13,9 @@ export const SECTION_ORDER: Readonly<Record<Manifest['kind'], readonly SectionKi
   // `workflow` sits directly after `skills` (conductor R6): both are "how to do this", one is what
   // the worker may reach for and the other is the order to do it in, and the checklist reads better
   // right after the tools than buried between the roster and the inbox.
+  // `package` (Conductor Plan 2) sits directly under the task it belongs to -- the contract is part
+  // of what the task IS. `report_protocol` is the last instruction before the rejection, which
+  // stays last (M49 R3): how to report is the final rule, the last attempt's verdict the final word.
   implementation: [
     'profile',
     'roster',
@@ -21,8 +24,10 @@ export const SECTION_ORDER: Readonly<Record<Manifest['kind'], readonly SectionKi
     'inbox',
     'ask_protocol',
     'task',
+    'package',
     'handoff',
     'memory',
+    'report_protocol',
     'rejection',
   ],
   review: ['profile', 'skills', 'task', 'handoff', 'review_diff'],

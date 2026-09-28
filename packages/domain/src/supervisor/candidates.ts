@@ -4,6 +4,7 @@ import { formTeam, type TeamPlan, type TeamProposal, type TeamRanking, type Team
 import { profileKeyOf } from '../evidence/derive.js'
 import { PERMISSION_KINDS, PERMISSION_LABEL, type PermissionKind, type PermissionRunKind } from '../permission/kinds.js'
 import { PROVIDER_LABEL } from '../provider/kind.js'
+import { CONDUCTOR_ROLE } from '../conduct/constants.js'
 import { recommendRunbooks } from '../runbook/recommend.js'
 import type { Action, Candidate } from './actions.js'
 import {
@@ -848,6 +849,11 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
           'The workspace goal, the asking task, the thread and the asker\'s own run context may already hold the answer; the Supervisor drafts one and sends it only if every quote it cites is really there.',
         ),
       )
+
+      // Conductor R7: a question to the conductor is answered in the conductor's voice or by a
+      // person -- never re-addressed to a seat, and nobody is hired to hold a role that is held by
+      // nobody on purpose. The sourced answer above and the last resorts below are the whole list.
+      if (question.recipientRole === CONDUCTOR_ROLE) break
 
       const target = reassignTarget(question, world)
       if (target !== undefined) {

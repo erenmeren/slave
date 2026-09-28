@@ -352,6 +352,17 @@ describe('observe -- unanswerable_question', () => {
     expect(keys(observe(w))).toEqual([['unanswerable_question', 'm1']])
   })
 
+  it('names the conductor as the conductor, not as a role nobody holds', () => {
+    const w = world({
+      questions: [question({ createdAt: NOW, recipientRole: 'conductor' })],
+      slaves: [slave({ runtimeRoles: ['backend'] })],
+    })
+    const [situation] = observe(w)
+    expect(situation?.kind).toBe('unanswerable_question')
+    expect(situation?.summary).toContain('the conductor')
+    expect(situation?.summary).not.toContain('"conductor" role')
+  })
+
   it('reports a question addressed to a slave that is not in the workspace', () => {
     const w = world({
       questions: [question({ recipientRole: null, recipientSlaveId: 'gone' })],

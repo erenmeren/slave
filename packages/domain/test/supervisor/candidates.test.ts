@@ -708,6 +708,20 @@ describe('candidates -- questions', () => {
     })
   })
 
+  it('offers only the sourced answer and escalation for a question to the conductor: nobody is hired to hold its role', () => {
+    // A staffable idle slave is in the world, so the staffing offers WOULD appear for any other
+    // unheld role. The conductor's role is held by nobody by design (spec R7).
+    const w = world({
+      questions: [question({ askerSlaveId: 's9', recipientRole: 'conductor', holders: [] })],
+      slaves: [ASKER, IDLE_HOLDER],
+      tasks: [ASKING_TASK],
+    })
+    expect(observe(w)[0]?.kind).toBe('unanswerable_question')
+    const cands = offered(w)
+    expect(kinds(cands)).toEqual(['answer_question', 'escalate_to_human', 'no_action'])
+    expect(cands[0]?.action).toEqual({ kind: 'answer_question', messageId: 'm1' })
+  })
+
   it('offers nothing but the last resorts when the world no longer holds the question', () => {
     // `observe` only ever names a question the world has, so this is a defensive shape rather than
     // a state a tick can reach -- but a catalogue that indexed into `undefined` would throw inside

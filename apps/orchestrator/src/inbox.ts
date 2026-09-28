@@ -5,6 +5,7 @@ import {
   ANSWER_BLOCK_OPEN,
   ASK_BLOCK_CLOSE,
   ASK_BLOCK_OPEN,
+  CONDUCTOR_ROLE,
   displayName,
   neutraliseMarkers,
   rosterLine,
@@ -146,22 +147,40 @@ export async function rosterSection(slaveId: string, workspaceId: string): Promi
  * they are the one text `neutraliseMarkers` is never applied to, because this section is what
  * TEACHES the real markers.
  *
- * **IMPLEMENTATION runs only, and only alongside a roster.** `ask.ts` refuses an ask from a review
- * run, and `recipientCanAnswer` refuses every recipient a lone slave could name -- `runContext.ts`
- * enforces both conditions, which is why this producer takes no arguments and never returns `null`.
+ * **IMPLEMENTATION runs only, and only when somebody can be asked.** `ask.ts` refuses an ask from a
+ * review run, and `recipientCanAnswer` refuses every recipient a lone slave could name --
+ * `runContext.ts` enforces both conditions, which is why this producer never returns `null`.
+ *
+ * `roster` says whether a roster section sits above (the default, and M36's only case);
+ * `conductor` (Conductor Plan 2) adds the conductor as a recipient for a package task. A package
+ * worker alone on its roster still gets the section, with the conductor as the only one to ask --
+ * `recipientCanAnswer` accepts that role with no holder (spec R7).
  *
  * The roster it used to end with is now its own section, above: the two references that pointed
  * "below" point at it by name instead.
  */
-export function askProtocolSection(): Section {
+export function askProtocolSection(
+  options: { readonly roster: boolean; readonly conductor: boolean } = { roster: true, conductor: false },
+): Section {
+  const conductorBlock = `${ASK_BLOCK_OPEN}{"role":"${CONDUCTOR_ROLE}","question":"..."}${ASK_BLOCK_CLOSE}`
+  const whom = options.roster
+    ? [
+        `${ASK_BLOCK_OPEN}{"role":"<a role from the roster above>","question":"..."}${ASK_BLOCK_CLOSE}`,
+        `Use "slaveId":"<an id from the roster above>" instead of "role" to ask one slave by name. Add`,
+        '"context":"..." for anything the answerer needs to know first.',
+        ...(options.conductor ? [`You can also ask the conductor, who decides how this goal is delivered: ${conductorBlock}`] : []),
+      ]
+    : [
+        conductorBlock,
+        'That asks the conductor, who decides how this goal is delivered. Add "context":"..." for',
+        'anything the answerer needs to know first.',
+      ]
   const text = [
-    'ASKING ANOTHER SLAVE',
+    options.roster ? 'ASKING ANOTHER SLAVE' : 'ASKING THE CONDUCTOR',
     '',
     'If you cannot continue without an answer somebody else has to give, do not guess. End your',
     'FINAL message with one block like this and stop there:',
-    `${ASK_BLOCK_OPEN}{"role":"<a role from the roster above>","question":"..."}${ASK_BLOCK_CLOSE}`,
-    `Use "slaveId":"<an id from the roster above>" instead of "role" to ask one slave by name. Add`,
-    '"context":"..." for anything the answerer needs to know first.',
+    ...whom,
     '',
     'Your run stops there. That is not a failure: it costs you no attempt, and you are resumed in',
     'this same session, in this same worktree, with the answer in front of you. Ask only when you',
