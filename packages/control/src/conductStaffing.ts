@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { PACKAGE_WORKER_ROLE, err, ok, type PackageSpec, type Result } from '@slave-of-ai/domain'
+import { PACKAGE_WORKER_ROLE, REVIEWER_ROLE, err, ok, type PackageSpec, type Result } from '@slave-of-ai/domain'
 import { hireFromTemplate, mergeRuntimeRoles } from './capability.js'
 import { refusalText } from './refusal.js'
 
@@ -13,6 +13,10 @@ import { refusalText } from './refusal.js'
  * A package task is live until it has failed, been cancelled, or is done AND integrated: a `done`
  * task whose branch is still waiting to be merged by hand is still that seat's work, and a second
  * package on the seat would be written on top of it.
+ *
+ * The workspace's ONLY reviewer is never reused (final review M2): made a package worker, it would
+ * implement a package that then has nobody to review it -- a reviewer is never the implementer.
+ * A package of that persona is staffed by a hire instead.
  */
 export async function staffPackages(
   workspaceId: string,
@@ -34,11 +38,15 @@ export async function staffPackages(
     select: { assigneeId: true },
   })
   const holding = new Set(live.map((task) => task.assigneeId))
+  const reviewers = open.filter((s) => s.runtimeRoles.includes(REVIEWER_ROLE))
+  const soleReviewer = reviewers.length === 1 ? reviewers[0]?.id : undefined
 
   const taken = new Set<string>()
   const seats = new Map<string, string>()
   for (const pkg of packages) {
-    const reuse = open.find((s) => s.person.templateId === pkg.templateId && !taken.has(s.id) && !holding.has(s.id))
+    const reuse = open.find(
+      (s) => s.person.templateId === pkg.templateId && !taken.has(s.id) && !holding.has(s.id) && s.id !== soleReviewer,
+    )
     let seat: string
     let roles: readonly string[]
     if (reuse !== undefined) {

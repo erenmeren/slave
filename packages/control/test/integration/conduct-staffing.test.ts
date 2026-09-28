@@ -126,6 +126,27 @@ describe('staffPackages', () => {
     expect(second.ok && second.value.get('x')).toBe(seat)
   })
 
+  /** Final review M2: the only reviewer, made a package worker, could review nobody's package but
+   *  someone else's -- and nobody could review its own (reviewer is never the implementer). */
+  it('hires rather than reuse the workspace\'s only reviewer, and reuses a reviewer when there is another', async (): Promise<void> => {
+    const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: w } })
+    const pooled = await prisma.person.findMany({ where: { templateId: 't-backend' }, orderBy: { id: 'asc' }, take: 2 })
+    const reviewer = await prisma.slave.create({
+      data: { teamId: team.id, role: 'Backend Developer', runtimeRoles: ['backend', 'reviewer'], personId: pooled[0]?.id ?? '' },
+    })
+    const alone = await staffPackages(w, 1, [{ key: 'a', templateId: 't-backend' }])
+    expect(alone.ok).toBe(true)
+    if (!alone.ok) return
+    expect(alone.value.get('a')).not.toBe(reviewer.id)
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: reviewer.id } })).runtimeRoles).not.toContain(PACKAGE_WORKER_ROLE)
+
+    // A second reviewer on another persona: the first may now take a package, and the second reviews it.
+    const docsPerson = await prisma.person.findFirstOrThrow({ where: { templateId: 't-docs' } })
+    await prisma.slave.create({ data: { teamId: team.id, role: 'Technical Writer', runtimeRoles: ['docs', 'reviewer'], personId: docsPerson.id } })
+    const shared = await staffPackages(w, 2, [{ key: 'b', templateId: 't-backend' }, { key: 'c', templateId: 't-backend' }])
+    expect(shared.ok && [...shared.value.values()]).toContain(reviewer.id)
+  })
+
   it('refuses with the persona named when the pool is exhausted', async (): Promise<void> => {
     // Three managed people per persona, one open seat each per project: the fourth package has
     // nobody left, and a sync cannot make a fourth slot.
