@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
-import { cp, lstat, mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { cp, lstat, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { runDirPathFor } from '@slave-of-ai/control'
 import { runId as brandRunId } from '@slave-of-ai/domain'
@@ -62,10 +62,12 @@ export function logSetAside(who: string, outcome: SetAsideOutcome): void {
  *
  * **Saved, not discarded.** Into `saveDir`: `changes.patch`, one binary-safe `git diff` of every
  * foreign path against HEAD as the worktree holds it (tracked, staged, deleted and untracked alike;
- * `git apply` puts them back), and `untracked/<path>`, a copy of each untracked foreign file as it
- * was on disk. Never `git stash`: `refs/stash` is shared by every worktree of the repository, so an
- * entry pushed here sits in the operator's own stash list, and two workspaces on one repository
- * would race on it.
+ * `git apply` puts them back); `untracked/<path>`, a copy of each untracked foreign file as it was
+ * on disk; and `staged/<path>` (round 4, m1), the exact bytes of a path staged new and then deleted
+ * from disk (`AD`) -- neither on disk nor in HEAD, so it is in none of the above, straight from the
+ * worktree's real index before anything below touches it. Never `git stash`: `refs/stash` is shared
+ * by every worktree of the repository, so an entry pushed here sits in the operator's own stash
+ * list, and two workspaces on one repository would race on it.
  *
  * **Removed.** Tracked foreign paths are restored to HEAD in the index and the tree (a staged new
  * file leaves both); untracked foreign files are deleted. Owned paths are not touched. Ignored files
@@ -95,6 +97,12 @@ export async function setAsideForeignChanges(input: {
     // HEAD, not deleted -- its disk copy is saved with the untracked files first.
     const untracked = foreign.filter((entry) => entry.untracked).map((entry) => entry.path)
     const deletable = untracked.filter((path) => !tracked.includes(path))
+    // A path staged new and then deleted from disk (`AD`) is neither on disk nor in HEAD (round 4,
+    // m1): `patchable` already excludes it from the patch for exactly that reason, and the same
+    // exclusion says which paths need their index blob saved on its own, before `restore` below
+    // drops them from the index with nothing left to recover them from.
+    const patchablePaths = await patchable(git, input.worktreePath, paths)
+    const indexOnly = paths.filter((path) => !patchablePaths.includes(path))
 
     await mkdir(input.saveDir, { recursive: true, mode: 0o700 })
     for (const path of untracked) {
@@ -103,7 +111,10 @@ export async function setAsideForeignChanges(input: {
         verbatimSymlinks: true,
       })
     }
-    await writePatch(git, await patchable(git, input.worktreePath, paths), join(input.saveDir, 'changes.patch'))
+    for (const path of indexOnly) {
+      await saveStagedBlob(input.worktreePath, path, join(input.saveDir, 'staged', path))
+    }
+    await writePatch(git, patchablePaths, join(input.saveDir, 'changes.patch'))
 
     if (tracked.length > 0) {
       await withPathspecFile(tracked, async (file) => {
@@ -129,7 +140,8 @@ export async function setAsideForeignChanges(input: {
 /**
  * The paths a patch can name: those on disk, and those HEAD has (a deletion). A file staged new and
  * then deleted from disk is neither -- its content was never committed nor is it in the tree, and
- * naming it would fail the whole `git add`; restoring it to HEAD removes it from the index.
+ * naming it would fail the whole `git add`. It is not lost: {@link saveStagedBlob} saves it on its
+ * own (round 4, m1), before it is restored to HEAD, which removes it from the index.
  */
 async function patchable(
   git: (args: readonly string[]) => Promise<string>,
@@ -151,6 +163,24 @@ async function patchable(
     if (known) kept.push(path)
   }
   return kept
+}
+
+/**
+ * The exact bytes of `path` as it sits in the worktree's REAL index (stage 0) -- round 4, m1: for a
+ * path staged new and then deleted from disk, that blob is the only copy of its content anywhere,
+ * not on disk and not in HEAD, so nothing else this module writes can carry it. `git show :<path>`
+ * reads the worktree's own index, not a private one, which is exactly why this must run before the
+ * "Removed" step below touches that index.
+ */
+async function saveStagedBlob(worktreePath: string, path: string, outFile: string): Promise<void> {
+  const { stdout } = await execFileAsync('git', ['show', `:${path}`], {
+    cwd: worktreePath,
+    timeout: GIT_TIMEOUT_MS,
+    maxBuffer: 64 * 1024 * 1024,
+    encoding: 'buffer',
+  })
+  await mkdir(dirname(outFile), { recursive: true })
+  await writeFile(outFile, stdout)
 }
 
 /**

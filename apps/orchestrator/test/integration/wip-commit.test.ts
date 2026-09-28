@@ -281,6 +281,32 @@ describe('setAsideForeignChanges', () => {
     expect(outcome.kind).toBe('set_aside')
     expect(git(['stash', 'list'], tree.repoPath)).toBe(stashes)
   })
+
+  /**
+   * Round 4 (re-review m1): a foreign path staged new and then deleted from disk (`AD`) exists only
+   * as a blob in the worktree's real index -- not on disk, not in HEAD, so it cannot go in the
+   * `changes.patch` (that private index is built from HEAD, and `git add` of a path neither on disk
+   * nor there fails the whole batch). Before this fix `restore --source=HEAD` dropped it from the
+   * index with nothing saved anywhere, contradicting "nothing removed unless everything saved".
+   */
+  it('saves the blob of a path staged new and then deleted from disk (AD), not just the patch and the untracked copies', async (): Promise<void> => {
+    const tree = await worktree()
+    writeFileSync(join(tree.path, 'staged-then-gone.txt'), 'only ever in the index\n')
+    git(['add', 'staged-then-gone.txt'], tree.path)
+    rmSync(join(tree.path, 'staged-then-gone.txt'))
+    const saveDir = saveDirIn()
+
+    const outcome = await setAsideForeignChanges({ worktreePath: tree.path, owns, saveDir })
+
+    expect(outcome.kind).toBe('set_aside')
+    if (outcome.kind !== 'set_aside') throw new Error('expected a set-aside')
+    expect(outcome.setAside.paths).toContain('staged-then-gone.txt')
+    // Gone from the index and the tree -- git status --porcelain shows nothing for this path.
+    expect(git(['status', '--porcelain', '--untracked-files=all'], tree.path)).toBe('')
+    // But not lost: its content is saved by itself, since neither the patch (built from HEAD) nor
+    // the untracked copy (there is nothing on disk) can carry it.
+    expect(readFileSync(join(saveDir, 'staged', 'staged-then-gone.txt'), 'utf8')).toBe('only ever in the index\n')
+  })
 })
 
 describe('verifyConcludedRun commits a succeeded run\'s leftover work before verify (H9 F7 a)', () => {
