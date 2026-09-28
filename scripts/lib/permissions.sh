@@ -15,7 +15,8 @@
 #    "grants":["read_repo","write_repo","run_commands"],
 #    "allow":[{"tool":"Read","kind":"read_repo"}, ...],
 #    "vocabulary":{"Read":"read_repo","Bash":"run_commands", ...},
-#    "prefixes":[{"prefix":"mcp__","kind":"network_fetch"}]}
+#    "prefixes":[{"prefix":"mcp__","kind":"network_fetch"}],
+#    "ownership":{"worktreeRoot":"<absolute path>","owned":["<regex source>", ...]|null,"excluded":["<regex source>", ...]}}
 #
 # It says five things and this library needs all five: what this run may call (`allow`), which
 # operation governs each tool (`vocabulary`, and `prefixes` for the name families nobody can
@@ -24,6 +25,15 @@
 # how much of it this provider can enforce (`enforce`), and WHICH RUN the verdict is about
 # (`tokenHash`). This library stays a dumb membership test with no table of its own: every word it
 # compares against comes out of the file (spec section 2, plan decisions D10/D11).
+#
+# `ownership` (conductor spec R4, OPTIONAL -- absent on every run that is not a package task of a
+# multi-package goal) is a SIXTH thing, read only for a call `vocabulary` maps to `write_repo`: the
+# `owned`/`excluded` regex SOURCES `@slave-of-ai/domain`'s `ownershipPatterns()` compiled from the
+# package's globs (Task 1; one glob implementation, rebuilt here with `new RegExp(source, "u")`),
+# and the `worktreeRoot` the call's path is resolved against -- never the payload's own `cwd`, which
+# is the session's current directory and not necessarily the run's worktree. `owned: null` is
+# "every path", the integration package's shape (spec R4: "single mode owns **", and the
+# integration package owns everything no other package excludes).
 #
 # REPORT, DON'T PRINT -- pause-flag.sh's rule, inherited here on purpose. The two gates' output
 # shapes differ (Claude allows by staying silent and denies via hookSpecificOutput.
@@ -180,6 +190,54 @@ read_permission_verdict() {
         tool = defaultTool;
       }
 
+      // THE VERDICT LINE IS TAB-DELIMITED AND ONE OF ITS FIELDS COMES FROM THE PAYLOAD (M52 final
+      // review, Important 2 -- MEASURED). The caller splits this line with `cut -f2`/`cut -f3`, so
+      // a `tool_name` carrying a TAB shifts the fields and lets the caller choose the CAPABILITY
+      // recorded against it: `{"tool_name":"Bash\tdeploy_release"}` yielded
+      // PERMISSION_DENY_CAPABILITY=deploy_release -- a kind no vendor tool can ever produce, which
+      // is how a worker would manufacture the denial evidence a `request_permission` proposal is
+      // built on. A newline would end the line entirely. Every field is stripped of the three
+      // characters that mean something to the format -- moved above 3b (Task 2) because the
+      // ownership deny below is the first place other than the final arms that needs it.
+      const field = (value) => String(value).replace(/[\t\n\r]/g, "");
+
+      // 3b. OWNERSHIP (conductor spec R4). A package run may change only the files its package
+      // owns. Judged for tools the vocabulary maps to write_repo, by the path the call names,
+      // resolved against the worktree root the orchestrator wrote -- not the payload cwd, which is
+      // the session current directory, not necessarily the worktree. A path outside the worktree is
+      // not another worker file (plan D4). Malformed ownership fails closed like every other
+      // malformed field. Runs BEFORE the `allow.some(...)` ALLOW below: Write/Edit/NotebookEdit are
+      // on the allow list for every implementation run, so the ordinary allow-list check would let a
+      // foreign-file write through before this ever ran. NO APOSTROPHES IN THIS COMMENT BLOCK: it is
+      // bash single-quoted around the whole `node -e` string, and a literal quote here ends it.
+      if (file.ownership !== undefined) {
+        const own = file.ownership;
+        const okList = (v) => Array.isArray(v) && v.every((s) => typeof s === "string");
+        if (own === null || typeof own !== "object" || typeof own.worktreeRoot !== "string" ||
+            !(own.owned === null || okList(own.owned)) || !okList(own.excluded)) {
+          process.stdout.write("BADFILE"); return;
+        }
+        let owned, excluded;
+        try {
+          owned = own.owned === null ? null : own.owned.map((s) => new RegExp(s, "u"));
+          excluded = own.excluded.map((s) => new RegExp(s, "u"));
+        } catch { process.stdout.write("BADFILE"); return; }
+        const writeKind = tool !== null && Object.prototype.hasOwnProperty.call(vocabulary, tool) &&
+          String(vocabulary[tool]) === "write_repo";
+        const input = isObject && payload.tool_input !== null && typeof payload.tool_input === "object" ? payload.tool_input : {};
+        const target = typeof input.file_path === "string" ? input.file_path
+          : typeof input.notebook_path === "string" ? input.notebook_path : null;
+        if (writeKind && target !== null) {
+          const path = require("node:path");
+          const rel = path.relative(own.worktreeRoot, path.resolve(own.worktreeRoot, target)).split(path.sep).join("/");
+          const inside = rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+          if (inside) {
+            const mine = (owned === null || owned.some((r) => r.test(rel))) && !excluded.some((r) => r.test(rel));
+            if (!mine) { process.stdout.write("DENY\t" + field(tool) + "\tforeign_file"); return; }
+          }
+        }
+      }
+
       if (tool !== null && allow.some((entry) => entry && entry.tool === tool)) {
         process.stdout.write("ALLOW"); return;
       }
@@ -198,17 +256,10 @@ read_permission_verdict() {
           }
         }
       }
-      // THE VERDICT LINE IS TAB-DELIMITED AND ONE OF ITS FIELDS COMES FROM THE PAYLOAD (M52 final
-      // review, Important 2 -- MEASURED). The caller splits this line with `cut -f2`/`cut -f3`, so
-      // a `tool_name` carrying a TAB shifts the fields and lets the caller choose the CAPABILITY
-      // recorded against it: `{"tool_name":"Bash\tdeploy_release"}` yielded
-      // PERMISSION_DENY_CAPABILITY=deploy_release -- a kind no vendor tool can ever produce, which
-      // is how a worker would manufacture the denial evidence a `request_permission` proposal is
-      // built on. A newline would end the line entirely. Every field is stripped of the three
-      // characters that mean something to the format, including `kind`: the vocabulary it comes
-      // from is read out of a file the worker can write (erratum E17), so it is no more trusted
-      // than the payload. Stripped rather than escaped, because nothing downstream unescapes.
-      const field = (value) => String(value).replace(/[\t\n\r]/g, "");
+      // `field` (above, moved ahead of 3b so the ownership deny can use it too) strips rather than
+      // escapes, because nothing downstream unescapes, and `kind` is no more trusted than the
+      // payload either: the vocabulary it comes from is read out of a file the worker can write
+      // (erratum E17).
       if (kind !== null) {
         // The decision belongs to the KIND, which is what makes ONE `network_fetch` grant open
         // every `mcp__*` tool rather than only the two an enumerable allow list can name.

@@ -29,6 +29,15 @@ describe('parsePermissionDenyReason', () => {
     expect(parsePermissionDenyReason('')).toBeNull()
   })
 
+  // Task 2 (conductor spec R4): `foreign_file` is not a `PermissionKind` -- it names no grant --
+  // but it follows the same fixed grammar every other capability does, so it parses the same way.
+  it('parses a foreign_file denial the same way as any other capability', () => {
+    expect(parsePermissionDenyReason(`${PERMISSION_DENY_REASON_PREFIX} 'foreign_file' (Write) for this slave`)).toEqual({
+      tool: 'Write',
+      capability: 'foreign_file',
+    })
+  })
+
   it('does not crash on a capability containing a quote of its own -- capabilities are fixed strings today, but this parses whatever arrives, not what the shell script promises to send', () => {
     const reason = `${PERMISSION_DENY_REASON_PREFIX} 'run 'tests'' (Bash) for this slave`
     expect(() => parsePermissionDenyReason(reason)).not.toThrow()

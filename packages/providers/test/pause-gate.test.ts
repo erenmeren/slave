@@ -141,6 +141,14 @@ function writePermissionsFile(
   overrides: {
     readonly grants?: readonly string[]
     readonly allow?: ReadonlyArray<{ readonly tool: string; readonly kind: string }>
+    readonly vocabulary?: Readonly<Record<string, string>>
+    // Task 2 (conductor spec R4): present only when a case asks for it, mirroring
+    // `writePermissionsFile`'s own `input.ownership === undefined ? {} : { ownership }` convention.
+    readonly ownership?: {
+      readonly worktreeRoot: string
+      readonly owned: readonly string[] | null
+      readonly excluded: readonly string[]
+    }
   } = {},
 ): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'slaveofai-pause-gate-matrix-'))
@@ -154,8 +162,9 @@ function writePermissionsFile(
       enforce: 'all-tools',
       grants: overrides.grants ?? ['read_repo'],
       allow: overrides.allow ?? [{ tool: 'Read', kind: 'read_repo' }],
-      vocabulary: { Read: 'read_repo', Bash: 'run_commands', WebFetch: 'network_fetch' },
+      vocabulary: overrides.vocabulary ?? { Read: 'read_repo', Bash: 'run_commands', WebFetch: 'network_fetch' },
       prefixes: [{ prefix: 'mcp__', kind: 'network_fetch' }],
+      ...(overrides.ownership === undefined ? {} : { ownership: overrides.ownership }),
     }),
   )
   return filePath
@@ -463,6 +472,39 @@ describe('pause-gate.sh', () => {
         expect(stdout).toBe('')
         expect(stderr).toContain('pause-gate.sh')
         expect(stderr).toContain('identity')
+      } finally {
+        rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
+      }
+    })
+
+    // Task 2 (conductor spec R4), end to end through the real gate: a package run whose
+    // `ownership` names a worktree and an owned subtree is denied a Write outside it, and the
+    // reason is byte-equal to the grammar `parsePermissionDenyReason` parses -- the path itself
+    // never appears in it (packages/providers/src/gate.ts).
+    it('denies a write outside the owned subtree, naming foreign_file, with no path in the reason', async (): Promise<void> => {
+      const permissionsFile = writePermissionsFile({
+        grants: ['read_repo', 'write_repo'],
+        allow: [
+          { tool: 'Read', kind: 'read_repo' },
+          { tool: 'Write', kind: 'write_repo' },
+        ],
+        vocabulary: { Read: 'read_repo', Write: 'write_repo' },
+        ownership: { worktreeRoot: '/work/pkg-report', owned: ['^src/report/.*$'], excluded: [] },
+      })
+      try {
+        const { stdout, code } = await runHook({
+          flagExists: false,
+          payload: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: '/work/pkg-report/src/config.py' } }),
+          permissionsFile,
+        })
+        expect(code).toBe(0)
+        const parsed = JSON.parse(stdout) as {
+          hookSpecificOutput: { permissionDecision: string; permissionDecisionReason: string }
+        }
+        expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny')
+        expect(parsed.hookSpecificOutput.permissionDecisionReason).toBe(
+          "permission matrix denies 'foreign_file' (Write) for this slave",
+        )
       } finally {
         rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
       }
