@@ -344,6 +344,46 @@ describe('the diff audit', () => {
     expect(files).toHaveLength(5)
   })
 
+  /** Final review I2: no trimming -- a leading space is part of the path. */
+  it('keeps a path that starts with a space exactly as it is', async (): Promise<void> => {
+    const dir = makeRepo()
+    git(['checkout', '-q', '-b', 'work'], dir)
+    writeFileSync(join(dir, ' a.txt'), 'leading space\n')
+    git(['add', '-A'], dir)
+    git(['commit', '-q', '-m', 'work'], dir)
+    expect(await changedFiles(dir, 'main', 'work')).toEqual([' a.txt'])
+  })
+
+  /** Final review I2: an audit that throws left the task to the stranded-claim sweep, which put it
+   *  back with no attempt charged -- a free endless loop. It is a rejection, charged and bounded. */
+  it('sends the task back with a reason, charging an attempt, when the audit cannot read the branch', async (): Promise<void> => {
+    const c = await seedConducted()
+    const report = await seedPackage(c, 'report', ['src/report/**'])
+    const seat = await prisma.task.findUniqueOrThrow({ where: { id: report }, select: { assigneeId: true } })
+    const run = await prisma.slaveRun.create({
+      data: { taskId: report, slaveId: seat.assigneeId ?? '', kind: 'implementation', status: 'succeeded', terminalAt: new Date(), endedAt: new Date() },
+    })
+    await prisma.task.update({ where: { id: report }, data: { status: 'running', branch: 'no-such-branch', activeRunId: run.id } })
+
+    const verifyMayGoOn = await auditOwnership(
+      { id: run.id, slaveId: run.slaveId },
+      { id: report, workspaceId: c.workspaceId, branch: 'no-such-branch' },
+      { repoPath: c.repoPath, baseBranch: 'main' },
+    )
+
+    expect(verifyMayGoOn).toBe(false)
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: report } })
+    expect(task.status).toBe('rework')
+    expect(task.attempt).toBe(1)
+    expect(task.lastRejectionReason?.startsWith('the ownership audit could not read what this branch changed: ')).toBe(true)
+    expect(task.lastRejectionReason).toContain('no-such-branch')
+    const events = await taskEventTypes(report)
+    expect(events).toContain('task.rework')
+    // Not a violation: `foreign_file` must not count it.
+    expect(events).not.toContain('task.ownership_violated')
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('failed')
+  }, 60_000)
+
   it('sends a run that changed a file its package does not own back, naming the file', async (): Promise<void> => {
     const c = await seedConducted()
     const report = await seedPackage(c, 'report', ['src/report/**'])

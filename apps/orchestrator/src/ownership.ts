@@ -1,14 +1,21 @@
+import { execFile } from 'node:child_process'
 import { realpathSync } from 'node:fs'
-import { gitIn } from '@slave-of-ai/control'
+import { promisify } from 'node:util'
 import { prisma } from '@slave-of-ai/db/client'
 import { isOwned, ownershipPatterns, ownershipRuleFor, type OwnershipRule } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { rejectRunBack } from './runs.js'
 
+const execFileAsync = promisify(execFile)
+
 /** How many foreign files the rejection reason names: enough to act on, short enough to read. */
 export const FOREIGN_FILES_LISTED = 20
 /** How many the `task.ownership_violated` event records -- its schema's cap; `total` counts all. */
 const FOREIGN_FILES_RECORDED = 50
+/** Room for a branch that touched a very large tree: execFile's 1 MiB default made the audit throw. */
+const DIFF_MAX_BUFFER = 64 * 1024 * 1024
+/** Bounded, like every git call made on a run's behalf: a contended repository must not hang a conclusion. */
+const DIFF_TIMEOUT_MS = 30_000
 
 /**
  * The ownership rule of a package task (conductor spec R4): its package among its goal version's
@@ -67,8 +74,15 @@ function resolvedRoot(worktreeRoot: string): string {
  * newline or a quote in it one entry.
  */
 export async function changedFiles(repoPath: string, base: string, branch: string): Promise<readonly string[]> {
-  const out = await gitIn(repoPath, 'diff', '--name-only', '--no-renames', '-z', `${base}...${branch}`)
-  return out.split('\0').filter((name) => name !== '')
+  // execFile directly, not `gitIn` (final review I2): its output is trimmed, which cut the leading
+  // space off the first path, and its default buffer is 1 MiB.
+  const { stdout } = await execFileAsync('git', ['diff', '--name-only', '--no-renames', '-z', `${base}...${branch}`], {
+    cwd: repoPath,
+    maxBuffer: DIFF_MAX_BUFFER,
+    timeout: DIFF_TIMEOUT_MS,
+    encoding: 'utf8',
+  })
+  return stdout.split('\0').filter((name) => name !== '')
 }
 
 /**
@@ -93,6 +107,11 @@ export function undoInstruction(base: string): string {
  * as `task.ownership_violated` -- only when the rejection applied, so a replayed conclusion does
  * not count a second violation toward the Supervisor's `foreign_file` (Task 5).
  *
+ * An audit that cannot read the branch's changes (a missing ref, a git that fails) is a rejection
+ * too, never a throw (final review I2): a throw left the task to the stranded-claim sweep, which
+ * put it back without charging an attempt -- a free endless loop. This one is charged, so
+ * `maxAttempts` bounds it, and it is not a violation: `foreign_file` does not count it.
+ *
  * Returns whether verify may go on: true for a task with no rule (no package, or one that owns
  * everything) and for a branch that changed only what it owns.
  */
@@ -103,7 +122,20 @@ export async function auditOwnership(
 ): Promise<boolean> {
   const rule = await ownershipRuleForTask(task.id)
   if (rule === null) return true
-  const changed = await changedFiles(workspace.repoPath, workspace.baseBranch, task.branch)
+  let changed: readonly string[]
+  try {
+    changed = await changedFiles(workspace.repoPath, workspace.baseBranch, task.branch)
+  } catch (error) {
+    const detail = auditFailureDetail(error)
+    await rejectRunBack(
+      run,
+      task,
+      `the ownership audit could not read what this branch changed: ${detail}`,
+      `ownership audit failed: ${detail}`,
+      (attempt) => `the ownership audit could not read what this branch changed after ${String(attempt)} attempts: ${detail}`,
+    )
+    return false
+  }
   const foreign = changed.filter((path) => !isOwned(rule, path))
   if (foreign.length === 0) return true
   const listed = foreign.slice(0, FOREIGN_FILES_LISTED).join(', ')
@@ -127,4 +159,12 @@ export async function auditOwnership(
     })
   }
   return false
+}
+
+/** git's own complaint (its stderr's first line) when there is one -- "fatal: ambiguous argument
+ *  ..." says more than execFile's "Command failed" -- else the error's first line. */
+function auditFailureDetail(error: unknown): string {
+  const stderr = typeof error === 'object' && error !== null && 'stderr' in error ? String(error.stderr).trim() : ''
+  const text = stderr !== '' ? stderr : error instanceof Error ? error.message : String(error)
+  return text.split('\n')[0] ?? ''
 }
