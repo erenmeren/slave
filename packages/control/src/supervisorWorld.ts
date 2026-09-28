@@ -299,6 +299,9 @@ interface TaskRow {
   /** M50 R3 (plan erratum E4): who this task is assigned to, verbatim. `engagement_over` counts a
    *  worker's non-terminal assigned tasks off it -- an ephemeral worker holding one is not done. */
   readonly assigneeId: string | null
+  /** Conductor Plan 2: the seat a package task may run on -- its assignee, for a task that belongs
+   *  to a work package, else null. The orchestrator's scheduler world reads the same expression. */
+  readonly pinnedSlaveId: string | null
   readonly integratedAt: Date | null
   readonly createdAt: Date
   readonly dependents: number
@@ -340,6 +343,7 @@ async function loadTaskRows(tx: Prisma.TransactionClient, workspaceId: string): 
       t."requiredRole",
       t."requiredCapabilities",
       t."assigneeId",
+      CASE WHEN t."workPackageId" IS NOT NULL THEN t."assigneeId" END AS "pinnedSlaveId",
       t."integratedAt",
       t."createdAt",
       t."goalVersion",
@@ -1277,6 +1281,7 @@ export async function loadSupervisorWorld(
           goalVersion: row.goalVersion,
           requiredCapabilities: row.requiredCapabilities,
           assigneeId: row.assigneeId,
+          pinnedSlaveId: row.pinnedSlaveId,
           stage: row.stage,
           // Plan erratum E6: resolved HERE, so `observe` can append the sentence without knowing
           // what a runbook is. Null whenever the task has no stage, the workspace has no runbook,

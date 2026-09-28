@@ -495,6 +495,26 @@ describe('observe -- a question nobody will pick up (pilot fix A)', () => {
     }
   })
 
+  // Conductor Plan 2: a package task is pinned to its own seat and `decide()` hands it to no other
+  // holder of the role, so it is not work the recipient could start.
+  it('does not count another seat\'s pinned package task as work the recipient could start', () => {
+    const w = world({
+      tasks: [task({ id: 't2', status: 'ready', assigneeId: 's3', pinnedSlaveId: 's3' })],
+      questions: [question({ createdAt: NOW, askerSlaveId: 's1', recipientRole: null, recipientSlaveId: 's2' })],
+      slaves: [slave({ id: 's1', busy: true }), slave({ id: 's2' }), slave({ id: 's3', busy: true })],
+    })
+    const situations = observe(w)
+    expect(keys(situations)).toContainEqual(['unanswerable_question', 'm1'])
+    expect(situations.find((s) => s.kind === 'unanswerable_question')?.facts.stranded).toBe(true)
+    // The same task pinned to the recipient itself is work it will start, and the question waits.
+    const own = world({
+      tasks: [task({ id: 't2', status: 'ready', assigneeId: 's2', pinnedSlaveId: 's2' })],
+      questions: [question({ createdAt: NOW, askerSlaveId: 's1', recipientRole: null, recipientSlaveId: 's2' })],
+      slaves: [slave({ id: 's1', busy: true }), slave({ id: 's2' })],
+    })
+    expect(observe(own)).toEqual([])
+  })
+
   it('does not count a startable task for a role the recipient does not hold', () => {
     const w = world({
       tasks: [task({ id: 't2', status: 'ready', requiredRole: 'frontend' })],

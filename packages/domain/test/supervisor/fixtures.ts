@@ -55,6 +55,7 @@ export function task(overrides: Partial<SupervisorTask> = {}): SupervisorTask {
     // about that. A real planned board carries a holder on every task since H2, so a case about
     // `engagement_over`'s open-work clause has to set this rather than assume the column is dead.
     assigneeId: null,
+    pinnedSlaveId: null,
     // M48: a task planned before runbooks existed belongs to no stage, which is what every fixture
     // in this file means unless it says otherwise -- and a task with no stage carries no
     // escalation sentence either.

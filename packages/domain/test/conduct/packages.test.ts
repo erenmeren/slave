@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   CONDUCT_ANSWER_KEY,
+  conductPlanSchema,
   ownerOf,
   parseConductAnswer,
   singlePlan,
@@ -122,5 +123,21 @@ describe('singlePlan', () => {
     expect(singlePlan('t-docs', ['R1'], 'fallback').packages[0]).toEqual(
       expect.objectContaining({ key: 'main', ownedPaths: ['**'], templateId: 't-docs' }),
     )
+  })
+})
+
+describe('conductPlanSchema', () => {
+  it('reads a validated plan back unchanged, integration package and all', () => {
+    const plan = validateConduct(
+      { mode: 'partitioned', reason: 'split', packages: [pkg({}), pkg({ key: 'config', requirementKeys: ['R2', 'R3'], ownedPaths: ['src/config.py'] })] },
+      context,
+    )
+    expect(plan.ok).toBe(true)
+    if (!plan.ok) return
+    expect(conductPlanSchema.parse(JSON.parse(JSON.stringify(plan.value)))).toEqual(plan.value)
+  })
+
+  it('refuses a stored plan with no packages', () => {
+    expect(conductPlanSchema.safeParse({ mode: 'single', reason: 'x', packages: [] }).success).toBe(false)
   })
 })

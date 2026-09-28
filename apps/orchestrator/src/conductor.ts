@@ -1,16 +1,27 @@
-import { isUniqueConstraintViolation, type ModelDecider } from '@slave-of-ai/control'
-import { type Prisma, prisma } from '@slave-of-ai/db/client'
+import { isUniqueConstraintViolation, staffPackages, type ModelDecider } from '@slave-of-ai/control'
+import { Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   CONDUCT_PER_CALL_CAP_USD,
   CONDUCT_RETRY_CAP,
+  PACKAGE_WORKER_ROLE,
   assignRequirementKeys,
+  buildConductPrompt,
   buildRequirementsPrompt,
+  candidateSchema,
+  conductPlanSchema,
+  parseConductAnswer,
   parseRequirementsAnswer,
   requirementItemsSchema,
+  singlePlan,
+  situationSchema,
+  validateConduct,
+  type ConductPlan,
   type GuardrailKind,
+  type PackageSpec,
   type Result,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { loadConductCatalogue, loadRepositoryFacts } from './conductFacts.js'
 import { modelSeam } from './supervisor.js'
 import type { TickDeps } from './tick.js'
 
@@ -38,7 +49,15 @@ interface ConductorCallTarget {
 export async function conduct(deps: TickDeps): Promise<ConductStep> {
   const workspace = await prisma.workspace.findUniqueOrThrow({
     where: { id: deps.workspaceId },
-    select: { delivery: true, goal: true, goalVersion: true, haltedReason: true },
+    select: {
+      delivery: true,
+      goal: true,
+      goalVersion: true,
+      haltedReason: true,
+      repoPath: true,
+      baseBranch: true,
+      maxAttempts: true,
+    },
   })
   if (workspace.delivery !== 'conducted' || workspace.goal === null || workspace.goalVersion === 0) return 'none'
   // A halted workspace spends nothing: the halt is a person's to clear, and this step's own halt
@@ -53,10 +72,287 @@ export async function conduct(deps: TickDeps): Promise<ConductStep> {
 
   const set = await prisma.requirementSet.findUnique({
     where: { workspaceId_goalVersion: { workspaceId: deps.workspaceId, goalVersion: version } },
-    select: { id: true },
+    select: { items: true },
   })
   if (set === null) return extractRequirements(deps.workspaceId, call, workspace.goal, version)
-  return 'none' // Task 6 replaces this line with the size decision
+  return decideAndMaterialise(deps.workspaceId, call, { ...workspace, goal: workspace.goal }, version, set.items)
+}
+
+/** What the size decision reads off the workspace row `conduct` already fetched. */
+interface ConductedWorkspace {
+  readonly goal: string
+  readonly repoPath: string
+  readonly baseBranch: string
+  readonly maxAttempts: number
+}
+
+/** Thrown inside `materialise`'s transaction when another tick conducted this version first: a
+ *  refusal inside a Prisma interactive transaction must THROW, or what was written commits. */
+class AlreadyConducted extends Error {}
+
+/**
+ * Spec R2/R3/R5: the size decision of one goal version, then its staffing, then its packages as
+ * pinned tasks. At most ONE model call (plan decision D4); at `CONDUCT_RETRY_CAP` unusable answers
+ * the version goes `single` by default rather than halting -- a goal whose requirements were read
+ * can always be delivered by one worker.
+ */
+async function decideAndMaterialise(
+  workspaceId: string,
+  call: ConductorCallTarget,
+  workspace: ConductedWorkspace,
+  version: number,
+  storedItems: Prisma.JsonValue,
+): Promise<ConductStep> {
+  const items = requirementItemsSchema.parse(storedItems)
+  const keys = items.map((i) => i.key)
+  // A plan already bought for this version (an ok `conduct` call) is staffed again, never re-bought:
+  // staffing can fail after the answer (a pool ran out), and the next tick retries only the staffing.
+  const bought = await prisma.conductorCall.findFirst({
+    where: { workspaceId, goalVersion: version, stage: 'conduct', outcome: 'ok', plan: { not: Prisma.AnyNull } },
+    orderBy: { createdAt: 'desc' },
+    select: { plan: true },
+  })
+  let plan: ConductPlan
+  // Only the fallback is decided by rules: it writes no `ConductorCall` row, so a bought plan is
+  // always the model's.
+  let fallback = false
+  if (bought !== null) {
+    plan = conductPlanSchema.parse(bought.plan)
+  } else {
+    const failures = await prisma.conductorCall.findMany({
+      where: { workspaceId, goalVersion: version, stage: 'conduct', outcome: 'failed' },
+      orderBy: { createdAt: 'asc' },
+      select: { reason: true },
+    })
+    const catalogue = await loadConductCatalogue()
+    if (failures.length >= CONDUCT_RETRY_CAP) {
+      const templateId = await fallbackTemplate(workspaceId, catalogue)
+      if (templateId === null) {
+        await tripConductor(workspaceId, `goal v${version} has no persona to deliver it: the catalogue shows none`)
+        return 'conduct_failed'
+      }
+      fallback = true
+      plan = singlePlan(
+        templateId,
+        keys,
+        `the conductor's answer was unusable ${failures.length} times (last: ${failures.at(-1)?.reason ?? 'unknown'}); single by default`,
+      )
+    } else {
+      const repo = await loadRepositoryFacts(workspace.repoPath, workspace.baseBranch)
+      const decided = await callConductor(
+        call,
+        workspaceId,
+        version,
+        'conduct',
+        buildConductPrompt({
+          goal: workspace.goal,
+          requirements: items,
+          repositoryMap: repo.map,
+          catalogue: catalogue.text,
+          previousError: failures.at(-1)?.reason ?? null,
+        }),
+        (text) => {
+          const raw = parseConductAnswer(text)
+          return raw.ok
+            ? validateConduct(raw.value, { requirementKeys: keys, repoFiles: repo.files, templateIds: catalogue.templateIds })
+            : raw
+        },
+        (value) => value,
+      )
+      if ('failure' in decided) return 'conduct_failed'
+      plan = decided.value
+    }
+  }
+
+  const seats = await staffPackages(workspaceId, version, plan.packages)
+  if (!seats.ok) {
+    await tripConductor(workspaceId, `staffing goal v${version}: ${seats.error}`)
+    return 'conduct_failed'
+  }
+  try {
+    await materialise(workspaceId, version, workspace.maxAttempts, plan, fallback, seats.value, items)
+  } catch (error) {
+    if (error instanceof AlreadyConducted) return 'none'
+    throw error
+  }
+  return 'conducted'
+}
+
+/**
+ * The persona a `single`-by-default fallback is staffed with. Which template the conductor leaned
+ * on in its refused answers is unknowable once they were refused, so the rule is deterministic and
+ * needs no model: the persona of an existing open seat that already holds PACKAGE_WORKER_ROLE
+ * (someone who has delivered a package here before), else the FIRST template of the catalogue the
+ * conductor was shown (ordered by name). Either way a template the catalogue shows, so the pool
+ * behind it is one `staffPackages` may hire from. `null` only for an empty catalogue.
+ */
+async function fallbackTemplate(
+  workspaceId: string,
+  catalogue: { readonly templateIds: ReadonlySet<string> },
+): Promise<string | null> {
+  const seats = await prisma.slave.findMany({
+    where: { team: { workspaceId }, closedAt: null, person: { releasedAt: null }, runtimeRoles: { has: PACKAGE_WORKER_ROLE } },
+    select: { person: { select: { templateId: true } } },
+    orderBy: { id: 'asc' },
+  })
+  const seated = seats
+    .map((seat) => seat.person.templateId)
+    .find((templateId): templateId is string => templateId !== null && catalogue.templateIds.has(templateId))
+  return seated ?? [...catalogue.templateIds][0] ?? null
+}
+
+/**
+ * Says a conductor problem that a later tick may fix by itself (a pool that ran out): a
+ * `guardrail.tripped` with guardrail `conductor_failed`, WITHOUT a halt -- a pool sync or a
+ * person's action can make the next tick's staffing succeed. Said once: skipped when the
+ * workspace's newest trip already carries the same detail, so an empty pool is not repeated on
+ * every tick.
+ */
+async function tripConductor(workspaceId: string, detail: string): Promise<void> {
+  const newest = await prisma.executionEvent.findFirst({
+    where: { workspaceId, type: 'guardrail_tripped' },
+    orderBy: { seq: 'desc' },
+    select: { payload: true },
+  })
+  const said = (newest?.payload as { readonly detail?: unknown } | null | undefined)?.detail
+  if (said === detail) return
+  await appendEvent({
+    type: 'guardrail.tripped',
+    workspaceId,
+    actor: 'system',
+    payload: { guardrail: 'conductor_failed' satisfies GuardrailKind, detail },
+  })
+}
+
+/**
+ * What a package task's description says: the requirements it delivers, word for word, or -- for
+ * an integration package with none of its own -- what it wires together. The full contract (owned
+ * paths, interfaces) is the run context's job (Conductor Task 8), not the description's.
+ */
+function taskDescription(pkg: PackageSpec, items: readonly { readonly key: string; readonly text: string }[]): string {
+  if (pkg.requirementKeys.length === 0) return `Wire the packages together: ${pkg.dependsOn.join(', ')}.`
+  const textOf = new Map(items.map((item) => [item.key, item.text] as const))
+  return `Requirements:\n${pkg.requirementKeys.map((k) => `${k}: ${textOf.get(k) ?? ''}`).join('\n')}`
+}
+
+/**
+ * ONE transaction (plan decision D7): the `conduct` decision is recorded already applied, and its
+ * packages, their pinned tasks and their dependency edges are written with it -- a decision row
+ * with no packages behind it, or packages no decision explains, can never be observed. The events
+ * follow the commit (`appendEvent` owns its own transaction on the shared client).
+ *
+ * Returns the decision's id.
+ */
+async function materialise(
+  workspaceId: string,
+  version: number,
+  maxAttempts: number,
+  plan: ConductPlan,
+  fallback: boolean,
+  seats: ReadonlyMap<string, string>,
+  items: readonly { readonly key: string; readonly text: string }[],
+): Promise<string> {
+  const subjectId = `${workspaceId}:v${version}`
+  const packageKeys = plan.packages.map((p) => p.key)
+  const action = { kind: 'conduct' as const, goalVersion: version, mode: plan.mode, packageKeys }
+  const situation = situationSchema.parse({
+    kind: 'conduct',
+    subjectId,
+    summary: `Goal v${version}: ${plan.mode}, ${plan.packages.length} package(s)`,
+    facts: { goalVersion: version, mode: plan.mode, packages: plan.packages.length },
+  })
+  const candidates = [candidateSchema.parse({ action, tier: 'applied', why: plan.reason })]
+
+  const { decisionId, tasks } = await prisma.$transaction(async (tx) => {
+    // One writer per workspace: two ticks that both staffed the same plan serialise here, and the
+    // second finds the first's packages and throws -- rolling back, never committing a duplicate.
+    await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
+    if ((await tx.workPackage.count({ where: { workspaceId, goalVersion: version } })) > 0) throw new AlreadyConducted()
+
+    const decision = await tx.supervisorDecision.create({
+      data: {
+        workspaceId,
+        situationKind: 'conduct',
+        subjectId,
+        situation: situation as unknown as Prisma.InputJsonValue,
+        candidates: candidates as unknown as Prisma.InputJsonValue,
+        chosenIndex: 0,
+        action: action as unknown as Prisma.InputJsonValue,
+        rationale: plan.reason,
+        tier: 'applied',
+        status: 'applied',
+        decidedBy: fallback ? 'rules' : 'model',
+        modelCostUsd: null,
+        modelCalled: false,
+      },
+      select: { id: true },
+    })
+
+    const taskIdByKey = new Map<string, string>()
+    const created: { readonly id: string; readonly title: string; readonly assigneeId: string | null }[] = []
+    for (const pkg of plan.packages) {
+      const row = await tx.workPackage.create({
+        data: {
+          workspaceId,
+          goalVersion: version,
+          key: pkg.key,
+          title: pkg.title,
+          requirementKeys: [...pkg.requirementKeys],
+          ownedPaths: [...pkg.ownedPaths],
+          newPaths: [...pkg.newPaths],
+          interface: pkg.interface,
+          dependsOn: [...pkg.dependsOn],
+          isIntegration: pkg.isIntegration,
+          templateId: pkg.templateId,
+        },
+        select: { id: true },
+      })
+      const task = await tx.task.create({
+        data: {
+          workspaceId,
+          title: pkg.title,
+          description: taskDescription(pkg, items),
+          status: 'ready',
+          requiredRole: PACKAGE_WORKER_ROLE,
+          requiredCapabilities: [],
+          createdBy: 'system',
+          maxAttempts,
+          goalVersion: version,
+          assigneeId: seats.get(pkg.key) ?? null,
+          workPackageId: row.id,
+        },
+        select: { id: true, title: true, assigneeId: true },
+      })
+      taskIdByKey.set(pkg.key, task.id)
+      created.push(task)
+    }
+    for (const pkg of plan.packages) {
+      for (const dep of pkg.dependsOn) {
+        const taskId = taskIdByKey.get(pkg.key)
+        const dependsOnTaskId = taskIdByKey.get(dep)
+        if (taskId === undefined || dependsOnTaskId === undefined) continue
+        await tx.taskDependency.create({ data: { taskId, dependsOnTaskId } })
+      }
+    }
+    return { decisionId: decision.id, tasks: created }
+  })
+
+  for (const task of tasks) {
+    await appendEvent({
+      type: 'task.created',
+      workspaceId,
+      taskId: task.id,
+      actor: 'system',
+      payload: { title: task.title, goalVersion: version, assigneeId: task.assigneeId },
+    })
+  }
+  await appendEvent({
+    type: 'workspace.conducted',
+    workspaceId,
+    actor: 'system',
+    payload: { version, mode: plan.mode, packages: packageKeys, decisionId, fallback },
+  })
+  return decisionId
 }
 
 /**

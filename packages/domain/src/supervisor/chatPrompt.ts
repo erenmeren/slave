@@ -96,7 +96,29 @@ export interface ChatTurnInput {
 }
 
 /**
- * THE ONE TABLE (R3): every {@link ActionKind}, and the JSON a reply writes to ask for it.
+ * The kinds a conversation may never carry, each with the sentence a person is told when a reply
+ * asks for one anyway. `conduct` (Conductor R2) is the conductor's own size decision, recorded by it
+ * in the transaction that carries it out (plan decision D7): a chat-proposed `conduct` would be a
+ * decision row with no packages behind it.
+ */
+type ChatRefusedKind = 'conduct'
+const CHAT_REFUSED: Readonly<Record<ChatRefusedKind, string>> = {
+  conduct: 'the conductor decides this itself',
+}
+
+/** Why a conversation may not carry `kind`, or undefined when it may. */
+function chatRefusal(kind: ActionKind): string | undefined {
+  return (CHAT_REFUSED as Readonly<Partial<Record<ActionKind, string>>>)[kind]
+}
+
+/** Every action kind a conversation may ask for: {@link ACTION_KINDS} less {@link CHAT_REFUSED}. */
+export type ChatActionKind = Exclude<ActionKind, ChatRefusedKind>
+export const CHAT_ACTION_KINDS: readonly ChatActionKind[] = ACTION_KINDS.filter(
+  (kind): kind is ChatActionKind => chatRefusal(kind) === undefined,
+)
+
+/**
+ * THE ONE TABLE (R3): every {@link ChatActionKind}, and the JSON a reply writes to ask for it.
  *
  * Generated from `ACTION_KINDS` rather than hand-listed in the prompt, and held to it by a test:
  * an action kind added later and forgotten here is one the Supervisor can take on a tick and
@@ -106,14 +128,14 @@ export interface ChatTurnInput {
  * The shapes are the ACTION's own fields, exactly as `actionSchema` validates them. A model that
  * writes one this table does not describe has its action dropped with a sentence, never guessed at.
  *
- * EVERY kind is here, including the ones the rules usually raise by themselves: a person may ask
+ * EVERY kind is here but {@link CHAT_REFUSED}'s, including the ones the rules usually raise by themselves: a person may ask
  * for any of them in words, and a vocabulary that left some out would be a Supervisor that can do
  * a thing on a tick and cannot be asked to do it. `answer_question` is the one to watch when this
  * is wired up: the answer path's tier comes from a DRAFT a second model call wrote (`answerTier`),
  * and a conversation proposes it with none -- so whoever carries it out settles what an
  * `answer_question` with no draft means.
  */
-export const ACTION_SHAPES: Readonly<Record<ActionKind, string>> = {
+export const ACTION_SHAPES: Readonly<Record<ChatActionKind, string>> = {
   unblock_task: '{"kind": "unblock_task", "taskId": "<task id>"}',
   raise_max_attempts: '{"kind": "raise_max_attempts", "taskId": "<task id>"}',
   set_runtime_roles: '{"kind": "set_runtime_roles", "slaveId": "<worker id>", "roles": ["<role>"]}',
@@ -388,7 +410,7 @@ export function buildSupervisorChatPrompt(input: ChatTurnInput): string {
     'ACTION VOCABULARY',
     'These are the only things you can ask this system to do. Each one names a row by its id, and',
     'an id that is not shown above is dropped before it reaches anything.',
-    ...ACTION_KINDS.map((kind) => `  ${ACTION_SHAPES[kind]}`),
+    ...CHAT_ACTION_KINDS.map((kind) => `  ${ACTION_SHAPES[kind]}`),
     '',
     'Reply with exactly one JSON object and nothing else on its line:',
     // THREE KINDS, NOT FIVE (erratum E12). `verifySources` resolves `task`, `run_context` and
@@ -547,6 +569,11 @@ export function parseSupervisorReply(text: string, world: SupervisorWorld): Pars
     const action = actionSchema.safeParse(raw)
     if (!action.success) {
       dropped.push(notAnAction(raw))
+      continue
+    }
+    const refused = chatRefusal(action.data.kind)
+    if (refused !== undefined) {
+      dropped.push(`the reply asked for "${action.data.kind}", which a conversation cannot: ${refused}`)
       continue
     }
     const missing = unknownReference(action.data, world)

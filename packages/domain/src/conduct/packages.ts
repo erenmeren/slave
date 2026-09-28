@@ -24,6 +24,27 @@ export interface ConductPlan {
   readonly packages: readonly PackageSpec[]
 }
 
+/**
+ * A stored {@link ConductPlan} read back typed (`ConductorCall.plan`): the interfaces above stay
+ * the source of truth and this mirrors them, so a plan bought on one tick and staffed on a later
+ * one is the same plan, field for field. Validation already ran before the plan was stored.
+ */
+export const conductPlanSchema: z.ZodType<ConductPlan, z.ZodTypeDef, unknown> = z.object({
+  mode: z.enum(['single', 'partitioned']),
+  reason: z.string(),
+  packages: z.array(z.object({
+    key: z.string().min(1),
+    title: z.string(),
+    requirementKeys: z.array(z.string()),
+    ownedPaths: z.array(z.string()),
+    newPaths: z.array(z.string()),
+    interface: z.string(),
+    dependsOn: z.array(z.string()),
+    isIntegration: z.boolean(),
+    templateId: z.string().min(1),
+  })).min(1),
+})
+
 export interface ConductContext {
   readonly requirementKeys: readonly string[]
   readonly repoFiles: readonly string[]

@@ -99,10 +99,10 @@ export function isDispatchable(
  */
 export function hasStartableWork(
   seat: { readonly id?: string; readonly runtimeRoles: readonly string[] },
-  tasks: readonly Pick<
-    SchedulableTask,
-    'status' | 'dependenciesDone' | 'backingOff' | 'requiredRole' | 'pinnedSlaveId'
-  >[],
+  // `pinnedSlaveId` widened to a plain string: the Supervisor's world carries unbranded ids.
+  tasks: readonly (Pick<SchedulableTask, 'status' | 'dependenciesDone' | 'backingOff' | 'requiredRole'> & {
+    readonly pinnedSlaveId?: string | null
+  })[],
 ): boolean {
   return tasks.some(
     (task) =>

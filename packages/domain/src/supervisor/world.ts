@@ -151,6 +151,16 @@ export interface SupervisorTask {
    * turned from a quiet one into a live one.
    */
   readonly assigneeId: string | null
+  /**
+   * Conductor Plan 2: the one seat that may start this task -- a work-package task is pinned to
+   * the seat it was staffed with, and no other holder of its role is ever handed it. Null for
+   * every task outside a package.
+   *
+   * LOADER CONTRACT: the assignee of a task with a `workPackageId`, else null -- the expression the
+   * scheduler's own loader (`apps/orchestrator/src/world.ts`) reads, so `willNotRun` cannot come
+   * to a different answer about who can start what than `decide()` does.
+   */
+  readonly pinnedSlaveId: string | null
   /** M48 R2: the runbook stage this task belongs to, or null for a task planned without one.
    *  A LABEL, never a scheduler input -- `decide()` has never seen it. */
   readonly stage: string | null

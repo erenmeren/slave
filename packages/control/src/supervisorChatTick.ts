@@ -322,6 +322,8 @@ const ASKED_FOR: Readonly<Record<Action['kind'], string>> = {
   retry_planning: 'letting planning start over',
   escalate_to_human: 'raising that with a person',
   no_action: 'doing nothing',
+  // Conductor R2: never carried by a conversation (`parseSupervisorReply` drops it); total anyway.
+  conduct: 'deciding how the goal is delivered',
 }
 
 /**

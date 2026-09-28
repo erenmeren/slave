@@ -37,9 +37,10 @@ describe('every union a person reads has a label (M44 R5)', () => {
   // M51 R3: the sixteenth action. `ACTION_KINDS` has no Postgres enum of its own (an `Action` lives
   // inside a JSONB column), so this count is the only thing that notices a kind added to the union
   // and forgotten in the list the event payloads validate against.
-  it('carries the twenty-four action kinds, `steer_run` among them', () => {
-    expect(ACTION_KINDS).toHaveLength(24)
+  it('carries the twenty-five action kinds, `steer_run` and `conduct` among them', () => {
+    expect(ACTION_KINDS).toHaveLength(25)
     expect(ACTION_KINDS).toContain('steer_run')
+    expect(ACTION_KINDS).toContain('conduct')
   })
 
   // M52 R5: the seventeenth situation, asserted BY NAME for `engagement_over`'s own reason. The

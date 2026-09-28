@@ -99,6 +99,9 @@ const HALT_INERT: readonly Action['kind'][] = ['configure_runtime']
 export function tierOf(action: Action, world: SupervisorWorld, situationKind: SituationKind): Tier {
   if (action.kind === 'escalate_to_human') return 'escalated'
   if (action.kind === 'no_action') return 'noop'
+  // Conductor R2 (plan decision D7): the conductor records its size decision already carried out,
+  // in the transaction that carries it out -- no halt or autonomy setting makes it a proposal.
+  if (action.kind === 'conduct') return 'applied'
   // R4: a halt still forces a proposal for everything -- except the two actions that exist to end a
   // BREAKER halt ({@link HALT_REMEDIES}, {@link BREAKER_HALT}). Both are applied under `act` there;
   // every other kind, under any halt, `act` or not, is `proposed` while the workspace is halted.
