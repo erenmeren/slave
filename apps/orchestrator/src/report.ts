@@ -1,4 +1,4 @@
-import { isUniqueConstraintViolation, refusalText, sendMessage } from '@slave-of-ai/control'
+import { isUniqueConstraintViolation, refusalText, reportQuestionKey, sendMessage } from '@slave-of-ai/control'
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import { CONDUCTOR_ROLE, parseSlaveReport, taskId as brandTaskId } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
@@ -74,7 +74,8 @@ export async function fileRunReport(
       recipientRole: CONDUCTOR_ROLE,
       expectsReply: true,
       taskId: task.id,
-      idempotencyKey: `report:${run.id}:${String(index)}`,
+      // The key is also what keeps the question pending with nobody parked on it (`stillPendingQuestion`).
+      idempotencyKey: reportQuestionKey(run.id, index),
     })
     if (!sent.ok) {
       console.error(`[report] run ${run.id}: question ${String(index + 1)} was not sent -- ${refusalText(sent.error)}`)

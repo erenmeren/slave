@@ -3,11 +3,13 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { answerQuestion, listPendingQuestions, loadSupervisorWorld } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { CONDUCTOR_ROLE, PACKAGE_WORKER_ROLE, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { CONDUCTOR_ROLE, PACKAGE_WORKER_ROLE, observe, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import { ClaudeCodeAdapter } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { inboxSection } from '../../src/inbox.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 import { worktreeRootFor } from '../../src/worktree.js'
 
@@ -260,6 +262,36 @@ describe('a package run files its report before verify', () => {
     expect(questions).toEqual([
       expect.objectContaining({ recipientRole: CONDUCTOR_ROLE, taskId: f.taskId, expectsReply: true, body: 'Omit JSON nulls?' }),
     ])
+  })
+
+  /**
+   * Final review C1: a report question is asked after its run concluded, so nobody is parked on it
+   * -- and under the parked-run rule alone it was pending nowhere. It must be pending for the
+   * Supervisor (which answers the conductor's questions), for `messages`, and until a reply lands;
+   * the reply then reaches the seat's next run on the task.
+   */
+  it('keeps a report question pending for the Supervisor until answered, and hands the answer to the seat', async (): Promise<void> => {
+    const f = await seedPackageTask({ report: { ...goodReport, questions: ['Omit JSON nulls?'] } })
+    await tickUntil(f, async () => (await prisma.runReport.count()) === 1)
+    const question = await prisma.slaveMessage.findFirstOrThrow({ where: { workspaceId: f.workspaceId, kind: 'question' } })
+
+    const pending = await listPendingQuestions(f.workspaceId)
+    expect(pending.ok && pending.value.map((m) => m.id)).toEqual([question.id])
+    const { world } = await loadSupervisorWorld(f.workspaceId, new Date())
+    expect(observe(world).some((s) => s.kind === 'unanswerable_question' && s.subjectId === question.id)).toBe(true)
+
+    const answered = await answerQuestion(question.id, { body: 'Yes, omit them.', answeredBy: 'test' })
+    expect(answered.ok).toBe(true)
+    const after = await listPendingQuestions(f.workspaceId)
+    expect(after.ok && after.value).toEqual([])
+    const { world: later } = await loadSupervisorWorld(f.workspaceId, new Date())
+    expect(observe(later).some((s) => s.subjectId === question.id)).toBe(false)
+
+    const inbox = await inboxSection(question.slaveId, f.taskId)
+    expect(inbox?.text).toContain('Omit JSON nulls?')
+    expect(inbox?.text).toContain('Yes, omit them.')
+    // Only on that task: the seat's run on another task is not told about it.
+    expect(await inboxSection(question.slaveId, null)).toBeNull()
   })
 
   it('leaves a non-package task exactly as before', async (): Promise<void> => {

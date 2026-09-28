@@ -968,7 +968,7 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
   if (input.kind === 'implementation') {
     const roster = await rosterSection(input.slaveId, input.workspaceId)
     if (roster !== null) sections.push(roster)
-    const inbox = await inboxSection(input.slaveId)
+    const inbox = await inboxSection(input.slaveId, task?.id ?? null)
     if (inbox !== null) sections.push(inbox)
     // Offered only when somebody can be asked: with nobody to address, `recipientCanAnswer` refuses
     // every recipient the slave could name, and an offer the system always turns down is worse than
