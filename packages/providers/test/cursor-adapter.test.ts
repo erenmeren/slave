@@ -268,6 +268,26 @@ describe('CursorAdapter', () => {
     expect(readFileSync(envOut, 'utf8')).toBe(`${input.permissionsFilePath}\n`)
   })
 
+  // Conductor Plan 4b (D2): `workerEnv` exports the scratch directory when the run directory has one.
+  it('sets SLAVEOFAI_VERIFY_DIR on the child exactly when the run directory has a verify/ directory', async () => {
+    const envOut = path.join(worktreePath, 'verify-env.txt')
+    const script = writeScript(
+      worktreePath,
+      'verify-env-echo.sh',
+      `#!/bin/sh\nprintf '[%s]\\n' "\${SLAVEOFAI_VERIFY_DIR-unset}" > ${JSON.stringify(envOut)}\n`,
+    )
+    const plain = adapterFor(script)
+    await plain.start(input)
+    await drain(plain, input.runId)
+    expect(readFileSync(envOut, 'utf8')).toBe('[unset]\n')
+
+    mkdirSync(path.join(input.runDir, 'verify'))
+    const verifying = adapterFor(script)
+    await verifying.start(input)
+    await drain(verifying, input.runId)
+    expect(readFileSync(envOut, 'utf8')).toBe(`[${path.join(input.runDir, 'verify')}]\n`)
+  })
+
   it('ends the stream when the child exits, even while a grandchild holds its stdout open', async () => {
     // THE ONLY SCENARIO THE QUIESCENCE MECHANISM EXISTS FOR, and until this test nothing exercised
     // it: every other script here is well-behaved, so `child.once('close', finalize)` always won

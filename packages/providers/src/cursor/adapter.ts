@@ -6,7 +6,13 @@ import { capabilitiesOf } from '../capabilities.js'
 import { listCursorModels, type ModelListing } from '../models.js'
 import { AsyncEventQueue } from '../runtime/event-queue.js'
 import { clearAndVerifyPauseFlagAbsent } from '../runtime/pause-flag.js'
-import { brokerChannelPathFor, buildChildEnv, permissionsFilePathFor, terminateChild } from '../runtime/process.js'
+import {
+  brokerChannelPathFor,
+  buildChildEnv,
+  permissionsFilePathFor,
+  terminateChild,
+  verifyDirIfPresent,
+} from '../runtime/process.js'
 import { isRecord } from '../runtime/summary.js'
 import type { RunOutcome, RuntimeEvent } from '../types.js'
 import type { SlaveRuntimeAdapter, ProviderCapabilities, RunHandle, StartRunInput } from '../contract/adapter.js'
@@ -324,7 +330,12 @@ export class CursorAdapter implements SlaveRuntimeAdapter {
   private workerEnv(runDir: string, input: Parameters<typeof buildChildEnv>[0]): NodeJS.ProcessEnv {
     const realHome = this.realHome ?? realHomeDir()
     const workerHome = prepareCursorWorkerHome({ runDir, realHome })
-    return { ...buildChildEnv(input), ...cursorWorkerEnv({ workerHome, realHome, parentEnv: process.env }) }
+    // Conductor Plan 4b (D2): a verification run's scratch directory, declared by its presence under
+    // `runDir` -- the one place both the start and the resume (`dirname(pauseFlagPath)`) name.
+    return {
+      ...buildChildEnv({ ...input, ...verifyDirIfPresent(runDir) }),
+      ...cursorWorkerEnv({ workerHome, realHome, parentEnv: process.env }),
+    }
   }
 
   private async runPreflightGate(gatePath: string, runId: RunId): Promise<void> {

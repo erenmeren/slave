@@ -291,6 +291,17 @@ describe('ClaudeCodeAdapter.resume', () => {
     expect(env['SLAVEOFAI_BROKER_CHANNEL']).toBe(path.join(input.runDir, 'broker.ndjson'))
   })
 
+  // Conductor Plan 4b (D2): a resumed verification run sees the SAME scratch directory -- the one
+  // under the original run directory, recovered from the checkpoint -- with no checkpoint column.
+  it('exports SLAVEOFAI_VERIFY_DIR on a resume when the original run directory has one', async (): Promise<void> => {
+    mkdirSync(path.join(input.runDir, 'verify'), { recursive: true })
+    const handle = await adapter.resume(input.runId, checkpoint, 'do the other thing', 'e'.repeat(64))
+    await spawnedArgsFor(handle)
+    const payload = adapter.rawTerminalPayload(handle.runId)
+    const env = z.record(z.string(), z.string().optional()).parse(payload?.['env'])
+    expect(env['SLAVEOFAI_VERIFY_DIR']).toBe(path.join(input.runDir, 'verify'))
+  })
+
   it('leaves SLAVEOFAI_RUN_TOKEN absent on a resume with no token', async (): Promise<void> => {
     const handle = await adapter.resume(input.runId, checkpoint, 'do the other thing')
     await spawnedArgsFor(handle)

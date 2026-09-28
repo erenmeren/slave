@@ -689,6 +689,69 @@ describe('scripts/lib/permissions.sh: read_permission_verdict (M52 R2: default-D
       })
     })
 
+    // Conductor Plan 4b (D1): a verification run's file carries `write_repo` and an ownership rule
+    // that owns NOTHING in its worktree. The gate is unchanged; this pins that the empty rule
+    // confines the verifier's write tools to outside the worktree (its scratch directory) while
+    // its shell stays allowed.
+    describe('the verification shape: owned: [], excluded: [] (Conductor Plan 4b D1)', () => {
+      const VERIFY_WORKTREE = '/w'
+      function writeVerificationFile(): string {
+        return writePermissionsFile(
+          v2({
+            grants: ['read_repo', 'write_repo', 'run_commands'],
+            allow: [
+              { tool: 'Read', kind: 'read_repo' },
+              { tool: 'Write', kind: 'write_repo' },
+              { tool: 'Edit', kind: 'write_repo' },
+              { tool: 'NotebookEdit', kind: 'write_repo' },
+              { tool: 'Bash', kind: 'run_commands' },
+            ],
+            vocabulary: {
+              Read: 'read_repo',
+              Write: 'write_repo',
+              Edit: 'write_repo',
+              NotebookEdit: 'write_repo',
+              Bash: 'run_commands',
+            },
+            ownership: { worktreeRoot: VERIFY_WORKTREE, owned: [], excluded: [] },
+          }),
+        )
+      }
+
+      it('is what ownershipPatterns builds for a rule that owns nothing', () => {
+        expect(ownershipPatterns({ owned: [], excluded: [] })).toEqual({ owned: [], excluded: [] })
+      })
+
+      it('denies a Write inside the verification worktree, as foreign_file', async () => {
+        const result = await runVerdict(
+          JSON.stringify({ tool_name: 'Write', tool_input: { file_path: `${VERIFY_WORKTREE}/src/a.py` } }),
+          writeVerificationFile(),
+        )
+        expect(result.code).toBe(0)
+        expect(result.status).toBe(0)
+        expect(result.tool).toBe('Write')
+        expect(result.capability).toBe('foreign_file')
+      })
+
+      it('allows a Write into the scratch directory, outside the worktree', async () => {
+        const result = await runVerdict(
+          JSON.stringify({ tool_name: 'Write', tool_input: { file_path: '/state/runs/r1/verify/check.sh' } }),
+          writeVerificationFile(),
+        )
+        expect(result.code).toBe(0)
+        expect(result.status).toBe(1)
+      })
+
+      it('allows Bash -- the shell is not judged by ownership (D7 checks the worktree afterwards)', async () => {
+        const result = await runVerdict(
+          JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'sh /state/runs/r1/verify/check.sh' } }),
+          writeVerificationFile(),
+        )
+        expect(result.code).toBe(0)
+        expect(result.status).toBe(1)
+      })
+    })
+
     it('leaves today’s verdicts unchanged when the file carries no ownership field at all', async () => {
       const result = await runVerdict('{"tool_name":"Read"}', writePermissionsFile(v2({})))
       expect(result.code).toBe(0)
