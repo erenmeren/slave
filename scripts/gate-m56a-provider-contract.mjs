@@ -136,8 +136,9 @@ const FAKE_CURSOR = join(repoRoot, 'scripts/gate-fakes/fake-cursor-agent.sh')
 const PAUSE_ADR = 'docs/decisions/0001-pause-semantics.md'
 const PAUSE_ADR_BYTES = 38_862
 
-// The hook plane, by name (spec §3 stage 12). Every one of these five is byte-identical to the tree
-// this milestone forked from -- `main` at `cff28066` -- and their sha256 digests are checked in at
+// The hook plane, by name (spec §3 stage 12). These five were byte-identical to the tree this
+// milestone forked from -- `main` at `cff28066` -- except `scripts/lib/permissions.sh`, re-pinned by
+// Conductor Plan 3 (the ownership deny). Their sha256 digests are checked in at
 // `scripts/fixtures/m56a-goldens/hook-plane-sha256.json`, which is what stage 12 compares against.
 const HOOK_PLANE_SCRIPTS = [
   'scripts/pause-gate.sh',
