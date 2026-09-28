@@ -1,6 +1,14 @@
 import { realpathSync } from 'node:fs'
+import { gitIn } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import { ownershipPatterns, ownershipRuleFor, type OwnershipRule } from '@slave-of-ai/domain'
+import { isOwned, ownershipPatterns, ownershipRuleFor, type OwnershipRule } from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
+import { rejectRunBack } from './runs.js'
+
+/** How many foreign files the rejection reason names: enough to act on, short enough to read. */
+export const FOREIGN_FILES_LISTED = 20
+/** How many the `task.ownership_violated` event records -- its schema's cap; `total` counts all. */
+const FOREIGN_FILES_RECORDED = 50
 
 /**
  * The ownership rule of a package task (conductor spec R4): its package among its goal version's
@@ -49,4 +57,61 @@ function resolvedRoot(worktreeRoot: string): string {
   } catch {
     return worktreeRoot
   }
+}
+
+/**
+ * The files `branch` changed since it left `base` -- the three-dot range, so the NET change of the
+ * branch alone: a file changed and then reverted on it is not listed, and neither is anything the
+ * base did after the branch left it. `--no-renames` lists a rename as both of its paths, so a file
+ * moved out of (or into) someone else's globs is judged on both sides; `-z` keeps a path with a
+ * newline or a quote in it one entry.
+ */
+export async function changedFiles(repoPath: string, base: string, branch: string): Promise<readonly string[]> {
+  const out = await gitIn(repoPath, 'diff', '--name-only', '--no-renames', '-z', `${base}...${branch}`)
+  return out.split('\0').filter((name) => name !== '')
+}
+
+/**
+ * The second enforcement of spec R4: a shell can write anywhere, so the files this task's branch
+ * changed since it left the base branch are checked against its package's ownership before the run
+ * is verified or its report filed (plan D7). Three-dot range: the NET change, so a rework that
+ * reverted a foreign edit passes. A violation goes back through the same guarded rejection a
+ * missing report uses, with every foreign file named up to FOREIGN_FILES_LISTED, and is recorded
+ * as `task.ownership_violated` -- only when the rejection applied, so a replayed conclusion does
+ * not count a second violation toward the Supervisor's `foreign_file` (Task 5).
+ *
+ * Returns whether verify may go on: true for a task with no rule (no package, or one that owns
+ * everything) and for a branch that changed only what it owns.
+ */
+export async function auditOwnership(
+  run: { readonly id: string; readonly slaveId: string },
+  task: { readonly id: string; readonly workspaceId: string; readonly branch: string },
+  workspace: { readonly repoPath: string; readonly baseBranch: string },
+): Promise<boolean> {
+  const rule = await ownershipRuleForTask(task.id)
+  if (rule === null) return true
+  const changed = await changedFiles(workspace.repoPath, workspace.baseBranch, task.branch)
+  const foreign = changed.filter((path) => !isOwned(rule, path))
+  if (foreign.length === 0) return true
+  const listed = foreign.slice(0, FOREIGN_FILES_LISTED).join(', ')
+  const more = foreign.length > FOREIGN_FILES_LISTED ? ` and ${String(foreign.length - FOREIGN_FILES_LISTED)} more` : ''
+  const reason = `revert changes to files you do not own: ${listed}${more}`
+  const applied = await rejectRunBack(
+    run,
+    task,
+    reason,
+    `ownership: ${String(foreign.length)} foreign file(s)`,
+    (attempt) => `still changing files it does not own after ${String(attempt)} attempts: ${listed}${more}`,
+  )
+  if (applied) {
+    await appendEvent({
+      type: 'task.ownership_violated',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      runId: run.id,
+      actor: 'system',
+      payload: { runId: run.id, files: foreign.slice(0, FOREIGN_FILES_RECORDED), total: foreign.length },
+    })
+  }
+  return false
 }

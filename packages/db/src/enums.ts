@@ -37,6 +37,7 @@ export const EVENT_TYPE_BY_DOMAIN_TYPE = {
   'task.review_approved': 'task_review_approved',
   'task.review_rejected': 'task_review_rejected',
   'task.merge_failed': 'task_merge_failed',
+  'task.ownership_violated': 'task_ownership_violated',
   'workspace.goal_set': 'workspace_goal_set',
   'workspace.requirements_set': 'workspace_requirements_set',
   'workspace.conducted': 'workspace_conducted',

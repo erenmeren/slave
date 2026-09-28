@@ -119,6 +119,9 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   'task.verify_failed': null,
   'task.review_rejected': null,
   'task.merge_failed': null,
+  // Conductor Plan 3: beside `task.rework`, which the same audit writes -- a rejection, not a lane
+  // of its own; the Supervisor's `foreign_file` situation is what reaches a person.
+  'task.ownership_violated': null,
   'task.unblocked': null,
   'task.dependency_added': null,
   'task.dependency_removed': null,

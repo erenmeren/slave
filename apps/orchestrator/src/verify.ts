@@ -12,6 +12,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { promote } from './memory.js'
+import { auditOwnership } from './ownership.js'
 import { concludePlanning } from './planning.js'
 import { fileRunReport } from './report.js'
 import { concludeReview } from './review.js'
@@ -448,6 +449,17 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
     console.warn(`[verify] run ${run.id} left uncommitted work; committed it on the worker's behalf as ${wip.sha.slice(0, 12)} (${wip.message})`)
   } else if (wip.kind !== 'clean') {
     console.warn(`[verify] run ${run.id} left uncommitted work that could not be committed for it (${wip.kind}): ${wip.reason}`)
+  }
+
+  // Conductor Plan 3 (spec R4, plan D7): a package run's branch is audited against its package's
+  // ownership after its leftover work is committed (so the audit sees everything the run changed)
+  // and before its report is filed -- a run that changed someone else's files is sent back, and
+  // neither its report nor verify is looked at. A task with no package is untouched.
+  if (
+    task.workPackageId !== null &&
+    !(await auditOwnership(run, { id: task.id, workspaceId: task.workspaceId, branch: task.branch }, task.workspace))
+  ) {
+    return
   }
 
   // Conductor Plan 2 (spec R7): a package worker's report is read BEFORE anything treats the run

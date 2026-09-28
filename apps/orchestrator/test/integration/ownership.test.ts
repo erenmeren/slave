@@ -1,14 +1,15 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { requestResume, runDirPathFor } from '@slave-of-ai/control'
+import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { PACKAGE_WORKER_ROLE, globToRegExp, runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import { ClaudeCodeAdapter, permissionsFilePathFor } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ownershipRuleForTask, permissionOwnership } from '../../src/ownership.js'
+import { changedFiles, ownershipRuleForTask, permissionOwnership } from '../../src/ownership.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 import { worktreeRootFor } from '../../src/worktree.js'
 
@@ -85,7 +86,12 @@ async function seedPackage(
   c: Conducted,
   key: string,
   ownedPaths: readonly string[],
-  options: { readonly isIntegration?: boolean; readonly goalVersion?: number; readonly status?: 'ready' | 'backlog' } = {},
+  options: {
+    readonly isIntegration?: boolean
+    readonly goalVersion?: number
+    readonly status?: 'ready' | 'backlog'
+    readonly maxAttempts?: number
+  } = {},
 ): Promise<string> {
   const pkg = await prisma.workPackage.create({
     data: {
@@ -112,7 +118,7 @@ async function seedPackage(
       requiredRole: PACKAGE_WORKER_ROLE,
       requiredCapabilities: [],
       createdBy: 'system',
-      maxAttempts: 3,
+      maxAttempts: options.maxAttempts ?? 3,
       goalVersion: options.goalVersion ?? 1,
       assigneeId: seat.id,
       workPackageId: pkg.id,
@@ -255,5 +261,141 @@ describe('a package run is given its ownership', () => {
     // Rewritten, not left over: the token rotated on resume.
     expect(after.tokenHash).not.toBe(before.tokenHash)
     expect(after.ownership).toEqual({ worktreeRoot: realpathSync(checkpoint.worktreePath), owned: [source('src/report/**')], excluded: [] })
+  }, 60_000)
+})
+
+/** The `m8-flow` fake, whose work run writes and commits `m8a-work.txt` at the worktree's root and
+ *  ends with a well-formed `<slave-report>` for R1 -- so an audit rejection is the only one left. */
+function depsWithReport(workspaceId: string): TickDeps {
+  const report = {
+    requirements: [{ key: 'R1', status: 'done', evidence: 'the fake wrote it' }],
+    filesTouched: ['m8a-work.txt'],
+    workflow: [{ step: 1, done: true, note: '' }],
+    questions: [],
+  }
+  const extraArgs = [FAKE, '--fixture', 'm8-flow', '--report-json-base64', Buffer.from(JSON.stringify(report)).toString('base64')]
+  const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs, hookPath: REAL_GATE })
+  return { workspaceId: brandWorkspaceId(workspaceId), registry: { resolve: () => adapter } }
+}
+
+/** Ticks, letting every pump finish between ticks, until `done` holds -- bounded, so a flow that
+ *  never gets there fails instead of hanging. */
+async function tickUntil(deps: TickDeps, done: () => Promise<boolean>): Promise<void> {
+  for (let i = 0; i < 40; i += 1) {
+    await tick(deps)
+    await drainPumps()
+    if (await done()) return
+  }
+  throw new Error('tickUntil: the condition never held')
+}
+
+async function taskEventTypes(taskId: string): Promise<readonly string[]> {
+  const rows = await prisma.executionEvent.findMany({ where: { taskId }, orderBy: { seq: 'asc' }, select: { type: true } })
+  return rows.map((row) => DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? row.type)
+}
+
+const taskStatus = async (taskId: string): Promise<string> => (await prisma.task.findUniqueOrThrow({ where: { id: taskId } })).status
+
+describe('the diff audit', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "Artifact", "Checkpoint", "SlaveMessage", "RunReport", "SlaveRun", "TaskDependency", "Task", "WorkPackage", "RequirementSet", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  afterEach(async (): Promise<void> => {
+    await drainPumps()
+  })
+
+  afterAll(async (): Promise<void> => {
+    for (const repo of repos) {
+      rmSync(worktreeRootFor(repo), { recursive: true, force: true })
+      rmSync(repo, { recursive: true, force: true })
+    }
+    await prisma.$disconnect()
+  }, 30_000)
+
+  it('lists the net change of a branch since it left the base, renames as both sides', async (): Promise<void> => {
+    const dir = makeRepo()
+    for (const name of ['a.txt', 'd.txt', 'e.txt', 'x.txt']) writeFileSync(join(dir, name), `${name}\n`)
+    git(['add', '-A'], dir)
+    git(['commit', '-q', '-m', 'base files'], dir)
+    git(['checkout', '-q', '-b', 'work'], dir)
+    writeFileSync(join(dir, 'a.txt'), 'changed\n')
+    mkdirSync(join(dir, 'b'))
+    writeFileSync(join(dir, 'b/c.txt'), 'new\n')
+    git(['rm', '-q', 'd.txt'], dir)
+    git(['mv', 'e.txt', 'f.txt'], dir)
+    writeFileSync(join(dir, 'x.txt'), 'touched\n')
+    git(['add', '-A'], dir)
+    git(['commit', '-q', '-m', 'work'], dir)
+    // Changed, then reverted on the branch: no net change, so not listed.
+    writeFileSync(join(dir, 'x.txt'), 'x.txt\n')
+    git(['commit', '-q', '-am', 'revert x'], dir)
+    // A commit on the base after the branch left it is not the branch's change (three-dot range).
+    git(['checkout', '-q', 'main'], dir)
+    writeFileSync(join(dir, 'm.txt'), 'main moved on\n')
+    git(['add', '-A'], dir)
+    git(['commit', '-q', '-m', 'main'], dir)
+
+    const files = await changedFiles(dir, 'main', 'work')
+    expect(new Set(files)).toEqual(new Set(['a.txt', 'b/c.txt', 'd.txt', 'e.txt', 'f.txt']))
+    expect(files).toHaveLength(5)
+  })
+
+  it('sends a run that changed a file its package does not own back, naming the file', async (): Promise<void> => {
+    const c = await seedConducted()
+    const report = await seedPackage(c, 'report', ['src/report/**'])
+    await tickUntil(depsWithReport(c.workspaceId), async () => (await taskStatus(report)) === 'rework')
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: report } })
+    expect(task.lastRejectionReason?.startsWith('revert changes to files you do not own: ')).toBe(true)
+    expect(task.lastRejectionReason).toContain('m8a-work.txt')
+    expect(task.attempt).toBe(1)
+    const events = await taskEventTypes(report)
+    expect(events).toContain('task.rework')
+    expect(events).toContain('task.ownership_violated')
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: report, kind: 'implementation' } })
+    expect(run.status).toBe('failed')
+    const violated = await prisma.executionEvent.findFirstOrThrow({ where: { taskId: report, type: 'task_ownership_violated' } })
+    expect(violated.runId).toBe(run.id)
+    const payload = violated.payload as { runId: string; files: string[]; total: number }
+    expect(payload.runId).toBe(run.id)
+    expect(payload.files).toContain('m8a-work.txt')
+    expect(payload.total).toBe(payload.files.length)
+    expect(await prisma.runReport.count()).toBe(0)
+  }, 60_000)
+
+  it('lets a run that changed only its own files go on to its report and review', async (): Promise<void> => {
+    const c = await seedConducted()
+    const report = await seedPackage(c, 'report', ['m8a-work.txt'])
+    await tickUntil(depsWithReport(c.workspaceId), async () => (await taskStatus(report)) !== 'running' && (await taskStatus(report)) !== 'ready')
+
+    expect(await taskStatus(report)).toBe('reviewing')
+    expect(await prisma.runReport.count({ where: { taskId: report } })).toBe(1)
+    expect(await taskEventTypes(report)).not.toContain('task.ownership_violated')
+  }, 60_000)
+
+  it('does not audit a main package that owns everything', async (): Promise<void> => {
+    const c = await seedConducted()
+    const main = await seedPackage(c, 'main', ['**'], { isIntegration: true })
+    await tickUntil(depsWithReport(c.workspaceId), async () => (await taskStatus(main)) !== 'running' && (await taskStatus(main)) !== 'ready')
+
+    expect(await taskStatus(main)).toBe('reviewing')
+    expect(await prisma.runReport.count({ where: { taskId: main } })).toBe(1)
+    expect(await taskEventTypes(main)).not.toContain('task.ownership_violated')
+  }, 60_000)
+
+  it('fails the task at the attempt cap, and says so with task.failed', async (): Promise<void> => {
+    const c = await seedConducted()
+    const report = await seedPackage(c, 'report', ['src/report/**'], { maxAttempts: 1 })
+    await tickUntil(depsWithReport(c.workspaceId), async () => (await taskStatus(report)) === 'failed')
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: report } })
+    expect(task.lastRejectionReason?.startsWith('revert changes to files you do not own: ')).toBe(true)
+    const events = await taskEventTypes(report)
+    expect(events).toContain('task.failed')
+    expect(events).toContain('task.ownership_violated')
+    expect(events).not.toContain('task.rework')
   }, 60_000)
 })

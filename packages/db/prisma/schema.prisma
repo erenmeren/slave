@@ -1870,6 +1870,9 @@ enum SupervisorSituationKind {
   /// Conductor Plan 2 (final review I5): a package task pinned to a seat that can no longer start
   /// it. The subject is the TASK.
   package_seat_lost
+  /// Conductor Plan 3 (spec R4): a package worker changed files another worker owns. The subject is
+  /// the TASK.
+  foreign_file
   done_not_integrated_stale
   /// M50 R3: a worker brought in for one assignment, whose assignment is over. The subject is the
   /// SLAVE.
@@ -2230,6 +2233,9 @@ enum EventType {
   task_review_approved        @map("task.review_approved")
   task_review_rejected        @map("task.review_rejected")
   task_merge_failed           @map("task.merge_failed")
+  /// Conductor Plan 3 (spec R4): a package run's branch changed files its package does not own, so
+  /// the run failed and the task went back before verify.
+  task_ownership_violated     @map("task.ownership_violated")
   workspace_goal_set          @map("workspace.goal_set")
   /// Conductor R1 (2026-09-28): a goal version's requirement set was extracted.
   workspace_requirements_set  @map("workspace.requirements_set")

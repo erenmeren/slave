@@ -69,6 +69,7 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'task.review_approved': { reason: 'diff matches the task' },
   'task.review_rejected': { reason: 'edge case unhandled', attempt: 2 },
   'task.merge_failed': { reason: 'conflict in package.json' },
+  'task.ownership_violated': { runId: 'r1', files: ['packages/api/src/a.ts', 'README.md'], total: 3 },
   'task.worktree_collected': {
     path: '/repo/.slaveofai/worktrees/T-abc',
     reason: 'operator',
@@ -508,6 +509,13 @@ describe('targeted card bodies', () => {
     const Card = ACTIVITY_CARDS['task.merge_failed']
     render(<Card event={fixtureFor('task.merge_failed')} {...CARD_PROPS} />)
     expect(screen.getByTestId('merge-failed-reason').textContent).toBe('conflict in package.json')
+  })
+
+  it('task.ownership_violated names the listed files and how many more there were', () => {
+    const Card = ACTIVITY_CARDS['task.ownership_violated']
+    render(<Card event={fixtureFor('task.ownership_violated')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('ownership-violated-files').textContent).toBe('packages/api/src/a.ts, README.md')
+    expect(screen.getByTestId('ownership-violated-files').parentElement?.textContent).toContain('and 1 more')
   })
 
   it('task.worktree_collected shows the path and the reason', () => {
