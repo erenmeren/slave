@@ -5,7 +5,8 @@
  * rather than imported so this module stays the one place that knows what "neutralised" means --
  * the messaging module's own constants are the ACTIVE markers a slave writes, these are the same
  * strings as DATA to be defused. The conductor's `<slave-report>` pair (`SLAVE_REPORT_TAG` in
- * `../conduct/contract.ts`) joined them in Conductor Plan 2.
+ * `../conduct/contract.ts`) joined them in Conductor Plan 2, and its `<slave-verification>` pair
+ * (`SLAVE_VERIFICATION_TAG` in `../conduct/constants.ts`) in Conductor Plan 4b.
  *
  * These two live in a LEAF module of their own (M48 t1), re-exported by `./render.ts` so every
  * caller since M37 is untouched. The reason is the import graph: `render.ts` imports
@@ -24,6 +25,10 @@ export const MARKERS = [
   // requirement, an interface, an inbox message) must not be able to forge or close one.
   '<slave-report>',
   '</slave-report>',
+  // Conductor Plan 4b: a verification run's verdict is read out of this tag, so a requirement's
+  // text or the integrated diff summary quoted in the prompt cannot forge or close one either.
+  '<slave-verification>',
+  '</slave-verification>',
 ] as const
 
 /**

@@ -329,3 +329,27 @@ describe('runContextManifestSchema -- package and report_protocol', () => {
     }
   })
 })
+
+// Conductor Plan 4b (Task 3): two NEW kinds, so every field is required -- there is no history to
+// tolerate, the same rule `package`/`report_protocol` followed in Plan 2.
+describe('runContextManifestSchema -- verification_goal and verification_protocol', () => {
+  it('accepts both sources with every field', () => {
+    const manifest = {
+      kind: 'verification',
+      sections: [
+        { kind: 'verification_goal', goalVersion: 1, round: 1, requirements: 2, diffCapped: false },
+        { kind: 'verification_protocol', requirements: 2 },
+      ],
+    }
+    expect(runContextManifestSchema.safeParse(manifest).success).toBe(true)
+  })
+
+  it('refuses a verification_goal source with no round and a protocol source with no requirement count', () => {
+    for (const source of [
+      { kind: 'verification_goal', goalVersion: 1, requirements: 2, diffCapped: false },
+      { kind: 'verification_protocol' },
+    ]) {
+      expect(runContextManifestSchema.safeParse({ kind: 'verification', sections: [source] }).success).toBe(false)
+    }
+  })
+})

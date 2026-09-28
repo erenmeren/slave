@@ -49,9 +49,12 @@ export const SECTION_ORDER: Readonly<Record<Manifest['kind'], readonly SectionKi
   // of the two -- a role that matches no seat is a task that can be dispatched to nobody -- so it
   // comes first.
   planning: ['profile', 'planning_goal', 'replan', 'roles', 'capabilities', 'runbook', 'handoff_protocol', 'memory'],
-  // Conductor Plan 4b: the verifier's profile for now; Task 3 adds the goal (requirements + the
-  // integrated diff summary) and the protocol that asks for the `<slave-verification>` block.
-  verification: ['profile'],
+  // Conductor Plan 4b (Task 3): the verifier's own profile, then its goal (the requirement set
+  // plus the integrated diff summary of what the goal version built), then the protocol that names
+  // the `<slave-verification>` shape it must end with -- the same "context, then the ask" shape
+  // `package`/`report_protocol` follow on the implementation order. `VERIFICATION_INSTRUCTIONS`
+  // is the trailer, appended after both by `renderRunContext` below.
+  verification: ['profile', 'verification_goal', 'verification_protocol'],
 }
 
 // The markers and their defusing live in `./markers.js` (M48 t1) and are re-exported here, so

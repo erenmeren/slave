@@ -45,3 +45,19 @@ describe('sectionLine — package and report_protocol', () => {
     )
   })
 })
+
+// Conductor Plan 4b (Task 3): a verification run's own goal and the report it was asked for.
+describe('sectionLine — verification_goal and verification_protocol', () => {
+  it('names the round, the goal version, the requirement count and whether the diff was capped', () => {
+    expect(sectionLine({ kind: 'verification_goal', goalVersion: 2, round: 3, requirements: 2, diffCapped: false }).detail).toBe(
+      'Verification round 3 of goal v2: 2 requirements',
+    )
+    expect(sectionLine({ kind: 'verification_goal', goalVersion: 1, round: 1, requirements: 1, diffCapped: true }).detail).toBe(
+      'Verification round 1 of goal v1: 1 requirement (diff capped)',
+    )
+  })
+
+  it('says what the verification must cover', () => {
+    expect(sectionLine({ kind: 'verification_protocol', requirements: 2 }).detail).toBe('Verification required: 2 requirements')
+  })
+})

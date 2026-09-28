@@ -67,6 +67,14 @@ export type SectionKind =
   /** Conductor Plan 2: the `<slave-report>` shape a package worker must end with. Paired with
    *  `package`: a task that has one has the other. */
   | 'report_protocol'
+  /** Conductor Plan 4b (Task 3): the verifier's own goal -- the requirement set it must check and
+   *  the integrated diff summary of what the goal version actually built. Sits directly under
+   *  `profile`, the same "context, then the work" shape the other run kinds follow. */
+  | 'verification_goal'
+  /** Conductor Plan 4b (Task 3): the `<slave-verification>` shape a verification run must end
+   *  with, one item per requirement key. Paired with `verification_goal` the way `report_protocol`
+   *  pairs with `package`. */
+  | 'verification_protocol'
 
 /**
  * One piece of a run's prompt, as the orchestrator hands it to {@link renderRunContext}: the
@@ -194,6 +202,20 @@ export type SectionSource =
   /** How many requirement keys and workflow steps the report was asked to cover: the counts the
    *  report is later checked against, recorded as the run saw them. */
   | { readonly kind: 'report_protocol'; readonly requirements: number; readonly workflowSteps: number }
+  /** Conductor Plan 4b (Task 3): which goal version and round a verification run was told to
+   *  check, how many requirements it covers, and whether the integrated diff summary it was shown
+   *  was cut for length -- the `review_diff.capped`/`capabilities.capped` idiom, for the verifier's
+   *  own diff. */
+  | {
+      readonly kind: 'verification_goal'
+      readonly goalVersion: number
+      readonly round: number
+      readonly requirements: number
+      readonly diffCapped: boolean
+    }
+  /** Conductor Plan 4b (Task 3): how many requirement keys the `<slave-verification>` block was
+   *  asked to cover -- the `report_protocol.requirements` idiom, for the verifier's own report. */
+  | { readonly kind: 'verification_protocol'; readonly requirements: number }
 
 /** The manifest stored (as `Json`) on `RunContext.sections` -- an ordered record of what produced
  *  the prompt, without the prompt text itself. */
@@ -317,6 +339,20 @@ const reportProtocolSourceSchema = z.object({
   workflowSteps: z.number().int().nonnegative(),
 })
 
+// Conductor Plan 4b (Task 3): NEW kinds, so every field REQUIRED by the `replan`/`capabilities`
+// rule -- there is no history of a row written without them to be tolerant of.
+const verificationGoalSourceSchema = z.object({
+  kind: z.literal('verification_goal'),
+  goalVersion: z.number().int().nonnegative(),
+  round: z.number().int().nonnegative(),
+  requirements: z.number().int().nonnegative(),
+  diffCapped: z.boolean(),
+})
+const verificationProtocolSourceSchema = z.object({
+  kind: z.literal('verification_protocol'),
+  requirements: z.number().int().nonnegative(),
+})
+
 const sectionSourceSchema = z.discriminatedUnion('kind', [
   profileSourceSchema,
   rosterSourceSchema,
@@ -338,6 +374,8 @@ const sectionSourceSchema = z.discriminatedUnion('kind', [
   memorySourceSchema,
   packageSourceSchema,
   reportProtocolSourceSchema,
+  verificationGoalSourceSchema,
+  verificationProtocolSourceSchema,
 ])
 
 /**
