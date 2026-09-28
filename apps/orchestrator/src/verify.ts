@@ -13,6 +13,7 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import { promote } from './memory.js'
 import { concludePlanning } from './planning.js'
+import { fileRunReport } from './report.js'
 import { concludeReview } from './review.js'
 import { describeOutcome, runShellCommand } from './shell.js'
 import { releaseTaskAfterFailure } from './taskRelease.js'
@@ -447,6 +448,17 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
     console.warn(`[verify] run ${run.id} left uncommitted work; committed it on the worker's behalf as ${wip.sha.slice(0, 12)} (${wip.message})`)
   } else if (wip.kind !== 'clean') {
     console.warn(`[verify] run ${run.id} left uncommitted work that could not be committed for it (${wip.kind}): ${wip.reason}`)
+  }
+
+  // Conductor Plan 2 (spec R7): a package worker's report is read BEFORE anything treats the run
+  // as a success -- before the observation below, which would otherwise remember a run this fails,
+  // and before verify, which a run without a usable report does not get. A task with no package
+  // is untouched.
+  if (
+    task.workPackageId !== null &&
+    !(await fileRunReport(run, { id: task.id, workspaceId: task.workspaceId, workPackageId: task.workPackageId }))
+  ) {
+    return
   }
 
   // M49 R2(a), here and not in `advance` (plan erratum E1): this is the one place a SUCCEEDED

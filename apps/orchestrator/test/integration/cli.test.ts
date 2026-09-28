@@ -415,6 +415,129 @@ describe('the orchestrator CLI', () => {
     expect(await prisma.goalVersion.count({ where: { workspaceId: fixture.workspaceId } })).toBe(1)
   })
 
+  it('set-delivery switches a workspace to the conductor and says whether it changed', async (): Promise<void> => {
+    const first = await runCli(['set-delivery', '--workspace', fixture.workspaceId, '--delivery', 'conducted'])
+    expect(first.code).toBe(0)
+    expect(JSON.parse(first.stdout)).toEqual({ delivery: 'conducted', changed: true })
+
+    const second = await runCli(['set-delivery', '--workspace', fixture.workspaceId, '--delivery', 'conducted'])
+    expect(JSON.parse(second.stdout)).toEqual({ delivery: 'conducted', changed: false })
+
+    const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
+    expect(ws.delivery).toBe('conducted')
+  })
+
+  it('exits non-zero for set-delivery with a value that is not conducted or planned', async (): Promise<void> => {
+    const result = await runCli(['set-delivery', '--workspace', fixture.workspaceId, '--delivery', 'nope'])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/--delivery must be one of/)
+  })
+
+  it('conductor prints the requirements, the decision, the packages with their seats and the calls', async (): Promise<void> => {
+    await prisma.workspace.update({
+      where: { id: fixture.workspaceId },
+      data: { delivery: 'conducted', goal: 'Add csv and json report modes', goalVersion: 1 },
+    })
+    await prisma.requirementSet.create({
+      data: { workspaceId: fixture.workspaceId, goalVersion: 1, items: [{ key: 'R1', text: 'csv mode', source: 'add a csv mode' }] },
+    })
+    const subjectId = `${fixture.workspaceId}:v1`
+    const action = { kind: 'conduct', goalVersion: 1, mode: 'single', packageKeys: ['main'] }
+    await prisma.supervisorDecision.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        situationKind: 'conduct',
+        subjectId,
+        situation: { kind: 'conduct', subjectId, summary: 'v1: single, 1 package(s)', facts: {} },
+        candidates: [{ action, tier: 'applied', why: 'one package covers it' }],
+        chosenIndex: 0,
+        action,
+        rationale: 'one package covers it',
+        tier: 'applied',
+        status: 'applied',
+        decidedBy: 'model',
+        modelCalled: true,
+        modelCostUsd: 0.02,
+      },
+    })
+    const pkg = await prisma.workPackage.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        goalVersion: 1,
+        key: 'main',
+        title: 'Report modes',
+        requirementKeys: ['R1'],
+        ownedPaths: ['**'],
+        interface: '',
+        isIntegration: true,
+        templateId: 'tpl',
+      },
+    })
+    await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'Report modes',
+        description: 'R1: csv mode',
+        status: 'ready',
+        requiredRole: 'backend',
+        maxAttempts: 3,
+        goalVersion: 1,
+        assigneeId: fixture.slaveId,
+        workPackageId: pkg.id,
+      },
+    })
+    await prisma.conductorCall.create({
+      data: { workspaceId: fixture.workspaceId, goalVersion: 1, stage: 'conduct', outcome: 'ok', modelCostUsd: 0.02 },
+    })
+
+    const result = await runCli(['conductor', '--workspace', fixture.workspaceId])
+
+    expect(result.code).toBe(0)
+    const view = JSON.parse(result.stdout) as {
+      goalVersion: number
+      delivery: string
+      requirements: unknown[] | null
+      decision: { mode: string; rationale: string; decidedBy: string } | null
+      packages: { key: string; seat: { slaveId: string; name: string } | null; reported: boolean }[]
+      calls: { stage: string; outcome: string; modelCostUsd: number | null }[]
+    }
+    expect(view.goalVersion).toBe(1)
+    expect(view.delivery).toBe('conducted')
+    expect(view.requirements).toEqual([{ key: 'R1', text: 'csv mode', source: 'add a csv mode' }])
+    expect(view.decision).toMatchObject({ mode: 'single', rationale: 'one package covers it', decidedBy: 'model' })
+    expect(view.packages).toEqual([
+      expect.objectContaining({ key: 'main', seat: { slaveId: fixture.slaveId, name: expect.any(String) }, reported: false }),
+    ])
+    expect(view.calls).toEqual([expect.objectContaining({ stage: 'conduct', outcome: 'ok', modelCostUsd: 0.02 })])
+  })
+
+  it('conductor --version reads an older version than the one the workspace currently reads', async (): Promise<void> => {
+    await prisma.workspace.update({
+      where: { id: fixture.workspaceId },
+      data: { delivery: 'conducted', goal: 'g', goalVersion: 2 },
+    })
+    await prisma.requirementSet.create({
+      data: { workspaceId: fixture.workspaceId, goalVersion: 1, items: [{ key: 'R1', text: 'x', source: 'y' }] },
+    })
+
+    const current = await runCli(['conductor', '--workspace', fixture.workspaceId])
+    expect((JSON.parse(current.stdout) as { goalVersion: number; requirements: unknown }).goalVersion).toBe(2)
+    expect((JSON.parse(current.stdout) as { goalVersion: number; requirements: unknown }).requirements).toBeNull()
+
+    const older = await runCli(['conductor', '--workspace', fixture.workspaceId, '--version', '1'])
+    const olderView = JSON.parse(older.stdout) as { goalVersion: number; requirements: unknown }
+    expect(olderView.goalVersion).toBe(1)
+    expect(olderView.requirements).not.toBeNull()
+  })
+
+  it('exits non-zero for conductor with an unparseable --version', async (): Promise<void> => {
+    const result = await runCli(['conductor', '--workspace', fixture.workspaceId, '--version', 'abc'])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/--version must be a positive integer/)
+  })
+
   it('request-change writes a new version carrying the words', async (): Promise<void> => {
     await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'Ship the checkout flow.'])
 

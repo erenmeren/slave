@@ -6,7 +6,7 @@ import { prisma } from '@slave-of-ai/db/client'
  * so the person-verb tests can call it rather than inventing a second reset.
  */
 const TRUNCATE =
-  'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "PersonSkill", "TemplateSkill", "Skill", "SkillProvider", "Slave", "Person", "Team", "Workspace", "CollaborationHint", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE'
+  'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "RunReport", "SlaveRun", "TaskDependency", "Task", "ConductorCall", "WorkPackage", "RequirementSet", "PersonSkill", "TemplateSkill", "Skill", "SkillProvider", "Slave", "Person", "Team", "Workspace", "CollaborationHint", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE'
 
 export async function truncateAll(): Promise<void> {
   await prisma.$executeRawUnsafe(TRUNCATE)

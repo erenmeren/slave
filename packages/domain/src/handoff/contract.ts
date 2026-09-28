@@ -82,6 +82,9 @@ export function parseHandoffContract(value: unknown): Result<HandoffContract, st
  * model's feed sentences into a prompt. Any of those carrying a literal envelope would be somebody
  * else writing this system's control word -- and the chat is the one prompt where such text sits
  * beside an instruction asking for exactly that object.
+ *
+ * `requirementsAnswer`/`conductAnswer` join them for the conductor (Conductor Plan 2): a goal quoting either
+ * must not steer the conductor's own calls.
  */
 export const ROUTING_LITERALS = [
   'candidateIndex',
@@ -90,6 +93,8 @@ export const ROUTING_LITERALS = [
   'task graph',
   'verdict',
   'supervisorReply',
+  'requirementsAnswer',
+  'conductAnswer',
 ] as const
 
 /**
@@ -107,10 +112,19 @@ export function defuseRoutingLiterals(text: string): string {
   return result
 }
 
-const safe = (text: string): string => defuseRoutingLiterals(neutraliseMarkers(text))
+/**
+ * Defuses person-authored text before it goes into a prompt: {@link neutraliseMarkers} so a quoted
+ * protocol marker cannot reopen the ask/answer block, then {@link defuseRoutingLiterals} so a
+ * quoted routing literal cannot steer a JSON-reading call. Exported so other prompt builders
+ * (the conductor's, Conductor Plan 2 ruling 4) compose the same two defuses instead of writing this
+ * one-liner a third time -- `renderHandoff` below is the second.
+ */
+export function sanitisePersonText(text: string): string {
+  return defuseRoutingLiterals(neutraliseMarkers(text))
+}
 
 const bullets = (heading: string, items: readonly string[]): readonly string[] =>
-  items.length === 0 ? [] : ['', heading, ...items.map((item) => `- ${safe(item)}`)]
+  items.length === 0 ? [] : ['', heading, ...items.map((item) => `- ${sanitisePersonText(item)}`)]
 
 /**
  * The `handoff` run-context section's text (R4), heading and closing rule included.
@@ -122,15 +136,16 @@ const bullets = (heading: string, items: readonly string[]): readonly string[] =
  *
  * Deterministic: a fixed field order, lists in the order they were written (the ORDER of acceptance
  * criteria is meaning, so it is never sorted), and an empty field omitted entirely rather than
- * printed as an empty heading. Every field goes through {@link safe} -- another party's text.
+ * printed as an empty heading. Every field goes through {@link sanitisePersonText} -- another
+ * party's text.
  */
 export function renderHandoff(contract: HandoffContract): string {
   return [
     'HANDOFF',
     '',
-    `Objective: ${safe(contract.objective)}`,
+    `Objective: ${sanitisePersonText(contract.objective)}`,
     '',
-    `Expected output: ${safe(contract.expectedOutput)}`,
+    `Expected output: ${sanitisePersonText(contract.expectedOutput)}`,
     ...bullets('Acceptance criteria (every one of these must hold):', contract.acceptanceCriteria),
     ...bullets('Known constraints:', contract.knownConstraints),
     ...bullets('Evidence required:', contract.evidenceRequired),

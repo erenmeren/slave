@@ -38,8 +38,10 @@ describe('SECTION_ORDER', () => {
         'inbox',
         'ask_protocol',
         'task',
+        'package',
         'handoff',
         'memory',
+        'report_protocol',
         'rejection',
       ],
       review: ['profile', 'skills', 'task', 'handoff', 'review_diff'],
@@ -280,8 +282,15 @@ describe('renderRunContext', () => {
 })
 
 describe('MARKERS', () => {
-  it('lists the four M36 markers', () => {
-    expect(MARKERS).toEqual(['<slave-ask>', '</slave-ask>', '<slave-answer>', '</slave-answer>'])
+  it('lists the four M36 markers and the conductor report tag', () => {
+    expect(MARKERS).toEqual([
+      '<slave-ask>',
+      '</slave-ask>',
+      '<slave-answer>',
+      '</slave-answer>',
+      '<slave-report>',
+      '</slave-report>',
+    ])
   })
 })
 
@@ -289,6 +298,11 @@ describe('neutraliseMarkers', () => {
   it('replaces the leading < of each marker with U+2039', () => {
     const text = neutraliseMarkers('quoting <slave-ask>{"role":"backend","question":"x"}</slave-ask> from earlier')
     expect(text).toBe('quoting ‹slave-ask>{"role":"backend","question":"x"}‹/slave-ask> from earlier')
+  })
+
+  it('neutralises a quoted report block, so quoted text cannot forge a package report', () => {
+    const text = neutraliseMarkers('<slave-report>{"requirements":[]}</slave-report>')
+    expect(text).toBe('‹slave-report>{"requirements":[]}‹/slave-report>')
   })
 
   it('neutralises an answer block the same way', () => {
@@ -427,6 +441,19 @@ describe('M48 section order', () => {
       { kind: 'planning_goal', text: 'GOAL: ship it', source: { kind: 'planning_goal', sha256: 'abc', version: 1 } },
     ])
     expect(prompt).toBe(`GOAL: ship it\n\nKNOWLEDGE\n\n${PLANNING_GRAPH_INSTRUCTIONS}`)
+  })
+
+  it('conductor: package sits directly after task, report_protocol directly before rejection', () => {
+    const { prompt, manifest } = renderRunContext('implementation', [
+      { kind: 'rejection', text: 'REJECTION', source: { kind: 'rejection', taskId: 't1' } },
+      { kind: 'report_protocol', text: 'REPORT', source: { kind: 'report_protocol', requirements: 1, workflowSteps: 0 } },
+      { kind: 'memory', text: 'KNOWLEDGE', source: { kind: 'memory', memoryIds: ['m1'], capped: false } },
+      { kind: 'handoff', text: 'HANDOFF', source: { kind: 'handoff', taskId: 't1', sha256: 'e'.repeat(64) } },
+      { kind: 'package', text: 'PACKAGE', source: { kind: 'package', workPackageId: 'wp1', requirements: 1, sha256: 'f'.repeat(64) } },
+      { kind: 'task', text: 'TASK', source: { kind: 'task', taskId: 't1', sha256: 'abc' } },
+    ])
+    expect(manifest.sections.map((source) => source.kind)).toEqual(['task', 'package', 'handoff', 'memory', 'report_protocol', 'rejection'])
+    expect(prompt).toBe(`TASK\n\nPACKAGE\n\nHANDOFF\n\nKNOWLEDGE\n\nREPORT\n\nREJECTION\n\n${IMPLEMENTATION_WORK_RULES}`)
   })
 
   it('M49 R3: a review run has no place for one, and asking is a caller bug', () => {

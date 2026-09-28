@@ -111,6 +111,14 @@ export const SITUATION_KINDS = [
    */
   'permission_blocked',
   'ready_unstaffed',
+  /**
+   * Conductor Plan 2 (final review I5): a package task pinned to a seat that can no longer start it
+   * -- the seat was closed, its person released, or it lost the package role. `decide()` hands a
+   * pinned task to nobody else, so it waits forever and keeps the board busy for the next goal
+   * version. `subjectId` is the TASK id; `facts.reason` is `missing | released | lacks_role`.
+   * Directly after `ready_unstaffed`: both are ready work nobody will start.
+   */
+  'package_seat_lost',
   'done_not_integrated_stale',
   /**
    * M50 R3: a worker brought in for ONE assignment, whose assignment is over. `subjectId` is the
@@ -150,6 +158,11 @@ export const SITUATION_KINDS = [
    * it -- after everything the rules found by themselves.
    */
   'operator_request',
+  /**
+   * Conductor R2: the size decision of one goal version. Never produced by {@link observe}; written
+   * by the conductor. `subjectId` is `<workspaceId>:v<version>`.
+   */
+  'conduct',
 ] as const
 
 export type SituationKind = (typeof SITUATION_KINDS)[number]
@@ -196,8 +209,8 @@ export const situationSchema: z.ZodType<Situation> = z.object({
  * key rendered as prose is the leak M44 closes -- the Supervisor panel's recent-decision rows read
  * `no_reviewer · proposed · pending · by model`.
  *
- * `Record<SituationKind, string>` is load-bearing: a TWENTIETH kind fails the build here rather
- * than turning up on the page as an identifier (nineteen as of H4a's `planning_stalled`).
+ * `Record<SituationKind, string>` is load-bearing: a new kind fails the build here rather than
+ * turning up on the page as an identifier (twenty-one as of Conductor Plan 2's `package_seat_lost`).
  * Each label says what is STUCK, in the words the report already uses; the decision's own
  * `situation.summary` carries the specifics beside it.
  */
@@ -221,9 +234,11 @@ export const SITUATION_LABEL: Record<SituationKind, string> = {
   run_looping: 'Going in circles',
   permission_blocked: 'Blocked by a permission',
   ready_unstaffed: 'Ready work, nobody to do it',
+  package_seat_lost: 'Package seat gone',
   done_not_integrated_stale: 'Finished, not integrated',
   engagement_over: 'Engagement over',
   memory_candidates_piling: 'Unverified knowledge piling up',
   workspace_halted: 'Project halted',
   operator_request: 'Something you asked for',
+  conduct: 'How a goal is delivered',
 }

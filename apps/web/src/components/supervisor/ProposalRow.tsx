@@ -132,6 +132,11 @@ export function actionText(action: Action, taskTitles: Readonly<Record<string, s
       return `escalate to a human: ${action.summary}`
     case 'no_action':
       return 'do nothing'
+    // Conductor R2: the conductor's own size decision, recorded already carried out.
+    case 'conduct':
+      return action.mode === 'single'
+        ? `deliver goal v${String(action.goalVersion)} as one package`
+        : `split goal v${String(action.goalVersion)} into ${String(action.packageKeys.length)} packages: ${action.packageKeys.join(', ')}`
   }
 }
 

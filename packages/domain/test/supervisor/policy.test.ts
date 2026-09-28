@@ -74,6 +74,8 @@ const ACTIONS: Readonly<Record<Action['kind'], Action>> = {
   retry_planning: { kind: 'retry_planning' },
   escalate_to_human: { kind: 'escalate_to_human', summary: 'a human must look' },
   no_action: { kind: 'no_action' },
+  // Conductor R2: the conductor's own size decision, recorded already applied (plan decision D7).
+  conduct: { kind: 'conduct', goalVersion: 1, mode: 'partitioned', packageKeys: ['report', 'config', 'integration'] },
 }
 
 function candidate(action: Action, tier: Tier): Candidate {
@@ -129,6 +131,9 @@ describe('tierOf', () => {
     ['retry_planning', 'proposed', 'proposed'],
     ['escalate_to_human', 'escalated', 'escalated'],
     ['no_action', 'noop', 'noop'],
+    // Conductor R2 (D7): recorded by the conductor in the transaction that carries it out -- no
+    // halt makes it a proposal, because there is nothing left for a person to approve.
+    ['conduct', 'applied', 'applied'],
   ]
 
   it.each(table)('tiers %s as %s while running and %s while halted', (kind, running, halted) => {
@@ -258,7 +263,8 @@ describe('tierOf -- autonomy: act (R1)', () => {
           : // H4a adds a THIRD exception, and on its own argument rather than the breaker's: writing
             // a runtime configuration row starts nothing under ANY halt, so it is applied here as
             // well as under a budget halt and an emergency stop (the case below says so).
-            kind === 'clear_halt' || kind === 'retry_task' || kind === 'configure_runtime'
+            // Conductor R2 (D7) is the fourth: the conductor records `conduct` already carried out.
+            kind === 'clear_halt' || kind === 'retry_task' || kind === 'configure_runtime' || kind === 'conduct'
             ? 'applied'
             : 'proposed'
     expect(tierOf(ACTIONS[kind], ACTING_HALTED, 'review_cap_blocked')).toBe(expected)

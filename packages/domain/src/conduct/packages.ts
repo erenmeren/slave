@@ -1,0 +1,216 @@
+import { z } from 'zod'
+import { err, ok, type Result } from '../result.js'
+import { firstJsonObject } from '../supervisor/prompt.js'
+import { CONDUCT_MAX_PACKAGES, INTEGRATION_PACKAGE_KEY } from './constants.js'
+import { globToRegExp, isValidOwnedGlob } from './glob.js'
+
+export const CONDUCT_ANSWER_KEY = 'conductAnswer'
+
+export interface PackageSpec {
+  readonly key: string
+  readonly title: string
+  readonly requirementKeys: readonly string[]
+  readonly ownedPaths: readonly string[]
+  readonly newPaths: readonly string[]
+  readonly interface: string
+  readonly dependsOn: readonly string[]
+  readonly isIntegration: boolean
+  readonly templateId: string
+}
+
+export interface ConductPlan {
+  readonly mode: 'single' | 'partitioned'
+  readonly reason: string
+  readonly packages: readonly PackageSpec[]
+}
+
+/**
+ * A stored {@link ConductPlan} read back typed (`ConductorCall.plan`): the interfaces above stay
+ * the source of truth and this mirrors them, so a plan bought on one tick and staffed on a later
+ * one is the same plan, field for field. Validation already ran before the plan was stored.
+ */
+export const conductPlanSchema: z.ZodType<ConductPlan, z.ZodTypeDef, unknown> = z.object({
+  mode: z.enum(['single', 'partitioned']),
+  reason: z.string(),
+  packages: z.array(z.object({
+    key: z.string().min(1),
+    title: z.string(),
+    requirementKeys: z.array(z.string()),
+    ownedPaths: z.array(z.string()),
+    newPaths: z.array(z.string()),
+    interface: z.string(),
+    dependsOn: z.array(z.string()),
+    isIntegration: z.boolean(),
+    templateId: z.string().min(1),
+  })).min(1),
+})
+
+export interface ConductContext {
+  readonly requirementKeys: readonly string[]
+  readonly repoFiles: readonly string[]
+  readonly templateIds: ReadonlySet<string>
+}
+
+const keySchema = z.string().regex(/^[a-z][a-z0-9-]{0,39}$/u)
+const packageSchema = z.object({
+  key: keySchema,
+  title: z.string().trim().min(1).max(200),
+  requirementKeys: z.array(z.string()).default([]),
+  ownedPaths: z.array(z.string()).min(1),
+  newPaths: z.array(z.string()).default([]),
+  interface: z.string().max(4000).default(''),
+  dependsOn: z.array(z.string()).default([]),
+  templateId: z.string().min(1),
+})
+const answerSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('single'), reason: z.string().trim().min(1), templateId: z.string().min(1) }),
+  z.object({
+    mode: z.literal('partitioned'),
+    reason: z.string().trim().min(1),
+    packages: z.array(packageSchema).min(2).max(CONDUCT_MAX_PACKAGES),
+    integrationTemplateId: z.string().min(1).optional(),
+  }),
+])
+
+/** The one package of a `single` goal: every requirement, every path (spec R4: owns `**`). */
+export function singlePlan(templateId: string, requirementKeys: readonly string[], reason: string): ConductPlan {
+  return {
+    mode: 'single',
+    reason,
+    packages: [{
+      key: 'main', title: 'The whole goal', requirementKeys: [...requirementKeys], ownedPaths: ['**'], newPaths: [],
+      interface: '', dependsOn: [], isIntegration: false, templateId,
+    }],
+  }
+}
+
+/**
+ * Who owns a path (spec R3): the one non-integration package whose globs match it, else the
+ * integration package, else nobody. Validation guarantees at most one non-integration match for
+ * every existing and declared path; for any other path the first match in package order wins.
+ */
+export function ownerOf(
+  path: string,
+  packages: readonly Pick<PackageSpec, 'key' | 'ownedPaths' | 'isIntegration'>[],
+): string | null {
+  const direct = packages.find((p) => !p.isIntegration && p.ownedPaths.some((g) => globToRegExp(g).test(path)))
+  if (direct !== undefined) return direct.key
+  return packages.find((p) => p.isIntegration)?.key ?? null
+}
+
+/** Reads the raw `conductAnswer` object out of the model's text; `validateConduct` judges it. */
+export function parseConductAnswer(text: string): Result<unknown, string> {
+  const json = firstJsonObject(text)
+  if (json === null) return err('the answer carried no JSON object')
+  try {
+    const value = JSON.parse(json) as Record<string, unknown>
+    if (typeof value !== 'object' || value === null || !(CONDUCT_ANSWER_KEY in value)) {
+      return err(`the answer must be {"${CONDUCT_ANSWER_KEY}": {...}}`)
+    }
+    return ok(value[CONDUCT_ANSWER_KEY])
+  } catch {
+    return err('the answer\'s JSON did not parse')
+  }
+}
+
+function hasCycle(packages: readonly { readonly key: string; readonly dependsOn: readonly string[] }[]): boolean {
+  const deps = new Map(packages.map((p) => [p.key, p.dependsOn] as const))
+  const state = new Map<string, 'visiting' | 'done'>()
+  const visit = (key: string): boolean => {
+    if (state.get(key) === 'done') return false
+    if (state.get(key) === 'visiting') return true
+    state.set(key, 'visiting')
+    const cyclic = (deps.get(key) ?? []).some(visit)
+    state.set(key, 'done')
+    return cyclic
+  }
+  return packages.some((p) => visit(p.key))
+}
+
+/**
+ * Judges the conductor's answer against the goal's requirements, the repository and the
+ * catalogue (spec R2/R3). Every problem found is listed in ONE sentence list, because the list is
+ * handed back to the next attempt's prompt (plan decision D4) and a model fixes what it is told.
+ */
+export function validateConduct(answer: unknown, context: ConductContext): Result<ConductPlan, string> {
+  const parsed = answerSchema.safeParse(answer)
+  if (!parsed.success) {
+    return err(`the answer's shape is wrong: ${parsed.error.issues.slice(0, 5).map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`)
+  }
+  const value = parsed.data
+  if (value.mode === 'single') {
+    if (!context.templateIds.has(value.templateId)) return err(`templateId "${value.templateId}" is not in the catalogue`)
+    return ok(singlePlan(value.templateId, context.requirementKeys, value.reason))
+  }
+
+  const problems: string[] = []
+  const keys = value.packages.map((p) => p.key)
+  if (new Set(keys).size !== keys.length) problems.push('package keys must be unique')
+
+  for (const p of value.packages) {
+    if (!context.templateIds.has(p.templateId)) problems.push(`package "${p.key}": templateId "${p.templateId}" is not in the catalogue`)
+    for (const glob of [...p.ownedPaths, ...p.newPaths]) {
+      if (!isValidOwnedGlob(glob)) problems.push(`package "${p.key}": "${glob}" is not a repository-relative path`)
+    }
+    for (const dep of p.dependsOn) {
+      // Integration is made to depend on every other package below, so the reverse edge is always
+      // a cycle (final review I4) -- refused by name, since "a cycle" alone would not say which.
+      if (dep === INTEGRATION_PACKAGE_KEY && p.key !== INTEGRATION_PACKAGE_KEY) {
+        problems.push(`package "${p.key}": dependsOn "${INTEGRATION_PACKAGE_KEY}" is not allowed -- the integration package depends on every other package, never the other way round`)
+      } else if (!keys.includes(dep) || dep === p.key) {
+        problems.push(`package "${p.key}": dependsOn "${dep}" names no other package`)
+      }
+    }
+    for (const path of p.newPaths) {
+      if (!p.ownedPaths.some((g) => globToRegExp(g).test(path))) problems.push(`package "${p.key}": new path "${path}" is not inside its own ownedPaths`)
+    }
+  }
+  const owners = new Map<string, string[]>()
+  for (const p of value.packages) for (const r of p.requirementKeys) owners.set(r, [...(owners.get(r) ?? []), p.key])
+  for (const r of context.requirementKeys) {
+    const holders = owners.get(r) ?? []
+    if (holders.length === 0) problems.push(`requirement ${r} is in no package`)
+    if (holders.length > 1) problems.push(`requirement ${r} is in ${holders.length} packages (${holders.join(', ')})`)
+  }
+  for (const r of owners.keys()) if (!context.requirementKeys.includes(r)) problems.push(`requirement ${r} does not exist`)
+
+  // Disjointness over what exists and what the packages SAID they will create (spec R3). The
+  // conductor-named integration package's own globs count like anyone's.
+  const declared = value.packages.flatMap((p) => p.newPaths)
+  const matchers = value.packages.map((p) => ({ key: p.key, regexes: p.ownedPaths.map(globToRegExp) }))
+  const clashes: string[] = []
+  for (const path of new Set([...context.repoFiles, ...declared])) {
+    const matching = matchers.filter((m) => m.regexes.some((r) => r.test(path))).map((m) => m.key)
+    if (matching.length > 1 && clashes.length < 10) clashes.push(`${path} (${matching.join(', ')})`)
+  }
+  if (clashes.length > 0) problems.push(`two packages own the same file: ${clashes.join('; ')}`)
+
+  const named = value.packages.find((p) => p.key === INTEGRATION_PACKAGE_KEY)
+  const others = value.packages.filter((p) => p.key !== INTEGRATION_PACKAGE_KEY).map((p) => p.key)
+  const packages: PackageSpec[] = value.packages.map((p) => ({
+    key: p.key, title: p.title, requirementKeys: p.requirementKeys, ownedPaths: p.ownedPaths, newPaths: p.newPaths,
+    interface: p.interface, templateId: p.templateId,
+    isIntegration: p.key === INTEGRATION_PACKAGE_KEY,
+    dependsOn: p.key === INTEGRATION_PACKAGE_KEY ? others : p.dependsOn,
+  }))
+  if (named === undefined) {
+    packages.push({
+      key: INTEGRATION_PACKAGE_KEY,
+      title: 'Integrate the packages',
+      requirementKeys: [],
+      ownedPaths: [],
+      newPaths: [],
+      interface: 'Wire the other packages together through the interfaces they declare; you own every file no other package owns.',
+      dependsOn: others,
+      isIntegration: true,
+      templateId: value.integrationTemplateId !== undefined && context.templateIds.has(value.integrationTemplateId)
+        ? value.integrationTemplateId
+        : value.packages[0]?.templateId ?? '',
+    })
+  }
+  // On the graph as it will be WRITTEN, after the integration rewrite: checked on the answer as
+  // given, a cycle through the rewritten edges slipped through and neither task could ever start.
+  if (hasCycle(packages)) problems.push('the packages\' dependsOn form a cycle')
+  if (problems.length > 0) return err(problems.join('; '))
+  return ok({ mode: 'partitioned', reason: value.reason, packages })
+}

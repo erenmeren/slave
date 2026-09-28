@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { isAlive } from '@slave-of-ai/control'
+import { amendRunOutcome, isAlive } from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
+import { appendEvent } from '@slave-of-ai/events'
 
 /**
  * H9b (F2): THIS process's name on the runs it owns -- `SlaveRun.ownerInstance`.
@@ -79,5 +80,31 @@ export async function createRunUnlessArchived(
     // so a row that dies before its pid is ever recorded still names who was about to spawn it.
     const run = await tx.slaveRun.create({ data: { ...data, ownerInstance: OWNER_INSTANCE } })
     return { id: run.id }
+  })
+}
+
+/**
+ * Walks a run the pump concluded `succeeded` back to `failed`, because what it produced turned out
+ * to be unusable -- a planning run's unparsable graph (`planning.ts`), a package run's missing or
+ * malformed report (`report.ts`) -- and records why as `run.failed`.
+ *
+ * The `updateMany` is conditioned on `succeeded`: a run somebody stopped in the meantime is not
+ * this function's to fail. M53 erratum E26: the pump wrote this run's fact when it concluded it
+ * `succeeded`, and the outcome has to follow the status this just wrote.
+ */
+export async function failConcludedRun(
+  run: { readonly id: string; readonly slaveId: string },
+  workspaceId: string,
+  reason: string,
+): Promise<void> {
+  await prisma.slaveRun.updateMany({ where: { id: run.id, status: 'succeeded' }, data: { status: 'failed' } })
+  await amendRunOutcome(run.id)
+  await appendEvent({
+    type: 'run.failed',
+    workspaceId,
+    slaveId: run.slaveId,
+    runId: run.id,
+    actor: 'system',
+    payload: { reason },
   })
 }

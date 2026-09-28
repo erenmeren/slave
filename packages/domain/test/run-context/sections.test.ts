@@ -306,3 +306,26 @@ describe('runContextManifestSchema', () => {
     expect(runContextManifestSchema.safeParse(malformed).success).toBe(false)
   })
 })
+
+// Conductor Plan 2: two NEW kinds, so every field is required -- there is no history to tolerate.
+describe('runContextManifestSchema -- package and report_protocol', () => {
+  it('accepts both sources with every field', () => {
+    const manifest = {
+      kind: 'implementation',
+      sections: [
+        { kind: 'package', workPackageId: 'wp1', requirements: 2, sha256: 'f'.repeat(64) },
+        { kind: 'report_protocol', requirements: 2, workflowSteps: 3 },
+      ],
+    }
+    expect(runContextManifestSchema.safeParse(manifest).success).toBe(true)
+  })
+
+  it('refuses a package source with no hash and a report source with no step count', () => {
+    for (const source of [
+      { kind: 'package', workPackageId: 'wp1', requirements: 2 },
+      { kind: 'report_protocol', requirements: 2 },
+    ]) {
+      expect(runContextManifestSchema.safeParse({ kind: 'implementation', sections: [source] }).success).toBe(false)
+    }
+  })
+})

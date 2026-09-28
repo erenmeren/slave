@@ -55,6 +55,7 @@ export function task(overrides: Partial<SupervisorTask> = {}): SupervisorTask {
     // about that. A real planned board carries a holder on every task since H2, so a case about
     // `engagement_over`'s open-work clause has to set this rather than assume the column is dead.
     assigneeId: null,
+    pinnedSlaveId: null,
     // M48: a task planned before runbooks existed belongs to no stage, which is what every fixture
     // in this file means unless it says otherwise -- and a task with no stage carries no
     // escalation sentence either.
@@ -216,6 +217,8 @@ export function world(overrides: Partial<SupervisorWorld> = {}): SupervisorWorld
     goal: null,
     // 0 is "the goal was never set" (M40 §1), which is what `goal: null` above means.
     goalVersion: 0,
+    // Conductor Plan 2: every fixture here is a planner-graph workspace unless a test says otherwise.
+    delivery: 'planned',
     halted: null,
     // R4: no halt has ever been cleared here, so the once-an-hour rule only ever decides in a test
     // that says when the last clear was.

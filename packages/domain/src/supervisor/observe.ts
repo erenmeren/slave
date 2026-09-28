@@ -1,4 +1,5 @@
 import { STEERS_PER_RUN_MAX } from '../breaker/constants.js'
+import { CONDUCTOR_ROLE } from '../conduct/constants.js'
 import { BREAKER_TRIP_LABEL } from '../breaker/detect.js'
 import { PERMISSION_TRIP_COUNT } from '../broker/operations.js'
 import { capabilityIndex, projectRoles } from '../capability/taxonomy.js'
@@ -6,6 +7,7 @@ import { isReleasable } from '../lifecycle/release.js'
 import { PERMISSION_KINDS, PERMISSION_LABEL, type PermissionKind } from '../permission/kinds.js'
 import { PLANNING_RETRY_CAP } from '../planning/constants.js'
 import { recommendRunbooks } from '../runbook/recommend.js'
+import { holdsRole } from '../scheduler/assign.js'
 import { hasStartableWork } from '../scheduler/decide.js'
 import { TERMINAL } from '../task/state.js'
 import { isStaffableTask } from './candidates.js'
@@ -126,6 +128,9 @@ export function willNotRun(world: SupervisorWorld, slave: SupervisorSlave): bool
 /** Who a question was addressed to, for a summary a human reads. */
 function recipientLabel(question: SupervisorQuestion): string {
   if (question.recipientSlaveId !== null) return `slave ${question.recipientSlaveId}`
+  // Conductor R7: a role no seat holds by design, so "the \"conductor\" role" would read as a
+  // staffing gap to the person reading the escalation.
+  if (question.recipientRole === CONDUCTOR_ROLE) return 'the conductor'
   if (question.recipientRole !== null) return `the "${question.recipientRole}" role`
   return 'nobody'
 }
@@ -278,6 +283,9 @@ const PLANNING_STALLED_SUMMARY: Record<PlanningStalledReason, (world: Supervisor
  * has nothing to spend a retry on. Exactly one fires, and the next pass names the next one.
  */
 function planningStalledReason(world: SupervisorWorld): PlanningStalledReason | null {
+  // Conductor Plan 2 (spec R2): a conducted workspace is never planned, so its planning cannot
+  // stall -- a `no_planner` here would ask a person to hire a planner nothing will ever dispatch.
+  if (world.delivery === 'conducted') return null
   if (world.goal === null || world.livePlanning) return null
   const boardVersion = world.tasks.reduce((highest, task) => Math.max(highest, task.goalVersion ?? 0), 0)
   if (world.tasks.length > 0 && world.goalVersion <= boardVersion) return null
@@ -362,7 +370,10 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
   // what the next run is asked for. `recommendRunbooks` returns nothing when no keyword is in the
   // goal, and then there is no situation at all: silence beats a proposal about a goal the rules
   // have no opinion on (R5).
-  if (world.goal !== null && world.runbook === null && world.tasks.length === 0) {
+  //
+  // Not for a conducted workspace (Conductor Plan 2): a runbook shapes what the PLANNER is asked
+  // for, and no planner runs there.
+  if (world.delivery !== 'conducted' && world.goal !== null && world.runbook === null && world.tasks.length === 0) {
     const top = recommendRunbooks(world.goal, world.runbooks, rosterCapabilities(world), world.taxonomy)[0]
     if (top !== undefined) {
       add({
@@ -598,11 +609,40 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
     })
   }
 
+  // package_seat_lost (Conductor Plan 2, final review I5): a pinned task waits for its OWN seat
+  // (`decide()`'s `pinnedSeat`), so whether anybody else holds the role is beside the point -- the
+  // question is whether that one seat can still start it. `world.slaves` holds open seats only, so a
+  // closed seat reads as missing. Ready or rework, whatever its dependencies: a task whose seat is
+  // gone is stuck the moment it would start, and it keeps the board busy until then.
+  const pinnedTaskIds = new Set<string>()
+  for (const task of world.tasks) {
+    if (task.pinnedSlaveId === null) continue
+    pinnedTaskIds.add(task.id)
+    if (task.status !== 'ready' && task.status !== 'rework') continue
+    const seat = world.slaves.find((one) => one.id === task.pinnedSlaveId)
+    const reason =
+      seat === undefined ? 'missing' : seat.released ? 'released' : !holdsRole(seat, task.requiredRole) ? 'lacks_role' : null
+    if (reason === null) continue
+    const why = {
+      missing: 'is no longer on this project',
+      released: `belongs to ${seat?.name ?? 'somebody'}, who has been released`,
+      lacks_role: `no longer holds the "${task.requiredRole}" role`,
+    }[reason]
+    add({
+      kind: 'package_seat_lost',
+      subjectId: task.id,
+      summary: `"${task.title}" is pinned to a seat that ${why}, and nobody else may start it.`,
+      facts: { taskId: task.id, slaveId: task.pinnedSlaveId, reason },
+    })
+  }
+
   // ready_unstaffed: keyed by the missing ROLE, so N startable tasks blocked on one absent role
   // are one situation with one decision -- not N proposals a human has to approve N times.
   const unstaffedRoles = new Map<string, SupervisorTask[]>()
   for (const task of world.tasks) {
     if (!isStaffableTask(task)) continue
+    // A pinned task is `package_seat_lost`'s above: staffing its role would not unpin it.
+    if (pinnedTaskIds.has(task.id)) continue
     // An empty `requiredRole` is a real value -- "any role will do" (see `SchedulableSlave.
     // runtimeRoles` in `../scheduler/decide.ts`, which reasons about exactly this string). Such a
     // task cannot be "unstaffed BY ROLE", and keying a situation on it would put an empty

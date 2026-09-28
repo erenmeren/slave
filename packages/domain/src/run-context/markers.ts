@@ -4,7 +4,8 @@
  * `ASK_BLOCK_CLOSE`/`ANSWER_BLOCK_OPEN`/`ANSWER_BLOCK_CLOSE` in `../messaging/`, spelled out here
  * rather than imported so this module stays the one place that knows what "neutralised" means --
  * the messaging module's own constants are the ACTIVE markers a slave writes, these are the same
- * four strings as DATA to be defused.
+ * strings as DATA to be defused. The conductor's `<slave-report>` pair (`SLAVE_REPORT_TAG` in
+ * `../conduct/contract.ts`) joined them in Conductor Plan 2.
  *
  * These two live in a LEAF module of their own (M48 t1), re-exported by `./render.ts` so every
  * caller since M37 is untouched. The reason is the import graph: `render.ts` imports
@@ -14,7 +15,16 @@
  * four-module cycle and left `planGraphSchema` undefined at the moment `delta.ts` evaluated. This
  * file imports nothing, which is what makes the graph acyclic again.
  */
-export const MARKERS = ['<slave-ask>', '</slave-ask>', '<slave-answer>', '</slave-answer>'] as const
+export const MARKERS = [
+  '<slave-ask>',
+  '</slave-ask>',
+  '<slave-answer>',
+  '</slave-answer>',
+  // Conductor Plan 2: a package worker's final report is read out of this tag, so quoted text (a
+  // requirement, an interface, an inbox message) must not be able to forge or close one.
+  '<slave-report>',
+  '</slave-report>',
+] as const
 
 /**
  * Replaces the leading `<` of each {@link MARKERS} entry with `‹` (U+2039) so a quoted marker in a

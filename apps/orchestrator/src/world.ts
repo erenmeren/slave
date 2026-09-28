@@ -72,6 +72,8 @@ interface TaskWorldRow {
   readonly requiredRole: string | null
   readonly priority: number
   readonly dependenciesDone: boolean
+  /** Conductor Plan 2 (D3): the assignee of a package task, which only that seat may run. */
+  readonly pinnedSlaveId: string | null
 }
 
 /**
@@ -95,6 +97,9 @@ interface TaskWorldRow {
  * same reason its own comment gives (the graph's read model must not disagree with the scheduler
  * about what "ready" means) -- the two must move together; if you change one, change the other in
  * the same commit (M35 t2 review round 1 caught this pair drifting once already).
+ *
+ * `pinnedSlaveId` (Conductor Plan 2) decides WHO may start a task, not whether it is ready, so the
+ * graph's twin query needs no matching change.
  */
 async function loadTaskRows(
   tx: Prisma.TransactionClient,
@@ -111,7 +116,8 @@ async function loadTaskRows(
         FROM "TaskDependency" td
         JOIN "Task" dep ON dep.id = td."dependsOnTaskId"
         WHERE td."taskId" = t.id AND (dep.status <> 'done' OR dep."integratedAt" IS NULL)
-      ) AS "dependenciesDone"
+      ) AS "dependenciesDone",
+      CASE WHEN t."workPackageId" IS NOT NULL THEN t."assigneeId" END AS "pinnedSlaveId"
     FROM "Task" t
     WHERE t."workspaceId" = ${workspaceId}
   `
@@ -287,6 +293,7 @@ export async function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld> 
       priority: row.priority,
       dependenciesDone: row.dependenciesDone,
       ...(backingOff.has(row.id) ? { backingOff: true } : {}),
+      ...(row.pinnedSlaveId === null ? {} : { pinnedSlaveId: slaveId(row.pinnedSlaveId) }),
     })
   }
 

@@ -3,6 +3,7 @@ import { PROFILE_MAX_CHARS } from '../../src/run-context/profile.js'
 import { ACTION_KINDS, actionSchema, type Action } from '../../src/supervisor/actions.js'
 import {
   ACTION_SHAPES,
+  CHAT_ACTION_KINDS,
   CHAT_ATTACHMENTS_TOTAL_CHARS,
   CHAT_ATTACHMENT_CHARS,
   CHAT_FEED_MAX,
@@ -388,8 +389,9 @@ describe('buildSupervisorChatPrompt -- the vocabulary and the envelope', () => {
   // The one table. A kind added to `ACTION_KINDS` and forgotten here is an action the Supervisor
   // can take on a tick and cannot be asked for in the conversation -- silently, and forever.
   it('has one JSON shape for every action kind, and for nothing else', () => {
-    expect(Object.keys(ACTION_SHAPES).sort()).toEqual([...ACTION_KINDS].sort())
-    for (const kind of ACTION_KINDS) {
+    expect(Object.keys(ACTION_SHAPES).sort()).toEqual([...CHAT_ACTION_KINDS].sort())
+    expect(ACTION_KINDS.filter((kind) => !(CHAT_ACTION_KINDS as readonly string[]).includes(kind))).toEqual(['conduct'])
+    for (const kind of CHAT_ACTION_KINDS) {
       expect(ACTION_SHAPES[kind]).toContain(`"kind": "${kind}"`)
     }
   })
@@ -399,7 +401,7 @@ describe('buildSupervisorChatPrompt -- the vocabulary and the envelope', () => {
   // Every placeholder is substitutable without knowing the kind: `"<...>"` is a string and a bare
   // `<...>` is a number, which is why no per-kind sample table is needed to round-trip all of them.
   it('round-trips every shape through actionSchema, so a wrong field name fails here', () => {
-    for (const kind of ACTION_KINDS) {
+    for (const kind of CHAT_ACTION_KINDS) {
       const filled = ACTION_SHAPES[kind].replace(/"<[^>]*>"/g, '"sample"').replace(/<[^>]*>/g, '1')
       const parsed = actionSchema.safeParse(JSON.parse(filled))
       expect(parsed.success, `${kind}: ${filled}`).toBe(true)
@@ -409,7 +411,8 @@ describe('buildSupervisorChatPrompt -- the vocabulary and the envelope', () => {
 
   it('prints every shape in the vocabulary section', () => {
     const prompt = buildSupervisorChatPrompt(input())
-    for (const kind of ACTION_KINDS) expect(prompt).toContain(ACTION_SHAPES[kind])
+    for (const kind of CHAT_ACTION_KINDS) expect(prompt).toContain(ACTION_SHAPES[kind])
+    expect(prompt).not.toContain('"kind": "conduct"')
   })
 
   it('asks for the one envelope this system reads back', () => {
@@ -517,6 +520,17 @@ describe('parseSupervisorReply -- what is read back (R2/R3)', () => {
       { kind: 'request_goal_change', request: 'invoicing, then reporting' },
       { kind: 'note_for_planner', text: 'The second page is the one that is wrong.' },
     ])
+  })
+
+  // Conductor R2 (D7): the size decision is the conductor's own, recorded in the transaction that
+  // carries it out. A well-formed `conduct` in a reply is dropped with the reason, never offered.
+  it('drops a conduct action with the reason a conversation cannot carry it', () => {
+    const parsed = parseSupervisorReply(
+      reply('{"text": "Split it.", "actions": [{"kind": "conduct", "goalVersion": 1, "mode": "partitioned", "packageKeys": ["a"]}]}'),
+      WORLD,
+    )
+    expect(parsed?.actions).toEqual([])
+    expect(parsed?.dropped).toEqual(['the reply asked for "conduct", which a conversation cannot: the conductor decides this itself'])
   })
 
   // A conversation is a conversation: most turns are an answer and nothing else.

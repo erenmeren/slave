@@ -61,6 +61,12 @@ export type SectionKind =
    * line in the byte-pinned instructions.
    */
   | 'roles'
+  /** Conductor Plan 2: a package task's contract -- the requirements it owns, the files it may
+   *  touch, the interfaces it provides and uses. Only a task with a `workPackageId` carries it. */
+  | 'package'
+  /** Conductor Plan 2: the `<slave-report>` shape a package worker must end with. Paired with
+   *  `package`: a task that has one has the other. */
+  | 'report_protocol'
 
 /**
  * One piece of a run's prompt, as the orchestrator hands it to {@link renderRunContext}: the
@@ -182,6 +188,12 @@ export type SectionSource =
    *  what lets a reader ask "was this run ever told that?" months later -- and what the task
    *  drawer's `memories` group reads to say what a run RECEIVED (M49 R6). */
   | { readonly kind: 'memory'; readonly memoryIds: readonly string[]; readonly capped: boolean }
+  /** Which package the worker was bound to, how many requirements it was told it owns, and the
+   *  hash of the contract text as rendered -- the `handoff.sha256` idiom, for "was it told that?". */
+  | { readonly kind: 'package'; readonly workPackageId: string; readonly requirements: number; readonly sha256: string }
+  /** How many requirement keys and workflow steps the report was asked to cover: the counts the
+   *  report is later checked against, recorded as the run saw them. */
+  | { readonly kind: 'report_protocol'; readonly requirements: number; readonly workflowSteps: number }
 
 /** The manifest stored (as `Json`) on `RunContext.sections` -- an ordered record of what produced
  *  the prompt, without the prompt text itself. */
@@ -292,6 +304,19 @@ const memorySourceSchema = z.object({
   capped: z.boolean(),
 })
 
+// Conductor Plan 2: NEW kinds, so every field REQUIRED by the `replan`/`capabilities` rule.
+const packageSourceSchema = z.object({
+  kind: z.literal('package'),
+  workPackageId: z.string(),
+  requirements: z.number().int().nonnegative(),
+  sha256: z.string(),
+})
+const reportProtocolSourceSchema = z.object({
+  kind: z.literal('report_protocol'),
+  requirements: z.number().int().nonnegative(),
+  workflowSteps: z.number().int().nonnegative(),
+})
+
 const sectionSourceSchema = z.discriminatedUnion('kind', [
   profileSourceSchema,
   rosterSourceSchema,
@@ -311,6 +336,8 @@ const sectionSourceSchema = z.discriminatedUnion('kind', [
   runbookSourceSchema,
   handoffProtocolSourceSchema,
   memorySourceSchema,
+  packageSourceSchema,
+  reportProtocolSourceSchema,
 ])
 
 /**

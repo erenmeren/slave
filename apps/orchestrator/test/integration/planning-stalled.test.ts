@@ -136,7 +136,8 @@ describe('planning that cannot start, end to end through the tick (H4a/H4b)', ()
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+      // RunbookTemplate too: a row another file left behind makes the supervisor fire runbook_recommended here.
+      'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "User", "RunbookTemplate" RESTART IDENTITY CASCADE',
     )
   })
 

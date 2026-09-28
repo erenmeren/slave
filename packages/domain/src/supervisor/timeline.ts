@@ -55,10 +55,16 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   // INTERPRETATION -- the delta IS the interpretation; no stored sentence exists (spec §3).
   'workspace.replan_started': 'interpretation',
   'workspace.replanned': 'interpretation',
+  // Conductor R1: the goal read into numbered requirements -- the conductor's own reading of the
+  // goal, the same lane the planner's delta interpretation sits on.
+  'workspace.requirements_set': 'interpretation',
   // PLAN CHANGE
   'task.created': 'plan_change',
   'task.cancelled': 'plan_change',
   'workspace.plan_created': 'plan_change',
+  // Conductor R2/R3: the size decision recorded and its packages materialised as tasks -- the
+  // conductor's own `workspace.plan_created`.
+  'workspace.conducted': 'plan_change',
   // M48: how the work will be done changed. Not `user_request` even when a person adopted it --
   // what changed is the plan's shape, and `laneFor`'s actor override exists only for task creation.
   'workspace.runbook_adopted': 'plan_change',

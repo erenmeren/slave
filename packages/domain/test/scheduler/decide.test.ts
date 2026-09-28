@@ -277,3 +277,41 @@ describe('isDispatchable / hasStartableWork', () => {
     expect(started.toSorted()).toEqual(tasks.filter(isDispatchable).map((t) => t.id as string).toSorted())
   })
 })
+
+/**
+ * Conductor Plan 2 (D3): a package task belongs to one seat. Another free seat with the same role
+ * must not take it -- two packages on one seat, or one package on two, is the collision the
+ * one-seat-per-package rule exists to prevent.
+ */
+describe('pinned tasks', () => {
+  const s1: SchedulableSlave = { id: slaveId('s1'), runtimeRoles: ['implementer'], busy: false }
+  const s2: SchedulableSlave = { id: slaveId('s2'), runtimeRoles: ['implementer'], busy: false }
+  const pinnedToS2 = task('t1', { requiredRole: 'implementer', priority: 0, pinnedSlaveId: slaveId('s2') })
+
+  it('gives a pinned task only to its seat', () => {
+    expect(decide(world({ tasks: [pinnedToS2], slaves: [s1, s2] }))).toEqual([
+      { kind: 'start_run', taskId: 't1', slaveId: 's2' },
+    ])
+  })
+
+  it('leaves a pinned task waiting while its seat is busy, even with another seat free', () => {
+    expect(decide(world({ tasks: [pinnedToS2], slaves: [s1, { ...s2, busy: true }] }))).toEqual([])
+  })
+
+  it('does not start a pinned task on its seat once the seat no longer holds the role', () => {
+    expect(decide(world({ tasks: [pinnedToS2], slaves: [s1, { ...s2, runtimeRoles: [] }] }))).toEqual([])
+  })
+
+  it('still hands an unpinned task to a free seat beside a pinned one', () => {
+    const loose = task('t2', { requiredRole: 'implementer', priority: 0 })
+    expect(decide(world({ tasks: [pinnedToS2, loose], slaves: [s1, s2] }))).toEqual([
+      { kind: 'start_run', taskId: 't1', slaveId: 's2' },
+      { kind: 'start_run', taskId: 't2', slaveId: 's1' },
+    ])
+  })
+
+  it('hasStartableWork respects the pin', () => {
+    expect(hasStartableWork(s1, [pinnedToS2])).toBe(false)
+    expect(hasStartableWork(s2, [pinnedToS2])).toBe(true)
+  })
+})

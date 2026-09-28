@@ -748,6 +748,105 @@ describe('buildRunContext', () => {
     })
   })
 
+  describe('a package task (Conductor Plan 2)', () => {
+    const CONDUCTOR_ASK = `${ASK_BLOCK_OPEN}{"role":"conductor","question":"..."}`
+
+    /** Binds the fixture's task to a `report` package that depends on a finished `config` one, with
+     *  the goal version's requirement set beside them -- the shape `conductor.ts` materialises. */
+    async function bindToPackage(): Promise<string> {
+      await prisma.requirementSet.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          goalVersion: 1,
+          items: [
+            { key: 'R1', text: 'csv mode', source: 'add a csv mode' },
+            { key: 'R2', text: 'json mode', source: 'and json' },
+            { key: 'R3', text: 'config file', source: 'read a config' },
+          ],
+        },
+      })
+      await prisma.workPackage.create({
+        data: {
+          workspaceId: fixture.workspaceId, goalVersion: 1, key: 'config', title: 'Config loading',
+          requirementKeys: ['R3'], ownedPaths: ['src/config/**'], interface: 'load(): Config', templateId: 'tpl',
+        },
+      })
+      const pkg = await prisma.workPackage.create({
+        data: {
+          workspaceId: fixture.workspaceId, goalVersion: 1, key: 'report', title: 'Report modes',
+          requirementKeys: ['R1', 'R2'], ownedPaths: ['src/report/**'], interface: 'render(rows, mode)',
+          dependsOn: ['config'], templateId: 'tpl',
+        },
+      })
+      await prisma.task.update({ where: { id: fixture.taskId }, data: { workPackageId: pkg.id } })
+      return pkg.id
+    }
+
+    it('carries its contract after the task, the report protocol, and the conductor in the ask protocol', async () => {
+      const packageId = await bindToPackage()
+
+      const { prompt, manifest } = await buildImplementation(fixture)
+
+      expect(prompt).toContain('Your work package: "report"')
+      expect(prompt).toContain('R1: csv mode')
+      expect(prompt).toContain('R2: json mode')
+      // Only the package's own requirements: R3 belongs to `config`.
+      expect(prompt).not.toContain('R3: config file')
+      expect(prompt).toContain('- src/report/**')
+      expect(prompt).toContain('- config: load(): Config')
+      expect(prompt).toContain('<slave-report>')
+      expect(prompt).toContain('"workflow": [] (you were given no workflow)')
+      // Alone on the roster, and still taught to ask -- the conductor is always there to ask.
+      expect(prompt).toContain(CONDUCTOR_ASK)
+
+      const kinds = manifest.sections.map((section) => section.kind)
+      expect(kinds.indexOf('package')).toBe(kinds.indexOf('task') + 1)
+      expect(kinds).toContain('ask_protocol')
+      const pkgSource = manifest.sections.find((section) => section.kind === 'package')
+      expect(pkgSource).toMatchObject({ kind: 'package', workPackageId: packageId, requirements: 2 })
+      expect(manifest.sections.find((section) => section.kind === 'report_protocol')).toEqual({
+        kind: 'report_protocol',
+        requirements: 2,
+        workflowSteps: 0,
+      })
+      // The manifest round-trips through the reader's schema.
+      expect(runContextManifestSchema.safeParse(manifest).success).toBe(true)
+    })
+
+    it("counts the persona's workflow steps in the report protocol", async () => {
+      await bindToPackage()
+      const template = await prisma.slaveTemplate.create({
+        data: {
+          name: 'Package Persona', role: 'engineering', profile: 'You follow a workflow.',
+          profileSpec: { ...MINIMAL_PROFILE_SPEC, workflow: ['Read', 'Test', 'Build'] } as unknown as object,
+        },
+      })
+      await prisma.person.update({ where: { id: fixture.personId }, data: { templateId: template.id } })
+
+      const { prompt, manifest } = await buildImplementation(fixture)
+
+      expect(prompt).toContain('one entry per workflow step (3)')
+      expect(manifest.sections.find((section) => section.kind === 'report_protocol')).toEqual({
+        kind: 'report_protocol',
+        requirements: 2,
+        workflowSteps: 3,
+      })
+    })
+
+    it('is none of that for an implementation task with no package', async () => {
+      await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Product Lead', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
+
+      const { prompt, manifest } = await buildImplementation(fixture)
+
+      expect(prompt).not.toContain('Your work package:')
+      expect(prompt).not.toContain('<slave-report>')
+      expect(prompt).not.toContain(CONDUCTOR_ASK)
+      // The ordinary ask protocol is still there: a peer exists.
+      expect(prompt).toContain(ASK_BLOCK_OPEN)
+      expect(manifest.sections.some((section) => section.kind === 'package' || section.kind === 'report_protocol')).toBe(false)
+    })
+  })
+
   describe('a review run', () => {
     it('carries the reviewer profile, the task and the diff, and never an inbox or an ask', async () => {
       await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Product Lead', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })

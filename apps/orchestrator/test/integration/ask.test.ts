@@ -234,6 +234,19 @@ describe('a slave that asks, and waits', () => {
     expect(types).not.toContain('run.failed')
   })
 
+  it('parks a question to the conductor, whom no seat holds: the Supervisor answers it (conductor R7)', async (): Promise<void> => {
+    const outcome = await pumpEndingWith(ids, ask('{"role":"conductor","question":"May I change src/config/load.ts?"}'))
+
+    expect(outcome).toBeNull()
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: ids.taskId } })
+    expect(task.status).toBe('waiting')
+    const message = await prisma.slaveMessage.findFirstOrThrow({ where: { senderRunId: ids.runId } })
+    expect(message.kind).toBe('question')
+    expect(message.recipientRole).toBe('conductor')
+    expect(message.recipientSlaveId).toBeNull()
+    expect(message.body).toContain('May I change src/config/load.ts?')
+  })
+
   it('writes a checkpoint a fresh process could resume from, and both rows survive a cold read', async (): Promise<void> => {
     await pumpEndingWith(ids, ask('{"slaveId":"__ANSWERER__","question":"Is the schema frozen?"}').replace('__ANSWERER__', ids.answererId))
 

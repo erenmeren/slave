@@ -48,6 +48,14 @@
 //                  moves the behavioural breaker's worktree clock on every
 //                  single run, which suppresses the very `no_progress` arm a
 //                  breaker gate exists to measure.
+//                  Conductor Plan 2: `--report-json-base64 <base64 of the
+//                  JSON>` in ARGV makes that work body end with a package
+//                  worker's report -- `\n<slave-report><decoded></slave-report>`
+//                  appended to the last assistant text block of `complete`
+//                  and to its `result.result`, the way `--ask-json-base64`
+//                  patches the ask legs below. Absent, the work run has no
+//                  report at all. ARGV and base64 for `--ask-json-base64`'s
+//                  reasons.
 //   M52 R8 hangs three optional side effects off the `--work-fixture` arm,
 //   so they reach every mode that has one and change nothing in any mode
 //   that is not asked for them. `--env-out <path>` appends this child's own
@@ -603,6 +611,47 @@ function askEnvelope() {
   const encoded = flagValue('--ask-json-base64')
   if (encoded !== undefined) return Buffer.from(encoded, 'base64').toString('utf8')
   return process.env.FAKE_CLAUDE_ASK_JSON
+}
+
+/**
+ * Conductor Plan 2: the `<slave-report>` body an `m8-flow` work run ends with --
+ * `--report-json-base64 <base64 of the JSON>` from ARGV, or `undefined` (no report at all, which
+ * is how a test scripts a worker that forgot one). ARGV and base64 for {@link askEnvelope}'s
+ * reasons: a run's child gets no daemon environment, and a report carries prose.
+ */
+function reportEnvelope() {
+  const encoded = flagValue('--report-json-base64')
+  return encoded === undefined ? undefined : Buffer.from(encoded, 'base64').toString('utf8')
+}
+
+/**
+ * Appends `suffix` to the LAST assistant text block among fixture `lines` (in place), which is the
+ * final message the orchestrator reads a `<slave-ask>` or `<slave-report>` block out of. Returns
+ * whether a block was found; the caller decides that none is fatal.
+ */
+function appendToLastAssistantText(lines, suffix) {
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const parsed = JSON.parse(lines[i])
+    if (parsed.type !== 'assistant') continue
+    const block = parsed.message?.content?.find?.((part) => part.type === 'text')
+    if (block === undefined) continue
+    block.text = `${block.text}${suffix}`
+    lines[i] = JSON.stringify(parsed)
+    return true
+  }
+  return false
+}
+
+/** Appends `suffix` to the terminal `result` line's `result` text (in place), so the run's final
+ *  message and its result agree the way a real CLI's do. */
+function appendToResultText(lines, suffix) {
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const parsed = JSON.parse(lines[i])
+    if (parsed.type !== 'result' || typeof parsed.result !== 'string') continue
+    parsed.result = `${parsed.result}${suffix}`
+    lines[i] = JSON.stringify(parsed)
+    return
+  }
 }
 
 /**
@@ -1267,17 +1316,7 @@ async function main() {
     // shape a real run produces, and the fixture's own `system:init` line still supplies the
     // session id the checkpoint is written from.
     const lines = readFixtureLines('complete')
-    let patched = false
-    for (let i = lines.length - 1; i >= 0 && !patched; i -= 1) {
-      const parsed = JSON.parse(lines[i])
-      if (parsed.type !== 'assistant') continue
-      const block = parsed.message?.content?.find?.((part) => part.type === 'text')
-      if (block === undefined) continue
-      block.text = `${block.text}\n\n<slave-ask>\n${askJson}\n</slave-ask>`
-      lines[i] = JSON.stringify(parsed)
-      patched = true
-    }
-    if (!patched) {
+    if (!appendToLastAssistantText(lines, `\n\n<slave-ask>\n${askJson}\n</slave-ask>`)) {
       process.stderr.write('fake-claude: m36-flow could not find an assistant text block in the complete fixture\n')
       process.exit(2)
     }
@@ -1307,9 +1346,27 @@ async function main() {
     if (await workFixtureArm()) return
     writeFileSync(path.join(process.cwd(), 'm8a-work.txt'), `${prompt.slice(0, 80)}\n`)
     execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
-    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '-m', 'fake work'], { cwd: process.cwd() })
-    await replayFixture('complete')
-    return
+    // `--allow-empty`: a REWORK run adopts its previous attempt's worktree, where this same file
+    // with the same first line is already committed -- without it the commit finds nothing, git
+    // exits non-zero, and the run dies with no terminal result instead of doing its rework.
+    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '--allow-empty', '-m', 'fake work'], { cwd: process.cwd() })
+    // Conductor Plan 2: a package worker ends with a `<slave-report>` block. Scripted on argv, and
+    // patched into the same `complete` capture the ask legs patch, so the report reaches the pump
+    // through the stream shape a real run produces.
+    const report = reportEnvelope()
+    if (report === undefined) {
+      await replayFixture('complete')
+      return
+    }
+    const lines = readFixtureLines('complete')
+    const suffix = `\n<slave-report>${report}</slave-report>`
+    if (!appendToLastAssistantText(lines, suffix)) {
+      process.stderr.write('fake-claude: m8-flow could not find an assistant text block in the complete fixture\n')
+      process.exit(2)
+    }
+    appendToResultText(lines, suffix)
+    await writeLines(lines)
+    process.exit(0)
   }
 
   if (fixtureName === 'slow-work') {
@@ -1364,17 +1421,7 @@ async function main() {
       // stream shape a real run produces, and the fixture's own `system:init` line still supplies
       // the session id the checkpoint is written from.
       const lines = readFixtureLines('complete')
-      let patched = false
-      for (let i = lines.length - 1; i >= 0 && !patched; i -= 1) {
-        const parsed = JSON.parse(lines[i])
-        if (parsed.type !== 'assistant') continue
-        const block = parsed.message?.content?.find?.((part) => part.type === 'text')
-        if (block === undefined) continue
-        block.text = `${block.text}\n\n<slave-ask>\n${askJson}\n</slave-ask>`
-        lines[i] = JSON.stringify(parsed)
-        patched = true
-      }
-      if (!patched) {
+      if (!appendToLastAssistantText(lines, `\n\n<slave-ask>\n${askJson}\n</slave-ask>`)) {
         process.stderr.write('fake-claude: m41-flow could not find an assistant text block in the complete fixture\n')
         process.exit(2)
       }

@@ -187,6 +187,16 @@ export type Action =
   | { readonly kind: 'escalate_to_human'; readonly summary: string }
   /** Deliberately nothing: the situation is real but waiting is the right move. */
   | { readonly kind: 'no_action' }
+  /**
+   * Conductor R2: the size decision of one goal version. Carried out by the conductor in the same
+   * transaction that records it (plan decision D7); `applyDecision` treats it as already applied.
+   */
+  | {
+      readonly kind: 'conduct'
+      readonly goalVersion: number
+      readonly mode: 'single' | 'partitioned'
+      readonly packageKeys: readonly string[]
+    }
 
 /** Every {@link Action} kind as data -- what the `supervisor.*` event payloads validate against. */
 export const ACTION_KINDS = [
@@ -215,6 +225,8 @@ export const ACTION_KINDS = [
   'retry_planning',
   'escalate_to_human',
   'no_action',
+  // Conductor R2: the size decision, recorded by the conductor itself.
+  'conduct',
 ] as const
 
 /** The NAME of an action, as a stored decision row carries it -- what a reader (the mailbox
@@ -340,6 +352,12 @@ const actionUnion = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('retry_planning') }),
   z.object({ kind: z.literal('escalate_to_human'), summary: z.string().min(1) }),
   z.object({ kind: z.literal('no_action') }),
+  z.object({
+    kind: z.literal('conduct'),
+    goalVersion: z.number().int().positive(),
+    mode: z.enum(['single', 'partitioned']),
+    packageKeys: z.array(z.string().min(1)).min(1),
+  }),
 ])
 
 /**

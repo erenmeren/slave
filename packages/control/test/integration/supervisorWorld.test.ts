@@ -462,6 +462,73 @@ describe('loadSupervisorWorld', () => {
     })
   })
 
+  /**
+   * Conductor Plan 2: a package task is pinned to the seat it was staffed with (its assignee), and
+   * `decide()` hands it to nobody else. The loader carries the pin so `willNotRun` agrees: a seat
+   * whose only startable work is ANOTHER seat's package task will not run, and a question to it is
+   * stranded at once rather than after the thirty-minute wait.
+   */
+  it('pins a package task to its assignee, so a question to another idle seat is stranded at once', async (): Promise<void> => {
+    const fixture = await seed()
+    const person = async (name: string): Promise<string> => (await prisma.person.create({ data: { name } })).id
+    const asker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'product', runtimeRoles: ['product'], personId: await person('Maya') } })
+    const recipient = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Backend', runtimeRoles: ['backend'], personId: await person('Robin') } })
+    const owner = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Backend', runtimeRoles: ['backend'], personId: await person('Sam') } })
+    const pkg = await prisma.workPackage.create({
+      data: { workspaceId: fixture.workspaceId, goalVersion: 1, key: 'report', title: 'Report', requirementKeys: ['R1'], ownedPaths: ['src/**'], interface: '', templateId: 't-backend' },
+    })
+    const packaged = await prisma.task.create({
+      data: { workspaceId: fixture.workspaceId, title: 'Report', description: 'x', status: 'ready', requiredRole: 'backend', maxAttempts: 3, assigneeId: owner.id, workPackageId: pkg.id },
+    })
+    const plain = await prisma.task.create({
+      data: { workspaceId: fixture.workspaceId, title: 'Plain', description: 'x', status: 'done', requiredRole: 'backend', maxAttempts: 3, assigneeId: owner.id },
+    })
+    const waitingRun = await prisma.slaveRun.create({
+      data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' },
+    })
+    const message = await prisma.slaveMessage.create({
+      data: {
+        slaveId: asker.id,
+        workspaceId: fixture.workspaceId,
+        senderRunId: waitingRun.id,
+        recipientSlaveId: recipient.id,
+        threadId: 'thread-1',
+        kind: 'question',
+        body: 'which format?',
+        actor: 'slave',
+        expectsReply: true,
+        createdAt: NOW,
+      },
+    })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.tasks.find((t) => t.id === packaged.id)?.pinnedSlaveId).toBe(owner.id)
+    expect(world.tasks.find((t) => t.id === plain.id)?.pinnedSlaveId).toBeNull()
+    const stranded = observe(world).find((s) => s.kind === 'unanswerable_question' && s.subjectId === message.id)
+    expect(stranded?.facts.stranded).toBe(true)
+  })
+
+  /** Final review I5: a closed seat is not in the world at all, so its pinned task reads as lost. */
+  it('raises package_seat_lost for a package task whose pinned seat was closed', async (): Promise<void> => {
+    const fixture = await seed()
+    const person = async (name: string): Promise<string> => (await prisma.person.create({ data: { name } })).id
+    const gone = await prisma.slave.create({
+      data: { teamId: fixture.teamId, role: 'Implementer', runtimeRoles: ['implementer'], personId: await person('Ivo'), closedAt: NOW },
+    })
+    await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Implementer', runtimeRoles: ['implementer'], personId: await person('Una') } })
+    const pkg = await prisma.workPackage.create({
+      data: { workspaceId: fixture.workspaceId, goalVersion: 1, key: 'report', title: 'Report', requirementKeys: ['R1'], ownedPaths: ['src/**'], interface: '', templateId: 't-backend' },
+    })
+    const packaged = await prisma.task.create({
+      data: { workspaceId: fixture.workspaceId, title: 'Report', description: 'x', status: 'rework', requiredRole: 'implementer', maxAttempts: 3, assigneeId: gone.id, workPackageId: pkg.id },
+    })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    const lost = observe(world).filter((s) => s.kind === 'package_seat_lost')
+    expect(lost.map((s) => s.subjectId)).toEqual([packaged.id])
+    expect(lost[0]?.facts).toEqual({ taskId: packaged.id, slaveId: gone.id, reason: 'missing' })
+  })
+
   it('holds a slave-addressed question for the addressee plus every peer who could take the asking task', async (): Promise<void> => {
     // Erratum E5, the case the two halves of `holders` differ on: a question addressed to ONE
     // worker may also be answered by anybody who could have been dispatched the asking task.
@@ -1062,6 +1129,9 @@ describe('workspaceSpend', () => {
       // F R2: nobody has talked to this project's Supervisor either.
       chatMeasuredUsd: 0,
       chatUnmeasuredTurns: 0,
+      // Conductor Plan 2: and no conductor call was made for it.
+      conductorMeasuredUsd: 0,
+      conductorUnmeasuredCalls: 0,
       spentUsd: 1.5 + 0.25 + 2 * SUPERVISOR_PER_CALL_CAP_USD,
     })
   })
@@ -1108,6 +1178,9 @@ describe('workspaceSpend', () => {
       intakeUnmeasuredCalls: 0,
       chatMeasuredUsd: 0,
       chatUnmeasuredTurns: 0,
+      // Conductor Plan 2: and no conductor call was made for it.
+      conductorMeasuredUsd: 0,
+      conductorUnmeasuredCalls: 0,
       spentUsd: 0,
     })
   })

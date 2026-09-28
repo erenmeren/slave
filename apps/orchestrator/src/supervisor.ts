@@ -152,6 +152,24 @@ interface Choice {
   readonly modelCalled: boolean
 }
 
+/** A decider and the model to aim it at: the pair a Supervisor-side model call is made with. */
+export interface ModelSeam {
+  readonly decider: ModelDecider
+  readonly model: string
+}
+
+/**
+ * The daemon's model seam, or `null` when it wired none. BOTH halves or nothing: a decider with no
+ * model to aim at is not a usable seam, and guessing a model here would put a model name in the
+ * orchestrator's loop rather than in `cli.ts`, where the environment is read.
+ *
+ * Shared with the conductor (`conductor.ts`, Conductor Plan 2), which calls the same model the
+ * Supervisor would: one reading of "is there a model to ask", so the two cannot disagree about it.
+ */
+export function modelSeam(decider: ModelDecider | undefined, model: string | undefined): ModelSeam | null {
+  return decider !== undefined && model !== undefined ? { decider, model } : null
+}
+
 /**
  * One Supervisor pass over one workspace (M38 §5), run at the end of every tick.
  *
@@ -209,10 +227,7 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
   // The seam, resolved once for the pass: a decider AND a model to aim it at, a budget that is not
   // gone, and a workspace that is still running. Held as a pair rather than re-tested per
   // situation so the two halves cannot be checked in one place and read in another.
-  const seam =
-    deps.decider !== undefined && deps.model !== undefined && !world.budgetExhausted && world.halted === null
-      ? { decider: deps.decider, model: deps.model }
-      : null
+  const seam = !world.budgetExhausted && world.halted === null ? modelSeam(deps.decider, deps.model) : null
 
   let decided = 0
   let applied = 0

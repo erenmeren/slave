@@ -50,6 +50,12 @@ export const GUARDRAIL_KINDS = [
   'pause_gate',
   'permission_mode',
   'no_planner',
+  /** Conductor Plan 2: the conductor cannot carry a goal version forward -- the conductor's own
+   *  `no_planner`, so it sits beside it. A halt when it failed to read the goal
+   *  `CONDUCT_RETRY_CAP` times (a goal the model cannot turn into requirements is a person's to
+   *  rewrite); said once WITHOUT a halt when staffing ran out, the repository could not be read, or
+   *  the version waits for an earlier one's live work -- each ends by itself or by a person's hand. */
+  'conductor_failed',
   'no_reviewer',
   'review_retry_cap_exhausted',
   'merge_failure',
@@ -85,6 +91,8 @@ export const GUARDRAIL_LABEL: Record<GuardrailKind, string> = {
   pause_gate: 'Pause gate broken',
   permission_mode: 'Permission mode wrong',
   no_planner: 'Nobody can plan',
+  // Covers every reason above; the breach's own `detail` says which.
+  conductor_failed: 'The conductor cannot go on',
   no_reviewer: 'Nobody can review',
   review_retry_cap_exhausted: 'Review attempts used up',
   merge_failure: 'Merge failed',

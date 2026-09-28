@@ -90,6 +90,9 @@ model Workspace {
   /// table with a `goal` and no version is the one remaining way to be 0 with a real goal; every
   /// reader tolerates it -- nothing treats 0 as "unset" beyond reporting no version.
   goalVersion             Int       @default(0)
+  /// Conductor (spec §5): `conducted` workspaces are delivered by the conductor, never by the
+  /// planner graph. Switched with the CLI's `set-delivery`.
+  delivery                Delivery  @default(planned)
   /// The company assigned to run this project (M10 §5), nullable: the engine never required a
   /// company, and existing seeded workspaces keep their hand-made teams/slaves untouched
   /// (Decision 7). Assignment is one-way in M10 -- no un-assignment or re-assignment to a
@@ -174,6 +177,12 @@ model Workspace {
   /// M59 R1: the conversation this project was created from, if it was. At most one -- the unique
   /// on `Intake.workspaceId`.
   intake Intake?
+  /// Conductor R1: the numbered requirements extracted per goal version.
+  requirementSets RequirementSet[]
+  /// Conductor R3: the packages a conducted goal version was split into.
+  workPackages    WorkPackage[]
+  /// Conductor D4/D6: every model call the conductor made for this workspace.
+  conductorCalls  ConductorCall[]
 
   @@index([adoptedFromSimulationId])
 }
@@ -1139,6 +1148,9 @@ model Task {
   createdAt           DateTime   @default(now())
   enqueuedAt          DateTime?
   mergeClaimedAt      DateTime?
+  /// Conductor R3: the package this task belongs to, for a conducted workspace. Null for a
+  /// planned workspace, and for a conducted one's integration-only bookkeeping tasks, if any.
+  workPackageId       String?
 
   workspace     Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   createdByUser User?            @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
@@ -1153,8 +1165,13 @@ model Task {
   /// M50 R2: the temporary specialists brought in for THIS task. SetNull on the other side -- a
   /// worker outlives the task it was hired for.
   engagedWorkers Slave[] @relation("EngagementWorkers")
+  /// Conductor R3: the package this task belongs to, for a conducted workspace.
+  workPackage   WorkPackage? @relation(fields: [workPackageId], references: [id], onDelete: SetNull)
+  /// Conductor R7: the structured reports this task's runs filed.
+  runReports    RunReport[]
 
   @@index([workspaceId, status])
+  @@index([workPackageId])
 }
 
 model TaskDependency {
@@ -1347,9 +1364,105 @@ model SlaveRun {
   context    RunContext?
   /// M49 R1: what was learnt FROM this run. SetNull on the other side.
   memories   Memory[]
+  /// Conductor R7: the structured report this run's final message carried, if it worked a package.
+  report     RunReport?
 
   @@index([taskId])
   @@index([slaveId, status])
+}
+
+/// Conductor R2/R3 (2026-09-28): how a workspace turns a goal into work. `planned` is the planner
+/// graph (M8 onwards); `conducted` is the conductor: requirements, a size decision, packages that
+/// own disjoint files, one seat each. Default `planned` until Conductor Plan 4 ships the gate.
+enum Delivery {
+  conducted
+  planned
+}
+
+enum ConductorStage {
+  requirements
+  conduct
+}
+
+enum ConductorCallOutcome {
+  ok
+  failed
+}
+
+/// Conductor R1: the numbered requirements of one goal version, extracted by the conductor with
+/// no approval step (ruling 6). `items` is `[{ key: 'R1', text, source }]`; keys are stable across
+/// versions for textually equal items.
+model RequirementSet {
+  id          String   @id @default(uuid())
+  workspaceId String
+  goalVersion Int
+  items       Json
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, goalVersion])
+}
+
+/// Conductor R3: one package of one goal version. Owns `ownedPaths` (repo-relative globs); the
+/// integration package also owns every path no other package matches (`ownerOf`).
+model WorkPackage {
+  id              String   @id @default(uuid())
+  workspaceId     String
+  goalVersion     Int
+  key             String
+  title           String
+  requirementKeys String[]
+  ownedPaths      String[]
+  newPaths        String[] @default([])
+  interface       String
+  dependsOn       String[] @default([])
+  isIntegration   Boolean  @default(false)
+  templateId      String
+  createdAt       DateTime @default(now())
+
+  workspace Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tasks     Task[]
+  reports   RunReport[]
+
+  @@unique([workspaceId, goalVersion, key])
+}
+
+/// Conductor R7: the structured report a package worker's final message carried.
+model RunReport {
+  id            String   @id @default(uuid())
+  runId         String   @unique
+  taskId        String
+  workPackageId String
+  report        Json
+  createdAt     DateTime @default(now())
+
+  run         SlaveRun    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  task        Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  workPackage WorkPackage @relation(fields: [workPackageId], references: [id], onDelete: Cascade)
+
+  @@index([workPackageId])
+}
+
+/// Conductor D4/D6: every model call the conductor made, ok or failed. The retry cap counts the
+/// failed rows per (goal version, stage); `workspaceSpend` sums the cost. `plan` is the validated
+/// `ConductPlan` of an ok `conduct` call: staffing can fail after the answer was bought, and the
+/// next tick must staff the SAME plan rather than pay for a new one.
+model ConductorCall {
+  id           String               @id @default(uuid())
+  workspaceId  String
+  goalVersion  Int
+  stage        ConductorStage
+  outcome      ConductorCallOutcome
+  reason       String?
+  modelCostUsd Float?
+  unmeasured   Boolean              @default(false)
+  plan         Json?
+  createdAt    DateTime             @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, goalVersion, stage])
 }
 
 /// M53 R3: ONE ROW PER CONCLUDED RUN, and the whole of what this organisation knows about how its
@@ -1754,6 +1867,9 @@ enum SupervisorSituationKind {
   /// one permission kind inside half an hour. The subject is `<slaveId>:<kind>`, the first COMPOUND
   /// subject: one wall, not one worker.
   permission_blocked
+  /// Conductor Plan 2 (final review I5): a package task pinned to a seat that can no longer start
+  /// it. The subject is the TASK.
+  package_seat_lost
   done_not_integrated_stale
   /// M50 R3: a worker brought in for one assignment, whose assignment is over. The subject is the
   /// SLAVE.
@@ -1767,6 +1883,9 @@ enum SupervisorSituationKind {
   /// first. The second kind `observe` never produces: nothing about the world says a person wants
   /// something, only their message does.
   operator_request
+  // Conductor R2: the size decision of one goal version. Not produced by observe; written by the
+  // conductor. Subject "<workspaceId>:v<version>".
+  conduct
 }
 
 /// What happens to a chosen action -- fixed in code by `tierOf`, never chosen by the model.
@@ -2112,6 +2231,11 @@ enum EventType {
   task_review_rejected        @map("task.review_rejected")
   task_merge_failed           @map("task.merge_failed")
   workspace_goal_set          @map("workspace.goal_set")
+  /// Conductor R1 (2026-09-28): a goal version's requirement set was extracted.
+  workspace_requirements_set  @map("workspace.requirements_set")
+  /// Conductor R2/R3 (2026-09-28): a goal version was conducted -- the size decision recorded, its
+  /// packages materialised as tasks.
+  workspace_conducted         @map("workspace.conducted")
   workspace_plan_created      @map("workspace.plan_created")
   /// M40 §2: the goal moved on a board that already had tasks, so the tick started a DELTA re-plan
   /// run (`workspace.replan_started`, whose `version` is the dedup key for "one re-plan per goal

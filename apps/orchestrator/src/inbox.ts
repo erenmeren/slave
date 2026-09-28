@@ -1,10 +1,11 @@
-import { listMessagesForSlave } from '@slave-of-ai/control'
+import { STORED_REPORT_QUESTION_KEY_PREFIX, listMessagesForSlave } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
   ANSWER_BLOCK_CLOSE,
   ANSWER_BLOCK_OPEN,
   ASK_BLOCK_CLOSE,
   ASK_BLOCK_OPEN,
+  CONDUCTOR_ROLE,
   displayName,
   neutraliseMarkers,
   rosterLine,
@@ -36,8 +37,12 @@ import {
  * The answer instructions live in this section rather than in one of their own: they are only true
  * while there is something to answer, and `SECTION_ORDER.implementation` has no `answer_protocol`
  * slot precisely because an unconditional copy of them would be noise in every other run.
+ *
+ * `taskId` (Conductor Plan 2, final review C1): the task this run is for. The answers to questions
+ * the seat asked in a `<slave-report>` on it ride in the same section -- the run that asked has
+ * ended, so this is the only place such an answer can reach anybody.
  */
-export async function inboxSection(slaveId: string): Promise<Section | null> {
+export async function inboxSection(slaveId: string, taskId: string | null = null): Promise<Section | null> {
   const pending = await listMessagesForSlave(slaveId, { unansweredOnly: true })
   if (!pending.ok) {
     // The only refusal this call can return is `slave_not_found`, for a slave the dispatch just
@@ -45,44 +50,95 @@ export async function inboxSection(slaveId: string): Promise<Section | null> {
     console.warn(`[inbox] could not read the inbox of slave ${slaveId}: ${pending.error.kind}`)
     return null
   }
-  if (pending.value.length === 0) return null
+  const answers = taskId === null ? [] : await reportAnswers(slaveId, taskId)
+  if (pending.value.length === 0 && answers.length === 0) return null
 
-  const senders = await prisma.slave.findMany({
-    where: { id: { in: [...new Set(pending.value.map((message) => message.senderSlaveId))] } },
-    select: { id: true, role: true, person: { select: { name: true } } },
+  const questionLines: string[] = []
+  if (pending.value.length > 0) {
+    const senders = await prisma.slave.findMany({
+      where: { id: { in: [...new Set(pending.value.map((message) => message.senderSlaveId))] } },
+      select: { id: true, role: true, person: { select: { name: true } } },
+    })
+    const nameById = new Map(
+      senders.map((slave) => [slave.id, displayName({ name: slave.person.name, role: slave.role })]),
+    )
+
+    const items = pending.value.map((message) => {
+      const from = nameById.get(message.senderSlaveId) ?? message.senderSlaveId
+      // Another party's text (M37 §1): a body that quoted `<slave-answer>` would otherwise answer on
+      // the reader's behalf, or park the reader's run with a marker the reader never wrote.
+      const body = neutraliseMarkers(message.body)
+      return `- from ${from}, message id ${message.id}:\n  ${body.replaceAll('\n', '\n  ')}`
+    })
+
+    // The envelope is spelled out with a real message id from the list above, so the slave copies
+    // rather than invents one. `apps/orchestrator/src/answer.ts` refuses an id it cannot match to a
+    // question addressed to this slave, so an invented one costs the answer, not the run.
+    const example = `${ANSWER_BLOCK_OPEN}{"messageId":"${pending.value[0]?.id ?? ''}","answer":"..."}${ANSWER_BLOCK_CLOSE}`
+    questionLines.push(
+      'MESSAGES ADDRESSED TO YOU',
+      '',
+      'Another slave asked you these and cannot continue until you reply.',
+      '',
+      ...items,
+      '',
+      'Answer what you can. To answer, put one block like this in your FINAL message, one per question:',
+      example,
+      '',
+      'Answering does not end your own task, which follows.',
+      '',
+      '---',
+    )
+  }
+
+  // Conductor Plan 2 D8 (final review C1): a question in a `<slave-report>` is asked after its run
+  // ended, so no parked session is there to be resumed with the answer -- the seat's next run on the
+  // same task is where it lands. Both sides quoted are neutralised: the answer is another party's
+  // text, and the question is model output being read back into a prompt.
+  const answerLines =
+    answers.length === 0
+      ? []
+      : [
+          'ANSWERS TO QUESTIONS YOU ASKED IN AN EARLIER REPORT ON THIS TASK',
+          '',
+          ...answers.map(
+            (row) =>
+              `- you asked: ${neutraliseMarkers(row.question).replaceAll('\n', '\n  ')}\n  answer: ${neutraliseMarkers(row.answer).replaceAll('\n', '\n  ')}`,
+          ),
+          '',
+          'Take these into account in the work that follows.',
+          '',
+          '---',
+        ]
+
+  const text = [...questionLines, ...(questionLines.length > 0 && answerLines.length > 0 ? [''] : []), ...answerLines].join('\n')
+  return {
+    kind: 'inbox',
+    text,
+    source: { kind: 'inbox', messageIds: [...pending.value.map((message) => message.id), ...answers.map((row) => row.answerId)] },
+  }
+}
+
+/**
+ * The answers to the questions THIS seat asked in a `<slave-report>` on THIS task, oldest first
+ * (spec R7, plan D8). A report question is recognised by the key `report.ts` sent it under
+ * (`STORED_REPORT_QUESTION_KEY_PREFIX`), the same marker `stillPendingQuestion` reads.
+ */
+async function reportAnswers(
+  slaveId: string,
+  taskId: string,
+): Promise<readonly { readonly answerId: string; readonly question: string; readonly answer: string }[]> {
+  const rows = await prisma.slaveMessage.findMany({
+    where: {
+      kind: 'answer',
+      taskId,
+      recipientSlaveId: slaveId,
+      replyTo: { slaveId, kind: 'question', idempotencyKey: { startsWith: STORED_REPORT_QUESTION_KEY_PREFIX } },
+    },
+    orderBy: { seq: 'asc' },
+    select: { id: true, body: true, replyTo: { select: { body: true } } },
   })
-  const nameById = new Map(
-    senders.map((slave) => [slave.id, displayName({ name: slave.person.name, role: slave.role })]),
-  )
-
-  const items = pending.value.map((message) => {
-    const from = nameById.get(message.senderSlaveId) ?? message.senderSlaveId
-    // Another party's text (M37 §1): a body that quoted `<slave-answer>` would otherwise answer on
-    // the reader's behalf, or park the reader's run with a marker the reader never wrote.
-    const body = neutraliseMarkers(message.body)
-    return `- from ${from}, message id ${message.id}:\n  ${body.replaceAll('\n', '\n  ')}`
-  })
-
-  // The envelope is spelled out with a real message id from the list above, so the slave copies
-  // rather than invents one. `apps/orchestrator/src/answer.ts` refuses an id it cannot match to a
-  // question addressed to this slave, so an invented one costs the answer, not the run.
-  const example = `${ANSWER_BLOCK_OPEN}{"messageId":"${pending.value[0]?.id ?? ''}","answer":"..."}${ANSWER_BLOCK_CLOSE}`
-  const text = [
-    'MESSAGES ADDRESSED TO YOU',
-    '',
-    'Another slave asked you these and cannot continue until you reply.',
-    '',
-    ...items,
-    '',
-    'Answer what you can. To answer, put one block like this in your FINAL message, one per question:',
-    example,
-    '',
-    'Answering does not end your own task, which follows.',
-    '',
-    '---',
-  ].join('\n')
-
-  return { kind: 'inbox', text, source: { kind: 'inbox', messageIds: pending.value.map((message) => message.id) } }
+  return rows.map((row) => ({ answerId: row.id, question: row.replyTo?.body ?? '', answer: row.body }))
 }
 
 /**
@@ -146,22 +202,40 @@ export async function rosterSection(slaveId: string, workspaceId: string): Promi
  * they are the one text `neutraliseMarkers` is never applied to, because this section is what
  * TEACHES the real markers.
  *
- * **IMPLEMENTATION runs only, and only alongside a roster.** `ask.ts` refuses an ask from a review
- * run, and `recipientCanAnswer` refuses every recipient a lone slave could name -- `runContext.ts`
- * enforces both conditions, which is why this producer takes no arguments and never returns `null`.
+ * **IMPLEMENTATION runs only, and only when somebody can be asked.** `ask.ts` refuses an ask from a
+ * review run, and `recipientCanAnswer` refuses every recipient a lone slave could name --
+ * `runContext.ts` enforces both conditions, which is why this producer never returns `null`.
+ *
+ * `roster` says whether a roster section sits above (the default, and M36's only case);
+ * `conductor` (Conductor Plan 2) adds the conductor as a recipient for a package task. A package
+ * worker alone on its roster still gets the section, with the conductor as the only one to ask --
+ * `recipientCanAnswer` accepts that role with no holder (spec R7).
  *
  * The roster it used to end with is now its own section, above: the two references that pointed
  * "below" point at it by name instead.
  */
-export function askProtocolSection(): Section {
+export function askProtocolSection(
+  options: { readonly roster: boolean; readonly conductor: boolean } = { roster: true, conductor: false },
+): Section {
+  const conductorBlock = `${ASK_BLOCK_OPEN}{"role":"${CONDUCTOR_ROLE}","question":"..."}${ASK_BLOCK_CLOSE}`
+  const whom = options.roster
+    ? [
+        `${ASK_BLOCK_OPEN}{"role":"<a role from the roster above>","question":"..."}${ASK_BLOCK_CLOSE}`,
+        `Use "slaveId":"<an id from the roster above>" instead of "role" to ask one slave by name. Add`,
+        '"context":"..." for anything the answerer needs to know first.',
+        ...(options.conductor ? [`You can also ask the conductor, who decides how this goal is delivered: ${conductorBlock}`] : []),
+      ]
+    : [
+        conductorBlock,
+        'That asks the conductor, who decides how this goal is delivered. Add "context":"..." for',
+        'anything the answerer needs to know first.',
+      ]
   const text = [
-    'ASKING ANOTHER SLAVE',
+    options.roster ? 'ASKING ANOTHER SLAVE' : 'ASKING THE CONDUCTOR',
     '',
     'If you cannot continue without an answer somebody else has to give, do not guess. End your',
     'FINAL message with one block like this and stop there:',
-    `${ASK_BLOCK_OPEN}{"role":"<a role from the roster above>","question":"..."}${ASK_BLOCK_CLOSE}`,
-    `Use "slaveId":"<an id from the roster above>" instead of "role" to ask one slave by name. Add`,
-    '"context":"..." for anything the answerer needs to know first.',
+    ...whom,
     '',
     'Your run stops there. That is not a failure: it costs you no attempt, and you are resumed in',
     'this same session, in this same worktree, with the answer in front of you. Ask only when you',

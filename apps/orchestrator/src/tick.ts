@@ -34,6 +34,7 @@ import {
   type SlaveRuntimeAdapter,
   type RunHandle,
 } from '@slave-of-ai/providers'
+import { conduct, type ConductStep } from './conductor.js'
 import { deliverAnswers } from './deliver.js'
 import { runMergePass } from './merge.js'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
@@ -116,6 +117,10 @@ export interface TickReport {
    *  HALTED workspace is supervised (spec §5, clarified in fix round 1) -- rules-only, every
    *  action a proposal -- because it is the workspace an operator most needs a decision about. */
   readonly supervisor: SuperviseReport
+  /** What the conductor did this tick (Conductor Plan 2), for a `conducted` workspace; `'none'`
+   *  for every other. Absent on the paths that never reach it -- an archived project, a halt, and
+   *  a tick waiting on concurrency -- so a report shape written before the conductor still reads. */
+  readonly conductStep?: ConductStep
 }
 
 /**
@@ -415,6 +420,11 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   //
   // H9c: both start a run, so neither goes out into a slot `decide()` just said is not there -- the
   // same rule the halt branch used to apply to a full workspace, without the halt.
+  //
+  // The conductor first (Conductor Plan 2): for a `conducted` workspace it is what turns the goal
+  // into work, and `dispatchPlanning` below refuses such a workspace outright (spec R2). Under the
+  // same H9c rule as planning: its model call is spend a full workspace has not got the room to act on.
+  const conductStep = waitingOn === null ? await conductQuietly(deps) : null
   const planningStarted = waitingOn === null ? await dispatchPlanning(deps) : null
 
   const reviewsStarted = waitingOn === null ? await dispatchReviews(deps) : []
@@ -430,7 +440,32 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   // a merge landed above all remove situations it would otherwise have decided about.
   const supervisor = await superviseQuietly(deps, statsSnapshot)
 
-  return { started, halted: null, waitingOn, skippedNoRole, unservedRoles, planningStarted, reviewsStarted, skipped: null, supervisor }
+  return {
+    started,
+    halted: null,
+    waitingOn,
+    skippedNoRole,
+    unservedRoles,
+    planningStarted,
+    reviewsStarted,
+    skipped: null,
+    supervisor,
+    ...(conductStep === null ? {} : { conductStep }),
+  }
+}
+
+/**
+ * The conductor's step, wrapped so it can never take the tick down -- `superviseQuietly`'s rule
+ * for the same reason: a daemon whose every tick throws stops scheduling entirely. A throw is
+ * logged in the tick's own shape and reported as a step that did nothing; the next tick tries again.
+ */
+async function conductQuietly(deps: TickDeps): Promise<ConductStep> {
+  try {
+    return await conduct(deps)
+  } catch (error) {
+    console.error(`[tick] the conductor step for workspace ${deps.workspaceId} failed:`, error)
+    return 'none'
+  }
 }
 
 /**

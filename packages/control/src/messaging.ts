@@ -267,19 +267,52 @@ export async function waitingSenderRunIds(
   return runs.map((run) => run.id)
 }
 
-/** The `where` fragment {@link waitingSenderRunIds} feeds. A question whose `senderRunId` is null
- *  (no run ever asked it) can park nobody and is never pending. */
+/**
+ * The idempotency key a `<slave-report>` question is sent under (Conductor Plan 2, spec R7), one
+ * per run and position -- `apps/orchestrator/src/report.ts` writes it, and it is also the MARKER
+ * that makes such a question pending in {@link stillPendingQuestion}.
+ */
+export function reportQuestionKey(runId: string, index: number): string {
+  return `${REPORT_QUESTION_KEY_PREFIX}${runId}:${String(index)}`
+}
+
+const REPORT_QUESTION_KEY_PREFIX = 'report:'
+
+/** The stored form of {@link reportQuestionKey}'s prefix: `sendMessage` namespaces every key it
+ *  writes, so this is what the column actually starts with. */
+export const STORED_REPORT_QUESTION_KEY_PREFIX = namespacedKey('send', REPORT_QUESTION_KEY_PREFIX)
+
+/**
+ * The `where` fragment {@link waitingSenderRunIds} feeds. A question whose `senderRunId` is null
+ * (no run ever asked it) can park nobody and is never pending.
+ *
+ * Two ways a question is still waited on, and the second is the conductor's (final review C1). A
+ * `<slave-ask>` question parks its run, so "waited on" is "its run is still parked". A question in
+ * a `<slave-report>` is sent AFTER its run concluded -- nothing is parked, and under the first rule
+ * alone it was never pending anywhere: not in the Supervisor's world, not in `messages`, not in
+ * the answer box. Its answer is read by the seat's NEXT run on the task (`inbox.ts`), so it is
+ * waited on until a reply lands; the idempotency key `report.ts` sends it under is the marker, since
+ * no other path writes one with that prefix.
+ */
 export function stillPendingQuestion(waitingRunIds: string[]): {
   kind: 'question'
   expectsReply: true
   replies: { none: Record<string, never> }
-  senderRunId: { in: string[] }
+  AND: [{ OR: [{ senderRunId: { in: string[] } }, { senderRunId: { not: null }; idempotencyKey: { startsWith: string } }] }]
 } {
   return {
     kind: 'question' as const,
     expectsReply: true as const,
     replies: { none: {} },
-    senderRunId: { in: waitingRunIds },
+    // Wrapped in AND so a caller's own `OR` (the inbox's recipient match) is not overwritten.
+    AND: [
+      {
+        OR: [
+          { senderRunId: { in: waitingRunIds } },
+          { senderRunId: { not: null }, idempotencyKey: { startsWith: STORED_REPORT_QUESTION_KEY_PREFIX } },
+        ],
+      },
+    ],
   }
 }
 

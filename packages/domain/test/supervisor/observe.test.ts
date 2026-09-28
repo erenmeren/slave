@@ -70,6 +70,22 @@ describe('observe -- planning_stalled', () => {
     expect(observe(w)[0]?.facts).toEqual({ reason: 'no_planner', goalVersion: 1 })
   })
 
+  it('is silent for a conducted workspace, and so is runbook_recommended: no planner ever runs there', () => {
+    const w = world({
+      goal: 'Ship the checkout flow',
+      goalVersion: 1,
+      delivery: 'conducted',
+      slaves: [slave({ runtimeRoles: ['backend'] })],
+      runbooks: [runbook({ key: 'feature-delivery', keywords: ['ship'] })],
+    })
+    const kinds = observe(w).map((situation) => situation.kind)
+    expect(kinds).not.toContain('planning_stalled')
+    expect(kinds).not.toContain('runbook_recommended')
+    // The same world, planned, raises both -- so the silence above is the delivery's doing.
+    const planned = observe({ ...w, delivery: 'planned' }).map((situation) => situation.kind)
+    expect(planned).toEqual(expect.arrayContaining(['planning_stalled', 'runbook_recommended']))
+  })
+
   it('reports cap_spent once the retries against this goal are gone', () => {
     const w = world({
       goal: 'Ship it',
@@ -336,6 +352,17 @@ describe('observe -- unanswerable_question', () => {
     expect(keys(observe(w))).toEqual([['unanswerable_question', 'm1']])
   })
 
+  it('names the conductor as the conductor, not as a role nobody holds', () => {
+    const w = world({
+      questions: [question({ createdAt: NOW, recipientRole: 'conductor' })],
+      slaves: [slave({ runtimeRoles: ['backend'] })],
+    })
+    const [situation] = observe(w)
+    expect(situation?.kind).toBe('unanswerable_question')
+    expect(situation?.summary).toContain('the conductor')
+    expect(situation?.summary).not.toContain('"conductor" role')
+  })
+
   it('reports a question addressed to a slave that is not in the workspace', () => {
     const w = world({
       questions: [question({ recipientRole: null, recipientSlaveId: 'gone' })],
@@ -479,6 +506,26 @@ describe('observe -- a question nobody will pick up (pilot fix A)', () => {
     }
   })
 
+  // Conductor Plan 2: a package task is pinned to its own seat and `decide()` hands it to no other
+  // holder of the role, so it is not work the recipient could start.
+  it('does not count another seat\'s pinned package task as work the recipient could start', () => {
+    const w = world({
+      tasks: [task({ id: 't2', status: 'ready', assigneeId: 's3', pinnedSlaveId: 's3' })],
+      questions: [question({ createdAt: NOW, askerSlaveId: 's1', recipientRole: null, recipientSlaveId: 's2' })],
+      slaves: [slave({ id: 's1', busy: true }), slave({ id: 's2' }), slave({ id: 's3', busy: true })],
+    })
+    const situations = observe(w)
+    expect(keys(situations)).toContainEqual(['unanswerable_question', 'm1'])
+    expect(situations.find((s) => s.kind === 'unanswerable_question')?.facts.stranded).toBe(true)
+    // The same task pinned to the recipient itself is work it will start, and the question waits.
+    const own = world({
+      tasks: [task({ id: 't2', status: 'ready', assigneeId: 's2', pinnedSlaveId: 's2' })],
+      questions: [question({ createdAt: NOW, askerSlaveId: 's1', recipientRole: null, recipientSlaveId: 's2' })],
+      slaves: [slave({ id: 's1', busy: true }), slave({ id: 's2' })],
+    })
+    expect(observe(own)).toEqual([])
+  })
+
   it('does not count a startable task for a role the recipient does not hold', () => {
     const w = world({
       tasks: [task({ id: 't2', status: 'ready', requiredRole: 'frontend' })],
@@ -553,6 +600,38 @@ describe('observe -- ready_unstaffed', () => {
   it('stays silent for a ready task whose dependencies are not done -- it is not startable yet', () => {
     const w = world({ tasks: [task({ status: 'ready', requiredRole: 'frontend', dependenciesDone: false })], slaves: [] })
     expect(observe(w)).toEqual([])
+  })
+})
+
+/**
+ * Final review I5: a package task is pinned to one seat and `decide()` hands it to nobody else, so a
+ * pinned seat that is gone, released or no longer holds the role leaves the task stuck -- and the
+ * board busy, so the next goal version waits forever. `ready_unstaffed` asked only whether anybody
+ * holds the role.
+ */
+describe('observe -- package_seat_lost', () => {
+  const pinned = (over: Partial<Parameters<typeof task>[0]> = {}): ReturnType<typeof task> =>
+    task({ id: 't1', status: 'ready', requiredRole: 'implementer', assigneeId: 's2', pinnedSlaveId: 's2', ...over })
+
+  it('reports a pinned task whose seat is not in the workspace any more (closed or deleted)', () => {
+    const w = world({ tasks: [pinned()], slaves: [slave({ id: 's1', runtimeRoles: ['implementer'] })] })
+    expect(keys(observe(w))).toEqual([['package_seat_lost', 't1']])
+    expect(observe(w)[0]?.facts).toEqual(expect.objectContaining({ taskId: 't1', slaveId: 's2', reason: 'missing' }))
+  })
+
+  it('reports a pinned seat that was released, or lost the role, in rework as in ready', () => {
+    const released = world({ tasks: [pinned({ status: 'rework' })], slaves: [slave({ id: 's2', runtimeRoles: ['implementer'], released: true })] })
+    expect(keys(observe(released))).toEqual([['package_seat_lost', 't1']])
+    expect(observe(released)[0]?.facts.reason).toBe('released')
+    const roleless = world({ tasks: [pinned()], slaves: [slave({ id: 's2', runtimeRoles: ['backend'] })] })
+    // One situation for the hole, not also a role gap: hiring the role would not unpin the task.
+    expect(keys(observe(roleless))).toEqual([['package_seat_lost', 't1']])
+    expect(observe(roleless)[0]?.facts.reason).toBe('lacks_role')
+  })
+
+  it('stays silent while the pinned seat can take it, and for a task that is not waiting to start', () => {
+    expect(observe(world({ tasks: [pinned()], slaves: [slave({ id: 's2', runtimeRoles: ['implementer'] })] }))).toEqual([])
+    expect(observe(world({ tasks: [pinned({ status: 'done' })], slaves: [] })).filter((s) => s.kind === 'package_seat_lost')).toEqual([])
   })
 })
 

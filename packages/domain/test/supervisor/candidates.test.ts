@@ -708,6 +708,20 @@ describe('candidates -- questions', () => {
     })
   })
 
+  it('offers only the sourced answer and escalation for a question to the conductor: nobody is hired to hold its role', () => {
+    // A staffable idle slave is in the world, so the staffing offers WOULD appear for any other
+    // unheld role. The conductor's role is held by nobody by design (spec R7).
+    const w = world({
+      questions: [question({ askerSlaveId: 's9', recipientRole: 'conductor', holders: [] })],
+      slaves: [ASKER, IDLE_HOLDER],
+      tasks: [ASKING_TASK],
+    })
+    expect(observe(w)[0]?.kind).toBe('unanswerable_question')
+    const cands = offered(w)
+    expect(kinds(cands)).toEqual(['answer_question', 'escalate_to_human', 'no_action'])
+    expect(cands[0]?.action).toEqual({ kind: 'answer_question', messageId: 'm1' })
+  })
+
   it('offers nothing but the last resorts when the world no longer holds the question', () => {
     // `observe` only ever names a question the world has, so this is a defensive shape rather than
     // a state a tick can reach -- but a catalogue that indexed into `undefined` would throw inside
@@ -1611,5 +1625,19 @@ describe('permission_blocked candidates (M52 R5)', () => {
 
   it('falls back to the last resorts when the worker is gone between observe and here', () => {
     expect(kinds(candidates(situation, world()))).toEqual(['escalate_to_human', 'no_action'])
+  })
+})
+
+describe('candidates -- package_seat_lost (final review I5)', () => {
+  it('puts the lost seat in front of a person: re-seating a pinned package is not a rules move', () => {
+    const w = world({
+      tasks: [task({ id: 't1', status: 'ready', requiredRole: 'implementer', assigneeId: 's2', pinnedSlaveId: 's2' })],
+      slaves: [slave({ id: 's1', runtimeRoles: ['implementer'] })],
+    })
+    const [lost] = observe(w)
+    expect(lost?.kind).toBe('package_seat_lost')
+    const cands = offered(w)
+    expect(kinds(cands)).toEqual(['escalate_to_human', 'no_action'])
+    expect(cands[0]?.action).toEqual({ kind: 'escalate_to_human', summary: lost?.summary })
   })
 })

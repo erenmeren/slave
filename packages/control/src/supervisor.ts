@@ -733,6 +733,11 @@ async function carryOut(
       return ok('none')
     case 'no_action':
       return ok('none')
+    case 'conduct':
+      // Conductor R2 (plan decision D7): recorded already applied, by the conductor, in the one
+      // transaction that also wrote its packages and tasks. There is nothing left to carry out, and
+      // a second `supervisor.applied` would announce a change `workspace.conducted` already did.
+      return ok('none')
   }
 }
 

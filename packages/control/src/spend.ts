@@ -1,5 +1,5 @@
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
-import { INTAKE_PER_CALL_CAP_USD, SUPERVISOR_PER_CALL_CAP_USD } from '@slave-of-ai/domain'
+import { CONDUCT_PER_CALL_CAP_USD, INTAKE_PER_CALL_CAP_USD, SUPERVISOR_PER_CALL_CAP_USD } from '@slave-of-ai/domain'
 
 /** What a workspace has spent, and the parts it is made of. The parts are kept because the
  *  total alone cannot say whether a figure is measured -- which is the difference between "this
@@ -7,7 +7,8 @@ import { INTAKE_PER_CALL_CAP_USD, SUPERVISOR_PER_CALL_CAP_USD } from '@slave-of-
 export interface WorkspaceSpend {
   /** `runsMeasuredUsd + supervisorMeasuredUsd + supervisorUnmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD
    *  + intakeMeasuredUsd + intakeUnmeasuredCalls * INTAKE_PER_CALL_CAP_USD
-   *  + chatMeasuredUsd + chatUnmeasuredTurns * SUPERVISOR_PER_CALL_CAP_USD`. */
+   *  + chatMeasuredUsd + chatUnmeasuredTurns * SUPERVISOR_PER_CALL_CAP_USD
+   *  + conductorMeasuredUsd + conductorUnmeasuredCalls * CONDUCT_PER_CALL_CAP_USD`. */
   readonly spentUsd: number
   /** Σ `SlaveRun.costUsd` over every run of the workspace, whatever its status. Postgres' `sum()`
    *  skips NULLs, so an unmeasured RUN contributes nothing here -- deliberately, and unchanged
@@ -33,6 +34,33 @@ export interface WorkspaceSpend {
   /** Conversation turns whose cost never came back (`SupervisorMessage.unmeasured`), charged at
    *  `SUPERVISOR_PER_CALL_CAP_USD`. Every Cursor turn is one of these (erratum E2). */
   readonly chatUnmeasuredTurns: number
+  /** Σ `ConductorCall.modelCostUsd` -- what the conductor's calls cost (Conductor Plan 2, D6). */
+  readonly conductorMeasuredUsd: number
+  /** Conductor calls whose cost never came back (`ConductorCall.unmeasured`), charged at
+   *  `CONDUCT_PER_CALL_CAP_USD` -- the intake's rule. */
+  readonly conductorUnmeasuredCalls: number
+}
+
+/** The model-call terms of {@link WorkspaceSpend}: everything but the runs. */
+export type ModelCallSpend = Omit<WorkspaceSpend, 'spentUsd' | 'runsMeasuredUsd'>
+
+/**
+ * What a workspace's model calls cost -- the Supervisor's decisions, its intake, its chat and its
+ * conductor -- each unmeasured call charged at its cap. Shared by {@link workspaceSpend} and the
+ * Projects list (`apps/web/src/server/org.ts`), which reads the same terms grouped for every
+ * project at once (Conductor Plan 2 final review M3: the list had fallen two terms behind).
+ */
+export function modelCallSpendUsd(terms: ModelCallSpend): number {
+  return (
+    terms.supervisorMeasuredUsd +
+    terms.supervisorUnmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD +
+    terms.intakeMeasuredUsd +
+    terms.intakeUnmeasuredCalls * INTAKE_PER_CALL_CAP_USD +
+    terms.chatMeasuredUsd +
+    terms.chatUnmeasuredTurns * SUPERVISOR_PER_CALL_CAP_USD +
+    terms.conductorMeasuredUsd +
+    terms.conductorUnmeasuredCalls * CONDUCT_PER_CALL_CAP_USD
+  )
 }
 
 /**
@@ -135,21 +163,27 @@ export async function workspaceSpend(
   const chatMeasuredUsd = chat.reduce((total, group) => total + (group._sum.modelCostUsd ?? 0), 0)
   const chatUnmeasuredTurns = chat.find((group) => group.unmeasured)?._count._all ?? 0
 
-  return {
-    runsMeasuredUsd,
+  // Conductor Plan 2 (D6): every conductor call is a `ConductorCall` row -- ok and failed alike,
+  // because a refused answer was still paid for. Unmeasured calls are charged at the cap, the
+  // intake term's rule.
+  const conductor = await client.conductorCall.groupBy({
+    by: ['unmeasured'],
+    where: { workspaceId },
+    _sum: { modelCostUsd: true },
+    _count: { _all: true },
+  })
+  const conductorMeasuredUsd = conductor.reduce((total, group) => total + (group._sum.modelCostUsd ?? 0), 0)
+  const conductorUnmeasuredCalls = conductor.find((group) => group.unmeasured)?._count._all ?? 0
+
+  const terms: ModelCallSpend = {
     supervisorMeasuredUsd,
     supervisorUnmeasuredCalls,
     intakeMeasuredUsd,
     intakeUnmeasuredCalls,
     chatMeasuredUsd,
     chatUnmeasuredTurns,
-    spentUsd:
-      runsMeasuredUsd +
-      supervisorMeasuredUsd +
-      supervisorUnmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD +
-      intakeMeasuredUsd +
-      intakeUnmeasuredCalls * INTAKE_PER_CALL_CAP_USD +
-      chatMeasuredUsd +
-      chatUnmeasuredTurns * SUPERVISOR_PER_CALL_CAP_USD,
+    conductorMeasuredUsd,
+    conductorUnmeasuredCalls,
   }
+  return { runsMeasuredUsd, ...terms, spentUsd: runsMeasuredUsd + modelCallSpendUsd(terms) }
 }
