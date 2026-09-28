@@ -1,4 +1,4 @@
-import { isUniqueConstraintViolation, staffPackages, type ModelDecider } from '@slave-of-ai/control'
+import { isUniqueConstraintViolation, staffPackages, staffVerifier, type ModelDecider } from '@slave-of-ai/control'
 import { Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   CONDUCT_PER_CALL_CAP_USD,
@@ -204,6 +204,13 @@ async function decideAndMaterialise(
     await tripConductor(workspaceId, `staffing goal v${version}: ${seats.error}`)
     return 'conduct_failed'
   }
+  // Plan 4b D4 (spec R8): the version's verifier, a seat that implements none of it, staffed before
+  // anything is written so a version never exists without one on record.
+  const verifier = await staffVerifier(workspaceId, version, new Set(seats.value.values()), plan.packages[0]?.templateId ?? '')
+  if (!verifier.ok) {
+    await tripConductor(workspaceId, `staffing the verifier of goal v${version}: ${verifier.error}`)
+    return 'conduct_failed'
+  }
   // Spec R9: the version's own integration branch, cut before the transaction below (git is not
   // transactional) -- `ensureIntegrationBranch` reuses it when a crash left it without its row.
   const integrationBranch = integrationBranchName(version, workspaceId)
@@ -219,6 +226,7 @@ async function decideAndMaterialise(
     await materialise(workspaceId, version, workspace.maxAttempts, plan, fallback, seats.value, items, {
       integrationBranch,
       baseCommit: cut.baseCommit,
+      verifierSlaveId: verifier.value,
     })
   } catch (error) {
     if (error instanceof AlreadyConducted) return 'none'
@@ -308,7 +316,7 @@ async function materialise(
   fallback: boolean,
   seats: ReadonlyMap<string, string>,
   items: readonly { readonly key: string; readonly text: string }[],
-  delivery: { readonly integrationBranch: string; readonly baseCommit: string },
+  delivery: { readonly integrationBranch: string; readonly baseCommit: string; readonly verifierSlaveId: string },
 ): Promise<string> {
   const subjectId = `${workspaceId}:v${version}`
   const packageKeys = plan.packages.map((p) => p.key)
@@ -327,7 +335,13 @@ async function materialise(
     await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
     if ((await tx.workPackage.count({ where: { workspaceId, goalVersion: version } })) > 0) throw new AlreadyConducted()
     await tx.goalDelivery.create({
-      data: { workspaceId, goalVersion: version, integrationBranch: delivery.integrationBranch, baseCommit: delivery.baseCommit },
+      data: {
+        workspaceId,
+        goalVersion: version,
+        integrationBranch: delivery.integrationBranch,
+        baseCommit: delivery.baseCommit,
+        verifierSlaveId: delivery.verifierSlaveId,
+      },
     })
 
     const decision = await tx.supervisorDecision.create({

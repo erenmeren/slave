@@ -17,6 +17,7 @@ import {
   CONDUCT_PER_CALL_CAP_USD,
   CONDUCT_RETRY_CAP,
   PACKAGE_WORKER_ROLE,
+  VERIFIER_ROLE,
   integrationBranchName,
   workspaceId as brandWorkspaceId,
 } from '@slave-of-ai/domain'
@@ -254,8 +255,13 @@ const PARTITIONED = JSON.stringify({
  * `seed` plus what the size decision reads: a repository with real files to own, two active
  * templates with a managed pool (three people each, `syncPersonPool`'s whole allowance) so
  * `staffPackages` can seat people, and goal v1's requirement set, made by one `conduct` tick.
+ *
+ * Plan 4b Task 4: a reviewer seat of the docs persona, as intake staffs one, so the conductor has a
+ * verifier to name -- without it `PARTITIONED`'s three backend packages take the backend pool's
+ * three people and a verifier hired from the first package's persona has nobody left.
+ * `withReviewer: false` leaves it out.
  */
-async function seedWithRequirements(): Promise<Fixture> {
+async function seedWithRequirements(options: { readonly withReviewer?: boolean } = {}): Promise<Fixture> {
   await syncCapabilityTaxonomy()
   await prisma.slaveTemplate.create({
     data: { id: 't-backend', name: 'Backend Developer', role: 'backend', description: 'x', active: true, capabilityKeys: [] },
@@ -269,6 +275,11 @@ async function seedWithRequirements(): Promise<Fixture> {
     goal: 'Add a CSV mode. Add a JSON mode.',
     files: ['src/cli.py', 'src/report/table.py', 'src/config.py'],
   })
+  if (options.withReviewer !== false) {
+    const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: f.workspaceId } })
+    const person = await prisma.person.findFirstOrThrow({ where: { templateId: 't-docs' }, orderBy: { id: 'asc' } })
+    await prisma.slave.create({ data: { teamId: team.id, role: 'Technical Writer', runtimeRoles: ['docs', 'reviewer'], personId: person.id } })
+  }
   const step = await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => failed('') }).decider))
   if (step !== 'requirements_set') throw new Error(`the fixture requirement set was not made: ${step}`)
   return f
@@ -445,6 +456,34 @@ describe('conduct: the size decision', () => {
     expect(cli).not.toContain('Wire the packages together')
     expect(cli).toContain('CLI flags')
     expect(packages.find((p) => p.key === 'integration')?.tasks[0]?.description).toBe('Wire the packages together: cli, report, config.')
+  })
+
+  /** Plan 4b D4 (spec R8): every conducted version has a verifier seat that implements none of it. */
+  it('records a verifier seat on the delivery that holds the verifier role and none of the packages', async () => {
+    const f = await seedWithRequirements()
+    expect(await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) }).decider))).toBe('conducted')
+    const delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { workspaceId_goalVersion: { workspaceId: f.workspaceId, goalVersion: 1 } } })
+    expect(delivery.verifierSlaveId).not.toBeNull()
+    const verifier = await prisma.slave.findUniqueOrThrow({ where: { id: delivery.verifierSlaveId ?? '' } })
+    expect(verifier.runtimeRoles).toContain(VERIFIER_ROLE)
+    expect(verifier.runtimeRoles).not.toContain(PACKAGE_WORKER_ROLE)
+    const tasks = await prisma.task.findMany({ where: { workspaceId: f.workspaceId } })
+    expect(tasks).toHaveLength(3)
+    expect(tasks.map((t) => t.assigneeId)).not.toContain(verifier.id)
+  })
+
+  it('says once and materialises nothing when no verifier can be staffed', async () => {
+    // No reviewer, and PARTITIONED's three backend packages take the backend pool's three people:
+    // a verifier hired from the first package's persona has nobody left.
+    const f = await seedWithRequirements({ withReviewer: false })
+    const { decider } = scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) })
+    expect(await conduct(depsFor(f, decider))).toBe('conduct_failed')
+    expect(await prisma.workPackage.count({ where: { workspaceId: f.workspaceId } })).toBe(0)
+    expect(await prisma.goalDelivery.count({ where: { workspaceId: f.workspaceId } })).toBe(0)
+    const trips = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'guardrail_tripped' } })
+    expect(trips).toHaveLength(1)
+    expect(trips[0]?.payload).toEqual(expect.objectContaining({ guardrail: 'conductor_failed' }))
+    expect((trips[0]?.payload as { detail: string }).detail).toContain('verifier')
   })
 
   it('staffs a bought plan again without buying it twice when the pool ran out, and says so once', async () => {
