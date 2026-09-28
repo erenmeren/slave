@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
@@ -7,7 +7,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { workspaceId as brandWorkspaceId, taskId as brandTaskId } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { addRunbook, adoptRunbook, confirmIntegration, recordRunEvidence, settleTaskEvidence } from '@slave-of-ai/control'
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { runMergePass } from '../../src/merge.js'
 import { loadWorld } from '../../src/world.js'
 import { provisionWorktree } from '../../src/worktree.js'
@@ -361,6 +361,282 @@ describe('runMergePass', () => {
     const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
     expect(task.status).toBe('done')
     expect(mergeCommitSubjects(workspace.repoPath)).toHaveLength(1)
+  })
+
+  /**
+   * Conductor Plan 3, fix rounds 2 and 3 (C1, controller Ruling 7): a package task's worktree can
+   * reach this pass with a file its package does not own changed in it -- a lockfile setup rewrote,
+   * a file a verify command generated. `git rebase` refuses a dirty tree, and a refusal here is a
+   * charged rework whose next run re-dirties the same file. None of those changes is on the branch,
+   * so they are SET ASIDE (saved under the run's state directory, removed from the tree) and the
+   * rebase and the re-verify see exactly the branch that lands. Never `git stash`: `refs/stash` is
+   * shared by every worktree of the repository, the operator's own stashes included.
+   */
+  describe('a package worktree holding changes the branch does not (Conductor Plan 3, C1)', () => {
+    const CLEAN_TREE = 'test -z "$(git status --porcelain --untracked-files=all)"'
+    const previousStateDir = process.env['SLAVEOFAI_STATE_DIR']
+    let stateDir = ''
+
+    beforeAll((): void => {
+      stateDir = mkdtempSync(join(tmpdir(), 'slaveofai-merge-state-'))
+      process.env['SLAVEOFAI_STATE_DIR'] = stateDir
+    })
+
+    afterAll((): void => {
+      if (previousStateDir === undefined) delete process.env['SLAVEOFAI_STATE_DIR']
+      else process.env['SLAVEOFAI_STATE_DIR'] = previousStateDir
+      rmSync(stateDir, { recursive: true, force: true })
+    })
+
+    const runOf = async (taskId: string): Promise<{ readonly id: string; readonly worktree: string }> => {
+      const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId } })
+      return { id: run.id, worktree: run.worktreePath as string }
+    }
+
+    /** Makes the seeded task a governed package task that owns only `feature.txt`/`shared.txt`. */
+    async function governByPackage(workspace: Workspace, taskId: string): Promise<void> {
+      const pkg = await prisma.workPackage.create({
+        data: {
+          workspaceId: workspace.id,
+          goalVersion: 1,
+          key: 'feature',
+          title: 'feature',
+          requirementKeys: ['R1'],
+          ownedPaths: ['feature.txt', 'shared.txt'],
+          interface: '',
+          templateId: 'tpl',
+        },
+      })
+      await prisma.task.update({ where: { id: taskId }, data: { workPackageId: pkg.id, goalVersion: 1 } })
+    }
+
+    /** The one directory this run's foreign changes were saved to. */
+    function savedDir(runId: string): string {
+      const root = join(stateDir, 'runs', runId, 'set-aside')
+      const entries = readdirSync(root)
+      expect(entries).toHaveLength(1)
+      return join(root, entries[0] as string)
+    }
+
+    /** An operator's own stash in the primary checkout, which nothing here may touch. */
+    function operatorStash(repoPath: string): string {
+      writeFileSync(join(repoPath, 'README.md'), '# the operator was editing this\n')
+      git(['stash', 'push', '-q', '-m', 'operator work'], repoPath)
+      return git(['stash', 'list'], repoPath)
+    }
+
+    const landedFiles = (repoPath: string): readonly string[] =>
+      git(['diff', '--name-only', 'main^1', 'main'], repoPath).split('\n').toSorted()
+
+    it('sets a modified tracked foreign file aside and merges, base unchanged', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: [CLEAN_TREE] })
+      const { taskId, taskKey } = await seedMergingTask(workspace)
+      await governByPackage(workspace, taskId)
+      const run = await runOf(taskId)
+      const stashes = operatorStash(workspace.repoPath)
+      writeFileSync(join(run.worktree, 'README.md'), 'rewritten by setup\n')
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.lastRejectionReason).toBeNull()
+      expect(task.status).toBe('done')
+      expect(mergeCommitSubjects(workspace.repoPath).some((subject) => subject.includes(taskKey))).toBe(true)
+      expect(landedFiles(workspace.repoPath)).toEqual(['feature.txt'])
+      expect(git(['show', 'main:README.md'], workspace.repoPath)).toBe('# fixture')
+      expect(git(['status', '--porcelain', '--untracked-files=all'], run.worktree)).toBe('')
+      expect(readFileSync(join(savedDir(run.id), 'changes.patch'), 'utf8')).toContain('rewritten by setup')
+      expect(git(['stash', 'list'], workspace.repoPath)).toBe(stashes)
+    })
+
+    it('sets a modified tracked foreign file aside and merges after the base branch moved on', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: [CLEAN_TREE] })
+      const { taskId, taskKey } = await seedMergingTask(workspace)
+      await governByPackage(workspace, taskId)
+      const run = await runOf(taskId)
+      writeFileSync(join(run.worktree, 'README.md'), 'rewritten by setup\n')
+      writeFileSync(join(workspace.repoPath, 'other.txt'), 'another task landed\n')
+      git(['add', '-A'], workspace.repoPath)
+      git(['commit', '-q', '-m', 'main moves on'], workspace.repoPath)
+      const stashes = operatorStash(workspace.repoPath)
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.lastRejectionReason).toBeNull()
+      expect(task.status).toBe('done')
+      expect(mergeCommitSubjects(workspace.repoPath).some((subject) => subject.includes(taskKey))).toBe(true)
+      expect(landedFiles(workspace.repoPath)).toEqual(['feature.txt'])
+      expect(git(['show', 'main:README.md'], workspace.repoPath)).toBe('# fixture')
+      expect(existsSync(join(run.worktree, 'other.txt'))).toBe(true)
+      expect(git(['status', '--porcelain', '--untracked-files=all'], run.worktree)).toBe('')
+      expect(readFileSync(join(savedDir(run.id), 'changes.patch'), 'utf8')).toContain('rewritten by setup')
+      expect(git(['stash', 'list'], workspace.repoPath)).toBe(stashes)
+    })
+
+    it('sets aside a foreign file the base branch also changed, and judges the rebased branch alone', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: [CLEAN_TREE, '! grep -rq "<<<<<<<" README.md'] })
+      const { taskId, taskKey } = await seedMergingTask(workspace)
+      await governByPackage(workspace, taskId)
+      const run = await runOf(taskId)
+      writeFileSync(join(run.worktree, 'README.md'), 'rewritten by setup\n')
+      writeFileSync(join(workspace.repoPath, 'README.md'), '# fixture, as main now has it\n')
+      git(['add', '-A'], workspace.repoPath)
+      git(['commit', '-q', '-m', 'main changes the readme'], workspace.repoPath)
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.lastRejectionReason).toBeNull()
+      expect(task.status).toBe('done')
+      expect(mergeCommitSubjects(workspace.repoPath).some((subject) => subject.includes(taskKey))).toBe(true)
+      expect(git(['show', 'main:README.md'], workspace.repoPath)).toBe('# fixture, as main now has it')
+      expect(readFileSync(join(run.worktree, 'README.md'), 'utf8')).toBe('# fixture, as main now has it\n')
+      expect(readFileSync(join(savedDir(run.id), 'changes.patch'), 'utf8')).toContain('rewritten by setup')
+    })
+
+    it('sets aside an untracked foreign file whose path the base branch now tracks, and merges', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: [CLEAN_TREE] })
+      const { taskId, taskKey } = await seedMergingTask(workspace)
+      await governByPackage(workspace, taskId)
+      const run = await runOf(taskId)
+      writeFileSync(join(run.worktree, 'generated.txt'), 'left behind\n')
+      writeFileSync(join(workspace.repoPath, 'generated.txt'), 'another package owns this\n')
+      git(['add', '-A'], workspace.repoPath)
+      git(['commit', '-q', '-m', 'another package lands generated.txt'], workspace.repoPath)
+      const stashes = operatorStash(workspace.repoPath)
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.lastRejectionReason).toBeNull()
+      expect(task.status).toBe('done')
+      expect(mergeCommitSubjects(workspace.repoPath).some((subject) => subject.includes(taskKey))).toBe(true)
+      expect(landedFiles(workspace.repoPath)).toEqual(['feature.txt'])
+      expect(git(['show', 'main:generated.txt'], workspace.repoPath)).toBe('another package owns this')
+      expect(readFileSync(join(run.worktree, 'generated.txt'), 'utf8')).toBe('another package owns this\n')
+      expect(readFileSync(join(savedDir(run.id), 'untracked', 'generated.txt'), 'utf8')).toBe('left behind\n')
+      expect(git(['stash', 'list'], workspace.repoPath)).toBe(stashes)
+    })
+
+    it('sets aside a foreign file staged but never committed, so it does not land', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: [CLEAN_TREE] })
+      const { taskId } = await seedMergingTask(workspace)
+      await governByPackage(workspace, taskId)
+      const run = await runOf(taskId)
+      writeFileSync(join(run.worktree, 'staged.txt'), 'staged, never committed\n')
+      git(['add', 'staged.txt'], run.worktree)
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.status).toBe('done')
+      expect(landedFiles(workspace.repoPath)).toEqual(['feature.txt'])
+      expect(existsSync(join(run.worktree, 'staged.txt'))).toBe(false)
+      expect(readFileSync(join(savedDir(run.id), 'changes.patch'), 'utf8')).toContain('staged, never committed')
+    })
+
+    it('still sends a conflicting branch back to rework with HEAD unchanged', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true })
+      const { taskId } = await seedMergingTask(workspace, { fileName: 'shared.txt', content: 'task version\n' })
+      await governByPackage(workspace, taskId)
+      const run = await runOf(taskId)
+      const headBefore = git(['rev-parse', 'HEAD'], run.worktree)
+      writeFileSync(join(run.worktree, 'README.md'), 'rewritten by setup\n')
+      writeFileSync(join(workspace.repoPath, 'shared.txt'), 'main version\n')
+      git(['add', '-A'], workspace.repoPath)
+      git(['commit', '-q', '-m', 'main writes the same file'], workspace.repoPath)
+      const stashes = operatorStash(workspace.repoPath)
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.status).toBe('rework')
+      expect(task.lastRejectionReason).toContain('conflicted')
+      expect(git(['rev-parse', 'HEAD'], run.worktree)).toBe(headBefore)
+      // The foreign change was set aside before the rebase, not lost.
+      expect(git(['status', '--porcelain', '--untracked-files=all'], run.worktree)).toBe('')
+      expect(readFileSync(join(savedDir(run.id), 'changes.patch'), 'utf8')).toContain('rewritten by setup')
+      expect(git(['stash', 'list'], workspace.repoPath)).toBe(stashes)
+    })
+
+    it('leaves a task with no package exactly as before: a dirty tree still refuses the rebase', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true })
+      const { taskId } = await seedMergingTask(workspace)
+      const run = await runOf(taskId)
+      writeFileSync(join(run.worktree, 'README.md'), 'rewritten by hand\n')
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.status).toBe('rework')
+      expect(task.lastRejectionReason).toContain('conflicted')
+      expect(readFileSync(join(run.worktree, 'README.md'), 'utf8')).toBe('rewritten by hand\n')
+      expect(existsSync(join(stateDir, 'runs', run.id))).toBe(false)
+    })
+
+    /**
+     * Round 4 (re-review m2): the dirty-tree check, the ownership-rule lookup and the set-aside call
+     * used to run BEFORE the rebase's own try/catch, not inside it. A worktree gone or broken threw
+     * out of all three, straight out of `runMergePass`, with the merge claim still set -- every later
+     * merge on the workspace stalled until the stale-merge sweep found it. A broken worktree always
+     * failed the rebase itself the same way (`git rebase` in a missing directory throws too); the fix
+     * is for the pre-checks to fail exactly the same way, not a new one.
+     */
+    it('fails the merge the same way a broken worktree always failed the rebase, claim released, when the worktree is gone before the dirty-tree check', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true })
+      const { taskId } = await seedMergingTask(workspace)
+      await governByPackage(workspace, taskId)
+      const run = await runOf(taskId)
+      const mainBefore = git(['rev-parse', 'main'], workspace.repoPath)
+      rmSync(run.worktree, { recursive: true, force: true })
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.status).toBe('rework')
+      expect(task.mergeClaimedAt).toBeNull()
+      const failures = await prisma.executionEvent.findMany({ where: { taskId, type: 'task_merge_failed' } })
+      expect(failures).toHaveLength(1)
+      // `main` never moved: the pass never reached the primary checkout at all.
+      expect(git(['rev-parse', 'main'], workspace.repoPath)).toBe(mainBefore)
+    })
+
+    /**
+     * Round 4 (re-review m3): a set-aside that cannot save what it would remove reports `failed`
+     * rather than throwing (`setAside.ts`'s own contract: nothing removed unless everything saved).
+     * Before this fix that `failed` outcome was only logged, the dirty tree was left in place, and
+     * the plain rebase below refused it -- a JUDGED, charged rework for a save failure that is not
+     * the work. `judged: false` still spends the attempt (`rejectTask` runs either way, exactly as
+     * the primary-checkout-dirty branch below already does for the same reason) -- bounded, not a
+     * free retry loop -- but never settles `integrated: false` on it, and the reason names the real
+     * cause instead of a rebase conflict that never happened.
+     */
+    it('routes a set-aside that cannot save its changes to an uncharged-judgement rework, not a rebase conflict', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: [CLEAN_TREE] })
+      const { taskId } = await seedMergingTask(workspace)
+      await governByPackage(workspace, taskId)
+      const run = await runOf(taskId)
+      writeFileSync(join(run.worktree, 'README.md'), 'rewritten by setup\n')
+      // The set-aside directory's own parent exists as a plain FILE: `mkdir` cannot create it, so
+      // the save fails before anything is touched in the worktree.
+      mkdirSync(join(stateDir, 'runs', run.id), { recursive: true })
+      writeFileSync(join(stateDir, 'runs', run.id, 'set-aside'), 'not a directory\n')
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.status).toBe('rework')
+      expect(task.mergeClaimedAt).toBeNull()
+      expect(task.attempt).toBe(1)
+      expect(task.lastRejectionReason).toContain('set aside')
+      expect(task.lastRejectionReason).not.toContain('conflicted')
+      // Nothing was removed from the worktree: the save never happened.
+      expect(readFileSync(join(run.worktree, 'README.md'), 'utf8')).toBe('rewritten by setup\n')
+
+      const failures = await prisma.executionEvent.findMany({ where: { taskId, type: 'task_merge_failed' } })
+      expect(failures).toHaveLength(1)
+    })
   })
 })
 

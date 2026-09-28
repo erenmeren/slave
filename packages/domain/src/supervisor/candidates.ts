@@ -986,6 +986,13 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
       // No safe automatic exit: a merge is a human's call.
       break
 
+    case 'foreign_file':
+      // Conductor Plan 3 (R11): the remedy is a person or a re-conduct -- the work was cut so that
+      // this package needs files it does not own, or its worker will not stay inside them. Not a
+      // grant (ownership is not a permission anyone may widen for one worker) and not a hire
+      // (the seat is there; it is the partition that is wrong), so the last resorts are all.
+      break
+
     case 'workspace_halted': {
       // R4: the ONE halt the Supervisor may retract, and three clauses that say when:
       //   - the breaker is what halted it. `budget_exhausted` is money and `emergency_stop` is a

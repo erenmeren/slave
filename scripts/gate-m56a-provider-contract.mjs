@@ -136,8 +136,9 @@ const FAKE_CURSOR = join(repoRoot, 'scripts/gate-fakes/fake-cursor-agent.sh')
 const PAUSE_ADR = 'docs/decisions/0001-pause-semantics.md'
 const PAUSE_ADR_BYTES = 38_862
 
-// The hook plane, by name (spec §3 stage 12). Every one of these five is byte-identical to the tree
-// this milestone forked from -- `main` at `cff28066` -- and their sha256 digests are checked in at
+// The hook plane, by name (spec §3 stage 12). These five were byte-identical to the tree this
+// milestone forked from -- `main` at `cff28066` -- except `scripts/lib/permissions.sh`, re-pinned by
+// Conductor Plan 3 (the ownership deny). Their sha256 digests are checked in at
 // `scripts/fixtures/m56a-goldens/hook-plane-sha256.json`, which is what stage 12 compares against.
 const HOOK_PLANE_SCRIPTS = [
   'scripts/pause-gate.sh',
@@ -1239,11 +1240,12 @@ try {
   // that the provider contract moved none of them -- so the figures follow main and a provider
   // change that bumps one still fails here. Conductor Plan 2 added the `conduct` situation and
   // action, and two events: `workspace.requirements_set` and `workspace.conducted`; its final
-  // review the `package_seat_lost` situation.
-  if (SITUATION_KINDS.length !== 21) await fail(`stage 12: SITUATION_KINDS is ${SITUATION_KINDS.length}, expected twenty-one`)
+  // review the `package_seat_lost` situation. Conductor Plan 3 added the `foreign_file` situation and
+  // one event, `task.ownership_violated`.
+  if (SITUATION_KINDS.length !== 22) await fail(`stage 12: SITUATION_KINDS is ${SITUATION_KINDS.length}, expected twenty-two`)
   if (ACTION_KINDS.length !== 25) await fail(`stage 12: ACTION_KINDS is ${ACTION_KINDS.length}, expected twenty-five`)
-  if (Object.keys(LANE_BY_TYPE).length !== 64) {
-    await fail(`stage 12: LANE_BY_TYPE holds ${Object.keys(LANE_BY_TYPE).length} event types, expected 64 -- a provider change adds none`)
+  if (Object.keys(LANE_BY_TYPE).length !== 65) {
+    await fail(`stage 12: LANE_BY_TYPE holds ${Object.keys(LANE_BY_TYPE).length} event types, expected 65 -- a provider change adds none`)
   }
 
   const enumRows = await prisma.$queryRaw`SELECT unnest(enum_range(NULL::"ProviderKind"))::text AS value`

@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { recordRunEvidence, runbookForWorkspace } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  isOwned,
   parseHandoffContract,
   runId as brandRunId,
   taskId as brandTaskId,
@@ -12,9 +13,11 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { promote } from './memory.js'
+import { auditOwnership, ownershipRuleForTask } from './ownership.js'
 import { concludePlanning } from './planning.js'
 import { fileRunReport } from './report.js'
 import { concludeReview } from './review.js'
+import { logSetAside, setAsideDirFor, setAsideForeignChanges } from './setAside.js'
 import { describeOutcome, runShellCommand } from './shell.js'
 import { releaseTaskAfterFailure } from './taskRelease.js'
 import { emailLocalPart, taskKeyFor } from './tick.js'
@@ -435,6 +438,14 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
   // uncommitted work reads there as an empty diff (`wipCommit.ts`). The identity is the one the
   // run's own process committed under (`tick.ts`'s dispatch). Never fatal: a tree this cannot
   // commit is judged exactly as it would have been without it, and the reason is logged.
+  //
+  // A governed package run's leftover commit stages only what its package owns (final review I1,
+  // controller Ruling 5): setup and tooling dirty files nobody in the package owns, and committed
+  // under the worker's name they would fail the audit below on every attempt. What it leaves is
+  // then SET ASIDE (controller Ruling 7): saved under the run's state directory and removed from
+  // the worktree, so the tree verify judges is the branch that lands. The worker's own commits are
+  // still audited in full.
+  const rule = task.workPackageId === null ? null : await ownershipRuleForTask(task.id)
   const wip = await commitUncommittedWork({
     worktreePath: run.worktreePath,
     branch: task.branch,
@@ -443,11 +454,39 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
       name: run.slave.person.name,
       email: `${emailLocalPart({ id: run.slave.id, name: run.slave.person.name })}@slaveofai.local`,
     },
+    ...(rule === null ? {} : { owns: (path: string): boolean => isOwned(rule, path) }),
   })
   if (wip.kind === 'committed') {
     console.warn(`[verify] run ${run.id} left uncommitted work; committed it on the worker's behalf as ${wip.sha.slice(0, 12)} (${wip.message})`)
-  } else if (wip.kind !== 'clean') {
+  }
+  if (wip.kind === 'skipped' || wip.kind === 'failed') {
     console.warn(`[verify] run ${run.id} left uncommitted work that could not be committed for it (${wip.kind}): ${wip.reason}`)
+  }
+  // Round 4 (re-review m4): `setAsideForeignChanges` restores a foreign tracked path "to HEAD",
+  // which is only right when HEAD is the task's own branch tip -- exactly what `wip.kind ===
+  // 'skipped'` means is NOT true (detached, or HEAD on some other branch). Running it anyway would
+  // restore or delete a foreign path against a tree that has nothing to do with this task's branch.
+  // `failed` is left alone: that is `commitUncommittedWork`'s own `git status` call failing before
+  // HEAD is even read, and `setAsideForeignChanges` fails the very same way on its own `git status`
+  // and touches nothing.
+  if (rule !== null && wip.kind !== 'skipped') {
+    const aside = await setAsideForeignChanges({
+      worktreePath: run.worktreePath,
+      owns: (path: string): boolean => isOwned(rule, path),
+      saveDir: setAsideDirFor(run.id, 'leftover'),
+    })
+    logSetAside(`[verify] run ${run.id}`, aside)
+  }
+
+  // Conductor Plan 3 (spec R4, plan D7): a package run's branch is audited against its package's
+  // ownership after its leftover work is committed (so the audit sees everything the run changed)
+  // and before its report is filed -- a run that changed someone else's files is sent back, and
+  // neither its report nor verify is looked at. A task with no package is untouched.
+  if (
+    task.workPackageId !== null &&
+    !(await auditOwnership(run, { id: task.id, workspaceId: task.workspaceId, branch: task.branch }, task.workspace))
+  ) {
+    return
   }
 
   // Conductor Plan 2 (spec R7): a package worker's report is read BEFORE anything treats the run

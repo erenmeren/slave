@@ -167,6 +167,14 @@ export const STALE_CANDIDATES_MIN = 5
 export const RETRIES_MAX = 2
 
 /**
+ * How many ownership violations make `foreign_file` (Conductor Plan 3, spec R11 "after a second
+ * violation"). One is a worker that strayed and was told, by name, which files to revert -- the
+ * rework loop's own answer. Two is a worker the rework loop is not reaching, or a partition that
+ * gave the work to the wrong package, and neither is anything a retry or a grant can fix.
+ */
+export const FOREIGN_FILE_TRIP_COUNT = 2
+
+/**
  * How much of a failure reason a situation's summary and a remedy's own reason may carry.
  *
  * A `run.failed` reason is whatever the run wrote -- a sentence, or a stderr dump with a stack in

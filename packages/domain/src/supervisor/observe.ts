@@ -16,6 +16,7 @@ import {
   boundReason,
   COOLDOWN_BY_KIND,
   COOLDOWN_MS,
+  FOREIGN_FILE_TRIP_COUNT,
   INTEGRATED_STALE_MS,
   MANAGER_ROLE,
   MEMORY_CANDIDATE_STALE_MS,
@@ -633,6 +634,25 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
       subjectId: task.id,
       summary: `"${task.title}" is pinned to a seat that ${why}, and nobody else may start it.`,
       facts: { taskId: task.id, slaveId: task.pinnedSlaveId, reason },
+    })
+  }
+
+  // foreign_file (Conductor Plan 3, R11): a package task the audit sent back for changing files
+  // another worker owns, a second time. Raised only while the task waits to go again (`rework` or
+  // `ready`): the count never goes down, so a task that has since moved on -- to review, or to its
+  // terminal -- is not flagged for a problem it got past (final review M2). Ownership refusals at
+  // the gate (`run.tool_denied` with capability `foreign_file`) are NOT this: they are not one of
+  // the six kinds, so `permission_blocked` above never offers a grant for them either.
+  for (const task of world.tasks) {
+    if (task.ownershipViolations < FOREIGN_FILE_TRIP_COUNT) continue
+    if (task.status !== 'rework' && task.status !== 'ready') continue
+    add({
+      kind: 'foreign_file',
+      subjectId: task.id,
+      summary:
+        `"${task.title}" has been sent back ${String(task.ownershipViolations)} times for changing files ` +
+        'another worker owns.',
+      facts: { taskId: task.id, violations: task.ownershipViolations },
     })
   }
 

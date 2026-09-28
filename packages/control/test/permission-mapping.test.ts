@@ -80,6 +80,10 @@ interface Verdict {
   readonly allow: readonly { readonly tool: string; readonly kind: string }[]
   readonly vocabulary: Readonly<Record<string, string>>
   readonly prefixes: readonly { readonly prefix: string; readonly kind: string }[]
+  // Task 2 (conductor spec R4): absent unless a caller passes `ownership` -- `'ownership' in
+  // verdict` is how the "absent when not given" case below tells that apart from a present-but-
+  // undefined key, which `JSON.parse` can never actually produce.
+  readonly ownership?: { readonly worktreeRoot: string; readonly owned: readonly string[] | null; readonly excluded: readonly string[] }
 }
 
 const TOKEN = 'f'.repeat(64)
@@ -257,6 +261,32 @@ describe('writePermissionsFile: the file IS the verdict (M52 R2/R4)', () => {
       expect(verdict.vocabulary[entry.tool], entry.tool).toBe(entry.kind)
       expect(verdict.grants, entry.tool).toContain(entry.kind)
     }
+  })
+})
+
+// Task 2 (conductor spec R4): `writePermissionsFile` gains an optional `ownership` input, written
+// into the body verbatim only when given -- the shell twin (`scripts/lib/permissions.sh`) reads
+// exactly this shape back, and `ownershipPatterns()` (Task 1) is what a real caller builds it with.
+describe('writePermissionsFile: ownership (Task 2)', () => {
+  const OWNERSHIP = { worktreeRoot: '/work/pkg-report', owned: ['^src/report/.*$'], excluded: [] }
+
+  it('writes the ownership field into the body when the caller passes one', () => {
+    const runDir = mkdtempSync(join(tmpdir(), 'slaveofai-permissions-v2-'))
+    const filePath = writePermissionsFile(runDir, {
+      rows: [],
+      provider: 'claude_code',
+      runKind: 'implementation',
+      runId: 'run-1',
+      runToken: TOKEN,
+      ownership: OWNERSHIP,
+    })
+    const verdict = JSON.parse(readFileSync(filePath, 'utf8')) as Verdict
+    expect(verdict.ownership).toEqual(OWNERSHIP)
+  })
+
+  it('leaves the ownership key absent entirely when the caller passes none', () => {
+    const { verdict } = write([], 'claude_code')
+    expect('ownership' in verdict).toBe(false)
   })
 })
 

@@ -57,6 +57,8 @@ export const TYPES_BY_KIND = {
     'task.review_approved',
     'task.review_rejected',
     'task.merge_failed',
+    // Conductor Plan 3: the ownership audit's rejection, beside the other ways a task is sent back.
+    'task.ownership_violated',
     'task.worktree_collected',
     // M35 t2: `confirmIntegration` stamped a done, hand-merged task's `integratedAt` -- a task
     // outcome, the same chip as `task.done` and `task.merge_failed` beside it.

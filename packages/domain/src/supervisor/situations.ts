@@ -119,6 +119,14 @@ export const SITUATION_KINDS = [
    * Directly after `ready_unstaffed`: both are ready work nobody will start.
    */
   'package_seat_lost',
+  /**
+   * Conductor Plan 3 (spec R4, R11): a package worker changed files another worker owns, and the
+   * audit before verify sent its task back for it a second time. `subjectId` is the TASK id. The
+   * value lands with the audit's migration (Task 4) so the Prisma enum and this list stay equal;
+   * Task 5 wires `observe` and the candidates. Directly after `package_seat_lost`: both are a
+   * package task the conductor's partition is not working for.
+   */
+  'foreign_file',
   'done_not_integrated_stale',
   /**
    * M50 R3: a worker brought in for ONE assignment, whose assignment is over. `subjectId` is the
@@ -210,7 +218,7 @@ export const situationSchema: z.ZodType<Situation> = z.object({
  * `no_reviewer · proposed · pending · by model`.
  *
  * `Record<SituationKind, string>` is load-bearing: a new kind fails the build here rather than
- * turning up on the page as an identifier (twenty-one as of Conductor Plan 2's `package_seat_lost`).
+ * turning up on the page as an identifier (twenty-two as of Conductor Plan 3's `foreign_file`).
  * Each label says what is STUCK, in the words the report already uses; the decision's own
  * `situation.summary` carries the specifics beside it.
  */
@@ -235,6 +243,7 @@ export const SITUATION_LABEL: Record<SituationKind, string> = {
   permission_blocked: 'Blocked by a permission',
   ready_unstaffed: 'Ready work, nobody to do it',
   package_seat_lost: 'Package seat gone',
+  foreign_file: 'Changed files another worker owns',
   done_not_integrated_stale: 'Finished, not integrated',
   engagement_over: 'Engagement over',
   memory_candidates_piling: 'Unverified knowledge piling up',

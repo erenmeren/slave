@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { settleTaskEvidence } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  isOwned,
   nextMergeCandidate,
   taskId as brandTaskId,
   type GuardrailKind,
@@ -9,6 +10,8 @@ import {
   type WorkspaceId,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { ownershipRuleForTask } from './ownership.js'
+import { logSetAside, setAsideDirFor, setAsideForeignChanges } from './setAside.js'
 import { rejectTask, runVerify, stageGatesFor } from './verify.js'
 import { gitIn } from './worktree.js'
 
@@ -220,7 +223,51 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
 
   // Rebase onto the current base branch in the preserved worktree -- the real gate is the re-verify
   // below, but a branch that no longer applies cleanly cannot even be judged.
+  //
+  // Conductor Plan 3, fix round 3 (controller Ruling 7): a governed package task's worktree can
+  // still hold changes to files its package does not own -- a verify command that generated a
+  // file, anything that dirtied the tree after the leftover commit set the rest aside. None of them
+  // is on the branch, and `git rebase` refuses a dirty tree: they are set aside the same way
+  // (saved under the implementation run's state directory, removed from the worktree), so the
+  // rebase and the re-verify below see exactly the branch that lands. Never `git stash`:
+  // `refs/stash` is shared by every worktree of the repository. A task with no package, and a
+  // package's own uncommitted changes, meet the rebase exactly as before.
+  //
+  // Round 4 (re-review m2): this whole check runs INSIDE the same try as the rebase itself, not
+  // before it. A worktree gone or broken used to throw straight out of these calls and out of
+  // `runMergePass`, with the merge claim still set -- every later merge on the workspace stalled
+  // until the stale-merge sweep found it. Caught here, it fails exactly the way a broken worktree
+  // already failed the rebase call below: judged, rejected, claim released.
   try {
+    if (task.workPackageId !== null && (await gitIn(worktreePath, 'status', '--porcelain', '--untracked-files=all')) !== '') {
+      const rule = await ownershipRuleForTask(task.id)
+      if (rule !== null) {
+        const aside = await setAsideForeignChanges({
+          worktreePath,
+          owns: (path: string): boolean => isOwned(rule, path),
+          saveDir: setAsideDirFor(latestImpl.id, 'merge'),
+        })
+        // Round 4 (re-review m3): `failed` means nothing was removed (`setAside.ts`'s own
+        // contract -- nothing goes unless everything is saved first), so the tree is still dirty
+        // and the plain rebase below would refuse it, turning a SAVE failure into a JUDGED, charged
+        // rework about a conflict that never happened. `judged: false`, exactly like the
+        // primary-checkout-dirty failure further down: `rejectTask` runs either way, so the
+        // attempt is still spent and this is bounded the same way -- never a free retry loop -- but
+        // no false verdict is ever settled on the worker for the orchestrator's own save failing.
+        if (aside.kind === 'failed') {
+          await failMerge({
+            taskId: task.id,
+            workspaceId,
+            taskKey,
+            reason: `could not set aside changes to files this package does not own: ${aside.reason}`,
+            judged: false,
+          })
+          return
+        }
+        logSetAside(`[merge] ${taskKey}`, aside)
+      }
+    }
+
     await gitIn(worktreePath, 'rebase', workspace.baseBranch)
   } catch (error) {
     await gitIn(worktreePath, 'rebase', '--abort').catch(() => {})

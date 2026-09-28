@@ -237,7 +237,8 @@ export const ENFORCE_BY_PROVIDER: Record<PermissionProvider, 'all-tools' | 'know
  * seventh `PERMISSION_KINDS` member would be a grant nobody asked for. It gets a word here because
  * a person meets it on the activity feed exactly as they meet the six.
  */
-export const TOOL_DENIED_LABEL: Record<PermissionKind | 'ungoverned_tool', string> = {
+export const TOOL_DENIED_LABEL: Record<PermissionKind | 'ungoverned_tool' | 'foreign_file', string> = {
   ...PERMISSION_LABEL,
   ungoverned_tool: 'A tool nobody governs',
+  foreign_file: 'Wrote a file another worker owns',
 }

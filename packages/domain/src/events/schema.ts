@@ -296,6 +296,17 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('task.merge_failed'),
     payload: z.object({ reason: z.string() }),
   }),
+  // Conductor Plan 3 (spec R4): the audit before verify found files this package run's branch
+  // changed but its package does not own. `files` names at most 50 of them; `total` counts all.
+  z.object({
+    ...envelope,
+    type: z.literal('task.ownership_violated'),
+    payload: z.object({
+      runId: z.string().min(1),
+      files: z.array(z.string().min(1)).max(50),
+      total: z.number().int().positive(),
+    }),
+  }),
   // M40 t1: which `GoalVersion` row this set created, and the sha256 of its text -- the two facts
   // that make a goal edit traceable without reading the `GoalVersion` table. Optional for the same
   // back-compat reason as `task.created` above: every `workspace.goal_set` row written before M40

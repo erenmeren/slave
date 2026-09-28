@@ -741,6 +741,14 @@ describe('candidates -- the escalate-only situations', () => {
     expect(kinds(offered(halted))).toEqual(['escalate_to_human', 'no_action'])
   })
 
+  it('offers a person, never a grant or a hire, for a task that keeps writing foreign files', () => {
+    const w = world({
+      tasks: [task({ id: 't1', status: 'rework', requiredRole: 'implementer', ownershipViolations: 2 })],
+      slaves: [slave({ id: 's1', runtimeRoles: ['implementer'] })],
+    })
+    expect(kinds(offered(w))).toEqual(['escalate_to_human', 'no_action'])
+  })
+
   it("carries the situation's summary into the escalation so a human sees what it is about", () => {
     const halted = world({ halted: { reason: 'budget_exhausted' } })
     const escalation = offered(halted)[0]?.action

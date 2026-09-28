@@ -257,6 +257,22 @@ function TaskMergeFailedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+// Conductor Plan 3 (spec R4): the audit before verify found files the package run's branch changed
+// but its package does not own. The task's own `task.rework` (or `task.failed`) beside it carries
+// the reason; this card names the files and how many there were in all.
+function TaskOwnershipViolatedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { files: readonly string[]; total: number }
+  const more = payload.total - payload.files.length
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="danger" label="changed files it does not own">
+        <span data-testid="ownership-violated-files">{payload.files.join(', ')}</span>
+        {more > 0 ? <span className="text-text-3"> and {more} more</span> : null}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 // M35 t2: `confirmIntegration` stamped a done, hand-merged task's `integratedAt` -- empty payload
 // (schema.ts), so this card carries no extra field, just the transition itself.
 function TaskIntegratedCard(props: ActivityCardProps): ReactElement {
@@ -1573,6 +1589,7 @@ export const ACTIVITY_CARDS = {
   'task.review_approved': TaskReviewApprovedCard,
   'task.review_rejected': TaskReviewRejectedCard,
   'task.merge_failed': TaskMergeFailedCard,
+  'task.ownership_violated': TaskOwnershipViolatedCard,
   'task.worktree_collected': TaskWorktreeCollectedCard,
   'task.integrated': TaskIntegratedCard,
   'task.unblocked': TaskUnblockedCard,

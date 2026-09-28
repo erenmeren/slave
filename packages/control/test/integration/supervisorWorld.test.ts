@@ -529,6 +529,30 @@ describe('loadSupervisorWorld', () => {
     expect(lost[0]?.facts).toEqual({ taskId: packaged.id, slaveId: gone.id, reason: 'missing' })
   })
 
+  /** Conductor Plan 3 (R11): the count `foreign_file` trips on -- this task's own violations, and
+   *  only those newer than the task itself. */
+  it('counts each task\'s ownership violations since it was created, and zero for one with none', async (): Promise<void> => {
+    const fixture = await seed()
+    const violating = await makeTask(fixture, { title: 'the violator', status: 'ready', createdAt: ago(2 * 3_600_000) })
+    const clean = await makeTask(fixture, { title: 'the clean one', status: 'ready' })
+    const violation = (ts: Date): Prisma.ExecutionEventUncheckedCreateInput => ({
+      workspaceId: fixture.workspaceId,
+      taskId: violating,
+      type: 'task_ownership_violated',
+      actor: 'system',
+      payload: { runId: 'run-x', files: ['other/owned.ts'], total: 1 },
+      ts,
+    })
+    // Older than the task: a row the task did not earn, which the count must not see.
+    await prisma.executionEvent.create({ data: violation(ago(3 * 3_600_000)) })
+    await prisma.executionEvent.create({ data: violation(ago(60 * 60_000)) })
+    await prisma.executionEvent.create({ data: violation(ago(30 * 60_000)) })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.tasks.find((t) => t.id === violating)?.ownershipViolations).toBe(2)
+    expect(world.tasks.find((t) => t.id === clean)?.ownershipViolations).toBe(0)
+  })
+
   it('holds a slave-addressed question for the addressee plus every peer who could take the asking task', async (): Promise<void> => {
     // Erratum E5, the case the two halves of `holders` differ on: a question addressed to ONE
     // worker may also be answered by anybody who could have been dispatched the asking task.

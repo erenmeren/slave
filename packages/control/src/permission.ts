@@ -70,6 +70,15 @@ export function writePermissionsFile(
      *  `string[]`, like `rows`, because the caller reads it straight off a Prisma row -- it is
      *  filtered to the six kinds here, at the one boundary that already does that for the rows. */
     readonly taskGrants?: readonly string[] | undefined
+    /** Task 2 (conductor spec R4): present only for a package task of a multi-package goal. The
+     *  regex SOURCES `@slave-of-ai/domain`'s `ownershipPatterns()` compiled from the package's own
+     *  `OwnershipRule`, plus the worktree the call's path is resolved against -- `scripts/lib/
+     *  permissions.sh` reads this verbatim and rebuilds each source with `new RegExp(source, 'u')`,
+     *  one glob implementation shared by the two enforcers (the gate and the diff audit). Absent
+     *  for every other run, exactly like `taskGrants` above. */
+    readonly ownership?:
+      | { readonly worktreeRoot: string; readonly owned: readonly string[] | null; readonly excluded: readonly string[] }
+      | undefined
   },
 ): string {
   const permissionsFilePath = permissionsFilePathFor(runDir)
@@ -98,6 +107,10 @@ export function writePermissionsFile(
     // The name families the vocabulary cannot enumerate. ONE entry today, spelled from the domain's
     // own constant rather than as a literal, so a second prefix rule lands here by construction.
     prefixes: [{ prefix: MCP_TOOL_PREFIX, kind: 'network_fetch' satisfies PermissionKind }],
+    // Task 2: written only when given, exactly like `taskGrants`'s own filtering above leaves no
+    // trace of itself when a run asked for nothing -- the shell twin's `file.ownership !== undefined`
+    // check is what this omission is FOR.
+    ...(input.ownership === undefined ? {} : { ownership: input.ownership }),
   }
   // 0600 (D15): the verdict that governs a worker is not world-readable, and `writeFileSync`'s
   // `mode` applies only when the file is CREATED -- which is every time here, because the file is

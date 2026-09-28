@@ -38,6 +38,7 @@ import { conduct, type ConductStep } from './conductor.js'
 import { deliverAnswers } from './deliver.js'
 import { runMergePass } from './merge.js'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
+import { permissionOwnership } from './ownership.js'
 import { dispatchPlanning } from './planning.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
@@ -905,6 +906,9 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
       // the baseline for an implementation run and an explicit `deny` still beats them
       // (`resolveGrants`), so this widens what a run may do without overruling anybody.
       taskGrants: task.requiredPermissions,
+      // Conductor spec R4: a package run's ownership -- which files in its worktree are its own --
+      // so the gate denies a write to a file another worker owns. Absent for every other task.
+      ownership: await permissionOwnership(task.id, worktree.path),
     })
 
     // M37 Task 2: the one builder. Everything this run is told -- who the slave is, who else is

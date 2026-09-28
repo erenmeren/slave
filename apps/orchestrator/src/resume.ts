@@ -10,6 +10,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { runTokenHash, type AdapterRegistry } from '@slave-of-ai/providers'
+import { permissionOwnership } from './ownership.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
 import { OWNER_INSTANCE } from './runs.js'
@@ -105,6 +106,15 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
     // a plan speaks for implementation runs alone, and a second copy of that rule here is a second
     // chance for the two to disagree. A review run's verdict is byte-identical with and without it.
     taskGrants: run.task?.requiredPermissions ?? [],
+    // Conductor spec R4, for the same reason as the task's grants: a package run that lost its
+    // ownership on the way back in could write any file. Implementation runs only, as at dispatch:
+    // a review run on a package task carries a `taskId` too but was never given ownership. The
+    // worktree is the checkpoint's: its path is the directory `adapter.resume` respawns the child
+    // in, so it is the root the gate must resolve the resumed run's paths against.
+    ownership:
+      run.kind !== 'implementation' || run.taskId === null
+        ? undefined
+        : await permissionOwnership(run.taskId, checkpoint.worktreePath),
   })
 
   // The checkpoint is the whole point of `resume`'s signature: this process may never have called

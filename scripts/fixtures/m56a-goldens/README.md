@@ -29,3 +29,8 @@ tree M56a forked from, and the digests here were taken from those identical file
 script's on-disk digest against this file; it used to compare against `git show HEAD:`, which only ever
 caught an uncommitted edit and would have passed a hook-plane script edited and committed inside the
 milestone.
+
+Since then one digest has been re-pinned on purpose: Conductor Plan 3 (2026-09-28) changed
+`scripts/lib/permissions.sh` so a package run is denied a write to a file another worker owns, and
+`hook-plane-sha256.json` carries that file's new digest. The other four scripts are still as `cff28066`
+left them. Any later hook-plane change re-pins its digest in the commit that makes it.
