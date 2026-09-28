@@ -1237,11 +1237,12 @@ try {
   // The counts as they stand on main, not as M56a left them (17 / 17 / 61): later milestones (E's
   // remedies, H4a's `planning_stalled`, the chat's lanes) grew all three, and this stage's claim is
   // that the provider contract moved none of them -- so the figures follow main and a provider
-  // change that bumps one still fails here.
-  if (SITUATION_KINDS.length !== 19) await fail(`stage 12: SITUATION_KINDS is ${SITUATION_KINDS.length}, expected nineteen`)
-  if (ACTION_KINDS.length !== 24) await fail(`stage 12: ACTION_KINDS is ${ACTION_KINDS.length}, expected twenty-four`)
-  if (Object.keys(LANE_BY_TYPE).length !== 62) {
-    await fail(`stage 12: LANE_BY_TYPE holds ${Object.keys(LANE_BY_TYPE).length} event types, expected 62 -- a provider change adds none`)
+  // change that bumps one still fails here. Conductor Plan 2 added the `conduct` situation and
+  // action, and two events: `workspace.requirements_set` and `workspace.conducted`.
+  if (SITUATION_KINDS.length !== 20) await fail(`stage 12: SITUATION_KINDS is ${SITUATION_KINDS.length}, expected twenty`)
+  if (ACTION_KINDS.length !== 25) await fail(`stage 12: ACTION_KINDS is ${ACTION_KINDS.length}, expected twenty-five`)
+  if (Object.keys(LANE_BY_TYPE).length !== 64) {
+    await fail(`stage 12: LANE_BY_TYPE holds ${Object.keys(LANE_BY_TYPE).length} event types, expected 64 -- a provider change adds none`)
   }
 
   const enumRows = await prisma.$queryRaw`SELECT unnest(enum_range(NULL::"ProviderKind"))::text AS value`
