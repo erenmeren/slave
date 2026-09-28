@@ -362,6 +362,131 @@ describe('runMergePass', () => {
     expect(task.status).toBe('done')
     expect(mergeCommitSubjects(workspace.repoPath)).toHaveLength(1)
   })
+
+  /**
+   * Conductor Plan 3, fix round 2 (C1): a package task's leftover-work commit stages only what the
+   * package owns, so its worktree can reach this pass with a foreign file still changed in it -- a
+   * lockfile setup rewrote is the ordinary case. `git rebase` refuses a dirty tree, and a refusal
+   * here is a charged rework whose next run re-dirties the same file: the second one halts the
+   * workspace. None of those changes is on the branch, so none of them may stop it merging.
+   */
+  describe('a worktree holding changes the branch does not (Conductor Plan 3, C1)', () => {
+    const worktreeOf = async (taskId: string): Promise<string> => {
+      const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId } })
+      return run.worktreePath as string
+    }
+
+    it('merges with a tracked foreign file left modified, base unchanged, and leaves the change in the tree', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true })
+      const { taskId, taskKey } = await seedMergingTask(workspace)
+      const worktree = await worktreeOf(taskId)
+      writeFileSync(join(worktree, 'README.md'), 'rewritten by setup\n')
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.lastRejectionReason).toBeNull()
+      expect(task.status).toBe('done')
+      expect(mergeCommitSubjects(workspace.repoPath).some((subject) => subject.includes(taskKey))).toBe(true)
+      // The foreign change never reached the base branch, and is still where the worker left it.
+      expect(git(['show', 'main:README.md'], workspace.repoPath)).toBe('# fixture')
+      expect(readFileSync(join(worktree, 'README.md'), 'utf8')).toBe('rewritten by setup\n')
+      expect(git(['stash', 'list'], worktree)).toBe('')
+    })
+
+    it('merges with a tracked foreign file left modified after the base branch moved on', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true })
+      const { taskId, taskKey } = await seedMergingTask(workspace)
+      const worktree = await worktreeOf(taskId)
+      writeFileSync(join(worktree, 'README.md'), 'rewritten by setup\n')
+      writeFileSync(join(workspace.repoPath, 'other.txt'), 'another task landed\n')
+      git(['add', '-A'], workspace.repoPath)
+      git(['commit', '-q', '-m', 'main moves on'], workspace.repoPath)
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.lastRejectionReason).toBeNull()
+      expect(task.status).toBe('done')
+      expect(mergeCommitSubjects(workspace.repoPath).some((subject) => subject.includes(taskKey))).toBe(true)
+      expect(git(['show', 'main:README.md'], workspace.repoPath)).toBe('# fixture')
+      expect(git(['show', 'main:feature.txt'], workspace.repoPath)).toBe('feature content')
+      // Rebased: the tree has the base's new file, and the foreign change is back on top of it.
+      expect(existsSync(join(worktree, 'other.txt'))).toBe(true)
+      expect(readFileSync(join(worktree, 'README.md'), 'utf8')).toBe('rewritten by setup\n')
+      expect(git(['stash', 'list'], worktree)).toBe('')
+    })
+
+    it('merges when the base branch changed the same foreign file: the rebased tree is judged clean, the change is kept in a stash', async (): Promise<void> => {
+      // The re-verify fails on any conflict marker or unmerged path: what it judges must be the
+      // rebased branch, never a half-applied leftover.
+      const workspace = await seedWorkspace({
+        autoMerge: true,
+        verifyCommands: ['test -z "$(git diff --name-only --diff-filter=U)"', '! grep -rq "<<<<<<<" README.md'],
+      })
+      const { taskId, taskKey } = await seedMergingTask(workspace)
+      const worktree = await worktreeOf(taskId)
+      writeFileSync(join(worktree, 'README.md'), 'rewritten by setup\n')
+      writeFileSync(join(workspace.repoPath, 'README.md'), '# fixture, as main now has it\n')
+      git(['add', '-A'], workspace.repoPath)
+      git(['commit', '-q', '-m', 'main changes the readme'], workspace.repoPath)
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.lastRejectionReason).toBeNull()
+      expect(task.status).toBe('done')
+      expect(mergeCommitSubjects(workspace.repoPath).some((subject) => subject.includes(taskKey))).toBe(true)
+      expect(git(['show', 'main:README.md'], workspace.repoPath)).toBe('# fixture, as main now has it')
+      // No conflict left in the tree; the foreign change is not lost -- it is in a stash entry.
+      expect(git(['status', '--porcelain'], worktree)).toBe('')
+      expect(readFileSync(join(worktree, 'README.md'), 'utf8')).toBe('# fixture, as main now has it\n')
+      const stashes = git(['stash', 'list'], worktree).split('\n')
+      expect(stashes).toHaveLength(1)
+      expect(git(['show', 'stash@{0}:README.md'], worktree)).toBe('rewritten by setup')
+    })
+
+    it('merges when an untracked foreign file collides with a file the base branch now tracks', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true })
+      const { taskId, taskKey } = await seedMergingTask(workspace)
+      const worktree = await worktreeOf(taskId)
+      writeFileSync(join(worktree, 'generated.txt'), 'left behind\n')
+      writeFileSync(join(workspace.repoPath, 'generated.txt'), 'another package owns this\n')
+      git(['add', '-A'], workspace.repoPath)
+      git(['commit', '-q', '-m', 'another package lands generated.txt'], workspace.repoPath)
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.lastRejectionReason).toBeNull()
+      expect(task.status).toBe('done')
+      expect(mergeCommitSubjects(workspace.repoPath).some((subject) => subject.includes(taskKey))).toBe(true)
+      expect(git(['status', '--porcelain'], worktree)).toBe('')
+      expect(readFileSync(join(worktree, 'generated.txt'), 'utf8')).toBe('another package owns this\n')
+      expect(git(['stash', 'list'], worktree).split('\n')).toHaveLength(1)
+    })
+
+    it('still sends a conflicting branch back to rework, with the leftover change put back as it was', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true })
+      const { taskId } = await seedMergingTask(workspace, { fileName: 'shared.txt', content: 'task version\n' })
+      const worktree = await worktreeOf(taskId)
+      const headBefore = git(['rev-parse', 'HEAD'], worktree)
+      writeFileSync(join(worktree, 'README.md'), 'rewritten by setup\n')
+      writeFileSync(join(workspace.repoPath, 'shared.txt'), 'main version\n')
+      git(['add', '-A'], workspace.repoPath)
+      git(['commit', '-q', '-m', 'main writes the same file'], workspace.repoPath)
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.status).toBe('rework')
+      expect(task.lastRejectionReason).toContain('conflicted')
+      expect(git(['rev-parse', 'HEAD'], worktree)).toBe(headBefore)
+      expect(git(['status', '--porcelain'], worktree)).toBe('M README.md')
+      expect(readFileSync(join(worktree, 'README.md'), 'utf8')).toBe('rewritten by setup\n')
+      expect(git(['stash', 'list'], worktree)).toBe('')
+    })
+  })
 })
 
 /**
