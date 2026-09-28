@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { ownerOf, singlePlan, validateConduct, type ConductContext } from '../../src/conduct/packages.js'
+import {
+  CONDUCT_ANSWER_KEY,
+  ownerOf,
+  parseConductAnswer,
+  singlePlan,
+  validateConduct,
+  type ConductContext,
+} from '../../src/conduct/packages.js'
 import { INTEGRATION_PACKAGE_KEY } from '../../src/conduct/constants.js'
 
 const context: ConductContext = {
@@ -82,6 +89,31 @@ describe('validateConduct', () => {
       packages: [pkg({}), pkg({ key: INTEGRATION_PACKAGE_KEY, requirementKeys: ['R2', 'R3'], ownedPaths: ['src/cli.py'] })],
     }, context)
     expect(plan.ok && plan.value.packages.find((p) => p.isIntegration)?.dependsOn).toEqual(['report'])
+  })
+})
+
+describe('parseConductAnswer', () => {
+  it('refuses text with no JSON object', () => {
+    expect(parseConductAnswer('no json here')).toEqual({ ok: false, error: 'the answer carried no JSON object' })
+  })
+
+  it('refuses JSON present but without the conductAnswer key', () => {
+    const parsed = parseConductAnswer('{"somethingElse": {"mode": "single"}}')
+    expect(parsed.ok).toBe(false)
+    expect(!parsed.ok && parsed.error).toContain(`"${CONDUCT_ANSWER_KEY}"`)
+  })
+
+  it('refuses JSON that does not parse', () => {
+    expect(parseConductAnswer('{conductAnswer: {"mode": "single"}}')).toEqual({
+      ok: false,
+      error: 'the answer\'s JSON did not parse',
+    })
+  })
+
+  it('reads the raw conductAnswer object on the happy path', () => {
+    const inner = { mode: 'single', reason: 'fits one session', templateId: 't-backend' }
+    const parsed = parseConductAnswer(`Here you go.\n${JSON.stringify({ [CONDUCT_ANSWER_KEY]: inner })}`)
+    expect(parsed).toEqual({ ok: true, value: inner })
   })
 })
 
