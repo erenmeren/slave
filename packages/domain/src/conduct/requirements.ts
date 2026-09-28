@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { defuseRoutingLiterals } from '../handoff/contract.js'
+import { sanitisePersonText } from '../handoff/contract.js'
 import { err, ok, type Result } from '../result.js'
 import { firstJsonObject } from '../supervisor/prompt.js'
 import { REQUIREMENT_TEXT_MAX_CHARS, REQUIREMENTS_MAX_ITEMS } from './constants.js'
@@ -42,7 +42,8 @@ function normalise(text: string): string {
 /**
  * The prompt that turns a goal into requirements (spec R1). No approval step follows (ruling 6),
  * so the rules are the whole quality bar: one testable statement each, from the goal, nothing
- * invented. The goal is defused so a quoted routing literal inside it routes nothing.
+ * invented. The goal goes through {@link sanitisePersonText} (controller ruling 4) so neither a
+ * quoted worker-protocol marker nor a quoted routing literal inside it routes or reopens anything.
  */
 export function buildRequirementsPrompt(goal: string): string {
   return [
@@ -57,7 +58,7 @@ export function buildRequirementsPrompt(goal: string): string {
     '',
     'The goal:',
     '<<<GOAL',
-    defuseRoutingLiterals(goal),
+    sanitisePersonText(goal),
     'GOAL>>>',
     '',
     'Answer with one JSON object and nothing after it:',
