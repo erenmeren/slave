@@ -145,6 +145,9 @@ export async function commitUncommittedWork(input: {
  */
 async function changedPaths(git: (args: readonly string[]) => Promise<string>): Promise<readonly string[]> {
   const out = await git(['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all'])
+  // One path per NUL-terminated entry, `XY path`, is what makes `slice(3)` safe, and `--no-renames`
+  // is what guarantees it: a rename entry would be `R  new` followed by a SECOND field, `old`, with
+  // no status prefix, which this parse would cut three characters off and misjudge.
   const paths = out
     .split('\0')
     .filter((entry) => entry.length > 3)
