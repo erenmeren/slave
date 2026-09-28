@@ -10,7 +10,7 @@ import {
   type WorkspaceId,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
-import { ensureIntegrationWorktree, integrationTargetFor } from './goalBranch.js'
+import { cancelIfVersionAbandoned, ensureIntegrationWorktree, integrationTargetFor } from './goalBranch.js'
 import { mergeOrAbort, primaryCheckoutReady } from './gitMerge.js'
 import { ownershipRuleForTask } from './ownership.js'
 import { logSetAside, setAsideDirFor, setAsideForeignChanges } from './setAside.js'
@@ -29,6 +29,16 @@ const taskKeyFor = (id: string): string => `T-${id.slice(0, 8)}`
 
 /** A thrown value as the text a `task.merge_failed` reason carries, cut to what a payload holds. */
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error)).slice(0, 2000)
+
+/**
+ * Final wave M5: git's own refusal when the integration branch is checked out somewhere else (the
+ * person's primary checkout, most often) names a path but not what to do; this says it. Both
+ * spellings: git 2.42 changed "is already checked out at" to "is already used by worktree at".
+ */
+const checkedOutHint = (error: unknown): string =>
+  /already (checked out|used by worktree) at/u.test(errorText(error))
+    ? ' (the integration branch may be checked out in another worktree or the primary checkout; check it out elsewhere to free it)'
+    : ''
 
 /**
  * The branch a task was worked on. `Task.branch` is nullable in the schema, but a task cannot
@@ -118,7 +128,9 @@ async function failMerge(input: {
           guardrail: 'merge_failure' satisfies GuardrailKind,
           detail:
             `package task ${input.taskKey} failed to merge into goal v${String(input.goalVersion)}'s ` +
-            `integration branch twice; blocked for a person: ${input.reason}`,
+            `integration branch twice; blocked for a person: ${input.reason}. Run ` +
+            `\`unblock-task --task ${input.taskId}\` to send it back, or ` +
+            `\`abandon-goal --workspace ${input.workspaceId} --version ${String(input.goalVersion)}\``,
         },
       })
       return
@@ -243,23 +255,7 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
   // here around it; its version is one nobody wants, so it is taken off the board -- cancelled,
   // claim released, nothing rebased or merged -- rather than left `merging`, where it would head
   // the FIFO on every later pass.
-  if (target !== null && (await prisma.goalDelivery.findUnique({ where: { id: target.deliveryId }, select: { status: true } }))?.status === 'abandoned') {
-    const reason = `goal v${String(target.goalVersion)} abandoned`
-    const cancelled = await prisma.task.updateMany({
-      where: { id: task.id, status: 'merging' },
-      data: { status: 'cancelled', mergeClaimedAt: null, lastRejectionReason: reason },
-    })
-    if (cancelled.count === 1) {
-      await appendEvent({
-        type: 'task.cancelled',
-        workspaceId,
-        taskId: task.id,
-        actor: 'system',
-        payload: { reason, goalVersion: task.goalVersion },
-      })
-    }
-    return
-  }
+  if (await cancelIfVersionAbandoned(task, target, 'merging')) return
 
   // spec Decision 5: `autoMerge` is consulted here, not at review time -- a workspace that does not
   // trust auto-merge still wants the task marked done and out of the queue, with the branch and
@@ -424,7 +420,7 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
         taskId: task.id,
         workspaceId,
         taskKey,
-        reason: `could not prepare the integration worktree for ${target.branch}: ${errorText(error)}`,
+        reason: `could not prepare the integration worktree for ${target.branch}: ${errorText(error)}${checkedOutHint(error)}`,
         judged: false,
         goalVersion,
       })

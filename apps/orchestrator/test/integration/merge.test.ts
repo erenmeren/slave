@@ -1224,6 +1224,9 @@ describe('into the integration branch', () => {
     const detail = (trips[0]?.payload as { detail: string }).detail
     expect(detail).toContain('goal v1')
     expect(detail).toContain(taskKey)
+    // The way out, in the CLI's own words.
+    expect(detail).toContain(`unblock-task --task ${taskId}`)
+    expect(detail).toContain(`abandon-goal --workspace ${workspace.id} --version 1`)
   })
 
   it('still halts the workspace on a second failure of a planned task (no package)', async (): Promise<void> => {
@@ -1292,6 +1295,22 @@ describe('into the integration branch', () => {
     expect(git(['rev-parse', target.branch], workspace.repoPath)).not.toBe(integrationBefore)
     expect(git(['status', '--porcelain'], path)).toBe('')
     expect(existsSync(join(git(['rev-parse', '--git-dir'], path), 'MERGE_HEAD'))).toBe(false)
+  })
+
+  it('says where to look when the integration branch is checked out in the primary checkout', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: true })
+    const target = await deliver(workspace)
+    const { taskId } = await seedMergingTask(workspace)
+    await packageTask(workspace, taskId, 'feature')
+    // The person has the integration branch checked out: `worktree add` refuses it.
+    git(['checkout', '-q', target.branch], workspace.repoPath)
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const failure = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_merge_failed' } })
+    const reason = (failure.payload as { reason: string }).reason
+    expect(reason).toMatch(/could not prepare the integration worktree/u)
+    expect(reason).toContain('may be checked out in another worktree or the primary checkout')
   })
 
   it('charges no judgement when the integration worktree cannot be prepared -- the machine failed, not the work', async (): Promise<void> => {
