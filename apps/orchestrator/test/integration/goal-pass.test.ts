@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import { recordRunEvidence } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
+import { appendEvent } from '@slave-of-ai/events'
 import { integrationBranchName, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { acceptGoal, runGoalPass } from '../../src/goal.js'
@@ -384,6 +385,48 @@ describe('runGoalPass', () => {
     }
   })
 
+  it('merges once and announces once when two passes overlap on an accepted version', async (): Promise<void> => {
+    const f = await seed()
+    await integrateAll(f)
+    await acceptGoal(f.deliveryId, 0)
+
+    await Promise.all([pass(f), pass(f)])
+
+    const row = await delivery(f)
+    expect(row.mergedAt).not.toBeNull()
+    expect(row.mergeError).toBeNull()
+    expect(git(['rev-parse', 'main'], f.repoPath)).toBe(git(['rev-parse', f.branch], f.repoPath))
+    expect((await goalEvents(f.workspaceId)).map((event) => event.type)).toEqual(['workspace.goal_accepted', 'workspace.goal_merged'])
+    expect(await mergeTrips(f.workspaceId)).toEqual([])
+    for (const runId of f.runIds) {
+      expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId } })).integrated).toBe(true)
+    }
+  })
+
+  it('announces a stamped-but-unannounced merge once when two passes overlap on it', async (): Promise<void> => {
+    const f = await seed()
+    await integrateAll(f)
+    git(['merge', '-q', '--ff-only', f.branch], f.repoPath)
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'accepted', acceptedAt: new Date(), mergedAt: new Date() } })
+
+    await Promise.all([pass(f), pass(f)])
+
+    expect((await goalEvents(f.workspaceId)).map((event) => event.type)).toEqual(['workspace.goal_merged'])
+    for (const runId of f.runIds) {
+      expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId } })).integrated).toBe(true)
+    }
+  })
+
+  it('accepts and merges once when two passes overlap on a fully integrated version', async (): Promise<void> => {
+    const f = await seed()
+    await integrateAll(f)
+
+    await Promise.all([pass(f), pass(f)])
+
+    expect((await goalEvents(f.workspaceId)).map((event) => event.type)).toEqual(['workspace.goal_accepted', 'workspace.goal_merged'])
+    expect((await delivery(f)).mergedAt).not.toBeNull()
+  })
+
   it('removes the integration worktree a confirmed hand merge left behind, and keeps the branch', async (): Promise<void> => {
     const f = await seed()
     await integrateAll(f)
@@ -405,6 +448,26 @@ describe('acceptGoal', () => {
     await prisma.$executeRawUnsafe(
       'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "WorkPackage", "GoalDelivery", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
+  })
+
+  it('applies once when two calls overlap: one goal_accepted', async (): Promise<void> => {
+    const f = await seed()
+
+    const results = await Promise.all([acceptGoal(f.deliveryId, 0), acceptGoal(f.deliveryId, 0)])
+
+    expect(results.toSorted()).toEqual([false, true])
+    expect(await goalEvents(f.workspaceId)).toEqual([{ type: 'workspace.goal_accepted', payload: { version: 1, rounds: 0 } }])
+  })
+
+  it('stamps an acceptance whose event a crash already wrote, without a second event', async (): Promise<void> => {
+    const f = await seed()
+    // The event landed; the daemon died before the status moved.
+    await appendEvent({ type: 'workspace.goal_accepted', workspaceId: f.workspaceId, actor: 'system', payload: { version: 1, rounds: 0 } })
+
+    expect(await acceptGoal(f.deliveryId, 0)).toBe(true)
+
+    expect((await delivery(f)).status).toBe('accepted')
+    expect(await goalEvents(f.workspaceId)).toHaveLength(1)
   })
 
   it('applies once on a replay: one goal_accepted', async (): Promise<void> => {
