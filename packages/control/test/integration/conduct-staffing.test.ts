@@ -6,18 +6,35 @@
  */
 import { prisma } from '@slave-of-ai/db/client'
 import { PACKAGE_WORKER_ROLE } from '@slave-of-ai/domain'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { syncCapabilityTaxonomy } from '../../src/capability.js'
 import { staffPackages } from '../../src/conductStaffing.js'
 import { syncPersonPool } from '../../src/personPool.js'
 
 const TRUNCATE =
-  'TRUNCATE TABLE "ExecutionEvent", "Task", "WorkPackage", "Slave", "Team", "Workspace", "Person", "SlaveTemplate" RESTART IDENTITY CASCADE'
+  'TRUNCATE TABLE "ExecutionEvent", "Task", "WorkPackage", "Slave", "Team", "Workspace", "Person" RESTART IDENTITY CASCADE'
 
 let w = ''
 
+/**
+ * The templates this file makes, removed by id: a TRUNCATE of "SlaveTemplate" CASCADE would also
+ * empty every table that references it (runbooks, hints, skills) under other files' feet, and
+ * leftover templates change what other files' supervisors and pools see.
+ */
+async function removeTemplates(): Promise<void> {
+  const ids = ['t-backend', 't-docs']
+  // Their pool people first: a pooled person cannot outlive its template (poolSlot needs templateId).
+  await prisma.person.deleteMany({ where: { templateId: { in: ids } } })
+  await prisma.slaveTemplate.deleteMany({ where: { id: { in: ids } } })
+}
+
+afterAll(async (): Promise<void> => {
+  await removeTemplates()
+})
+
 beforeEach(async (): Promise<void> => {
   await prisma.$executeRawUnsafe(TRUNCATE)
+  await removeTemplates()
   await syncCapabilityTaxonomy()
   const workspace = await prisma.workspace.create({
     data: {

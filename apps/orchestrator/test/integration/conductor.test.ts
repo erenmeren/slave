@@ -116,10 +116,23 @@ function scripted(answers: Record<'requirements' | 'conduct', () => ModelOutcome
 const answer = (text: string, costUsd: number | null = 0.02): ModelOutcome => ({ kind: 'answer', text, costUsd, tokens: null, numTurns: 1 })
 const failed = (reason: string): ModelOutcome => ({ kind: 'failed', reason, costUsd: null, tokens: null })
 
+/**
+ * The templates this file makes, removed by id: a TRUNCATE of "SlaveTemplate" CASCADE would also
+ * empty every table that references it (runbooks, hints, skills) under other files' feet, and
+ * leftover templates change what other files' supervisors and pools see.
+ */
+async function removeTemplates(): Promise<void> {
+  const ids = ['t-backend', 't-docs']
+  // Their pool people first: a pooled person cannot outlive its template (poolSlot needs templateId).
+  await prisma.person.deleteMany({ where: { templateId: { in: ids } } })
+  await prisma.slaveTemplate.deleteMany({ where: { id: { in: ids } } })
+}
+
 beforeEach(async (): Promise<void> => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "ConductorCall", "RequirementSet", "WorkPackage", "RunReport", "SupervisorDecision", "SlaveMessage", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "ProviderConfiguration", "Slave", "Person", "Team", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "ConductorCall", "RequirementSet", "WorkPackage", "RunReport", "SupervisorDecision", "SlaveMessage", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "ProviderConfiguration", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
   )
+  await removeTemplates()
 })
 
 afterEach(async (): Promise<void> => {
@@ -127,6 +140,7 @@ afterEach(async (): Promise<void> => {
 })
 
 afterAll(async (): Promise<void> => {
+  await removeTemplates()
   for (const repo of repos) rmSync(repo, { recursive: true, force: true })
   await prisma.$disconnect()
 })
