@@ -234,12 +234,32 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
   // that version's integration branch; everything else into the base branch, as before. The same
   // `integrationTargetFor` dispatch, the ownership audit and review read, so all four judge the
   // task against one branch (D12).
-  //
-  // Seam for Plan 4a Task 6 (P1): a task whose goal version is abandoned must be refused here,
-  // once the target is known and before anything is rebased or merged.
   const target = await integrationTargetFor(task.id)
   const into = target?.branch ?? workspace.baseBranch
   const goalVersion = target?.goalVersion ?? null
+
+  // Plan 4a D10 (controller ruling P1): a package of an abandoned goal version does not land.
+  // `abandonGoal` refuses while any package is merging, so this is only reached by a task that got
+  // here around it; its version is one nobody wants, so it is taken off the board -- cancelled,
+  // claim released, nothing rebased or merged -- rather than left `merging`, where it would head
+  // the FIFO on every later pass.
+  if (target !== null && (await prisma.goalDelivery.findUnique({ where: { id: target.deliveryId }, select: { status: true } }))?.status === 'abandoned') {
+    const reason = `goal v${String(target.goalVersion)} abandoned`
+    const cancelled = await prisma.task.updateMany({
+      where: { id: task.id, status: 'merging' },
+      data: { status: 'cancelled', mergeClaimedAt: null, lastRejectionReason: reason },
+    })
+    if (cancelled.count === 1) {
+      await appendEvent({
+        type: 'task.cancelled',
+        workspaceId,
+        taskId: task.id,
+        actor: 'system',
+        payload: { reason, goalVersion: task.goalVersion },
+      })
+    }
+    return
+  }
 
   // spec Decision 5: `autoMerge` is consulted here, not at review time -- a workspace that does not
   // trust auto-merge still wants the task marked done and out of the queue, with the branch and

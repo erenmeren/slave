@@ -1148,6 +1148,30 @@ describe('into the integration branch', () => {
     expect(git(['rev-parse', '--abbrev-ref', 'HEAD'], path)).toBe(target.branch)
   })
 
+  it('does not land a package of an abandoned goal version: it is cancelled, and nothing is merged', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: true })
+    const target = await deliver(workspace)
+    await prisma.goalDelivery.update({ where: { id: target.deliveryId }, data: { status: 'abandoned' } })
+    const { taskId, branch } = await seedMergingTask(workspace)
+    await packageTask(workspace, taskId, 'feature')
+    const integrationBefore = git(['rev-parse', target.branch], workspace.repoPath)
+    const mainBefore = git(['rev-parse', 'main'], workspace.repoPath)
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+    expect(task.status).toBe('cancelled')
+    expect(task.mergeClaimedAt).toBeNull()
+    expect(task.integratedAt).toBeNull()
+    expect(git(['rev-parse', target.branch], workspace.repoPath)).toBe(integrationBefore)
+    expect(git(['rev-parse', 'main'], workspace.repoPath)).toBe(mainBefore)
+    expect(isAncestor(workspace.repoPath, branch, target.branch)).toBe(false)
+    expect(existsSync(integrationWorktreePath(workspace.repoPath, 1, workspace.id))).toBe(false)
+    const cancelled = await prisma.executionEvent.findMany({ where: { workspaceId: workspace.id, type: 'task_cancelled' } })
+    expect(cancelled.map((event) => event.taskId)).toEqual([taskId])
+    expect(await prisma.executionEvent.count({ where: { workspaceId: workspace.id, type: 'task_merge_failed' } })).toBe(0)
+  })
+
   it('merges two packages one after another, each with its own merge commit', async (): Promise<void> => {
     const workspace = await seedWorkspace({ autoMerge: true })
     const target = await deliver(workspace)

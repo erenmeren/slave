@@ -538,6 +538,113 @@ describe('the orchestrator CLI', () => {
     expect(`${result.stdout}${result.stderr}`).toMatch(/--version must be a positive integer/)
   })
 
+  /** Goal v`version`'s integration branch (one commit of its own) and delivery row, and one package task. */
+  async function seedGoalDelivery(
+    version: number,
+    status: 'integrating' | 'accepted',
+    taskStatus: 'ready' | 'done' | 'running',
+  ): Promise<{ readonly branch: string; readonly taskId: string }> {
+    const git = (args: readonly string[]): string => execFileSync('git', [...args], { cwd: fixture.repoPath, encoding: 'utf8' }).trim()
+    const branch = `slaveofai/goal-v${String(version)}-${fixture.workspaceId.slice(0, 8)}`
+    const baseCommit = git(['rev-parse', 'main'])
+    git(['checkout', '-q', '-b', branch])
+    writeFileSync(join(fixture.repoPath, `goal-v${String(version)}.txt`), 'the goal\n')
+    git(['add', '-A'])
+    git(['commit', '-q', '-m', `goal v${String(version)}`])
+    git(['checkout', '-q', 'main'])
+    await prisma.goalDelivery.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        goalVersion: version,
+        integrationBranch: branch,
+        baseCommit,
+        status,
+        acceptedAt: status === 'accepted' ? new Date() : null,
+      },
+    })
+    const pkg = await prisma.workPackage.create({
+      data: { workspaceId: fixture.workspaceId, goalVersion: version, key: 'main', title: 'x', requirementKeys: ['R1'], ownedPaths: ['**'], interface: '', templateId: 'tpl' },
+    })
+    const task = await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'The package',
+        description: 'x',
+        status: taskStatus,
+        requiredRole: 'backend',
+        maxAttempts: 3,
+        goalVersion: version,
+        workPackageId: pkg.id,
+        integratedAt: taskStatus === 'done' ? new Date() : null,
+      },
+    })
+    return { branch, taskId: task.id }
+  }
+
+  it('goal-status prints each goal version with its packages as JSON', async (): Promise<void> => {
+    const { branch, taskId } = await seedGoalDelivery(1, 'integrating', 'ready')
+
+    const result = await runCli(['goal-status', '--workspace', fixture.workspaceId])
+
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.stdout)).toEqual([
+      expect.objectContaining({
+        goalVersion: 1,
+        status: 'integrating',
+        integrationBranch: branch,
+        mergedAt: null,
+        packages: [{ taskId, key: 'main', status: 'ready', integrated: false }],
+      }),
+    ])
+    const none = await runCli(['goal-status', '--workspace', fixture.workspaceId, '--version', '2'])
+    expect(JSON.parse(none.stdout)).toEqual([])
+  })
+
+  it('abandon-goal cancels the unfinished packages and prints them', async (): Promise<void> => {
+    const { taskId } = await seedGoalDelivery(1, 'integrating', 'ready')
+
+    const result = await runCli(['abandon-goal', '--workspace', fixture.workspaceId, '--version', '1'])
+
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.stdout)).toEqual({ cancelled: [taskId] })
+    expect((await prisma.goalDelivery.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })).status).toBe('abandoned')
+  })
+
+  it('abandon-goal exits non-zero with the refusal while a package is running', async (): Promise<void> => {
+    const { taskId } = await seedGoalDelivery(1, 'integrating', 'running')
+
+    const result = await runCli(['abandon-goal', '--workspace', fixture.workspaceId, '--version', '1'])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toContain(
+      `goal v1 still has work in flight (task ${taskId}); stop it before abandoning the version`,
+    )
+  })
+
+  it('confirm-goal-merge confirms a hand merge and prints the base branch commit', async (): Promise<void> => {
+    const { branch } = await seedGoalDelivery(1, 'accepted', 'done')
+    execFileSync('git', ['merge', '-q', '--no-ff', '--no-edit', branch], { cwd: fixture.repoPath })
+    const tip = execFileSync('git', ['rev-parse', 'main'], { cwd: fixture.repoPath, encoding: 'utf8' }).trim()
+
+    const result = await runCli(['confirm-goal-merge', '--workspace', fixture.workspaceId, '--version', '1'])
+
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.stdout)).toEqual({ commit: tip })
+    expect((await prisma.goalDelivery.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })).mergedAt).not.toBeNull()
+  })
+
+  it('confirm-goal-merge exits non-zero when the branch is not in the base branch, and on a bad --version', async (): Promise<void> => {
+    const { branch } = await seedGoalDelivery(1, 'accepted', 'done')
+
+    const result = await runCli(['confirm-goal-merge', '--workspace', fixture.workspaceId, '--version', '1'])
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toContain(`${branch} is not merged into main; merge it by hand first`)
+
+    const bad = await runCli(['confirm-goal-merge', '--workspace', fixture.workspaceId, '--version', '1abc'])
+    expect(bad.code).not.toBe(0)
+    expect(`${bad.stdout}${bad.stderr}`).toMatch(/--version must be a positive integer/)
+  })
+
   it('request-change writes a new version carrying the words', async (): Promise<void> => {
     await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'Ship the checkout flow.'])
 

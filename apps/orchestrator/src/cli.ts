@@ -35,11 +35,13 @@ import {
   unassignPerson,
   CREDENTIAL_KINDS,
   CREDENTIAL_KIND_LABEL,
+  abandonGoal,
   claimResume,
   cloneSimulation,
   compareSimulations,
   condenseWorkspaceMemories,
   conductorView,
+  confirmGoalMerge,
   confirmIntegration,
   createCompany,
   createProjectTeam,
@@ -54,6 +56,7 @@ import {
   deleteUser,
   emergencyStop,
   EXTERNAL_IGNORED_REASON_LABEL,
+  goalDeliveries,
   haltSimulation,
   hireFromTemplate,
   importCatalog,
@@ -344,6 +347,26 @@ const USAGE = `usage: orchestrator <command> [options]
                                        package with its seat and its task's id/status/reported flag,
                                        and every model call it made, ok or failed, oldest first. As
                                        JSON.
+  goal-status --workspace <id> [--version <n>]
+                                       each conducted goal version's delivery, oldest first (or one,
+                                       with --version): its integration branch and the commit it was
+                                       cut at, integrating/accepted/abandoned, when it was accepted
+                                       and merged, a merge git refused, and each package task with
+                                       its status and whether it is on the integration branch. As
+                                       JSON.
+  abandon-goal --workspace <id> --version <n>
+                                       move on from a goal version: every unfinished package task of
+                                       it is cancelled and the version is abandoned, which lets the
+                                       next version be conducted. Refused (non-zero) while any of its
+                                       package tasks is running, in review or merging -- stop it
+                                       first. The integration branch is kept. Prints the cancelled
+                                       task ids as JSON.
+  confirm-goal-merge --workspace <id> --version <n>
+                                       say you merged an accepted goal version's integration branch
+                                       into the base branch by hand (after a merge git refused, the
+                                       base branch moved, or autoMerge is off). Checked against git:
+                                       refused (non-zero) unless the branch is in the base branch.
+                                       Prints the base branch's commit as JSON.
   request-change --workspace <id> --request "<text>"
                                        tell the Supervisor what changed. The request AMENDS the
                                        standing goal -- the document keeps its body and gains a
@@ -1398,6 +1421,13 @@ function requireFlag(flags: Flags, name: string): string {
   return value
 }
 
+/** A `--version` naming a goal version: the whole string a positive integer or nothing, the
+ *  `conductor` check's shape, so `--version 1abc` is refused rather than read as 1. */
+function goalVersionFlag(text: string): number {
+  if (!/^[1-9]\d*$/.test(text)) throw new Error('--version must be a positive integer')
+  return Number.parseInt(text, 10)
+}
+
 /**
  * A flag whose value must be one of a closed list (M49 R4), or `undefined` when it was not given.
  *
@@ -2265,6 +2295,32 @@ export async function main(argv: readonly string[]): Promise<number> {
       const result = await conductorView(workspaceId, version)
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`${JSON.stringify(result.value, null, 2)}\n`)
+      return 0
+    }
+
+    case 'goal-status': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const versionText = flagText(flags, 'version')
+      const version = versionText === undefined ? undefined : goalVersionFlag(versionText)
+      const result = await goalDeliveries(workspaceId, version)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`${JSON.stringify(result.value, null, 2)}\n`)
+      return 0
+    }
+
+    case 'abandon-goal': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const result = await abandonGoal(workspaceId, goalVersionFlag(requireFlag(flags, 'version')))
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`${JSON.stringify(result.value)}\n`)
+      return 0
+    }
+
+    case 'confirm-goal-merge': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const result = await confirmGoalMerge(workspaceId, goalVersionFlag(requireFlag(flags, 'version')))
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`${JSON.stringify(result.value)}\n`)
       return 0
     }
 

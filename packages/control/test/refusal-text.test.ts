@@ -154,3 +154,19 @@ describe('refusalText for the M58 person kinds (R14, plan additions)', () => {
     expect(texts[2]).toContain('r1')
   })
 })
+
+describe('refusalText for the goal-version verbs (Conductor Plan 4a)', () => {
+  it('names the version and what to do next', () => {
+    expect(refusalText({ kind: 'goal_version_not_found', workspaceId: 'w1', goalVersion: 3 })).toBe('workspace w1 has no conducted goal v3')
+    expect(refusalText({ kind: 'goal_version_closed', goalVersion: 2, status: 'merged' })).toBe('goal v2 is already merged')
+    expect(refusalText({ kind: 'goal_version_busy', goalVersion: 1, holder: 'task t1' })).toBe(
+      'goal v1 still has work in flight (task t1); stop it before abandoning the version',
+    )
+    expect(refusalText({ kind: 'goal_not_accepted', goalVersion: 1, status: 'integrating' })).toBe(
+      'goal v1 is integrating, not accepted; there is nothing to confirm yet',
+    )
+    expect(refusalText({ kind: 'goal_not_merged', goalVersion: 1, branch: 'slaveofai/goal-v1-abcd1234', into: 'main' })).toBe(
+      'slaveofai/goal-v1-abcd1234 is not merged into main; merge it by hand first',
+    )
+  })
+})

@@ -60,6 +60,13 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   invalid_request: true,
   duplicate_request: true,
   goal_unchanged: true,
+  // Conductor Plan 4a (Task 6): the goal-version verbs. Only `goal_version_not_found` is a 404 --
+  // the other four name a version that exists and a request that does not make sense against it.
+  goal_version_not_found: true,
+  goal_version_closed: true,
+  goal_version_busy: true,
+  goal_not_merged: true,
+  goal_not_accepted: true,
   duplicate_name: true,
   template_not_found: true,
   company_not_found: true,
@@ -251,13 +258,14 @@ const TODAYS_NOT_FOUND_KINDS = [
   'external_repository_not_found',
   'template_duplicate_not_found',
   'person_not_found',
+  'goal_version_not_found',
 ] as const satisfies readonly ControlRefusal['kind'][]
 
 describe('refusalStatus', () => {
-  it('is 404 for exactly the twenty-six kinds ending in _not_found today', () => {
+  it('is 404 for exactly the twenty-seven kinds ending in _not_found today', () => {
     const bySuffix = ALL.filter((kind) => kind.endsWith('_not_found')).sort()
     expect(bySuffix).toEqual([...TODAYS_NOT_FOUND_KINDS].sort())
-    expect(bySuffix).toHaveLength(26)
+    expect(bySuffix).toHaveLength(27)
   })
 
   it('maps every kind in the taxonomy to 404 iff it ends in _not_found, 409 otherwise', () => {

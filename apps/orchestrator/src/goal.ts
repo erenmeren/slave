@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { settleGoalEvidence } from '@slave-of-ai/control'
+import { goalEventSaid, settleGoalEvidence, withDeliveryLock } from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import { type GuardrailKind, type WorkspaceId } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
@@ -64,45 +64,6 @@ async function everyPackageIntegrated(workspaceId: string, goalVersion: number):
 }
 
 /**
- * Serialises everything that decides a delivery's once-only facts (`goal_accepted`, the final
- * merge, `goal_merged`) across overlapping ticks -- a CLI `tick` beside a live daemon, or two
- * ticks of one daemon.
- *
- * A Postgres TRANSACTION advisory lock keyed on the delivery (the daemon already relies on a
- * session advisory lock for "one daemon per database"). The events themselves cannot be written in
- * this transaction -- `appendEvent` is the log's only writer and commits on its own -- so the rule
- * is: under the lock, look for the event, write it if it is missing, THEN move the row. An event
- * `appendEvent` returned is committed before the lock is released, so the next holder sees it; a
- * crash anywhere releases the lock with the connection and leaves the row unmoved, so the next
- * pass comes back and finds the event already there. Exactly once, and nothing lost.
- */
-async function withDeliveryLock<T>(deliveryId: string, work: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
-  return prisma.$transaction(
-    async (tx) => {
-      await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtext(${`slaveofai:goal-delivery:${deliveryId}`}))`
-      return work(tx)
-    },
-    // The final merge runs git under the lock, and a waiter waits out the holder's whole merge.
-    { maxWait: 10_000, timeout: 120_000 },
-  )
-}
-
-/** Whether the workspace's log already has `type` for this goal version -- read in the lock's
- *  transaction, which sees every event committed before the lock was granted. */
-async function saidFor(
-  tx: Prisma.TransactionClient,
-  workspaceId: string,
-  type: 'workspace_goal_accepted' | 'workspace_goal_merged',
-  version: number,
-): Promise<boolean> {
-  const row = await tx.executionEvent.findFirst({
-    where: { workspaceId, type, payload: { path: ['version'], equals: version } },
-    select: { seq: true },
-  })
-  return row !== null
-}
-
-/**
  * `integrating` -> `accepted`, once: under the delivery's lock, the event first (if a crash did not
  * already write it), then the guarded status move. Returns whether this call moved it.
  */
@@ -110,7 +71,7 @@ export async function acceptGoal(deliveryId: string, rounds: number): Promise<bo
   return withDeliveryLock(deliveryId, async (tx) => {
     const delivery = await tx.goalDelivery.findUniqueOrThrow({ where: { id: deliveryId } })
     if (delivery.status !== 'integrating') return false
-    if (!(await saidFor(tx, delivery.workspaceId, 'workspace_goal_accepted', delivery.goalVersion))) {
+    if (!(await goalEventSaid(tx, delivery.workspaceId, 'workspace_goal_accepted', delivery.goalVersion))) {
       await appendEvent({
         type: 'workspace.goal_accepted',
         workspaceId: delivery.workspaceId,
@@ -225,7 +186,7 @@ async function announceOnce(
   commit: string,
   by: 'system',
 ): Promise<void> {
-  if (await saidFor(tx, workspaceId, 'workspace_goal_merged', version)) return
+  if (await goalEventSaid(tx, workspaceId, 'workspace_goal_merged', version)) return
   await settleGoalEvidence(workspaceId, version)
   await appendEvent({ type: 'workspace.goal_merged', workspaceId, actor: 'system', payload: { version, branch, into, commit, by } })
 }

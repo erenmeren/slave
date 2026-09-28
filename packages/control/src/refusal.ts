@@ -198,6 +198,18 @@ export type ControlRefusal =
    * `version` is the version it is unchanged FROM.
    */
   | { readonly kind: 'goal_unchanged'; readonly workspaceId: string; readonly version: number }
+  /** Conductor Plan 4a (Task 6): a goal-version verb named a version with no `GoalDelivery` -- never
+   *  conducted, or conducted before goal deliveries existed. */
+  | { readonly kind: 'goal_version_not_found'; readonly workspaceId: string; readonly goalVersion: number }
+  /** Plan 4a: the version is already `merged` or `abandoned`; there is nothing left to decide. */
+  | { readonly kind: 'goal_version_closed'; readonly goalVersion: number; readonly status: string }
+  /** Plan 4a D10: `abandonGoal` while a package task of the version holds a run or a merge.
+   *  `holder` says which (`task <id>`). */
+  | { readonly kind: 'goal_version_busy'; readonly goalVersion: number; readonly holder: string }
+  /** Plan 4a D9: `confirmGoalMerge` when git says the integration branch is not in the base branch. */
+  | { readonly kind: 'goal_not_merged'; readonly goalVersion: number; readonly branch: string; readonly into: string }
+  /** Plan 4a D9: `confirmGoalMerge` on a version that has not been accepted yet. */
+  | { readonly kind: 'goal_not_accepted'; readonly goalVersion: number; readonly status: string }
   | { readonly kind: 'duplicate_name'; readonly name: string }
   | { readonly kind: 'template_not_found'; readonly templateId: string }
   /** M47 R1: a capability key nothing in the taxonomy table has. Nothing matches on a key that is
@@ -724,6 +736,16 @@ export function refusalText(refusal: ControlRefusal): string {
       return `project ${refusal.workspaceId} already recorded exactly this change request at version ${String(refusal.version)}: nothing was recorded`
     case 'goal_unchanged':
       return `the goal of project ${refusal.workspaceId} already reads exactly this at version ${String(refusal.version)}: nothing was recorded`
+    case 'goal_version_not_found':
+      return `workspace ${refusal.workspaceId} has no conducted goal v${String(refusal.goalVersion)}`
+    case 'goal_version_closed':
+      return `goal v${String(refusal.goalVersion)} is already ${refusal.status}`
+    case 'goal_version_busy':
+      return `goal v${String(refusal.goalVersion)} still has work in flight (${refusal.holder}); stop it before abandoning the version`
+    case 'goal_not_accepted':
+      return `goal v${String(refusal.goalVersion)} is ${refusal.status}, not accepted; there is nothing to confirm yet`
+    case 'goal_not_merged':
+      return `${refusal.branch} is not merged into ${refusal.into}; merge it by hand first`
     case 'duplicate_name':
       return `the name "${refusal.name}" is already taken`
     case 'template_not_found':
