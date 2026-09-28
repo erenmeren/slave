@@ -109,6 +109,7 @@ export * from './capabilityMapping.js'
 export * from './capabilityMappingTick.js'
 export * from './failureClass.js'
 export * from './conductStaffing.js'
+export * from './delivery.js'
 /** Conductor Plan 2: the orchestrator's conductor reads a racing `RequirementSet` create as
  *  success, and this is the one P2002 predicate (`prisma-errors.ts`'s M17 census rule). */
 export { isUniqueConstraintViolation } from './prisma-errors.js'

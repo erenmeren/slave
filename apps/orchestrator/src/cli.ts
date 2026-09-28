@@ -39,6 +39,7 @@ import {
   cloneSimulation,
   compareSimulations,
   condenseWorkspaceMemories,
+  conductorView,
   confirmIntegration,
   createCompany,
   createProjectTeam,
@@ -116,6 +117,7 @@ import {
   setPersonCapabilities,
   setSlaveModel,
   setSlaveRole,
+  setDelivery,
   setGoal,
   setPassword,
   setSupervisorSettings,
@@ -326,6 +328,22 @@ const USAGE = `usage: orchestrator <command> [options]
                                        and that text's sha256. Refused (non-zero) when the new text
                                        is byte-identical to the current version -- nothing is
                                        recorded, because nothing changed.
+  set-delivery --workspace <id> --delivery <conducted|planned>
+                                       switch how this workspace's goal is delivered: conducted (the
+                                       conductor, spec §5) or planned (the planner graph). Prints the
+                                       delivery it landed on and whether it changed. Safe to switch
+                                       either way while work is in flight -- switching TO conducted
+                                       while the planner has a board live waits for it to go quiet
+                                       before the conductor's first pass; switching AWAY FROM
+                                       conducted leaves a materialised version's packages and their
+                                       pinned tasks exactly as they are.
+  conductor --workspace <id> [--version <n>]
+                                       what the conductor has decided and done for one goal version
+                                       (the current one by default): the extracted requirements, the
+                                       size decision (mode, rationale, who decided, when), each
+                                       package with its seat and its task's id/status/reported flag,
+                                       and every model call it made, ok or failed, oldest first. As
+                                       JSON.
   request-change --workspace <id> --request "<text>"
                                        tell the Supervisor what changed. The request AMENDS the
                                        standing goal -- the document keeps its body and gains a
@@ -2224,6 +2242,29 @@ export async function main(argv: readonly string[]): Promise<number> {
       // JSON, like `show-context` and `supervisor-decisions`: the version is the number the re-plan
       // trigger counts and a caller has to be able to read it back without parsing a sentence.
       process.stdout.write(`${JSON.stringify({ version: result.value.version, sha256: result.value.sha256 })}\n`)
+      return 0
+    }
+
+    case 'set-delivery': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const delivery = oneOfFlag(flags, 'delivery', ['conducted', 'planned'] as const)
+      if (delivery === undefined) throw new Error('--delivery is required')
+      const result = await setDelivery(workspaceId, delivery)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`${JSON.stringify(result.value)}\n`)
+      return 0
+    }
+
+    case 'conductor': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const versionText = flagText(flags, 'version')
+      // The same shape of check `list-imports`' `--limit` makes (M3): the whole string or nothing,
+      // so `--version 1abc` is refused rather than silently read as 1.
+      if (versionText !== undefined && !/^\d+$/.test(versionText)) throw new Error('--version must be a positive integer')
+      const version = versionText === undefined ? undefined : Number.parseInt(versionText, 10)
+      const result = await conductorView(workspaceId, version)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`${JSON.stringify(result.value, null, 2)}\n`)
       return 0
     }
 
