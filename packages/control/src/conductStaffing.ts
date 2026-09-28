@@ -85,20 +85,27 @@ export async function staffPackages(
  * The seat that verifies goal version `goalVersion` (spec R8: "a verifier seat that implemented
  * nothing in this goal version"; plan 4b D4). Intake staffs the verifier for a conducted project
  * (spec R5); the conductor makes sure one exists when intake did not -- a workspace switched to
- * `conducted`, a reviewer released since. In order, among open, unreleased seats that hold none of
- * `packageSeats` (this version's package workers) and ran no `implementation` on a task of this
- * version:
- *   1. a seat already holding VERIFIER_ROLE;
- *   2. a reviewer seat, given VERIFIER_ROLE (reviewing is not implementing);
- *   3. a new seat hired from `fallbackTemplateId` (the first package's persona), given the role.
- * Profile only: a verification run gets the persona's profile and no skills (D4), so the persona
- * needs no fit to the work. The refusal names the verifier and the persona it could not hire.
+ * `conducted`, a reviewer released since.
+ *
+ * ELIGIBLE means an open, unreleased seat that holds none of `packageSeats` (this version's
+ * package workers) and ran no `implementation` on a task of this version. In order (ruling V3):
+ *   1. an eligible seat already holding VERIFIER_ROLE;
+ *   2. an eligible reviewer seat, given VERIFIER_ROLE (reviewing is not implementing);
+ *   3. any other eligible seat, given VERIFIER_ROLE -- a seat already here costs no pool person;
+ *   4. a new seat hired from `personas` in the order given (the conductor passes the plan's
+ *      personas, least-used first), the next one when a pool is exhausted;
+ *   5. a new seat hired from any active catalogue persona with a free pool slot, by name then id.
+ * A seat whose role grant is refused (the runtime-role cap) is passed over, not the end. Steps 4
+ * and 5 are what keep a reviewer-less workspace conductable when the plan takes every person of
+ * its persona; step 5 is sound because a verification run gets the persona's profile and no skills
+ * (D4), so the persona needs no fit to the work. Lowest id wins a tie, as in `staffPackages`. The
+ * refusal names everything that was tried.
  */
 export async function staffVerifier(
   workspaceId: string,
   goalVersion: number,
   packageSeats: ReadonlySet<string>,
-  fallbackTemplateId: string,
+  personas: readonly string[],
 ): Promise<Result<string, string>> {
   const implementers = await implementersOf(workspaceId, goalVersion)
   const open = await prisma.slave.findMany({
@@ -110,23 +117,62 @@ export async function staffVerifier(
   const verifier = eligible.find((s) => s.runtimeRoles.includes(VERIFIER_ROLE))
   if (verifier !== undefined) return ok(verifier.id)
 
-  let seat: string
-  const reviewer = eligible.find((s) => s.runtimeRoles.includes(REVIEWER_ROLE))
-  if (reviewer !== undefined) {
-    seat = reviewer.id
-  } else {
-    const hired = await hireFromTemplate(workspaceId, fallbackTemplateId, {
-      rationale: `Conductor: verifier of goal v${String(goalVersion)}`,
-      requirePool: true,
-      newSeat: true,
-    })
-    if (!hired.ok) return err(noVerifier(goalVersion, fallbackTemplateId, refusalText(hired.error)))
-    seat = hired.value.slaveId
-    if (hired.value.runtimeRoles.includes(VERIFIER_ROLE)) return ok(seat)
+  const tried: string[] = []
+  // Steps 2 and 3: reviewers first, then every other eligible seat, each given the role.
+  const reviewers = eligible.filter((s) => s.runtimeRoles.includes(REVIEWER_ROLE))
+  const rest = eligible.filter((s) => !s.runtimeRoles.includes(REVIEWER_ROLE))
+  for (const seat of [...reviewers, ...rest]) {
+    const granted = await mergeRuntimeRoles(seat.id, [VERIFIER_ROLE], 'conductor', 'system')
+    if (granted.ok) return ok(seat.id)
+    tried.push(`seat ${seat.id}: ${refusalText(granted.error)}`)
   }
-  const granted = await mergeRuntimeRoles(seat, [VERIFIER_ROLE], 'conductor', 'system')
-  if (!granted.ok) return err(noVerifier(goalVersion, fallbackTemplateId, refusalText(granted.error)))
-  return ok(seat)
+  if (eligible.length === 0) tried.push('no open seat is free of this version\'s work')
+
+  // Step 4: the plan's personas, in the order given.
+  const hiredFrom = new Set<string>()
+  for (const templateId of new Set(personas)) {
+    hiredFrom.add(templateId)
+    const hired = await hireVerifier(workspaceId, goalVersion, templateId)
+    if (hired.ok) return hired
+    tried.push(`persona ${templateId}: ${hired.error}`)
+  }
+
+  // Step 5: any active catalogue persona with a free pool slot for this workspace. One query per
+  // pick, never a hire per catalogue entry: a hire that finds its pool empty re-syncs the pool.
+  for (;;) {
+    const free = await prisma.slaveTemplate.findFirst({
+      where: {
+        active: true,
+        id: { notIn: [...hiredFrom] },
+        hiredPersons: {
+          some: { poolSlot: { not: null }, releasedAt: null, seats: { none: { closedAt: null, team: { workspaceId } } } },
+        },
+      },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      select: { id: true },
+    })
+    if (free === null) break
+    hiredFrom.add(free.id)
+    const hired = await hireVerifier(workspaceId, goalVersion, free.id)
+    if (hired.ok) return hired
+    tried.push(`persona ${free.id}: ${hired.error}`)
+  }
+  tried.push('no catalogue persona has a free pool slot')
+  return err(`no verifier seat for goal v${String(goalVersion)}: ${tried.join('; ')}`)
+}
+
+/** A new seat from `templateId`'s managed pool, holding VERIFIER_ROLE; the error is the reason. */
+async function hireVerifier(workspaceId: string, goalVersion: number, templateId: string): Promise<Result<string, string>> {
+  const hired = await hireFromTemplate(workspaceId, templateId, {
+    rationale: `Conductor: verifier of goal v${String(goalVersion)}`,
+    requirePool: true,
+    newSeat: true,
+  })
+  if (!hired.ok) return err(refusalText(hired.error))
+  if (hired.value.runtimeRoles.includes(VERIFIER_ROLE)) return ok(hired.value.slaveId)
+  const granted = await mergeRuntimeRoles(hired.value.slaveId, [VERIFIER_ROLE], 'conductor', 'system')
+  if (!granted.ok) return err(refusalText(granted.error))
+  return ok(hired.value.slaveId)
 }
 
 /**
@@ -140,11 +186,6 @@ export async function implementersOf(workspaceId: string, goalVersion: number): 
     distinct: ['slaveId'],
   })
   return new Set(runs.map((run) => run.slaveId))
-}
-
-/** The refusal a person reads when no verifier could be staffed: which version, which persona, why. */
-function noVerifier(goalVersion: number, templateId: string, reason: string): string {
-  return `no verifier seat for goal v${String(goalVersion)} (persona ${templateId}): ${reason}`
 }
 
 /** The refusal a person reads: which package went unstaffed, from which persona, and why. */

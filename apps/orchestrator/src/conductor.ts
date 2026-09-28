@@ -206,7 +206,7 @@ async function decideAndMaterialise(
   }
   // Plan 4b D4 (spec R8): the version's verifier, a seat that implements none of it, staffed before
   // anything is written so a version never exists without one on record.
-  const verifier = await staffVerifier(workspaceId, version, new Set(seats.value.values()), plan.packages[0]?.templateId ?? '')
+  const verifier = await staffVerifier(workspaceId, version, new Set(seats.value.values()), verifierPersonas(plan))
   if (!verifier.ok) {
     await tripConductor(workspaceId, `staffing the verifier of goal v${version}: ${verifier.error}`)
     return 'conduct_failed'
@@ -233,6 +233,18 @@ async function decideAndMaterialise(
     throw error
   }
   return 'conducted'
+}
+
+/**
+ * The personas a verifier may be hired from, in the order to try them (ruling V3): the plan's
+ * distinct personas, the one holding the FEWEST packages first -- its pool has the most people
+ * left after `staffPackages` (a persona holding no package, e.g. a distinct integration persona,
+ * is not in a validated plan: the integration package itself carries it). Plan order breaks ties.
+ */
+function verifierPersonas(plan: ConductPlan): readonly string[] {
+  const count = new Map<string, number>()
+  for (const pkg of plan.packages) count.set(pkg.templateId, (count.get(pkg.templateId) ?? 0) + 1)
+  return [...count.keys()].toSorted((a, b) => (count.get(a) ?? 0) - (count.get(b) ?? 0))
 }
 
 /**

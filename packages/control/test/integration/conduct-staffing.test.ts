@@ -9,6 +9,7 @@ import { PACKAGE_WORKER_ROLE, VERIFIER_ROLE } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { syncCapabilityTaxonomy } from '../../src/capability.js'
 import { implementersOf, staffPackages, staffVerifier } from '../../src/conductStaffing.js'
+import { MAX_RUNTIME_ROLES } from '../../src/profile.js'
 import { syncPersonPool } from '../../src/personPool.js'
 
 const TRUNCATE =
@@ -195,21 +196,21 @@ describe('staffVerifier', () => {
 
   it('picks an open seat already holding the verifier role', async (): Promise<void> => {
     const verifier = await seat(['backend', VERIFIER_ROLE])
-    const chosen = await staffVerifier(w, 1, new Set(), 't-backend')
+    const chosen = await staffVerifier(w, 1, new Set(), ['t-backend'])
     expect(chosen.ok && chosen.value).toBe(verifier)
     expect(await prisma.slave.count({ where: { team: { workspaceId: w } } })).toBe(1)
   })
 
   it('gives the verifier role to a reviewer seat when no verifier exists', async (): Promise<void> => {
     const reviewer = await seat(['backend', 'reviewer'])
-    const chosen = await staffVerifier(w, 1, new Set(), 't-backend')
+    const chosen = await staffVerifier(w, 1, new Set(), ['t-backend'])
     expect(chosen.ok && chosen.value).toBe(reviewer)
     expect((await prisma.slave.findUniqueOrThrow({ where: { id: reviewer } })).runtimeRoles).toContain(VERIFIER_ROLE)
   })
 
   it('hires a new seat when the only reviewer holds a package of this version', async (): Promise<void> => {
     const reviewer = await seat(['backend', 'reviewer'])
-    const chosen = await staffVerifier(w, 1, new Set([reviewer]), 't-docs')
+    const chosen = await staffVerifier(w, 1, new Set([reviewer]), ['t-docs'])
     expect(chosen.ok).toBe(true)
     if (!chosen.ok) return
     expect(chosen.value).not.toBe(reviewer)
@@ -224,20 +225,71 @@ describe('staffVerifier', () => {
     await implemented(verifier, 1)
     expect([...(await implementersOf(w, 1))]).toEqual([verifier])
     expect((await implementersOf(w, 2)).size).toBe(0)
-    const v1 = await staffVerifier(w, 1, new Set(), 't-backend')
+    const v1 = await staffVerifier(w, 1, new Set(), ['t-backend'])
     expect(v1.ok && v1.value).not.toBe(verifier)
     expect(v1.ok).toBe(true)
     // Version 2: the same seat implemented nothing there, so it verifies it. The v1 verifier's seat
     // is closed first: two eligible verifiers would be chosen by id, which is random.
     await prisma.slave.update({ where: { id: v1.ok ? v1.value : '' }, data: { closedAt: new Date() } })
-    const v2 = await staffVerifier(w, 2, new Set(), 't-backend')
+    const v2 = await staffVerifier(w, 2, new Set(), ['t-backend'])
     expect(v2.ok && v2.value).toBe(verifier)
   })
 
-  it('refuses, naming the verifier and the persona, when nobody is eligible and the pool is gone', async (): Promise<void> => {
-    const chosen = await staffVerifier(w, 1, new Set(), 't-missing')
+  /** Fix round 1 (ruling V3): a reviewer that cannot take one more role is passed over, not the end. */
+  it('falls through when the reviewer is at the runtime-role cap', async (): Promise<void> => {
+    const roles = ['reviewer', ...Array.from({ length: MAX_RUNTIME_ROLES - 1 }, (_, i) => `role-${String(i)}`)]
+    const reviewer = await seat(roles)
+    const chosen = await staffVerifier(w, 1, new Set(), ['t-backend'])
+    expect(chosen.ok).toBe(true)
+    if (!chosen.ok) return
+    expect(chosen.value).not.toBe(reviewer)
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: chosen.value } })).runtimeRoles).toContain(VERIFIER_ROLE)
+  })
+
+  it('reuses an eligible open seat before hiring anybody', async (): Promise<void> => {
+    const idle = await seat(['backend'])
+    const chosen = await staffVerifier(w, 1, new Set(), ['t-backend'])
+    expect(chosen.ok && chosen.value).toBe(idle)
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: idle } })).runtimeRoles).toContain(VERIFIER_ROLE)
+    expect(await prisma.slave.count({ where: { team: { workspaceId: w } } })).toBe(1)
+  })
+
+  it("hires from the plan's next persona when the first one's pool is exhausted", async (): Promise<void> => {
+    const busy = new Set<string>()
+    for (let i = 0; i < 3; i += 1) busy.add(await seat(['backend'], 't-backend', i))
+    const chosen = await staffVerifier(w, 1, busy, ['t-backend', 't-docs'])
+    expect(chosen.ok).toBe(true)
+    if (!chosen.ok) return
+    const hired = await prisma.slave.findUniqueOrThrow({ where: { id: chosen.value }, include: { person: true } })
+    expect(hired.person.templateId).toBe('t-docs')
+    expect(hired.runtimeRoles).toContain(VERIFIER_ROLE)
+  })
+
+  it('hires from any catalogue persona with a free pool slot when the plan has none', async (): Promise<void> => {
+    const busy = new Set<string>()
+    for (let i = 0; i < 3; i += 1) busy.add(await seat(['backend'], 't-backend', i))
+    const chosen = await staffVerifier(w, 1, busy, ['t-backend'])
+    expect(chosen.ok).toBe(true)
+    if (!chosen.ok) return
+    expect(busy.has(chosen.value)).toBe(false)
+    const hired = await prisma.slave.findUniqueOrThrow({ where: { id: chosen.value }, include: { person: true } })
+    expect(hired.person.templateId).not.toBe('t-backend')
+    expect(hired.runtimeRoles).toContain(VERIFIER_ROLE)
+  })
+
+  it('refuses, naming what it tried, only when every seat is ineligible and every pool is exhausted', async (): Promise<void> => {
+    // Every managed person of every active persona holds a package seat of this version.
+    const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: w } })
+    const everyone = await prisma.person.findMany({ where: { poolSlot: { not: null }, releasedAt: null } })
+    const busy = new Set<string>()
+    for (const person of everyone) {
+      busy.add((await prisma.slave.create({ data: { teamId: team.id, role: 'Seat', runtimeRoles: ['backend'], personId: person.id } })).id)
+    }
+    const chosen = await staffVerifier(w, 1, busy, ['t-backend'])
     expect(chosen.ok).toBe(false)
     expect(!chosen.ok && chosen.error).toContain('verifier')
-    expect(!chosen.ok && chosen.error).toContain('t-missing')
+    expect(!chosen.ok && chosen.error).toContain('t-backend')
+    expect(!chosen.ok && chosen.error).toContain('catalogue')
+    expect(await prisma.slave.count({ where: { team: { workspaceId: w } } })).toBe(busy.size)
   })
 })

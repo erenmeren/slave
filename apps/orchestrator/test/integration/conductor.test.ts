@@ -1,3 +1,6 @@
+    // Every managed person but the backend pool (which PARTITIONED's three packages take) is
+    // released: no open seat, no persona of the plan and no catalogue persona has anybody left.
+    await prisma.person.updateMany({ where: { poolSlot: { not: null }, NOT: { templateId: 't-backend' } }, data: { releasedAt: new Date() } })
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -411,7 +414,9 @@ describe('conduct: the size decision', () => {
     git(['commit', '-q', '-m', 'foreign'], repoPath)
     git(['checkout', '-q', 'main'], repoPath)
     const { decider } = scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) })
-    expect(await conduct(depsFor(f, decider))).toBe('conduct_failed')
+    console.log('DBG0', await prisma.person.count({ where: { poolSlot: { not: null }, releasedAt: null, NOT: { templateId: 't-backend' } } }))
+    const DBG = await conduct(depsFor(f, decider)); if (DBG !== 'conduct_failed') { const d = await prisma.goalDelivery.findFirstOrThrow({}); console.log('DBG', JSON.stringify(await prisma.slave.findUnique({ where: { id: d.verifierSlaveId ?? '' }, include: { person: true } }), null, 1), await prisma.person.count({ where: { poolSlot: { not: null }, releasedAt: null, NOT: { templateId: 't-backend' } } })) }
+    expect(DBG).toBe('conduct_failed')
     expect(await conduct(depsFor(f, decider))).toBe('conduct_failed')
     expect(await prisma.workPackage.count({ where: { workspaceId: f.workspaceId } })).toBe(0)
     expect(await prisma.goalDelivery.count({ where: { workspaceId: f.workspaceId } })).toBe(0)
@@ -472,11 +477,26 @@ describe('conduct: the size decision', () => {
     expect(tasks.map((t) => t.assigneeId)).not.toContain(verifier.id)
   })
 
-  it('says once and materialises nothing when no verifier can be staffed', async () => {
-    // No reviewer, and PARTITIONED's three backend packages take the backend pool's three people:
-    // a verifier hired from the first package's persona has nobody left.
+  /** Fix round 1 (ruling V3): the plan's only persona is exhausted and there is no reviewer, so the
+   *  verifier comes from another catalogue persona -- the version is conducted, not stuck. */
+  it('conducts with no reviewer when the plan exhausts its persona, hiring the verifier elsewhere', async () => {
     const f = await seedWithRequirements({ withReviewer: false })
+    expect(await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) }).decider))).toBe('conducted')
+    const delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { workspaceId_goalVersion: { workspaceId: f.workspaceId, goalVersion: 1 } } })
+    const verifier = await prisma.slave.findUniqueOrThrow({ where: { id: delivery.verifierSlaveId ?? '' }, include: { person: true } })
+    expect(verifier.runtimeRoles).toContain(VERIFIER_ROLE)
+    expect(verifier.person.templateId).not.toBe('t-backend')
+    const tasks = await prisma.task.findMany({ where: { workspaceId: f.workspaceId } })
+    expect(tasks.map((t) => t.assigneeId)).not.toContain(verifier.id)
+  })
+
+  it('says once and materialises nothing when no verifier can be staffed', async () => {
+    const f = await seedWithRequirements({ withReviewer: false })
+    // Every managed person but the backend pool (which PARTITIONED's three packages take) is
+    // released: no open seat, no persona of the plan and no catalogue persona has anybody left.
+    await prisma.person.updateMany({ where: { poolSlot: { not: null }, NOT: { templateId: 't-backend' } }, data: { releasedAt: new Date() } })
     const { decider } = scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) })
+    expect(await conduct(depsFor(f, decider))).toBe('conduct_failed')
     expect(await conduct(depsFor(f, decider))).toBe('conduct_failed')
     expect(await prisma.workPackage.count({ where: { workspaceId: f.workspaceId } })).toBe(0)
     expect(await prisma.goalDelivery.count({ where: { workspaceId: f.workspaceId } })).toBe(0)
