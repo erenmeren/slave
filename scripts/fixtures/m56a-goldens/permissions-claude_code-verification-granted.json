@@ -210,5 +210,10 @@
       "prefix": "mcp__",
       "kind": "network_fetch"
     }
-  ]
+  ],
+  "ownership": {
+    "worktreeRoot": "/m56a-golden/verify-worktree",
+    "owned": [],
+    "excluded": []
+  }
 }

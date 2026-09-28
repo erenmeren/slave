@@ -496,6 +496,24 @@ describe('CursorAdapter', () => {
       expect(readFileSync(envOut, 'utf8')).toBe(`${path.join(divergentPauseDir, 'permissions.json')}\n`)
     })
 
+    // Conductor Plan 4b (D2, fix round 1): a resumed verification run sees the SAME scratch
+    // directory -- the one under the run directory the checkpoint's pause flag lives in.
+    it('sets SLAVEOFAI_VERIFY_DIR on the child at resume when the run directory has a verify/ directory', async () => {
+      const resumeRunDir = path.dirname(checkpointFor().pauseFlagPath)
+      mkdirSync(path.join(resumeRunDir, 'verify'), { recursive: true })
+      const envOut = path.join(worktreePath, 'resume-verify-env.txt')
+      const script = writeScript(
+        worktreePath,
+        'resume-verify-env-echo.sh',
+        `#!/bin/sh\nprintf '[%s]\\n' "\${SLAVEOFAI_VERIFY_DIR-unset}" > ${JSON.stringify(envOut)}\n`,
+      )
+      const adapter = adapterFor(script)
+      await adapter.resume(input.runId, checkpointFor(), null)
+      await drain(adapter, input.runId)
+
+      expect(readFileSync(envOut, 'utf8')).toBe(`[${path.join(resumeRunDir, 'verify')}]\n`)
+    })
+
     it('rewrites the hooks file and clears the pause flag before spawning', async () => {
       writeFileSync(input.pauseFlagPath, 'paused by an operator\n')
       const adapter = new CursorAdapter({ command: '/bin/echo', gatePath })

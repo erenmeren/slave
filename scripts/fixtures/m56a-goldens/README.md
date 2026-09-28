@@ -22,7 +22,7 @@ deliberate act somebody has to reconstruct, not a convenience one keystroke away
 
 Twenty-five files and this README, twenty-six entries in all (`ls scripts/fixtures/m56a-goldens | wc -l`).
 
-Conductor Plan 4b (2026-09-29) added the four `verification` files when the run kind was added, written by `writePermissionsFile` with the gate's fixed run id and token (the command is in `docs/superpowers/plans/2026-09-28-conductor-4b-verification.md`, Task 2); the twelve earlier files did not change.
+Conductor Plan 4b (2026-09-29) added the four `verification` files when the run kind was added, written by `writePermissionsFile` with the gate's fixed run id and token (the command is in `docs/superpowers/plans/2026-09-28-conductor-4b-verification.md`, Task 2); the twelve earlier files did not change. They carry the ownership rule that owns nothing, rooted at the fixed `/m56a-golden/verify-worktree` (`GOLDEN_VERIFICATION_OWNERSHIP` in the gate): `writePermissionsFile` refuses a verification file without that rule, so the goldens pin the verifier's confinement byte for byte, not only its grants.
 
 `hook-plane-sha256.json` is the one golden captured during the milestone rather than before it, and it
 records a NON-change: `scripts/pause-gate.sh`, `scripts/cursor-shell-gate.sh`, `scripts/tool-result-tap.sh`,

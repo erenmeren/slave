@@ -152,6 +152,10 @@ const HOOK_PLANE_SCRIPTS = [
 // sixteen comparisons are total rather than field-wise (spec §3 stage 2).
 const GOLDEN_RUN_ID = '00000000-0000-4000-8000-000000000m56'
 const GOLDEN_RUN_TOKEN = 'm56a-golden-token-not-a-secret'
+// Conductor Plan 4b (fix round 1): `writePermissionsFile` refuses a `verification` file without the
+// ownership rule that owns nothing, so the four verification goldens are written with this fixed
+// rule -- and pin the confinement byte for byte, not only the grants.
+const GOLDEN_VERIFICATION_OWNERSHIP = { worktreeRoot: '/m56a-golden/verify-worktree', owned: [], excluded: [] }
 // Claude's governed vocabulary, as a count somebody can re-run (M56a erratum E22). The `mcp__*`
 // prefix rule covers every name this list cannot enumerate, and it is asserted separately.
 const CLAUDE_VOCABULARY_NAMES = 38
@@ -536,6 +540,7 @@ try {
             runKind,
             runId: GOLDEN_RUN_ID,
             runToken: GOLDEN_RUN_TOKEN,
+            ...(runKind === 'verification' ? { ownership: GOLDEN_VERIFICATION_OWNERSHIP } : {}),
           })
           const goldenPath = join(GOLDENS, `permissions-${provider}-${runKind}-${setName}.json`)
           const actual = readFileSync(written)
