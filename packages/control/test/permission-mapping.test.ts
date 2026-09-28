@@ -1,5 +1,6 @@
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -12,7 +13,7 @@ import {
   type PermissionProvider,
   type PermissionRunKind,
 } from '@slave-of-ai/domain'
-import { PERMISSION_DENY_REASON_PREFIX } from '@slave-of-ai/providers'
+import { PERMISSION_DENY_REASON_PREFIX, parsePermissionDenyReason } from '@slave-of-ai/providers'
 import { writePermissionsFile } from '../src/permission.js'
 
 const PROVIDERS = ['claude_code', 'cursor'] as const
@@ -95,7 +96,10 @@ function write(
   taskGrants?: readonly string[],
 ): { readonly verdict: Verdict; readonly path: string } {
   const runDir = mkdtempSync(join(tmpdir(), 'slaveofai-permissions-v2-'))
-  const path = writePermissionsFile(runDir, { rows, provider, runKind, runId: 'run-1', runToken: TOKEN, taskGrants })
+  // Conductor Plan 4b fix round 1 (V1): a verification file cannot be written without the rule
+  // that owns nothing, so the helper supplies it for that kind alone.
+  const ownership = runKind === 'verification' ? { worktreeRoot: '/w', owned: [], excluded: [] } : undefined
+  const path = writePermissionsFile(runDir, { rows, provider, runKind, runId: 'run-1', runToken: TOKEN, taskGrants, ownership })
   return { verdict: JSON.parse(readFileSync(path, 'utf8')) as Verdict, path }
 }
 
@@ -303,9 +307,132 @@ describe('writePermissionsFile: ownership (Task 2)', () => {
     expect(verdict.ownership).toEqual(ownership)
   })
 
+  // Conductor Plan 4b fix round 1 (V1): `write_repo` is in the verification baseline, so a
+  // verification file with no owns-nothing rule would let the verifier write the repository. The
+  // one writer refuses to produce one -- fail closed, not a comment.
+  describe('a verification file must carry the owns-nothing rule (fix round 1, V1)', () => {
+    function writeVerification(ownership: Parameters<typeof writePermissionsFile>[1]['ownership']): string {
+      const runDir = mkdtempSync(join(tmpdir(), 'slaveofai-permissions-v2-'))
+      return writePermissionsFile(runDir, {
+        rows: [],
+        provider: 'claude_code',
+        runKind: 'verification',
+        runId: 'run-1',
+        runToken: TOKEN,
+        ownership,
+      })
+    }
+
+    it('throws when a verification run is written with no ownership rule', () => {
+      expect(() => writeVerification(undefined)).toThrow(/verification/)
+    })
+
+    it('throws when the rule owns something', () => {
+      expect(() => writeVerification({ worktreeRoot: '/w', owned: ['^src/.*$'], excluded: [] })).toThrow(/verification/)
+    })
+
+    it('throws when the rule owns everything (owned: null)', () => {
+      expect(() => writeVerification({ worktreeRoot: '/w', owned: null, excluded: [] })).toThrow(/verification/)
+    })
+
+    it('throws when the rule excludes something', () => {
+      expect(() => writeVerification({ worktreeRoot: '/w', owned: [], excluded: ['^x$'] })).toThrow(/verification/)
+    })
+
+    it('throws when the rule is not rooted at an absolute worktree path', () => {
+      expect(() => writeVerification({ worktreeRoot: 'w', owned: [], excluded: [] })).toThrow(/verification/)
+    })
+
+    it('writes the file with the owns-nothing rule', () => {
+      const verdict = JSON.parse(readFileSync(writeVerification({ worktreeRoot: '/w', owned: [], excluded: [] }), 'utf8')) as Verdict
+      expect(verdict.ownership).toEqual({ worktreeRoot: '/w', owned: [], excluded: [] })
+    })
+  })
+
   it('leaves the ownership key absent entirely when the caller passes none', () => {
     const { verdict } = write([], 'claude_code')
     expect('ownership' in verdict).toBe(false)
+  })
+})
+
+/**
+ * Conductor Plan 4b fix round 1: the two halves together. The verdict `writePermissionsFile`
+ * really writes for a verification run, fed to the real `scripts/pause-gate.sh` (the hook plane,
+ * unchanged by 4b) -- so the confinement is proven end to end, not as a writer test here and a
+ * hand-built file in `permissions-lib.test.ts`.
+ */
+describe('a verification run\u2019s real verdict through the real gate (fix round 1)', () => {
+  const WORKTREE = '/w'
+
+  function gate(runDir: string, payload: object): { readonly stdout: string; readonly code: number | null } {
+    const result = spawnSync('scripts/pause-gate.sh', [], {
+      input: JSON.stringify(payload),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        // Not paused: the flag path names nothing, so only the permission matrix decides.
+        SLAVEOFAI_PAUSE_FLAG: join(runDir, 'pause.flag'),
+        SLAVEOFAI_PERMISSIONS_FILE: join(runDir, 'permissions.json'),
+        SLAVEOFAI_RUN_TOKEN: TOKEN,
+      },
+    })
+    return { stdout: result.stdout, code: result.status }
+  }
+
+  function verificationRunDir(): string {
+    const runDir = mkdtempSync(join(tmpdir(), 'slaveofai-verification-gate-'))
+    writePermissionsFile(runDir, {
+      rows: [],
+      provider: 'claude_code',
+      runKind: 'verification',
+      runId: 'run-1',
+      runToken: TOKEN,
+      ownership: { worktreeRoot: WORKTREE, owned: [], excluded: [] },
+    })
+    return runDir
+  }
+
+  it('denies a Write into the verification worktree, as foreign_file', () => {
+    const runDir = verificationRunDir()
+    try {
+      const { stdout, code } = gate(runDir, { tool_name: 'Write', tool_input: { file_path: `${WORKTREE}/src/a.py` } })
+      expect(code).toBe(0)
+      const parsed = JSON.parse(stdout) as {
+        hookSpecificOutput: { permissionDecision: string; permissionDecisionReason: string }
+      }
+      expect(parsed.hookSpecificOutput.permissionDecision).toBe('deny')
+      expect(parsePermissionDenyReason(parsed.hookSpecificOutput.permissionDecisionReason)).toEqual({
+        tool: 'Write',
+        capability: 'foreign_file',
+      })
+    } finally {
+      rmSync(runDir, { recursive: true, force: true })
+    }
+  })
+
+  it('allows a Write into the scratch directory, outside the worktree', () => {
+    const runDir = verificationRunDir()
+    try {
+      const { stdout, code } = gate(runDir, {
+        tool_name: 'Write',
+        tool_input: { file_path: join(runDir, 'verify', 'check.sh') },
+      })
+      expect(code).toBe(0)
+      expect(stdout).toBe('')
+    } finally {
+      rmSync(runDir, { recursive: true, force: true })
+    }
+  })
+
+  it('allows Bash', () => {
+    const runDir = verificationRunDir()
+    try {
+      const { stdout, code } = gate(runDir, { tool_name: 'Bash', tool_input: { command: 'true' } })
+      expect(code).toBe(0)
+      expect(stdout).toBe('')
+    } finally {
+      rmSync(runDir, { recursive: true, force: true })
+    }
   })
 })
 
