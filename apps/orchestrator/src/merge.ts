@@ -27,14 +27,14 @@ import { gitIn } from './worktree.js'
  */
 const taskKeyFor = (id: string): string => `T-${id.slice(0, 8)}`
 
+/** A thrown value as the text a `task.merge_failed` reason carries, cut to what a payload holds. */
+const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error)).slice(0, 2000)
+
 /**
  * The branch a task was worked on. `Task.branch` is nullable in the schema, but a task cannot
  * reach `merging` without having passed verify once (`advance()` sets it there), so a `null` here
  * is a caller bug -- surfaced loudly rather than merging a task onto no branch at all.
  */
-/** A thrown value as the text a `task.merge_failed` reason carries, cut to what a payload holds. */
-const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error)).slice(0, 2000)
-
 function requireBranch(task: { readonly id: string; readonly branch: string | null }): string {
   if (task.branch === null) {
     throw new Error(`task ${task.id} reached the merge pass with no branch recorded`)

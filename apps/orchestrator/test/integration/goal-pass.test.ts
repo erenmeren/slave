@@ -326,6 +326,64 @@ describe('runGoalPass', () => {
     expect((await delivery(f)).mergedAt).toBeNull()
   })
 
+  it('never accepts a version while one of its packages is blocked', async (): Promise<void> => {
+    const f = await seed()
+    await integrate(f.taskIds[0])
+    await prisma.task.update({ where: { id: f.taskIds[1] }, data: { status: 'blocked' } })
+
+    await pass(f)
+    await pass(f)
+
+    expect((await delivery(f)).status).toBe('integrating')
+    expect(await goalEvents(f.workspaceId)).toEqual([])
+  })
+
+  it('finishes a merge a crash interrupted after the fast-forward: stamped and announced, no false "base moved" trip', async (): Promise<void> => {
+    const f = await seed()
+    await integrateAll(f)
+    await acceptGoal(f.deliveryId, 0)
+    // The fast-forward happened; the daemon died before `mergedAt` was written.
+    git(['merge', '-q', '--ff-only', f.branch], f.repoPath)
+    const mainTip = git(['rev-parse', 'main'], f.repoPath)
+
+    await pass(f)
+    await pass(f)
+
+    const row = await delivery(f)
+    expect(row.mergedAt).not.toBeNull()
+    expect(row.mergeError).toBeNull()
+    expect(await goalEvents(f.workspaceId)).toEqual([
+      { type: 'workspace.goal_accepted', payload: { version: 1, rounds: 0 } },
+      { type: 'workspace.goal_merged', payload: { version: 1, branch: f.branch, into: 'main', commit: mainTip, by: 'system' } },
+    ])
+    expect(await mergeTrips(f.workspaceId)).toEqual([])
+    expect(existsSync(f.integrationPath)).toBe(false)
+    for (const runId of f.runIds) {
+      expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId } })).integrated).toBe(true)
+    }
+  })
+
+  it('announces and settles a merge whose stamp landed but whose event a crash lost, exactly once', async (): Promise<void> => {
+    const f = await seed()
+    await integrateAll(f)
+    git(['merge', '-q', '--ff-only', f.branch], f.repoPath)
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'accepted', acceptedAt: new Date(), mergedAt: new Date() } })
+
+    await pass(f)
+    await pass(f)
+
+    const merged = (await goalEvents(f.workspaceId)).filter((event) => event.type === 'workspace.goal_merged')
+    expect(merged).toEqual([
+      {
+        type: 'workspace.goal_merged',
+        payload: { version: 1, branch: f.branch, into: 'main', commit: git(['rev-parse', f.branch], f.repoPath), by: 'system' },
+      },
+    ])
+    for (const runId of f.runIds) {
+      expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId } })).integrated).toBe(true)
+    }
+  })
+
   it('removes the integration worktree a confirmed hand merge left behind, and keeps the branch', async (): Promise<void> => {
     const f = await seed()
     await integrateAll(f)
@@ -337,7 +395,8 @@ describe('runGoalPass', () => {
 
     expect(existsSync(integrationWorktreePath(f.repoPath, 1, f.workspaceId))).toBe(false)
     expect(git(['rev-parse', f.branch], f.repoPath)).toBe(tip)
-    expect(await goalEvents(f.workspaceId)).toEqual([])
+    // No `goal_merged` existed for the stamp, so the pass writes the one it recovers (fix round 1).
+    expect((await goalEvents(f.workspaceId)).map((event) => event.type)).toEqual(['workspace.goal_merged'])
   })
 })
 
