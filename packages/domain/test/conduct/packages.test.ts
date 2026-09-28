@@ -91,6 +91,20 @@ describe('validateConduct', () => {
     }, context)
     expect(plan.ok && plan.value.packages.find((p) => p.isIntegration)?.dependsOn).toEqual(['report'])
   })
+
+  /** Final review I4: integration is rewritten to depend on every other package, so a package that
+   *  depends on it would make a cycle neither task could start from. */
+  it('refuses a package that depends on the integration package, and never returns a cyclic plan', () => {
+    const plan = validateConduct({
+      mode: 'partitioned', reason: 'r',
+      packages: [
+        pkg({ dependsOn: [INTEGRATION_PACKAGE_KEY] }),
+        pkg({ key: INTEGRATION_PACKAGE_KEY, requirementKeys: ['R2', 'R3'], ownedPaths: ['src/cli.py'] }),
+      ],
+    }, context)
+    expect(plan.ok).toBe(false)
+    expect(!plan.ok && plan.error).toContain(`package "report": dependsOn "${INTEGRATION_PACKAGE_KEY}" is not allowed`)
+  })
 })
 
 describe('parseConductAnswer', () => {

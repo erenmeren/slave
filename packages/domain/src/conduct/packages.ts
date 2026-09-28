@@ -153,14 +153,18 @@ export function validateConduct(answer: unknown, context: ConductContext): Resul
       if (!isValidOwnedGlob(glob)) problems.push(`package "${p.key}": "${glob}" is not a repository-relative path`)
     }
     for (const dep of p.dependsOn) {
-      if (!keys.includes(dep) || dep === p.key) problems.push(`package "${p.key}": dependsOn "${dep}" names no other package`)
+      // Integration is made to depend on every other package below, so the reverse edge is always
+      // a cycle (final review I4) -- refused by name, since "a cycle" alone would not say which.
+      if (dep === INTEGRATION_PACKAGE_KEY && p.key !== INTEGRATION_PACKAGE_KEY) {
+        problems.push(`package "${p.key}": dependsOn "${INTEGRATION_PACKAGE_KEY}" is not allowed -- the integration package depends on every other package, never the other way round`)
+      } else if (!keys.includes(dep) || dep === p.key) {
+        problems.push(`package "${p.key}": dependsOn "${dep}" names no other package`)
+      }
     }
     for (const path of p.newPaths) {
       if (!p.ownedPaths.some((g) => globToRegExp(g).test(path))) problems.push(`package "${p.key}": new path "${path}" is not inside its own ownedPaths`)
     }
   }
-  if (hasCycle(value.packages)) problems.push('the packages\' dependsOn form a cycle')
-
   const owners = new Map<string, string[]>()
   for (const p of value.packages) for (const r of p.requirementKeys) owners.set(r, [...(owners.get(r) ?? []), p.key])
   for (const r of context.requirementKeys) {
@@ -180,8 +184,6 @@ export function validateConduct(answer: unknown, context: ConductContext): Resul
     if (matching.length > 1 && clashes.length < 10) clashes.push(`${path} (${matching.join(', ')})`)
   }
   if (clashes.length > 0) problems.push(`two packages own the same file: ${clashes.join('; ')}`)
-
-  if (problems.length > 0) return err(problems.join('; '))
 
   const named = value.packages.find((p) => p.key === INTEGRATION_PACKAGE_KEY)
   const others = value.packages.filter((p) => p.key !== INTEGRATION_PACKAGE_KEY).map((p) => p.key)
@@ -206,5 +208,9 @@ export function validateConduct(answer: unknown, context: ConductContext): Resul
         : value.packages[0]?.templateId ?? '',
     })
   }
+  // On the graph as it will be WRITTEN, after the integration rewrite: checked on the answer as
+  // given, a cycle through the rewritten edges slipped through and neither task could ever start.
+  if (hasCycle(packages)) problems.push('the packages\' dependsOn form a cycle')
+  if (problems.length > 0) return err(problems.join('; '))
   return ok({ mode: 'partitioned', reason: value.reason, packages })
 }
