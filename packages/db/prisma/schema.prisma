@@ -1135,6 +1135,8 @@ model Task {
   /// `status` so a dependent is never provisioned from `baseBranch` while its dependency's
   /// commits are still sitting on an unmerged branch; `confirmIntegration`
   /// (`packages/control/src/integration.ts`) is the only other writer, for the human-merge case.
+  /// Conductor Plan 4a (D4): on a package task of a goal version with a `GoalDelivery`, when it was
+  /// merged into that version's integration branch.
   integratedAt        DateTime?
   createdBy           Actor      @default(human)
   /// M40 §1: the goal version the PLAN that produced this task derived from -- provenance, not a

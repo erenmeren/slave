@@ -1,5 +1,8 @@
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
-import { gitIn } from './worktree.js'
+import { integrationWorktreeKey } from '@slave-of-ai/domain'
+import { gitIn, worktreeRootFor } from './worktree.js'
 
 /**
  * Cuts a conducted goal version's integration branch from the base branch (spec R9), or reuses it.
@@ -59,4 +62,38 @@ export async function integrationTargetFor(taskId: string): Promise<IntegrationT
 /** The ref a task's work is measured from: its integration branch, else the workspace's base branch. */
 export async function baseRefFor(taskId: string, baseBranch: string): Promise<string> {
   return (await integrationTargetFor(taskId))?.branch ?? baseBranch
+}
+
+/**
+ * Where the worktree kept on a goal version's integration branch lives (plan D2): outside the
+ * repository, beside the task worktrees (`worktreeRootFor`). The one spelling of that path, for the
+ * code that creates it and the code that will remove it.
+ */
+export function integrationWorktreePath(repoPath: string, goalVersion: number, workspaceId: string): string {
+  return join(worktreeRootFor(repoPath), integrationWorktreeKey(goalVersion, workspaceId))
+}
+
+/**
+ * The worktree the merge pass keeps checked out on a goal version's integration branch (plan D2):
+ * package merges land here, never in the person's primary checkout. Created when missing (after a
+ * `worktree prune`, so a directory somebody deleted does not leave a registration `worktree add`
+ * refuses); otherwise it must be registered on exactly that branch -- line equality, as
+ * `adoptWorktree` checks it, so a longer-named branch is not mistaken for this one. A merge a crash
+ * interrupted is aborted first: nothing else ever writes here, so an in-progress merge can only be
+ * this pass's own.
+ */
+export async function ensureIntegrationWorktree(repoPath: string, target: IntegrationTarget, workspaceId: string): Promise<string> {
+  const path = integrationWorktreePath(repoPath, target.goalVersion, workspaceId)
+  if (!existsSync(path)) {
+    await gitIn(repoPath, 'worktree', 'prune')
+    await gitIn(repoPath, 'worktree', 'add', path, target.branch)
+    return path
+  }
+  const records = (await gitIn(repoPath, 'worktree', 'list', '--porcelain')).split('\n\n')
+  const registered = records.find((record) => record.startsWith(`worktree ${path}\n`))
+  if (registered === undefined || !registered.split('\n').includes(`branch refs/heads/${target.branch}`)) {
+    throw new Error(`${path} is not a worktree of ${repoPath} on ${target.branch}`)
+  }
+  await gitIn(path, 'merge', '--abort').catch(() => {})
+  return path
 }

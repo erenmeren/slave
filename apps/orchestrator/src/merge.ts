@@ -10,6 +10,7 @@ import {
   type WorkspaceId,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { ensureIntegrationWorktree, integrationTargetFor } from './goalBranch.js'
 import { ownershipRuleForTask } from './ownership.js'
 import { logSetAside, setAsideDirFor, setAsideForeignChanges } from './setAside.js'
 import { rejectTask, runVerify, stageGatesFor } from './verify.js'
@@ -38,8 +39,13 @@ function requireBranch(task: { readonly id: string; readonly branch: string | nu
 }
 
 /**
- * Emits `task.merge_failed`, escalates a second failure on the same task into a workspace halt
- * (spec §4 step 4), and either way sends the task back to rework and releases the merge claim.
+ * Emits `task.merge_failed`, escalates a second failure on the same task, and otherwise sends the
+ * task back to rework and releases the merge claim.
+ *
+ * The escalation depends on where the task was merging (Conductor Plan 4a, D7). A task with no
+ * integration target (planned delivery, or a package of a version from before goal deliveries)
+ * halts the workspace (spec §4 step 4), and still goes back to rework. A package of a goal version
+ * is blocked alone (spec §5): the task goes `blocked`, a person is told, and the workspace goes on.
  *
  * The escalation check counts this task's `task.merge_failed` events *after* appending the current
  * one: a count greater than one means a prior failure already existed, without a separate
@@ -62,13 +68,19 @@ async function failMerge(input: {
    * so a workspace with no verify commands would mark down every worker whose task reached this
    * pass.
    *
-   * Required rather than defaulted: the FOUR callers are the whole question, and a default is how
+   * Required rather than defaulted: the callers are the whole question, and a default is how
    * a fifth one would get it wrong silently.
    *
    * A JUDGEMENT IS NOT YET A VERDICT (erratum E24, final wave): being judged is necessary for
    * `integrated: false` and no longer sufficient -- see the settle below.
    */
   readonly judged: boolean
+  /**
+   * Conductor Plan 4a (D7): the goal version whose integration branch this task was merging into,
+   * or `null` when it was merging into the base branch. A version decides how a second failure
+   * escalates, and names the version in what the person reads.
+   */
+  readonly goalVersion: number | null
 }): Promise<void> {
   await appendEvent({
     type: 'task.merge_failed',
@@ -81,7 +93,33 @@ async function failMerge(input: {
   const failureCount = await prisma.executionEvent.count({
     where: { taskId: input.taskId, type: 'task_merge_failed' },
   })
-  if (failureCount > 1) {
+  if (input.goalVersion !== null) {
+    if (failureCount > 1) {
+      // Spec §5: a conducted workspace is not halted by one package that will not merge. The
+      // package is escalated alone -- `blocked` is "a person must look at this" (`unblock-task`
+      // leaves it; the Supervisor's `task_blocked_human` picks it up) -- and every other package
+      // keeps going. No attempt is charged: the person, not another run, decides what happens next.
+      // Conditioned on `merging`, like every claim release here: a task something else moved on
+      // is not dragged back.
+      await prisma.task.updateMany({
+        where: { id: input.taskId, status: 'merging' },
+        data: { status: 'blocked', mergeClaimedAt: null, lastRejectionReason: input.reason },
+      })
+      await appendEvent({
+        type: 'guardrail.tripped',
+        workspaceId: input.workspaceId,
+        taskId: input.taskId,
+        actor: 'system',
+        payload: {
+          guardrail: 'merge_failure' satisfies GuardrailKind,
+          detail:
+            `package task ${input.taskKey} failed to merge into goal v${String(input.goalVersion)}'s ` +
+            `integration branch twice; blocked for a person: ${input.reason}`,
+        },
+      })
+      return
+    }
+  } else if (failureCount > 1) {
     // Conditioned: the first halt reason stands, matching the halt precedent in `verify.ts`'s
     // `not_configured` path.
     await prisma.workspace.updateMany({
@@ -188,10 +226,24 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
   const branch = requireBranch(task)
   const taskKey = taskKeyFor(task.id)
 
+  // Conductor Plan 4a (spec R9, D5): a package of a goal version with a `GoalDelivery` merges into
+  // that version's integration branch; everything else into the base branch, as before. The same
+  // `integrationTargetFor` dispatch, the ownership audit and review read, so all four judge the
+  // task against one branch (D12).
+  //
+  // Seam for Plan 4a Task 6 (P1): a task whose goal version is abandoned must be refused here,
+  // once the target is known and before anything is rebased or merged.
+  const target = await integrationTargetFor(task.id)
+  const into = target?.branch ?? workspace.baseBranch
+  const goalVersion = target?.goalVersion ?? null
+
   // spec Decision 5: `autoMerge` is consulted here, not at review time -- a workspace that does not
   // trust auto-merge still wants the task marked done and out of the queue, with the branch and
   // worktree left for a human to merge by hand.
-  if (!workspace.autoMerge) {
+  //
+  // Plan 4a D3: only for a merge into the base branch. The integration branch is Slave's staging
+  // area, and `autoMerge` governs the goal version's one final merge into the base branch instead.
+  if (target === null && !workspace.autoMerge) {
     await prisma.task.update({
       where: { id: task.id },
       // M35 t2: no git merge happened here, on purpose -- `integratedAt` stays null (explicit,
@@ -261,6 +313,7 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
             taskKey,
             reason: `could not set aside changes to files this package does not own: ${aside.reason}`,
             judged: false,
+            goalVersion,
           })
           return
         }
@@ -268,7 +321,7 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       }
     }
 
-    await gitIn(worktreePath, 'rebase', workspace.baseBranch)
+    await gitIn(worktreePath, 'rebase', into)
   } catch (error) {
     await gitIn(worktreePath, 'rebase', '--abort').catch(() => {})
     const message = (error instanceof Error ? error.message : String(error)).slice(0, 2000)
@@ -276,12 +329,13 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       taskId: task.id,
       workspaceId,
       taskKey,
-      reason: `rebase onto ${workspace.baseBranch} conflicted: ${message}`,
+      reason: `rebase onto ${into} conflicted: ${message}`,
       // The branch no longer applies to the base branch. That is the work -- so it is JUDGED. It
       // still settles nothing unless this failure spent the task's last attempt (E24): the task
       // goes back to rework, the conflict is resolved and the work merges, and a `false` written
       // here could never be taken back.
       judged: true,
+      goalVersion,
     })
     return
   }
@@ -322,7 +376,45 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
     // for). Even `failed` settles nothing while the task can still be re-done and merged again
     // (E24): a gate that fails once and passes the second time is the ordinary case this rule is
     // about.
-    await failMerge({ taskId: task.id, workspaceId, taskKey, reason, judged: result.kind === 'failed' })
+    await failMerge({ taskId: task.id, workspaceId, taskKey, reason, judged: result.kind === 'failed', goalVersion })
+    return
+  }
+
+  if (target !== null) {
+    // Plan 4a (spec R9, D2): into the goal version's integration branch, in the worktree kept on
+    // it. The primary checkout is neither read nor touched: it is the person's, and the base branch
+    // changes only when the goal version is accepted (spec §5). `--no-ff` and `--no-verify` for the
+    // base-branch merge's reasons below.
+    //
+    // `integrationPath` is hoisted so the catch can abort a merge git left half-done: a conflicted
+    // merge left in this worktree would refuse every later package's merge until the next
+    // `ensureIntegrationWorktree` cleared it.
+    let integrationPath: string | null = null
+    try {
+      integrationPath = await ensureIntegrationWorktree(workspace.repoPath, target, workspaceId)
+      await gitIn(integrationPath, 'merge', '--no-ff', '--no-verify', branch, '-m', `merge(${taskKey}): ${task.title}`)
+    } catch (error) {
+      if (integrationPath !== null) await gitIn(integrationPath, 'merge', '--abort').catch(() => {})
+      const message = (error instanceof Error ? error.message : String(error)).slice(0, 2000)
+      await failMerge({
+        taskId: task.id,
+        workspaceId,
+        taskKey,
+        reason: `merge of ${branch} into ${target.branch} failed: ${message}`,
+        judged: true,
+        goalVersion,
+      })
+      return
+    }
+    // Plan D4: on a package task `integratedAt` means "on its goal's integration branch" -- what
+    // the dependency gate needs, since a dependent package is cut from that branch. The integration
+    // EVIDENCE waits for the final merge into the base branch: that is what "integrated" means in
+    // the ranker.
+    await prisma.task.update({
+      where: { id: task.id },
+      data: { status: 'done', mergeClaimedAt: null, lastRejectionReason: null, integratedAt: new Date() },
+    })
+    await appendEvent({ type: 'task.done', workspaceId, taskId: task.id, actor: 'system', payload: { branch } })
     return
   }
 
@@ -340,6 +432,7 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       // Somebody left the shared repository dirty, or it is on the wrong branch. Nothing here is
       // about the work, and no worker did it.
       judged: false,
+      goalVersion,
     })
     return
   }
@@ -366,6 +459,7 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       // The same class as the rebase above: the branch would not go onto the base branch, and the
       // same E24 rule applies -- `main` moving under a task is not a verdict on the worker.
       judged: true,
+      goalVersion,
     })
     return
   }

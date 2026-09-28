@@ -4,10 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { workspaceId as brandWorkspaceId, taskId as brandTaskId } from '@slave-of-ai/domain'
+import { integrationBranchName, workspaceId as brandWorkspaceId, taskId as brandTaskId } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { addRunbook, adoptRunbook, confirmIntegration, recordRunEvidence, settleTaskEvidence } from '@slave-of-ai/control'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { ensureIntegrationBranch, ensureIntegrationWorktree, integrationWorktreePath, type IntegrationTarget } from '../../src/goalBranch.js'
 import { runMergePass } from '../../src/merge.js'
 import { loadWorld } from '../../src/world.js'
 import { provisionWorktree } from '../../src/worktree.js'
@@ -1050,5 +1051,189 @@ describe('integration settles only where work actually reached the base branch (
     const row = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRunId } })
     expect(row.integrated).toBe(true)
     expect(row.settledAt).toEqual(first.settledAt)
+  })
+})
+
+/**
+ * Conductor Plan 4a, Task 4 (spec R9, §5; plan D2, D3, D4, D7): a package task of a goal version
+ * with a `GoalDelivery` merges into that version's integration branch, in the worktree kept on it,
+ * whatever `autoMerge` says -- never into the base branch, never in the person's primary checkout.
+ * A second merge failure blocks that package alone; the workspace keeps going.
+ */
+describe('into the integration branch', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  afterAll(async (): Promise<void> => {
+    for (const repo of repos) {
+      rmSync(`${repo}-slaveofai-worktrees`, { recursive: true, force: true })
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  /** Goal version 1's integration branch and delivery row, exactly as the conductor leaves them. */
+  async function deliver(workspace: Workspace): Promise<IntegrationTarget> {
+    const branch = integrationBranchName(1, workspace.id)
+    const { baseCommit } = await ensureIntegrationBranch(workspace.repoPath, 'main', branch)
+    const delivery = await prisma.goalDelivery.create({
+      data: { workspaceId: workspace.id, goalVersion: 1, integrationBranch: branch, baseCommit },
+    })
+    return { deliveryId: delivery.id, goalVersion: 1, branch }
+  }
+
+  /** Makes a seeded task a package task of goal version 1. */
+  async function packageTask(workspace: Workspace, taskId: string, key: string): Promise<void> {
+    const pkg = await prisma.workPackage.create({
+      data: {
+        workspaceId: workspace.id,
+        goalVersion: 1,
+        key,
+        title: key,
+        requirementKeys: ['R1'],
+        ownedPaths: ['**'],
+        interface: '',
+        templateId: 'tpl',
+      },
+    })
+    await prisma.task.update({ where: { id: taskId }, data: { workPackageId: pkg.id, goalVersion: 1 } })
+  }
+
+  /** Commits `file` onto `branch` from a scratch worktree, leaving the primary checkout alone. */
+  function commitOnto(repo: string, branch: string, file: string, content: string): void {
+    const dir = join(mkdtempSync(join(tmpdir(), 'slaveofai-merge-scratch-')), 'tree')
+    git(['worktree', 'add', '-q', dir, branch], repo)
+    writeFileSync(join(dir, file), content)
+    git(['add', '-A'], dir)
+    git(['commit', '-q', '-m', `add ${file}`], dir)
+    git(['worktree', 'remove', '--force', dir], repo)
+  }
+
+  const isAncestor = (repo: string, ancestor: string, of: string): boolean => {
+    try {
+      git(['merge-base', '--is-ancestor', ancestor, of], repo)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  it('merges a package into its integration branch with autoMerge off, and leaves main and the checkout alone', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    const target = await deliver(workspace)
+    const { taskId, branch } = await seedMergingTask(workspace)
+    await packageTask(workspace, taskId, 'feature')
+    const implRun = await prisma.slaveRun.findFirstOrThrow({ where: { taskId, kind: 'implementation' } })
+    await recordRunEvidence(implRun.id)
+    const mainBefore = git(['rev-parse', 'main'], workspace.repoPath)
+    const headBefore = git(['rev-parse', '--abbrev-ref', 'HEAD'], workspace.repoPath)
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+    expect(task.status).toBe('done')
+    expect(task.integratedAt).not.toBeNull()
+    expect(task.mergeClaimedAt).toBeNull()
+    expect(isAncestor(workspace.repoPath, branch, target.branch)).toBe(true)
+    expect(isAncestor(workspace.repoPath, branch, 'main')).toBe(false)
+    expect(git(['rev-parse', 'main'], workspace.repoPath)).toBe(mainBefore)
+    expect(git(['rev-parse', '--abbrev-ref', 'HEAD'], workspace.repoPath)).toBe(headBefore)
+    expect(git(['status', '--porcelain'], workspace.repoPath)).toBe('')
+    // Plan D4: the integration EVIDENCE waits for the final merge into the base branch.
+    expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRun.id } })).integrated).toBeNull()
+    // The integration worktree is the one helper's path, checked out on the integration branch.
+    const path = integrationWorktreePath(workspace.repoPath, 1, workspace.id)
+    expect(git(['rev-parse', '--abbrev-ref', 'HEAD'], path)).toBe(target.branch)
+  })
+
+  it('merges two packages one after another, each with its own merge commit', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: true })
+    const target = await deliver(workspace)
+    const first = await seedMergingTask(workspace, { title: 'First', fileName: 'a.txt', content: 'a\n' })
+    await packageTask(workspace, first.taskId, 'a')
+    const second = await seedMergingTask(workspace, { title: 'Second', fileName: 'b.txt', content: 'b\n' })
+    await packageTask(workspace, second.taskId, 'b')
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: first.taskId } })).status).toBe('done')
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: second.taskId } })).status).toBe('done')
+    expect(isAncestor(workspace.repoPath, first.branch, target.branch)).toBe(true)
+    expect(isAncestor(workspace.repoPath, second.branch, target.branch)).toBe(true)
+    const merges = git(['rev-list', '--merges', `main..${target.branch}`], workspace.repoPath).split('\n').filter((line) => line !== '')
+    expect(merges).toHaveLength(2)
+    expect(mergeCommitSubjects(workspace.repoPath)).toEqual([])
+  })
+
+  it('sends a first conflict back to rework, then blocks only that package on the second', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: true })
+    const target = await deliver(workspace)
+    commitOnto(workspace.repoPath, target.branch, 'a.txt', 'the integration branch says this\n')
+    const { taskId, taskKey } = await seedMergingTask(workspace, { fileName: 'a.txt', content: 'the task says that\n' })
+    await packageTask(workspace, taskId, 'feature')
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const afterFirst = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+    expect(afterFirst.status).toBe('rework')
+    expect(afterFirst.attempt).toBe(1)
+    expect(await eventTypesFor(workspace.id)).toContain('task.merge_failed')
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })).haltedReason).toBeNull()
+
+    await prisma.task.update({ where: { id: taskId }, data: { status: 'merging' } })
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const afterSecond = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+    expect(afterSecond.status).toBe('blocked')
+    expect(afterSecond.mergeClaimedAt).toBeNull()
+    expect(afterSecond.lastRejectionReason).toMatch(/conflicted/u)
+    expect(afterSecond.lastRejectionReason).toContain(target.branch)
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })).haltedReason).toBeNull()
+    const trips = (await prisma.executionEvent.findMany({ where: { workspaceId: workspace.id, type: 'guardrail_tripped' } })).filter(
+      (event) => (event.payload as { guardrail: string }).guardrail === 'merge_failure',
+    )
+    expect(trips).toHaveLength(1)
+    expect(trips[0]?.taskId).toBe(taskId)
+    const detail = (trips[0]?.payload as { detail: string }).detail
+    expect(detail).toContain('goal v1')
+    expect(detail).toContain(taskKey)
+  })
+
+  it('still halts the workspace on a second failure of a planned task (no package)', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: true })
+    await deliver(workspace)
+    const { taskId } = await seedMergingTask(workspace, { fileName: 'README.md', content: 'task version\n' })
+    writeFileSync(join(workspace.repoPath, 'README.md'), 'main version\n')
+    git(['add', '-A'], workspace.repoPath)
+    git(['commit', '-q', '-m', 'diverge main'], workspace.repoPath)
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+    await prisma.task.update({ where: { id: taskId }, data: { status: 'merging' } })
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })).haltedReason).toContain('repeated merge failure')
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('rework')
+  })
+
+  it('aborts a merge a crash left in the integration worktree, then merges the package', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: true })
+    const target = await deliver(workspace)
+    const path = await ensureIntegrationWorktree(workspace.repoPath, target, workspace.id)
+    git(['branch', 'stray', 'main'], workspace.repoPath)
+    commitOnto(workspace.repoPath, 'stray', 'stray.txt', 'half-merged\n')
+    git(['merge', '--no-ff', '--no-commit', 'stray'], path)
+    expect(existsSync(join(git(['rev-parse', '--git-dir'], path), 'MERGE_HEAD'))).toBe(true)
+    const { taskId, branch } = await seedMergingTask(workspace)
+    await packageTask(workspace, taskId, 'feature')
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('done')
+    expect(isAncestor(workspace.repoPath, branch, target.branch)).toBe(true)
+    expect(isAncestor(workspace.repoPath, 'stray', target.branch)).toBe(false)
+    expect(git(['status', '--porcelain'], path)).toBe('')
   })
 })
