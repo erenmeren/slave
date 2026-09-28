@@ -216,6 +216,8 @@ export function world(overrides: Partial<SupervisorWorld> = {}): SupervisorWorld
     goal: null,
     // 0 is "the goal was never set" (M40 §1), which is what `goal: null` above means.
     goalVersion: 0,
+    // Conductor Plan 2: every fixture here is a planner-graph workspace unless a test says otherwise.
+    delivery: 'planned',
     halted: null,
     // R4: no halt has ever been cleared here, so the once-an-hour rule only ever decides in a test
     // that says when the last clear was.

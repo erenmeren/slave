@@ -70,6 +70,22 @@ describe('observe -- planning_stalled', () => {
     expect(observe(w)[0]?.facts).toEqual({ reason: 'no_planner', goalVersion: 1 })
   })
 
+  it('is silent for a conducted workspace, and so is runbook_recommended: no planner ever runs there', () => {
+    const w = world({
+      goal: 'Ship the checkout flow',
+      goalVersion: 1,
+      delivery: 'conducted',
+      slaves: [slave({ runtimeRoles: ['backend'] })],
+      runbooks: [runbook({ key: 'feature-delivery', keywords: ['ship'] })],
+    })
+    const kinds = observe(w).map((situation) => situation.kind)
+    expect(kinds).not.toContain('planning_stalled')
+    expect(kinds).not.toContain('runbook_recommended')
+    // The same world, planned, raises both -- so the silence above is the delivery's doing.
+    const planned = observe({ ...w, delivery: 'planned' }).map((situation) => situation.kind)
+    expect(planned).toEqual(expect.arrayContaining(['planning_stalled', 'runbook_recommended']))
+  })
+
   it('reports cap_spent once the retries against this goal are gone', () => {
     const w = world({
       goal: 'Ship it',

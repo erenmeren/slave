@@ -9,7 +9,10 @@ describe('GUARDRAIL_KINDS', () => {
     //
     // Nineteen since conductor Task 3 (R0): `sweep.ts` also writes `run_stalled`, for a `working`
     // run whose stream went silent with nothing running.
-    expect(GUARDRAIL_KINDS).toHaveLength(19)
+    //
+    // Twenty since Conductor Plan 2: `conductor.ts` writes `conductor_failed` when a conducted goal
+    // version's requirements could not be extracted within the retry cap.
+    expect(GUARDRAIL_KINDS).toHaveLength(20)
     expect(GUARDRAIL_KINDS).toEqual([
       'emergency_stop',
       'concurrency',
@@ -24,6 +27,7 @@ describe('GUARDRAIL_KINDS', () => {
       'pause_gate',
       'permission_mode',
       'no_planner',
+      'conductor_failed',
       'no_reviewer',
       'review_retry_cap_exhausted',
       'merge_failure',

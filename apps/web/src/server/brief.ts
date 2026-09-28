@@ -7,6 +7,7 @@ import {
 } from '@slave-of-ai/db'
 import { workspaceSpend, type WorkspaceSpend } from '@slave-of-ai/control'
 import {
+  CONDUCT_PER_CALL_CAP_USD,
   INTAKE_PER_CALL_CAP_USD,
   NON_TERMINAL_RUN_STATUSES,
   RUN_UNMEASURED_CAP_USD,
@@ -340,14 +341,22 @@ export async function buildProjectBrief(
       // could read below the runs and Supervisor money actually reported for a project a
       // conversation created, which is not what "measured" means. F R2's chat turns join on the
       // same terms and for the same reason (task 4 fix round 1): talking to the Supervisor is
-      // measured spend too.
+      // measured spend too, and so are the conductor's calls (Conductor Plan 2, D6).
       measuredUsd:
-        spend.runsMeasuredUsd + spend.supervisorMeasuredUsd + spend.intakeMeasuredUsd + spend.chatMeasuredUsd,
+        spend.runsMeasuredUsd +
+        spend.supervisorMeasuredUsd +
+        spend.intakeMeasuredUsd +
+        spend.chatMeasuredUsd +
+        spend.conductorMeasuredUsd,
       // The SAME sum under its own name (M51 R5, erratum E13): the tile's `actual` line replaces
       // its `measured` line, and the field is duplicated rather than renamed so nothing that reads
       // `measuredUsd` today has to move.
       actualUsd:
-        spend.runsMeasuredUsd + spend.supervisorMeasuredUsd + spend.intakeMeasuredUsd + spend.chatMeasuredUsd,
+        spend.runsMeasuredUsd +
+        spend.supervisorMeasuredUsd +
+        spend.intakeMeasuredUsd +
+        spend.chatMeasuredUsd +
+        spend.conductorMeasuredUsd,
       // Σ over runs of (reported ?? estimated ?? 0), plus the Supervisor's own measured spend and
       // its capped unmeasured calls, plus the intake's own measured spend and its capped unmeasured
       // calls (M59 R12, fix round 1) -- i.e. `spentUsd` with the holes filled in wherever they can
@@ -362,7 +371,9 @@ export async function buildProjectBrief(
         spend.intakeMeasuredUsd +
         spend.intakeUnmeasuredCalls * INTAKE_PER_CALL_CAP_USD +
         spend.chatMeasuredUsd +
-        spend.chatUnmeasuredTurns * SUPERVISOR_PER_CALL_CAP_USD,
+        spend.chatUnmeasuredTurns * SUPERVISOR_PER_CALL_CAP_USD +
+        spend.conductorMeasuredUsd +
+        spend.conductorUnmeasuredCalls * CONDUCT_PER_CALL_CAP_USD,
       // A DISPLAY figure, computed HERE and never inside `workspaceSpend` (spec R5): charging an
       // unmeasured run would let a budget halt fire on spending nobody measured.
       //
@@ -376,7 +387,11 @@ export async function buildProjectBrief(
       // Two different facts, kept apart: a Supervisor, intake or CONVERSATION call is charged at
       // its cap and is inside `spentUsd`; a RUN nobody measured is in no total at all
       // (`sumSpend`'s own reading).
-      unmeasuredCalls: spend.supervisorUnmeasuredCalls + spend.intakeUnmeasuredCalls + spend.chatUnmeasuredTurns,
+      unmeasuredCalls:
+        spend.supervisorUnmeasuredCalls +
+        spend.intakeUnmeasuredCalls +
+        spend.chatUnmeasuredTurns +
+        spend.conductorUnmeasuredCalls,
       unmeasuredRuns: runSpend.unknownRuns,
       budgetUsd: workspace.budgetUsd,
     },

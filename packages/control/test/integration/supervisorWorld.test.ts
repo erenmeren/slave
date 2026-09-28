@@ -1062,6 +1062,9 @@ describe('workspaceSpend', () => {
       // F R2: nobody has talked to this project's Supervisor either.
       chatMeasuredUsd: 0,
       chatUnmeasuredTurns: 0,
+      // Conductor Plan 2: and no conductor call was made for it.
+      conductorMeasuredUsd: 0,
+      conductorUnmeasuredCalls: 0,
       spentUsd: 1.5 + 0.25 + 2 * SUPERVISOR_PER_CALL_CAP_USD,
     })
   })
@@ -1108,6 +1111,9 @@ describe('workspaceSpend', () => {
       intakeUnmeasuredCalls: 0,
       chatMeasuredUsd: 0,
       chatUnmeasuredTurns: 0,
+      // Conductor Plan 2: and no conductor call was made for it.
+      conductorMeasuredUsd: 0,
+      conductorUnmeasuredCalls: 0,
       spentUsd: 0,
     })
   })

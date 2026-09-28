@@ -944,6 +944,7 @@ export async function loadSupervisorWorld(
           id: true,
           goal: true,
           goalVersion: true,
+          delivery: true,
           supervisorEnabled: true,
           supervisorProfile: true,
           // E R1/R4: the one switch, and the stamp the once-an-hour rule for `clear_halt` is
@@ -1346,6 +1347,7 @@ export async function loadSupervisorWorld(
         now: now.getTime(),
         goal: workspace.goal,
         goalVersion: workspace.goalVersion,
+        delivery: workspace.delivery,
         halted,
         // R4: the stamp the once-an-hour rule reads -- epoch ms, like every other time in the
         // world. Null on a project whose halt has never been cleared, by anybody.

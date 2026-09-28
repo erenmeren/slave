@@ -622,6 +622,9 @@ describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
       // F R2: and nobody has talked to its Supervisor.
       chatMeasuredUsd: 0,
       chatUnmeasuredTurns: 0,
+      // Conductor Plan 2: and no conductor call was made for it.
+      conductorMeasuredUsd: 0,
+      conductorUnmeasuredCalls: 0,
       spentUsd: 2 + 0.25 + 2 * SUPERVISOR_PER_CALL_CAP_USD,
     })
   })

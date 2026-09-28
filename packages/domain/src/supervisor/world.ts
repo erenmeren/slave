@@ -474,6 +474,9 @@ export interface SupervisorWorld {
   /** `Workspace.goalVersion` (M40 §1): which `GoalVersion` the `goal` above IS. 0 means the goal
    *  was never set, which is also the only state in which it is null. */
   readonly goalVersion: number
+  /** `Workspace.delivery` (Conductor Plan 2): `conducted` means the conductor, not the planner,
+   *  turns the goal into work -- so no planning situation is ever raised about it. */
+  readonly delivery: 'conducted' | 'planned'
   /** Non-null while the budget/failure guardrail has halted scheduling. */
   readonly halted: { readonly reason: string } | null
   /**

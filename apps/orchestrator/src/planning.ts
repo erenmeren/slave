@@ -464,6 +464,11 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
   // 1. No goal, nothing to plan toward.
   if (workspace.goal === null) return null
 
+  // 1b. Conductor Plan 2, spec R2: "Planner-graph planning is not dispatched for a conducted
+  // workspace." The conductor (`conductor.ts`) turns its goal into work instead; a planner run on
+  // top would write a second, competing board for the same goal.
+  if (workspace.delivery === 'conducted') return null
+
   // 2. Which of the two planning runs this would be. An EMPTY board is the first plan, unchanged
   // (spec Decision: planning fires at an empty board). A non-empty one gets a run only when the
   // goal has moved past the board that goal produced -- M40 §1's delta re-plan, whose own

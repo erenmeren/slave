@@ -278,6 +278,9 @@ const PLANNING_STALLED_SUMMARY: Record<PlanningStalledReason, (world: Supervisor
  * has nothing to spend a retry on. Exactly one fires, and the next pass names the next one.
  */
 function planningStalledReason(world: SupervisorWorld): PlanningStalledReason | null {
+  // Conductor Plan 2 (spec R2): a conducted workspace is never planned, so its planning cannot
+  // stall -- a `no_planner` here would ask a person to hire a planner nothing will ever dispatch.
+  if (world.delivery === 'conducted') return null
   if (world.goal === null || world.livePlanning) return null
   const boardVersion = world.tasks.reduce((highest, task) => Math.max(highest, task.goalVersion ?? 0), 0)
   if (world.tasks.length > 0 && world.goalVersion <= boardVersion) return null
@@ -362,7 +365,10 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
   // what the next run is asked for. `recommendRunbooks` returns nothing when no keyword is in the
   // goal, and then there is no situation at all: silence beats a proposal about a goal the rules
   // have no opinion on (R5).
-  if (world.goal !== null && world.runbook === null && world.tasks.length === 0) {
+  //
+  // Not for a conducted workspace (Conductor Plan 2): a runbook shapes what the PLANNER is asked
+  // for, and no planner runs there.
+  if (world.delivery !== 'conducted' && world.goal !== null && world.runbook === null && world.tasks.length === 0) {
     const top = recommendRunbooks(world.goal, world.runbooks, rosterCapabilities(world), world.taxonomy)[0]
     if (top !== undefined) {
       add({

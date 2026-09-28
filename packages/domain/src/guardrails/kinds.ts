@@ -50,6 +50,10 @@ export const GUARDRAIL_KINDS = [
   'pause_gate',
   'permission_mode',
   'no_planner',
+  /** Conductor Plan 2: a `conducted` workspace whose goal version the conductor failed to read
+   *  `CONDUCT_RETRY_CAP` times -- the conductor's own `no_planner`, so it sits beside it. A halt:
+   *  a goal the model cannot turn into requirements is a person's to rewrite. */
+  'conductor_failed',
   'no_reviewer',
   'review_retry_cap_exhausted',
   'merge_failure',
@@ -85,6 +89,7 @@ export const GUARDRAIL_LABEL: Record<GuardrailKind, string> = {
   pause_gate: 'Pause gate broken',
   permission_mode: 'Permission mode wrong',
   no_planner: 'Nobody can plan',
+  conductor_failed: 'The conductor could not read the goal',
   no_reviewer: 'Nobody can review',
   review_retry_cap_exhausted: 'Review attempts used up',
   merge_failure: 'Merge failed',
