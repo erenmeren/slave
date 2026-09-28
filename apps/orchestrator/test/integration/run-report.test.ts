@@ -6,11 +6,12 @@ import { fileURLToPath } from 'node:url'
 import { answerQuestion, listPendingQuestions, loadSupervisorWorld } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { CONDUCTOR_ROLE, PACKAGE_WORKER_ROLE, observe, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { CONDUCTOR_ROLE, PACKAGE_WORKER_ROLE, observe, runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import { ClaudeCodeAdapter } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { inboxSection } from '../../src/inbox.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
+import { verifyConcludedRun } from '../../src/verify.js'
 import { worktreeRootFor } from '../../src/worktree.js'
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
@@ -228,6 +229,51 @@ describe('a package run files its report before verify', () => {
     expect(run.status).toBe('failed')
     expect(await prisma.runReport.count()).toBe(0)
     expect(await taskEventTypes(f.taskId)).toContain('task.rework')
+  })
+
+  it('reworks a report that lists one requirement twice, naming the duplicate', async (): Promise<void> => {
+    const duplicated = { ...goodReport, requirements: [...goodReport.requirements, { key: 'R1', status: 'done', evidence: 'again' }] }
+    const f = await seedPackageTask({ report: duplicated })
+    await tickUntil(f, async () => (await taskStatus(f.taskId)) === 'rework')
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })).lastRejectionReason).toContain('R1 is reported 2 times')
+    expect(await prisma.runReport.count()).toBe(0)
+    expect((await prisma.slaveRun.findFirstOrThrow({ where: { taskId: f.taskId } })).status).toBe('failed')
+  })
+
+  /**
+   * Final review I3: the rejection is the run's to make only while the task is still the run's.
+   * The replay here is the crash window between the two writes -- the task rejected, the run not
+   * yet failed -- which a restarted daemon concludes again.
+   */
+  it('charges one attempt when the same conclusion is replayed', async (): Promise<void> => {
+    const f = await seedPackageTask({ report: null })
+    await tickUntil(f, async () => (await taskStatus(f.taskId)) === 'rework')
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: f.taskId } })
+    const after = await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { status: 'succeeded' } })
+
+    await verifyConcludedRun(brandRunId(run.id))
+    const replayed = await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })
+    expect(replayed.attempt).toBe(after.attempt)
+    expect(replayed.status).toBe('rework')
+    expect((await taskEventTypes(f.taskId)).filter((t) => t === 'task.rework')).toHaveLength(1)
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('failed')
+  })
+
+  it('leaves a cancelled task cancelled when a late conclusion has no report', async (): Promise<void> => {
+    const f = await seedPackageTask({ report: null })
+    await tickUntil(f, async () => (await taskStatus(f.taskId)) === 'rework')
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: f.taskId } })
+    // A person cancelled the task while its run's result was still on its way.
+    await prisma.task.update({ where: { id: f.taskId }, data: { status: 'cancelled', activeRunId: null } })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { status: 'succeeded' } })
+    const before = await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })
+
+    await verifyConcludedRun(brandRunId(run.id))
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })
+    expect(task.status).toBe('cancelled')
+    expect(task.attempt).toBe(before.attempt)
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('failed')
   })
 
   it('fails the task at the attempt cap, and says so with task.failed', async (): Promise<void> => {
