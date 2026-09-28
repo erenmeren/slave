@@ -737,6 +737,60 @@ function WorkspaceConductedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+/** Conductor Plan 4a: a goal version waiting for an earlier one to reach the base branch. */
+function WorkspaceGoalWaitingCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; waitingOn: number | null }
+  const on = payload.waitingOn === null ? 'the work already on the board' : `goal v${String(payload.waitingOn)} to be merged`
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label={`goal v${String(payload.version)} waits for ${on}`} />
+    </ActivityCard>
+  )
+}
+
+/** Conductor Plan 4a: every package of a goal version integrated (4b: every requirement verified).
+ *  `working` tone, the same tone `task.done`'s card uses -- this file's `TRANSITION_COLOR` has no
+ *  `success` (controller ruling P3). */
+function WorkspaceGoalAcceptedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; rounds: number }
+  const rounds = payload.rounds === 0 ? '' : ` after ${plural(payload.rounds, 'verification round')}`
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="working" label={`goal v${String(payload.version)} accepted${rounds}`} />
+    </ActivityCard>
+  )
+}
+
+/** Conductor Plan 4a: a goal version's integration branch reached the base branch. `working` tone,
+ *  the same tone `task.done`'s card uses -- this file's `TRANSITION_COLOR` has no `success`
+ *  (controller ruling P3). */
+function WorkspaceGoalMergedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; into: string; commit: string; by: 'system' | 'human' }
+  return (
+    <ActivityCard {...props}>
+      <Transition
+        tone="working"
+        label={`goal v${String(payload.version)} merged into ${payload.into}${payload.by === 'human' ? ' by hand' : ''}`}
+      >
+        <span data-testid="goal-merged-commit">{payload.commit.slice(0, 12)}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+/** Conductor Plan 4a: the person moved on from a goal version. */
+function WorkspaceGoalAbandonedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; cancelled: readonly string[] }
+  return (
+    <ActivityCard {...props}>
+      <Transition
+        tone="idle"
+        label={`goal v${String(payload.version)} abandoned; ${plural(payload.cancelled.length, 'unfinished package')} cancelled`}
+      />
+    </ActivityCard>
+  )
+}
+
 /**
  * A task taken off the board (M40 §4) -- by a human, or by a human approving the Supervisor's
  * `cancel_task` proposal.
@@ -1596,6 +1650,10 @@ export const ACTIVITY_CARDS = {
   'workspace.goal_set': WorkspaceGoalSetCard,
   'workspace.requirements_set': WorkspaceRequirementsSetCard,
   'workspace.conducted': WorkspaceConductedCard,
+  'workspace.goal_waiting': WorkspaceGoalWaitingCard,
+  'workspace.goal_accepted': WorkspaceGoalAcceptedCard,
+  'workspace.goal_merged': WorkspaceGoalMergedCard,
+  'workspace.goal_abandoned': WorkspaceGoalAbandonedCard,
   'workspace.plan_created': WorkspacePlanCreatedCard,
   'workspace.replan_started': WorkspaceReplanStartedCard,
   'workspace.replanned': WorkspaceReplannedCard,

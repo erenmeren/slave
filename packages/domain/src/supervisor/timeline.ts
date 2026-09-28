@@ -65,6 +65,9 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   // Conductor R2/R3: the size decision recorded and its packages materialised as tasks -- the
   // conductor's own `workspace.plan_created`.
   'workspace.conducted': 'plan_change',
+  // Conductor Plan 4a (plan D10): the person moved on from a goal version -- a plan change, the
+  // same lane `workspace.conducted` sits on.
+  'workspace.goal_abandoned': 'plan_change',
   // M48: how the work will be done changed. Not `user_request` even when a person adopted it --
   // what changed is the plan's shape, and `laneFor`'s actor override exists only for task creation.
   'workspace.runbook_adopted': 'plan_change',
@@ -108,12 +111,20 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   'task.review_approved': 'verified',
   'task.done': 'verified',
   'task.integrated': 'verified',
+  // Conductor Plan 4a: the version's gate passed (4a: every package integrated) and, once merged,
+  // its integration branch reached the base branch -- both a verified result, the same lane
+  // `task.verify_passed` and `task.integrated` sit on.
+  'workspace.goal_accepted': 'verified',
+  'workspace.goal_merged': 'verified',
   // Everything else: real, kept, and not on this timeline.
   // H4a: a planning reset is `supervisor.applied`'s own story -- the Supervisor gave the planner
   // its attempts back, and that event is already on the `decision` lane above. A second line saying
   // the same thing would double the entry, which is the reason `supervisor.proposed` and
   // `supervisor.decided` are off this timeline too.
   'workspace.planning_reset': null,
+  // Conductor Plan 4a (plan D6): the wait itself is not news on this timeline -- its card is in
+  // the Home feed (P7), and the timeline already carries the acceptance/merge/abandon that ends it.
+  'workspace.goal_waiting': null,
   'task.rework': null,
   'task.failed': null,
   'task.verify_failed': null,

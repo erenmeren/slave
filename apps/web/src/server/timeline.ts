@@ -292,6 +292,20 @@ function titleFor(
       const what = mode === 'partitioned' ? `partitioned into ${packages.length} package${packages.length === 1 ? '' : 's'}` : 'kept as a single package'
       return `conducted goal v${v}: ${what}`
     }
+    // Conductor Plan 4a: a goal version's gate passed, and its branch reached the base branch.
+    case 'workspace.goal_accepted': {
+      const version = payload['version']
+      return `accepted goal v${typeof version === 'number' ? String(version) : '?'}`
+    }
+    case 'workspace.goal_merged': {
+      const version = payload['version']
+      const into = payload['into']
+      return `merged goal v${typeof version === 'number' ? String(version) : '?'} into ${typeof into === 'string' ? into : 'the base branch'}`
+    }
+    case 'workspace.goal_abandoned': {
+      const version = payload['version']
+      return `abandoned goal v${typeof version === 'number' ? String(version) : '?'}`
+    }
     // M48 R5/R7: a runbook adopted, or stopped. The payload's `title` is not a field this event
     // carries, so without a case of its own it would read as its own type name on the PLAN CHANGE
     // lane -- and this is the one entry that says how the project decided to work.

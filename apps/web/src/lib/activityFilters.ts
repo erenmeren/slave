@@ -99,6 +99,12 @@ export const TYPES_BY_KIND = {
     // `workspace.plan_created` sit under -- neither carries a taskId or a runId.
     'workspace.requirements_set',
     'workspace.conducted',
+    // Conductor Plan 4a (spec R9): a goal version's delivery -- waiting, accepted, merged or
+    // abandoned -- is workspace lifecycle, the same chip `workspace.conducted` sits under.
+    'workspace.goal_waiting',
+    'workspace.goal_accepted',
+    'workspace.goal_merged',
+    'workspace.goal_abandoned',
     'workspace.plan_created',
     // M40 t1: a goal change on a non-empty board starts a delta re-plan, and both ends of that are
     // workspace lifecycle for the same reason `workspace.plan_created` is -- neither carries a

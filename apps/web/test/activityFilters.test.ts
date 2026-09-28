@@ -95,7 +95,13 @@ describe('parseActivityFilters', () => {
       // decision, beside `workspace.goal_set` and `workspace.plan_created`.
       'workspace.conducted',
       'workspace.created',
+      // Conductor Plan 4a (spec R9): a goal version's delivery -- waiting, accepted, merged or
+      // abandoned -- beside `workspace.conducted`.
+      'workspace.goal_abandoned',
+      'workspace.goal_accepted',
+      'workspace.goal_merged',
       'workspace.goal_set',
+      'workspace.goal_waiting',
       'workspace.plan_created',
       // H4a: the planning retry cap given back for one goal version, beside the re-plan pair.
       'workspace.planning_reset',

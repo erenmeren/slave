@@ -1241,11 +1241,13 @@ try {
   // change that bumps one still fails here. Conductor Plan 2 added the `conduct` situation and
   // action, and two events: `workspace.requirements_set` and `workspace.conducted`; its final
   // review the `package_seat_lost` situation. Conductor Plan 3 added the `foreign_file` situation and
-  // one event, `task.ownership_violated`.
+  // one event, `task.ownership_violated`. Conductor Plan 4a added four events:
+  // `workspace.goal_waiting`, `workspace.goal_accepted`, `workspace.goal_merged`,
+  // `workspace.goal_abandoned`.
   if (SITUATION_KINDS.length !== 22) await fail(`stage 12: SITUATION_KINDS is ${SITUATION_KINDS.length}, expected twenty-two`)
   if (ACTION_KINDS.length !== 25) await fail(`stage 12: ACTION_KINDS is ${ACTION_KINDS.length}, expected twenty-five`)
-  if (Object.keys(LANE_BY_TYPE).length !== 65) {
-    await fail(`stage 12: LANE_BY_TYPE holds ${Object.keys(LANE_BY_TYPE).length} event types, expected 65 -- a provider change adds none`)
+  if (Object.keys(LANE_BY_TYPE).length !== 69) {
+    await fail(`stage 12: LANE_BY_TYPE holds ${Object.keys(LANE_BY_TYPE).length} event types, expected 69 -- a provider change adds none`)
   }
 
   const enumRows = await prisma.$queryRaw`SELECT unnest(enum_range(NULL::"ProviderKind"))::text AS value`

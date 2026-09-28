@@ -1,6 +1,7 @@
 export * from './constants.js'
 export * from './contract.js'
 export * from './glob.js'
+export * from './goalBranch.js'
 export * from './ownership.js'
 export * from './packages.js'
 export * from './prompt.js'

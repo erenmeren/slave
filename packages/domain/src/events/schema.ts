@@ -444,6 +444,39 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       fallback: z.boolean(),
     }),
   }),
+  // Conductor Plan 4a (spec R9): a goal version is not conducted while an earlier one has not
+  // reached the base branch (`waitingOn` names it) or a planned board is still live (`null`).
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.goal_waiting'),
+    payload: z.object({ version: z.number().int().positive(), waitingOn: z.number().int().positive().nullable() }),
+  }),
+  // Conductor Plan 4a: the version passed its gate. `rounds` is how many verification rounds it
+  // took (Plan 4b); 0 when acceptance was every package integrated.
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.goal_accepted'),
+    payload: z.object({ version: z.number().int().positive(), rounds: z.number().int().nonnegative() }),
+  }),
+  // Conductor Plan 4a: the integration branch reached the base branch -- merged by the goal pass
+  // (`system`) or by a person and confirmed (`human`).
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.goal_merged'),
+    payload: z.object({
+      version: z.number().int().positive(),
+      branch: z.string().min(1),
+      into: z.string().min(1),
+      commit: z.string().min(1),
+      by: z.enum(['system', 'human']),
+    }),
+  }),
+  // Conductor Plan 4a (plan D10): the person moved on; `cancelled` are the package tasks cancelled.
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.goal_abandoned'),
+    payload: z.object({ version: z.number().int().positive(), cancelled: z.array(z.string().min(1)).max(50) }),
+  }),
   // M40 §4: `cancelTask` took a task off the board -- an operator's own call, or an approved
   // `stale_task` proposal. `goalVersion` is the task's own stamp (null for a hand-made task), so
   // the log says which requirement's work was dropped.

@@ -22,6 +22,9 @@ export interface HappeningNames {
 const quoted = (n: HappeningNames): string => (n.taskTitle === null ? 'a task' : `"${n.taskTitle}"`)
 const who = (n: HappeningNames): string => n.actor ?? 'Somebody'
 const str = (p: Record<string, unknown>, k: string): string | null => (typeof p[k] === 'string' ? (p[k] as string) : null)
+// Conductor Plan 4a: `?` for a payload written before the field existed, or malformed -- the same
+// degrade-gracefully rule `str` follows, for the one numeric field these two sentences read.
+const numStr = (p: Record<string, unknown>, k: string): string => (typeof p[k] === 'number' ? String(p[k]) : '?')
 
 /**
  * The families Home's feed and the Activity digest draw from (spec R10/R11).
@@ -53,6 +56,12 @@ export const HAPPENING_TYPES: readonly DomainEventType[] = [
   'task.created', 'task.started',
   'task.done', 'task.verify_passed', 'guardrail.tripped', 'run.started', 'run.succeeded', 'run.failed',
   'task.integrated', 'task.review_approved', 'task.review_rejected',
+  // Conductor Plan 4a (controller ruling P7): a goal version's gate passing, and its branch
+  // reaching the base branch, are both news for the whole workspace, the same standing
+  // `workspace.goal_set` already has on this feed. `workspace.goal_waiting` and
+  // `workspace.goal_abandoned` stay off it -- a wait is not an event a person needs pushed at them,
+  // and an abandon is the person's own doing.
+  'workspace.goal_accepted', 'workspace.goal_merged',
 ]
 
 /**
@@ -185,6 +194,10 @@ const SENTENCE: Partial<Record<DomainEventType, (p: Record<string, unknown>, n: 
   'task.integrated': (_p, n) => `${quoted(n)} was merged`,
   'task.review_approved': (_p, n) => `${who(n)} approved ${quoted(n)}`,
   'task.review_rejected': (_p, n) => `${who(n)} asked for changes on ${quoted(n)}`,
+  // Conductor Plan 4a (controller ruling P7): neither event carries a task or an actor -- the
+  // version and (for a merge) where it landed are the whole story.
+  'workspace.goal_accepted': (p) => `Goal v${numStr(p, 'version')} was accepted`,
+  'workspace.goal_merged': (p) => `Goal v${numStr(p, 'version')} was merged into ${str(p, 'into') ?? 'the base branch'}`,
 }
 
 /** One HAPPENING_TYPES event, said as a sentence a person reads without knowing the vocabulary

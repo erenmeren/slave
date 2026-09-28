@@ -87,6 +87,11 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
     decisionId: 'd1',
     fallback: false,
   },
+  // Conductor Plan 4a: the goal version's delivery, from waiting to merged or abandoned.
+  'workspace.goal_waiting': { version: 2, waitingOn: 1 },
+  'workspace.goal_accepted': { version: 1, rounds: 0 },
+  'workspace.goal_merged': { version: 1, branch: 'slaveofai/goal-v1-0c1d2e3f', into: 'main', commit: 'abc1234', by: 'system' },
+  'workspace.goal_abandoned': { version: 1, cancelled: ['t1', 't2'] },
   'workspace.plan_created': {
     goal: 'Ship the checkout flow',
     goalVersion: 1,
