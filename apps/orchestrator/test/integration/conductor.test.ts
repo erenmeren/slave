@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  clearHalt,
   setGoal,
   syncCapabilityTaxonomy,
   syncPersonPool,
@@ -179,6 +180,19 @@ describe('conduct: requirements', () => {
     const calls = await prisma.conductorCall.findMany({ where: { workspaceId: f.workspaceId, outcome: 'failed' } })
     expect(calls).toHaveLength(CONDUCT_RETRY_CAP)
     expect(calls[0]?.reason).toContain('JSON')
+  })
+
+  /** Final review I2: only failures since the halt was last cleared count, or clearing does nothing. */
+  it('makes a new call after the halt is cleared, and says how to recover in the halt', async () => {
+    const f = await seed({ delivery: 'conducted', goal: 'x' })
+    const { decider, prompts } = scripted({ requirements: () => answer('no json'), conduct: () => failed('') })
+    for (let i = 0; i < CONDUCT_RETRY_CAP; i += 1) await conduct(depsFor(f, decider))
+    expect(await conduct(depsFor(f, decider))).toBe('halted')
+    const halted = await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })
+    expect(halted.haltedReason).toContain(`clear-halt --workspace ${f.workspaceId}`)
+    expect((await clearHalt(f.workspaceId)).ok).toBe(true)
+    expect(await conduct(depsFor(f, decider))).toBe('requirements_failed')
+    expect(prompts).toHaveLength(CONDUCT_RETRY_CAP + 1)
   })
 
   it('keeps keys across goal versions', async () => {

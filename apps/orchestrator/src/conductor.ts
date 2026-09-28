@@ -54,6 +54,7 @@ export async function conduct(deps: TickDeps): Promise<ConductStep> {
       goal: true,
       goalVersion: true,
       haltedReason: true,
+      haltClearedAt: true,
       repoPath: true,
       baseBranch: true,
       maxAttempts: true,
@@ -74,13 +75,24 @@ export async function conduct(deps: TickDeps): Promise<ConductStep> {
     where: { workspaceId_goalVersion: { workspaceId: deps.workspaceId, goalVersion: version } },
     select: { items: true },
   })
-  if (set === null) return extractRequirements(deps.workspaceId, call, workspace.goal, version)
+  if (set === null) return extractRequirements(deps.workspaceId, call, workspace.goal, version, workspace.haltClearedAt)
   return decideAndMaterialise(deps.workspaceId, call, { ...workspace, goal: workspace.goal }, version, set.items)
+}
+
+/**
+ * The failed calls the retry cap counts (final review I2): only those made since a person last
+ * cleared a halt -- the circuit breaker's `haltClearedAt` precedent (`stats.ts`). Counting every
+ * failure of the version, a cleared "could not extract requirements" halt re-halted on the very
+ * next tick without a new call, so clearing it did nothing.
+ */
+function failuresSince(haltClearedAt: Date | null): { readonly createdAt?: { readonly gt: Date } } {
+  return haltClearedAt === null ? {} : { createdAt: { gt: haltClearedAt } }
 }
 
 /** What the size decision reads off the workspace row `conduct` already fetched. */
 interface ConductedWorkspace {
   readonly goal: string
+  readonly haltClearedAt: Date | null
   readonly repoPath: string
   readonly baseBranch: string
   readonly maxAttempts: number
@@ -120,7 +132,7 @@ async function decideAndMaterialise(
     plan = conductPlanSchema.parse(bought.plan)
   } else {
     const failures = await prisma.conductorCall.findMany({
-      where: { workspaceId, goalVersion: version, stage: 'conduct', outcome: 'failed' },
+      where: { workspaceId, goalVersion: version, stage: 'conduct', outcome: 'failed', ...failuresSince(workspace.haltClearedAt) },
       orderBy: { createdAt: 'asc' },
       select: { reason: true },
     })
@@ -444,9 +456,10 @@ async function extractRequirements(
   call: ConductorCallTarget,
   goal: string,
   version: number,
+  haltClearedAt: Date | null,
 ): Promise<ConductStep> {
   const failures = await prisma.conductorCall.findMany({
-    where: { workspaceId, stage: 'requirements', outcome: 'failed', goalVersion: version },
+    where: { workspaceId, stage: 'requirements', outcome: 'failed', goalVersion: version, ...failuresSince(haltClearedAt) },
     orderBy: { createdAt: 'desc' },
     select: { reason: true },
   })
@@ -492,7 +505,10 @@ async function extractRequirements(
 
 /** The `merge.ts` halt precedent: the first halt reason stands, and the trip is announced once. */
 async function haltConductor(workspaceId: string, version: number, lastReason: string): Promise<void> {
-  const detail = `the conductor could not extract requirements for goal v${version}: ${lastReason}`
+  // Says how to recover: the next tick after a clear makes a fresh call (`failuresSince`).
+  const detail =
+    `the conductor could not extract requirements for goal v${version}: ${lastReason}. ` +
+    `Reword the goal or fix the model, then retract the halt with: clear-halt --workspace ${workspaceId}`
   const halted = await prisma.workspace.updateMany({
     where: { id: workspaceId, haltedReason: null },
     data: { haltedReason: detail, haltedAt: new Date() },
