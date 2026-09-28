@@ -72,6 +72,19 @@ export async function changedFiles(repoPath: string, base: string, branch: strin
 }
 
 /**
+ * How a worker undoes a foreign change it COMMITTED (final review I1): the write tools are denied
+ * on those files, so the reason has to name the git commands that still work -- restore a modified
+ * or deleted file from the base, remove one it added -- and the commit that makes it the branch's.
+ */
+export function undoInstruction(base: string): string {
+  return (
+    `To undo committed changes to files you do not own, run \`git checkout ${base} -- <file>\` for each one you modified or deleted ` +
+    'and `git rm <file>` (or `git rm --cached <file>` to keep it on disk) for each one you added, then commit; ' +
+    'Edit and Write on those files are denied.'
+  )
+}
+
+/**
  * The second enforcement of spec R4: a shell can write anywhere, so the files this task's branch
  * changed since it left the base branch are checked against its package's ownership before the run
  * is verified or its report filed (plan D7). Three-dot range: the NET change, so a rework that
@@ -95,7 +108,7 @@ export async function auditOwnership(
   if (foreign.length === 0) return true
   const listed = foreign.slice(0, FOREIGN_FILES_LISTED).join(', ')
   const more = foreign.length > FOREIGN_FILES_LISTED ? ` and ${String(foreign.length - FOREIGN_FILES_LISTED)} more` : ''
-  const reason = `revert changes to files you do not own: ${listed}${more}`
+  const reason = `revert changes to files you do not own: ${listed}${more}. ${undoInstruction(workspace.baseBranch)}`
   const applied = await rejectRunBack(
     run,
     task,

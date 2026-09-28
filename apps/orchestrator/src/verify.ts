@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { recordRunEvidence, runbookForWorkspace } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  isOwned,
   parseHandoffContract,
   runId as brandRunId,
   taskId as brandTaskId,
@@ -12,7 +13,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { promote } from './memory.js'
-import { auditOwnership } from './ownership.js'
+import { auditOwnership, ownershipRuleForTask } from './ownership.js'
 import { concludePlanning } from './planning.js'
 import { fileRunReport } from './report.js'
 import { concludeReview } from './review.js'
@@ -436,6 +437,12 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
   // uncommitted work reads there as an empty diff (`wipCommit.ts`). The identity is the one the
   // run's own process committed under (`tick.ts`'s dispatch). Never fatal: a tree this cannot
   // commit is judged exactly as it would have been without it, and the reason is logged.
+  //
+  // A governed package run's leftover commit stages only what its package owns (final review I1,
+  // controller Ruling 5): setup and tooling dirty files nobody in the package owns, and committed
+  // under the worker's name they would fail the audit below on every attempt. They stay in the
+  // worktree, uncommitted; the worker's own commits are still audited in full.
+  const rule = task.workPackageId === null ? null : await ownershipRuleForTask(task.id)
   const wip = await commitUncommittedWork({
     worktreePath: run.worktreePath,
     branch: task.branch,
@@ -444,9 +451,17 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
       name: run.slave.person.name,
       email: `${emailLocalPart({ id: run.slave.id, name: run.slave.person.name })}@slaveofai.local`,
     },
+    ...(rule === null ? {} : { owns: (path: string): boolean => isOwned(rule, path) }),
   })
   if (wip.kind === 'committed') {
     console.warn(`[verify] run ${run.id} left uncommitted work; committed it on the worker's behalf as ${wip.sha.slice(0, 12)} (${wip.message})`)
+  }
+  if (wip.kind === 'committed' || wip.kind === 'nothing_owned') {
+    if (wip.leftOut !== undefined) {
+      console.warn(
+        `[verify] run ${run.id} left ${String(wip.leftOut.total)} uncommitted change(s) to files its package does not own; not committed: ${wip.leftOut.paths.join(', ')}${wip.leftOut.total > wip.leftOut.paths.length ? ' ...' : ''}`,
+      )
+    }
   } else if (wip.kind !== 'clean') {
     console.warn(`[verify] run ${run.id} left uncommitted work that could not be committed for it (${wip.kind}): ${wip.reason}`)
   }
