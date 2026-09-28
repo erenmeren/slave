@@ -574,6 +574,69 @@ describe('runMergePass', () => {
       expect(readFileSync(join(run.worktree, 'README.md'), 'utf8')).toBe('rewritten by hand\n')
       expect(existsSync(join(stateDir, 'runs', run.id))).toBe(false)
     })
+
+    /**
+     * Round 4 (re-review m2): the dirty-tree check, the ownership-rule lookup and the set-aside call
+     * used to run BEFORE the rebase's own try/catch, not inside it. A worktree gone or broken threw
+     * out of all three, straight out of `runMergePass`, with the merge claim still set -- every later
+     * merge on the workspace stalled until the stale-merge sweep found it. A broken worktree always
+     * failed the rebase itself the same way (`git rebase` in a missing directory throws too); the fix
+     * is for the pre-checks to fail exactly the same way, not a new one.
+     */
+    it('fails the merge the same way a broken worktree always failed the rebase, claim released, when the worktree is gone before the dirty-tree check', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true })
+      const { taskId } = await seedMergingTask(workspace)
+      await governByPackage(workspace, taskId)
+      const run = await runOf(taskId)
+      const mainBefore = git(['rev-parse', 'main'], workspace.repoPath)
+      rmSync(run.worktree, { recursive: true, force: true })
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.status).toBe('rework')
+      expect(task.mergeClaimedAt).toBeNull()
+      const failures = await prisma.executionEvent.findMany({ where: { taskId, type: 'task_merge_failed' } })
+      expect(failures).toHaveLength(1)
+      // `main` never moved: the pass never reached the primary checkout at all.
+      expect(git(['rev-parse', 'main'], workspace.repoPath)).toBe(mainBefore)
+    })
+
+    /**
+     * Round 4 (re-review m3): a set-aside that cannot save what it would remove reports `failed`
+     * rather than throwing (`setAside.ts`'s own contract: nothing removed unless everything saved).
+     * Before this fix that `failed` outcome was only logged, the dirty tree was left in place, and
+     * the plain rebase below refused it -- a JUDGED, charged rework for a save failure that is not
+     * the work. `judged: false` still spends the attempt (`rejectTask` runs either way, exactly as
+     * the primary-checkout-dirty branch below already does for the same reason) -- bounded, not a
+     * free retry loop -- but never settles `integrated: false` on it, and the reason names the real
+     * cause instead of a rebase conflict that never happened.
+     */
+    it('routes a set-aside that cannot save its changes to an uncharged-judgement rework, not a rebase conflict', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: [CLEAN_TREE] })
+      const { taskId } = await seedMergingTask(workspace)
+      await governByPackage(workspace, taskId)
+      const run = await runOf(taskId)
+      writeFileSync(join(run.worktree, 'README.md'), 'rewritten by setup\n')
+      // The set-aside directory's own parent exists as a plain FILE: `mkdir` cannot create it, so
+      // the save fails before anything is touched in the worktree.
+      mkdirSync(join(stateDir, 'runs', run.id), { recursive: true })
+      writeFileSync(join(stateDir, 'runs', run.id, 'set-aside'), 'not a directory\n')
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.status).toBe('rework')
+      expect(task.mergeClaimedAt).toBeNull()
+      expect(task.attempt).toBe(1)
+      expect(task.lastRejectionReason).toContain('set aside')
+      expect(task.lastRejectionReason).not.toContain('conflicted')
+      // Nothing was removed from the worktree: the save never happened.
+      expect(readFileSync(join(run.worktree, 'README.md'), 'utf8')).toBe('rewritten by setup\n')
+
+      const failures = await prisma.executionEvent.findMany({ where: { taskId, type: 'task_merge_failed' } })
+      expect(failures).toHaveLength(1)
+    })
   })
 })
 
