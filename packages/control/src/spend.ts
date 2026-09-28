@@ -41,6 +41,28 @@ export interface WorkspaceSpend {
   readonly conductorUnmeasuredCalls: number
 }
 
+/** The model-call terms of {@link WorkspaceSpend}: everything but the runs. */
+export type ModelCallSpend = Omit<WorkspaceSpend, 'spentUsd' | 'runsMeasuredUsd'>
+
+/**
+ * What a workspace's model calls cost -- the Supervisor's decisions, its intake, its chat and its
+ * conductor -- each unmeasured call charged at its cap. Shared by {@link workspaceSpend} and the
+ * Projects list (`apps/web/src/server/org.ts`), which reads the same terms grouped for every
+ * project at once (Conductor Plan 2 final review M3: the list had fallen two terms behind).
+ */
+export function modelCallSpendUsd(terms: ModelCallSpend): number {
+  return (
+    terms.supervisorMeasuredUsd +
+    terms.supervisorUnmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD +
+    terms.intakeMeasuredUsd +
+    terms.intakeUnmeasuredCalls * INTAKE_PER_CALL_CAP_USD +
+    terms.chatMeasuredUsd +
+    terms.chatUnmeasuredTurns * SUPERVISOR_PER_CALL_CAP_USD +
+    terms.conductorMeasuredUsd +
+    terms.conductorUnmeasuredCalls * CONDUCT_PER_CALL_CAP_USD
+  )
+}
+
 /**
  * The ONE spend formula for a workspace (spec erratum E2).
  *
@@ -153,8 +175,7 @@ export async function workspaceSpend(
   const conductorMeasuredUsd = conductor.reduce((total, group) => total + (group._sum.modelCostUsd ?? 0), 0)
   const conductorUnmeasuredCalls = conductor.find((group) => group.unmeasured)?._count._all ?? 0
 
-  return {
-    runsMeasuredUsd,
+  const terms: ModelCallSpend = {
     supervisorMeasuredUsd,
     supervisorUnmeasuredCalls,
     intakeMeasuredUsd,
@@ -163,15 +184,6 @@ export async function workspaceSpend(
     chatUnmeasuredTurns,
     conductorMeasuredUsd,
     conductorUnmeasuredCalls,
-    spentUsd:
-      runsMeasuredUsd +
-      supervisorMeasuredUsd +
-      supervisorUnmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD +
-      intakeMeasuredUsd +
-      intakeUnmeasuredCalls * INTAKE_PER_CALL_CAP_USD +
-      chatMeasuredUsd +
-      chatUnmeasuredTurns * SUPERVISOR_PER_CALL_CAP_USD +
-      conductorMeasuredUsd +
-      conductorUnmeasuredCalls * CONDUCT_PER_CALL_CAP_USD,
   }
+  return { runsMeasuredUsd, ...terms, spentUsd: runsMeasuredUsd + modelCallSpendUsd(terms) }
 }

@@ -8,6 +8,7 @@ import {
   listRunbooks,
   listTemplateDuplicates,
   listWorkforceCatalog,
+  modelCallSpendUsd,
   readTemplateProfile,
   TEMPLATE_PICKER_MAX,
   type ControlRefusal,
@@ -26,9 +27,7 @@ import {
   ok,
   needsYou,
   sumSpendFromGroups,
-  INTAKE_PER_CALL_CAP_USD,
   NON_TERMINAL_RUN_STATUSES,
-  SUPERVISOR_PER_CALL_CAP_USD,
   type BreakerLevel,
   type CapabilityRecord,
   type DuplicateCounts,
@@ -164,7 +163,7 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
     orderBy: { name: 'asc' },
   })
 
-  const [taskGroups, unintegratedDoneGroups, slaveRows, spendGroups, decisionGroups, pendingDecisionGroups, intakeRows] = await Promise.all([
+  const [taskGroups, unintegratedDoneGroups, slaveRows, spendGroups, decisionGroups, pendingDecisionGroups, intakeRows, chatGroups, conductorGroups] = await Promise.all([
     prisma.task.groupBy({ by: ['workspaceId', 'status'], _count: { _all: true } }),
     // The second half of `needsYou` (M44 R1): finished work sitting on a branch nothing will merge
     // by itself. `integratedAt` is not a `by` column and cannot be counted out of the group above,
@@ -225,6 +224,11 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
       where: { workspaceId: { not: null } },
       select: { workspaceId: true, modelCostUsd: true, unmeasuredCalls: true },
     }),
+    // The chat's turns (F R2) and the conductor's calls (Conductor Plan 2, D6): `workspaceSpend`'s
+    // last two terms, grouped for every project at once on `workspaceSpend`'s own `unmeasured`
+    // column (final review M3 -- the card had fallen behind by both).
+    prisma.supervisorMessage.groupBy({ by: ['workspaceId', 'unmeasured'], _sum: { modelCostUsd: true }, _count: { _all: true } }),
+    prisma.conductorCall.groupBy({ by: ['workspaceId', 'unmeasured'], _sum: { modelCostUsd: true }, _count: { _all: true } }),
   ])
 
   // Grouped first, then summed through `sumSpendFromGroups` (M12 Task 9 ruling R3; M17 Task 13's
@@ -274,21 +278,47 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
     intakeRows.flatMap((row) => (row.workspaceId === null ? [] : [[row.workspaceId, row] as const])),
   )
 
-  /** One project's two spend figures. `spend` is the whole workspace's money -- runs, Supervisor
-   *  and the intake that created it, together, `workspaceSpend`'s `spentUsd`. `unmeasuredRuns`
+  /** Measured cost summed across both `unmeasured` groups, and the unmeasured group's count --
+   *  `workspaceSpend`'s reading of the same two tables, per workspace. */
+  const byUnmeasured = (
+    groups: readonly { readonly workspaceId: string; readonly unmeasured: boolean; readonly _sum: { readonly modelCostUsd: number | null }; readonly _count: { readonly _all: number } }[],
+  ): Map<string, { measuredUsd: number; unmeasured: number }> => {
+    const out = new Map<string, { measuredUsd: number; unmeasured: number }>()
+    for (const group of groups) {
+      const running = out.get(group.workspaceId) ?? { measuredUsd: 0, unmeasured: 0 }
+      running.measuredUsd += group._sum.modelCostUsd ?? 0
+      if (group.unmeasured) running.unmeasured += group._count._all
+      out.set(group.workspaceId, running)
+    }
+    return out
+  }
+  const chatByWorkspace = byUnmeasured(chatGroups)
+  const conductorByWorkspace = byUnmeasured(conductorGroups)
+
+  /** One project's two spend figures. `spend` is the whole workspace's money -- runs, Supervisor,
+   *  the intake that created it, the chat and the conductor, together, `workspaceSpend`'s `spentUsd`. `unmeasuredRuns`
    *  stays a count of RUNS: a Supervisor or intake call nobody measured is already IN the total at
    *  the cap, and counting it here as well would answer a question this stat does not ask. */
   const spendOf = (workspaceId: string): { readonly spend: number; readonly unmeasuredRuns: number } => {
     const runs = spendOfGroups(groupsByWorkspace.get(workspaceId) ?? [])
     const supervisor = supervisorByWorkspace.get(workspaceId) ?? { measuredUsd: 0, unmeasuredCalls: 0 }
     const intake = intakeByWorkspace.get(workspaceId)
+    const chat = chatByWorkspace.get(workspaceId)
+    const conductor = conductorByWorkspace.get(workspaceId)
     return {
+      // `modelCallSpendUsd` is `workspaceSpend`'s own sum of these terms, so the two cannot drift.
       spend:
         runs.spend +
-        supervisor.measuredUsd +
-        supervisor.unmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD +
-        (intake?.modelCostUsd ?? 0) +
-        (intake?.unmeasuredCalls ?? 0) * INTAKE_PER_CALL_CAP_USD,
+        modelCallSpendUsd({
+          supervisorMeasuredUsd: supervisor.measuredUsd,
+          supervisorUnmeasuredCalls: supervisor.unmeasuredCalls,
+          intakeMeasuredUsd: intake?.modelCostUsd ?? 0,
+          intakeUnmeasuredCalls: intake?.unmeasuredCalls ?? 0,
+          chatMeasuredUsd: chat?.measuredUsd ?? 0,
+          chatUnmeasuredTurns: chat?.unmeasured ?? 0,
+          conductorMeasuredUsd: conductor?.measuredUsd ?? 0,
+          conductorUnmeasuredCalls: conductor?.unmeasured ?? 0,
+        }),
       unmeasuredRuns: runs.unmeasuredRuns,
     }
   }

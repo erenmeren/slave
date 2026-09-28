@@ -240,3 +240,41 @@ describe('listProjects counts the Supervisor spend', () => {
     expect(spend.spentUsd).toBeCloseTo(2.25)
   })
 })
+
+/**
+ * Conductor Plan 2 final review M3: the chat's turns (F R2) and the conductor's calls (D6) are in
+ * `workspaceSpend`, and the list card must show the same number -- measured cost summed, an
+ * unmeasured turn or call charged at its cap.
+ */
+describe('listProjects counts the chat and the conductor', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "SupervisorDecision", "SupervisorMessage", "ConductorCall", "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  it('shows exactly what workspaceSpend shows', async (): Promise<void> => {
+    const { workspaceId } = await seed('Spend Groups Conducted Project')
+    const other = await seed('Spend Groups Quiet Project')
+    await prisma.supervisorMessage.createMany({
+      data: [
+        { workspaceId, seq: 1, role: 'supervisor', text: 'a', modelCostUsd: 0.4, unmeasured: false },
+        { workspaceId, seq: 2, role: 'supervisor', text: 'b', modelCostUsd: null, unmeasured: true },
+      ],
+    })
+    await prisma.conductorCall.createMany({
+      data: [
+        { workspaceId, goalVersion: 1, stage: 'requirements', outcome: 'ok', modelCostUsd: 0.1, unmeasured: false },
+        { workspaceId, goalVersion: 1, stage: 'conduct', outcome: 'failed', modelCostUsd: null, unmeasured: true },
+      ],
+    })
+
+    const projects = await listProjects()
+    const spend = await workspaceSpend(workspaceId)
+    expect(spend.chatUnmeasuredTurns).toBe(1)
+    expect(spend.conductorUnmeasuredCalls).toBe(1)
+    expect(projects.find((p) => p.id === workspaceId)?.spend).toBeCloseTo(spend.spentUsd)
+    // Per project: none of it lands on the other card.
+    expect(projects.find((p) => p.id === other.workspaceId)?.spend).toBeCloseTo(0)
+  })
+})
