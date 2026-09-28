@@ -114,6 +114,68 @@ describe('commitUncommittedWork', () => {
   })
 })
 
+/**
+ * Final-review I1 (controller Ruling 5): for a governed package run the leftover-work commit
+ * stages only the paths the package owns. Setup and tooling dirty files the package does not own
+ * (a lockfile, a generated file); committing them under the worker's name put them in the branch
+ * the ownership audit judges, and every rework re-dirtied them.
+ */
+describe('commitUncommittedWork for a package run commits only what the package owns', () => {
+  async function worktree(): Promise<{ path: string; branch: string }> {
+    const repoPath = makeRepo()
+    writeFileSync(join(repoPath, 'package-lock.json'), '{}\n')
+    writeFileSync(join(repoPath, 'gone.txt'), 'foreign, deleted by setup\n')
+    writeFileSync(join(repoPath, 'mine-gone.txt'), 'owned, deleted by the worker\n')
+    git(['add', '-A'], repoPath)
+    git(['commit', '-q', '-m', 'more files'], repoPath)
+    const handle = await provisionWorktree({ repoPath, baseBranch: 'main', taskKey: 'T-0000abcd', slug: 'x', setupCommands: [] })
+    return { path: handle.path, branch: handle.branch }
+  }
+  const owns = (path: string): boolean => path.startsWith('src/') || path.startsWith(' src/') || path === 'mine-gone.txt'
+
+  it('commits owned changes, leaves foreign ones uncommitted in the tree, and says which', async (): Promise<void> => {
+    const tree = await worktree()
+    execFileSync('mkdir', ['-p', join(tree.path, 'src')])
+    writeFileSync(join(tree.path, 'src', 'feature.ts'), 'export const feature = 1\n')
+    writeFileSync(join(tree.path, ' src'), 'a leading space: not src/\n')
+    rmSync(join(tree.path, 'mine-gone.txt'))
+    // Foreign: a tracked lockfile setup rewrote, a foreign file it deleted, an untracked foreign
+    // file, and one the worker staged but never committed -- the index must not smuggle it in.
+    writeFileSync(join(tree.path, 'package-lock.json'), '{"dirty":true}\n')
+    rmSync(join(tree.path, 'gone.txt'))
+    writeFileSync(join(tree.path, 'notes.txt'), 'scratch\n')
+    writeFileSync(join(tree.path, 'README.md'), '# staged foreign\n')
+    git(['add', 'README.md'], tree.path)
+
+    const outcome = await commitUncommittedWork({ worktreePath: tree.path, branch: tree.branch, taskKey: 'T-0000abcd', identity: WORKER, owns })
+
+    expect(outcome.kind).toBe('committed')
+    if (outcome.kind !== 'committed') throw new Error('expected a commit')
+    expect(git(['show', '--name-only', '--format=', 'HEAD'], tree.path).split('\n').toSorted()).toEqual(['mine-gone.txt', 'src/feature.ts'])
+    expect(outcome.leftOut).toEqual({ total: 5, paths: [' src', 'README.md', 'gone.txt', 'notes.txt', 'package-lock.json'] })
+    // Left in the tree, not discarded.
+    const status = git(['status', '--porcelain', '--untracked-files=all'], tree.path)
+    for (const path of ['package-lock.json', 'gone.txt', 'notes.txt', 'README.md', ' src']) expect(status).toContain(path)
+
+    // A replayed conclusion commits nothing more and still names what it left out.
+    const again = await commitUncommittedWork({ worktreePath: tree.path, branch: tree.branch, taskKey: 'T-0000abcd', identity: WORKER, owns })
+    expect(again).toEqual({ kind: 'nothing_owned', leftOut: { total: 5, paths: [' src', 'README.md', 'gone.txt', 'notes.txt', 'package-lock.json'] } })
+    expect(git(['rev-parse', 'HEAD'], tree.path)).toBe(outcome.sha)
+  })
+
+  it('names at most 20 of the paths it left out, and counts them all', async (): Promise<void> => {
+    const tree = await worktree()
+    for (let i = 0; i < 25; i += 1) writeFileSync(join(tree.path, `f${String(i).padStart(2, '0')}.txt`), 'x\n')
+
+    const outcome = await commitUncommittedWork({ worktreePath: tree.path, branch: tree.branch, taskKey: 'T-0000abcd', identity: WORKER, owns })
+
+    expect(outcome.kind).toBe('nothing_owned')
+    if (outcome.kind !== 'nothing_owned') throw new Error('expected nothing owned')
+    expect(outcome.leftOut.total).toBe(25)
+    expect(outcome.leftOut.paths).toHaveLength(20)
+  })
+})
+
 describe('verifyConcludedRun commits a succeeded run\'s leftover work before verify (H9 F7 a)', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(

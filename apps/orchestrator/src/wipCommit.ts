@@ -1,4 +1,7 @@
 import { execFile } from 'node:child_process'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
@@ -13,9 +16,22 @@ const GIT_TIMEOUT_MS = 30_000
  */
 export type WipCommitOutcome =
   | { readonly kind: 'clean' }
-  | { readonly kind: 'committed'; readonly sha: string; readonly message: string }
+  | { readonly kind: 'committed'; readonly sha: string; readonly message: string; readonly leftOut?: LeftOut }
+  | { readonly kind: 'nothing_owned'; readonly leftOut: LeftOut }
   | { readonly kind: 'skipped'; readonly reason: string }
   | { readonly kind: 'failed'; readonly reason: string }
+
+/** How many of the paths a package run's leftover commit left out are named: enough to read. */
+export const LEFT_OUT_LISTED = 20
+
+/**
+ * The uncommitted paths a package run's leftover commit did NOT stage because the package does not
+ * own them: every one counted, the first {@link LEFT_OUT_LISTED} (sorted) named.
+ */
+export interface LeftOut {
+  readonly total: number
+  readonly paths: readonly string[]
+}
 
 /** The commit message, spelt once: `wip(<task key>): uncommitted work at run end`. */
 export function wipCommitMessage(taskKey: string): string {
@@ -47,13 +63,25 @@ export function wipCommitMessage(taskKey: string): string {
  * runs the project's checks straight after it. `commit.gpgsign=false`, because a signing prompt
  * with nobody at the terminal is a conclusion that never finishes.
  *
- * Idempotent: a conclusion replayed after a restart finds a clean tree and does nothing.
+ * **A package run (final review I1, controller Ruling 5).** With `owns`, only the changed paths it
+ * accepts are staged and committed; every other change stays in the worktree, uncommitted and
+ * untouched, and is reported as `leftOut`. Setup commands and tooling dirty files no package owns
+ * (a lockfile, a generated file) on every provisioning; committed here under the worker's name they
+ * reached the branch the ownership audit judges, failed it, and came back on every rework. The
+ * worker's OWN commits are not filtered -- the audit still rejects a foreign file it committed. The
+ * commit names its paths (`--pathspec-from-file`, so `--only` semantics), so a foreign file the
+ * worker staged but never committed cannot ride along from the index either.
+ *
+ * Idempotent: a conclusion replayed after a restart finds a clean tree (or only foreign changes)
+ * and commits nothing.
  */
 export async function commitUncommittedWork(input: {
   readonly worktreePath: string
   readonly branch: string
   readonly taskKey: string
   readonly identity: { readonly name: string; readonly email: string }
+  /** A governed package run's ownership: only paths it accepts are committed. Absent: everything. */
+  readonly owns?: (path: string) => boolean
 }): Promise<WipCommitOutcome> {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -84,11 +112,55 @@ export async function commitUncommittedWork(input: {
     }
 
     const message = wipCommitMessage(input.taskKey)
-    await git(['add', '--all'])
-    await git(['commit', '--no-verify', '-q', '-m', message])
+    const owns = input.owns
+    if (owns === undefined) {
+      await git(['add', '--all'])
+      await git(['commit', '--no-verify', '-q', '-m', message])
+      const sha = (await git(['rev-parse', 'HEAD'])).trim()
+      return { kind: 'committed', sha, message }
+    }
+
+    const changed = await changedPaths(git)
+    const owned = changed.filter((path) => owns(path))
+    const foreign = changed.filter((path) => !owns(path))
+    const leftOut: LeftOut | undefined =
+      foreign.length === 0 ? undefined : { total: foreign.length, paths: foreign.slice(0, LEFT_OUT_LISTED) }
+    if (owned.length === 0) return leftOut === undefined ? { kind: 'clean' } : { kind: 'nothing_owned', leftOut }
+    await withPathspecFile(owned, async (file) => {
+      const spec = [`--pathspec-from-file=${file}`, '--pathspec-file-nul']
+      await git(['--literal-pathspecs', 'add', '--all', ...spec])
+      await git(['--literal-pathspecs', 'commit', '--no-verify', '-q', '-m', message, ...spec])
+    })
     const sha = (await git(['rev-parse', 'HEAD'])).trim()
-    return { kind: 'committed', sha, message }
+    return leftOut === undefined ? { kind: 'committed', sha, message } : { kind: 'committed', sha, message, leftOut }
   } catch (error) {
     return { kind: 'failed', reason: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/**
+ * Every path with an uncommitted change -- staged or not, tracked or untracked, deleted included --
+ * sorted. `-z` keeps each path exactly as it is (a leading space, a quote, a newline), and
+ * `--no-renames` lists a staged rename as both of its paths, so each side is judged on its own.
+ */
+async function changedPaths(git: (args: readonly string[]) => Promise<string>): Promise<readonly string[]> {
+  const out = await git(['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all'])
+  const paths = out
+    .split('\0')
+    .filter((entry) => entry.length > 3)
+    .map((entry) => entry.slice(3))
+  return [...new Set(paths)].toSorted()
+}
+
+/** The paths to stage, NUL-separated in a private temporary file: argv has a length limit, a tree
+ *  of leftover work does not. */
+async function withPathspecFile(paths: readonly string[], use: (file: string) => Promise<void>): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), 'slaveofai-wip-'))
+  try {
+    const file = join(dir, 'pathspec')
+    await writeFile(file, paths.join('\0'))
+    await use(file)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
   }
 }
