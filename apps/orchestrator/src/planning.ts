@@ -15,7 +15,6 @@ import {
 } from '@slave-of-ai/domain'
 import {
   admitProvider,
-  amendRunOutcome,
   listCapabilities,
   planningCountSince,
   providerBackoffFor,
@@ -35,7 +34,7 @@ import { assignableSeatsForWorkspace, staffedRolesForWorkspace } from './staffin
 import { concludeReplan, replanIntent, replanSectionOf, runbookSectionOf, type ReplanIntent } from './replan.js'
 import { buildRunContext } from './runContext.js'
 import { joinRunOutput } from './runOutput.js'
-import { createRunUnlessArchived } from './runs.js'
+import { createRunUnlessArchived, failConcludedRun } from './runs.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
 import { verifyConcludedRun } from './verify.js'
 
@@ -362,27 +361,15 @@ export function adherenceOf(
  * Shared by the two ways a graph can be unusable -- one that does not parse, and one whose task
  * asks only for capabilities the table does not have -- because they have the same consequence:
  * the board stays empty, and `dispatchPlanning`'s retry cap, not a cleared goal, is what
- * eventually stops the redispatch. The `updateMany` is conditioned on `succeeded` for the reason
- * it always was: a run somebody stopped in the meantime is not this function's to fail.
+ * eventually stops the redispatch. The walk-back itself is {@link failConcludedRun}'s, which a
+ * package run without a usable report shares (Conductor Plan 2).
  */
 async function failPlanningRun(
   run: { readonly id: string; readonly slaveId: string },
   workspaceId: string,
   reason: string,
 ): Promise<void> {
-  await prisma.slaveRun.updateMany({ where: { id: run.id, status: 'succeeded' }, data: { status: 'failed' } })
-  // M53 erratum E26, the same walk-back and the same amend as `replan.ts`'s `failRun`: the pump
-  // wrote this run's fact when it concluded it `succeeded`, and the outcome has to follow the
-  // status this line just wrote.
-  await amendRunOutcome(run.id)
-  await appendEvent({
-    type: 'run.failed',
-    workspaceId,
-    slaveId: run.slaveId,
-    runId: run.id,
-    actor: 'system',
-    payload: { reason },
-  })
+  await failConcludedRun(run, workspaceId, reason)
 }
 
 /**
