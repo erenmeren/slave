@@ -84,6 +84,36 @@ describe('parseSlaveVerification', () => {
     expect(parsed.ok).toBe(true)
     expect(parsed.ok && parsed.value[0]?.status).toBe('pass')
   })
+
+  // Ruling V2c (fix round 3, replaces V2b): the last RECORDED block wins, with no fallback to an
+  // earlier one -- a valid block followed by a later block that is structurally balanced but not
+  // valid JSON is an error, not a silent read of the stale earlier block (V2b's bug: trying every
+  // (open, close) pair let a later malformed pair fail and fall through to an earlier one that
+  // happened to parse).
+  it('errors when a later block is structurally closed but not valid JSON, without falling back to an earlier valid one', () => {
+    const text = `${block([pass('R1')])}\n<slave-verification>{not valid json at all}</slave-verification>`
+    const parsed = parseSlaveVerification(text, ['R1'])
+    expect(parsed.ok).toBe(false)
+    if (!parsed.ok) expect(parsed.error).toMatch(/not valid JSON/)
+  })
+
+  // Ruling V2c: no caps. V2b's 50x50 cap could drop the genuine (open, close) pair once 50+
+  // tag-like substrings existed either inside the block's own evidence or after it. The forward
+  // JSON-aware scan never even considers a `close` mention on its own -- it finds the object's own
+  // end by tracking brace/bracket depth and JSON strings -- so a flood of close-tag mentions INSIDE
+  // a string value never becomes a candidate at all.
+  it('parses a valid block whose output contains 55 mentions of the closing tag', () => {
+    const parsed = parseSlaveVerification(block([{ ...pass('R1'), output: '</slave-verification>'.repeat(55) }]), ['R1'])
+    expect(parsed.ok).toBe(true)
+    expect(parsed.ok && parsed.value[0]?.status).toBe('pass')
+  })
+
+  it('parses a valid block followed by 70 spurious opening-tag mentions in prose', () => {
+    const trailing = Array.from({ length: 70 }, (_, i) => ` mention ${String(i)}: <slave-verification> tags again.`).join('\n')
+    const parsed = parseSlaveVerification(`${block([pass('R1')])}\n${trailing}`, ['R1'])
+    expect(parsed.ok).toBe(true)
+    expect(parsed.ok && parsed.value[0]?.status).toBe('pass')
+  })
 })
 
 describe('trimEvidence', () => {
