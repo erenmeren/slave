@@ -603,6 +603,38 @@ describe('observe -- ready_unstaffed', () => {
   })
 })
 
+/**
+ * Final review I5: a package task is pinned to one seat and `decide()` hands it to nobody else, so a
+ * pinned seat that is gone, released or no longer holds the role leaves the task stuck -- and the
+ * board busy, so the next goal version waits forever. `ready_unstaffed` asked only whether anybody
+ * holds the role.
+ */
+describe('observe -- package_seat_lost', () => {
+  const pinned = (over: Partial<Parameters<typeof task>[0]> = {}): ReturnType<typeof task> =>
+    task({ id: 't1', status: 'ready', requiredRole: 'implementer', assigneeId: 's2', pinnedSlaveId: 's2', ...over })
+
+  it('reports a pinned task whose seat is not in the workspace any more (closed or deleted)', () => {
+    const w = world({ tasks: [pinned()], slaves: [slave({ id: 's1', runtimeRoles: ['implementer'] })] })
+    expect(keys(observe(w))).toEqual([['package_seat_lost', 't1']])
+    expect(observe(w)[0]?.facts).toEqual(expect.objectContaining({ taskId: 't1', slaveId: 's2', reason: 'missing' }))
+  })
+
+  it('reports a pinned seat that was released, or lost the role, in rework as in ready', () => {
+    const released = world({ tasks: [pinned({ status: 'rework' })], slaves: [slave({ id: 's2', runtimeRoles: ['implementer'], released: true })] })
+    expect(keys(observe(released))).toEqual([['package_seat_lost', 't1']])
+    expect(observe(released)[0]?.facts.reason).toBe('released')
+    const roleless = world({ tasks: [pinned()], slaves: [slave({ id: 's2', runtimeRoles: ['backend'] })] })
+    // One situation for the hole, not also a role gap: hiring the role would not unpin the task.
+    expect(keys(observe(roleless))).toEqual([['package_seat_lost', 't1']])
+    expect(observe(roleless)[0]?.facts.reason).toBe('lacks_role')
+  })
+
+  it('stays silent while the pinned seat can take it, and for a task that is not waiting to start', () => {
+    expect(observe(world({ tasks: [pinned()], slaves: [slave({ id: 's2', runtimeRoles: ['implementer'] })] }))).toEqual([])
+    expect(observe(world({ tasks: [pinned({ status: 'done' })], slaves: [] })).filter((s) => s.kind === 'package_seat_lost')).toEqual([])
+  })
+})
+
 describe('observe -- done_not_integrated_stale', () => {
   it('reports a done, unintegrated task with dependents that has sat past INTEGRATED_STALE_MS', () => {
     const w = world({

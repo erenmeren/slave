@@ -1627,3 +1627,17 @@ describe('permission_blocked candidates (M52 R5)', () => {
     expect(kinds(candidates(situation, world()))).toEqual(['escalate_to_human', 'no_action'])
   })
 })
+
+describe('candidates -- package_seat_lost (final review I5)', () => {
+  it('puts the lost seat in front of a person: re-seating a pinned package is not a rules move', () => {
+    const w = world({
+      tasks: [task({ id: 't1', status: 'ready', requiredRole: 'implementer', assigneeId: 's2', pinnedSlaveId: 's2' })],
+      slaves: [slave({ id: 's1', runtimeRoles: ['implementer'] })],
+    })
+    const [lost] = observe(w)
+    expect(lost?.kind).toBe('package_seat_lost')
+    const cands = offered(w)
+    expect(kinds(cands)).toEqual(['escalate_to_human', 'no_action'])
+    expect(cands[0]?.action).toEqual({ kind: 'escalate_to_human', summary: lost?.summary })
+  })
+})

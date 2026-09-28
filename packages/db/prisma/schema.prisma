@@ -1867,6 +1867,9 @@ enum SupervisorSituationKind {
   /// one permission kind inside half an hour. The subject is `<slaveId>:<kind>`, the first COMPOUND
   /// subject: one wall, not one worker.
   permission_blocked
+  /// Conductor Plan 2 (final review I5): a package task pinned to a seat that can no longer start
+  /// it. The subject is the TASK.
+  package_seat_lost
   done_not_integrated_stale
   /// M50 R3: a worker brought in for one assignment, whose assignment is over. The subject is the
   /// SLAVE.

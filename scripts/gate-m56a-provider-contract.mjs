@@ -1238,8 +1238,9 @@ try {
   // remedies, H4a's `planning_stalled`, the chat's lanes) grew all three, and this stage's claim is
   // that the provider contract moved none of them -- so the figures follow main and a provider
   // change that bumps one still fails here. Conductor Plan 2 added the `conduct` situation and
-  // action, and two events: `workspace.requirements_set` and `workspace.conducted`.
-  if (SITUATION_KINDS.length !== 20) await fail(`stage 12: SITUATION_KINDS is ${SITUATION_KINDS.length}, expected twenty`)
+  // action, and two events: `workspace.requirements_set` and `workspace.conducted`; its final
+  // review the `package_seat_lost` situation.
+  if (SITUATION_KINDS.length !== 21) await fail(`stage 12: SITUATION_KINDS is ${SITUATION_KINDS.length}, expected twenty-one`)
   if (ACTION_KINDS.length !== 25) await fail(`stage 12: ACTION_KINDS is ${ACTION_KINDS.length}, expected twenty-five`)
   if (Object.keys(LANE_BY_TYPE).length !== 64) {
     await fail(`stage 12: LANE_BY_TYPE holds ${Object.keys(LANE_BY_TYPE).length} event types, expected 64 -- a provider change adds none`)

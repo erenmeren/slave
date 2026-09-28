@@ -7,6 +7,7 @@ import { isReleasable } from '../lifecycle/release.js'
 import { PERMISSION_KINDS, PERMISSION_LABEL, type PermissionKind } from '../permission/kinds.js'
 import { PLANNING_RETRY_CAP } from '../planning/constants.js'
 import { recommendRunbooks } from '../runbook/recommend.js'
+import { holdsRole } from '../scheduler/assign.js'
 import { hasStartableWork } from '../scheduler/decide.js'
 import { TERMINAL } from '../task/state.js'
 import { isStaffableTask } from './candidates.js'
@@ -608,11 +609,40 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
     })
   }
 
+  // package_seat_lost (Conductor Plan 2, final review I5): a pinned task waits for its OWN seat
+  // (`decide()`'s `pinnedSeat`), so whether anybody else holds the role is beside the point -- the
+  // question is whether that one seat can still start it. `world.slaves` holds open seats only, so a
+  // closed seat reads as missing. Ready or rework, whatever its dependencies: a task whose seat is
+  // gone is stuck the moment it would start, and it keeps the board busy until then.
+  const pinnedTaskIds = new Set<string>()
+  for (const task of world.tasks) {
+    if (task.pinnedSlaveId === null) continue
+    pinnedTaskIds.add(task.id)
+    if (task.status !== 'ready' && task.status !== 'rework') continue
+    const seat = world.slaves.find((one) => one.id === task.pinnedSlaveId)
+    const reason =
+      seat === undefined ? 'missing' : seat.released ? 'released' : !holdsRole(seat, task.requiredRole) ? 'lacks_role' : null
+    if (reason === null) continue
+    const why = {
+      missing: 'is no longer on this project',
+      released: `belongs to ${seat?.name ?? 'somebody'}, who has been released`,
+      lacks_role: `no longer holds the "${task.requiredRole}" role`,
+    }[reason]
+    add({
+      kind: 'package_seat_lost',
+      subjectId: task.id,
+      summary: `"${task.title}" is pinned to a seat that ${why}, and nobody else may start it.`,
+      facts: { taskId: task.id, slaveId: task.pinnedSlaveId, reason },
+    })
+  }
+
   // ready_unstaffed: keyed by the missing ROLE, so N startable tasks blocked on one absent role
   // are one situation with one decision -- not N proposals a human has to approve N times.
   const unstaffedRoles = new Map<string, SupervisorTask[]>()
   for (const task of world.tasks) {
     if (!isStaffableTask(task)) continue
+    // A pinned task is `package_seat_lost`'s above: staffing its role would not unpin it.
+    if (pinnedTaskIds.has(task.id)) continue
     // An empty `requiredRole` is a real value -- "any role will do" (see `SchedulableSlave.
     // runtimeRoles` in `../scheduler/decide.ts`, which reasons about exactly this string). Such a
     // task cannot be "unstaffed BY ROLE", and keying a situation on it would put an empty
