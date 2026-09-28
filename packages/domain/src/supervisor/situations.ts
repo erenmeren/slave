@@ -150,6 +150,11 @@ export const SITUATION_KINDS = [
    * it -- after everything the rules found by themselves.
    */
   'operator_request',
+  /**
+   * Conductor R2: the size decision of one goal version. Never produced by {@link observe}; written
+   * by the conductor. `subjectId` is `<workspaceId>:v<version>`.
+   */
+  'conduct',
 ] as const
 
 export type SituationKind = (typeof SITUATION_KINDS)[number]
@@ -226,4 +231,5 @@ export const SITUATION_LABEL: Record<SituationKind, string> = {
   memory_candidates_piling: 'Unverified knowledge piling up',
   workspace_halted: 'Project halted',
   operator_request: 'Something you asked for',
+  conduct: 'How a goal is delivered',
 }
