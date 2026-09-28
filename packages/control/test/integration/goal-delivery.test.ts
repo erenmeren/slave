@@ -279,8 +279,8 @@ describe('confirmGoalMerge', () => {
       expect(merged[0]?.payload).toEqual({ version: 1, branch: v1.branch, into: 'main', commit: tip, by: 'human' })
       expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: pkg.runId ?? '' } })).integrated).toBe(true)
 
-      // Said once: a second confirm is refused as closed, and nothing more is written.
-      expect(await confirmGoalMerge(f.workspaceId, 1)).toEqual({ ok: false, error: { kind: 'goal_version_closed', goalVersion: 1, status: 'merged' } })
+      // Said once: a second confirm is idempotent (final wave I1) -- the same commit, nothing more written.
+      expect(await confirmGoalMerge(f.workspaceId, 1)).toEqual({ ok: true, value: { commit: tip } })
       expect(await eventsOf(f.workspaceId, 'workspace_goal_merged')).toHaveLength(1)
     })
   }
@@ -301,6 +301,30 @@ describe('confirmGoalMerge', () => {
 
     expect(await confirmGoalMerge(f.workspaceId, 1)).toEqual({ ok: true, value: { commit: tip } })
     expect((await prisma.goalDelivery.findUniqueOrThrow({ where: { id: v1.id } })).mergedAt).not.toBeNull()
+    expect(await eventsOf(f.workspaceId, 'workspace_goal_merged')).toHaveLength(1)
+  })
+
+  it('confirms a version the goal pass already recorded as merged, without a second event', async (): Promise<void> => {
+    const f = await seedWorkspace()
+    const v1 = await seedDelivery(f, 1, { status: 'accepted' })
+    git(['merge', '-q', '--no-ff', '--no-edit', v1.branch], f.repoPath)
+    const tip = git(['rev-parse', 'main'], f.repoPath)
+    // The goal pass saw the branch contained and recorded it before the person got to confirm.
+    await prisma.executionEvent.create({
+      data: {
+        workspaceId: f.workspaceId,
+        type: 'workspace_goal_merged',
+        actor: 'human',
+        payload: { version: 1, branch: v1.branch, into: 'main', commit: tip, by: 'human' },
+      },
+    })
+    await prisma.goalDelivery.update({ where: { id: v1.id }, data: { mergedAt: new Date() } })
+    // The person commits on after the merge; the confirm answers with the commit that was recorded.
+    writeFileSync(join(f.repoPath, 'later.txt'), 'later\n')
+    git(['add', '-A'], f.repoPath)
+    git(['commit', '-q', '-m', 'later'], f.repoPath)
+
+    expect(await confirmGoalMerge(f.workspaceId, 1)).toEqual({ ok: true, value: { commit: tip } })
     expect(await eventsOf(f.workspaceId, 'workspace_goal_merged')).toHaveLength(1)
   })
 

@@ -221,6 +221,9 @@ export async function abandonGoal(
  * commit the person's merge made, which contains the integration branch.
  *
  * The integration worktree is left for the goal pass, which removes it once the row is stamped.
+ *
+ * Idempotent on a version already stamped whose branch is in the base branch (final wave I1): the
+ * goal pass may have recorded the person's hand merge first.
  */
 export async function confirmGoalMerge(
   workspaceId: string,
@@ -236,15 +239,25 @@ export async function confirmGoalMerge(
       where: { id: found.id },
       include: { workspace: { select: { repoPath: true, baseBranch: true } } },
     })
-    if (delivery.mergedAt !== null || delivery.status === 'abandoned') {
-      return err({ kind: 'goal_version_closed', goalVersion, status: delivery.mergedAt !== null ? 'merged' : delivery.status })
+    if (delivery.status === 'abandoned') return err({ kind: 'goal_version_closed', goalVersion, status: delivery.status })
+    if (delivery.mergedAt === null && delivery.status !== 'accepted') {
+      return err({ kind: 'goal_not_accepted', goalVersion, status: delivery.status })
     }
-    if (delivery.status !== 'accepted') return err({ kind: 'goal_not_accepted', goalVersion, status: delivery.status })
     const { repoPath, baseBranch } = delivery.workspace
     const merged = await gitIn(repoPath, 'merge-base', '--is-ancestor', delivery.integrationBranch, `refs/heads/${baseBranch}`).then(
       () => true,
       () => false,
     )
+    if (delivery.mergedAt !== null) {
+      // Final wave I1: already recorded -- by the goal pass, which finds a hand merge contained on
+      // its next tick and records it as the person's, often before the person gets to confirm, or
+      // by an earlier confirm. The person did what they were told, so the confirm is idempotent:
+      // it answers with the commit already recorded, and writes nothing. A stamp whose branch is
+      // NOT in the base branch (somebody rewrote it since) is not something to confirm.
+      if (!merged) return err({ kind: 'goal_version_closed', goalVersion, status: 'merged' })
+      const recorded = await recordedMergeCommit(tx, workspaceId, goalVersion)
+      return ok({ commit: recorded ?? (await gitIn(repoPath, 'rev-parse', `refs/heads/${baseBranch}`)) })
+    }
     if (!merged) return err({ kind: 'goal_not_merged', goalVersion, branch: delivery.integrationBranch, into: baseBranch })
     const commit = await gitIn(repoPath, 'rev-parse', `refs/heads/${baseBranch}`)
 
@@ -261,4 +274,13 @@ export async function confirmGoalMerge(
     await tx.goalDelivery.updateMany({ where: { id: delivery.id, mergedAt: null }, data: { mergedAt: new Date(), mergeError: null } })
     return ok({ commit })
   })
+}
+
+/** The commit a version's `goal_merged` recorded, if the log has one. */
+async function recordedMergeCommit(tx: Prisma.TransactionClient, workspaceId: string, version: number): Promise<string | null> {
+  const row = await tx.executionEvent.findFirst({
+    where: { workspaceId, type: 'workspace_goal_merged', payload: { path: ['version'], equals: version } },
+    select: { payload: true },
+  })
+  return (row?.payload as { readonly commit?: string } | undefined)?.commit ?? null
 }
