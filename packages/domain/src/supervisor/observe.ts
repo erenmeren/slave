@@ -638,13 +638,14 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
   }
 
   // foreign_file (Conductor Plan 3, R11): a package task the audit sent back for changing files
-  // another worker owns, a second time. A task that is over has nothing left to go back to, so it
-  // is not raised whatever its count. Ownership refusals at the gate (`run.tool_denied` with
-  // capability `foreign_file`) are NOT this: they are not one of the six kinds, so
-  // `permission_blocked` above never offers a grant for them either.
+  // another worker owns, a second time. Raised only while the task waits to go again (`rework` or
+  // `ready`): the count never goes down, so a task that has since moved on -- to review, or to its
+  // terminal -- is not flagged for a problem it got past (final review M2). Ownership refusals at
+  // the gate (`run.tool_denied` with capability `foreign_file`) are NOT this: they are not one of
+  // the six kinds, so `permission_blocked` above never offers a grant for them either.
   for (const task of world.tasks) {
     if (task.ownershipViolations < FOREIGN_FILE_TRIP_COUNT) continue
-    if (TERMINAL.includes(task.status)) continue
+    if (task.status !== 'rework' && task.status !== 'ready') continue
     add({
       kind: 'foreign_file',
       subjectId: task.id,

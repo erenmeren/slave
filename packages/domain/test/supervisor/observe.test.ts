@@ -660,6 +660,20 @@ describe('observe -- foreign_file (Conductor Plan 3, R11)', () => {
     }
   })
 
+  it('is raised while the task waits to go again: rework or ready', () => {
+    for (const status of ['rework', 'ready'] as const) {
+      expect(keys(observe(world({ tasks: [sentBack({ status })], slaves: [holder] })))).toEqual([['foreign_file', 't1']])
+    }
+  })
+
+  // Final review M2: the count never goes down, so without this a task that recovered stayed flagged.
+  it('stays silent once the task has moved on, e.g. to review', () => {
+    for (const status of ['assigned', 'running', 'verifying', 'reviewing', 'merging'] as const) {
+      const situations = observe(world({ tasks: [sentBack({ status, ownershipViolations: 3 })], slaves: [holder] }))
+      expect(situations.filter((s) => s.kind === 'foreign_file')).toEqual([])
+    }
+  })
+
   it('never reads a denied write to a foreign file as a permission a person could grant', () => {
     // The gate spells an ownership refusal `foreign_file` on `run.tool_denied`; it is not one of the
     // six kinds, so no grant is ever proposed for it however often it is met.
