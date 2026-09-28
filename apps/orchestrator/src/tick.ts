@@ -37,6 +37,7 @@ import {
 import { conduct, type ConductStep } from './conductor.js'
 import { deliverAnswers } from './deliver.js'
 import { baseRefFor } from './goalBranch.js'
+import { runGoalPass } from './goal.js'
 import { runMergePass } from './merge.js'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { permissionOwnership } from './ownership.js'
@@ -436,6 +437,12 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   // produce one this same tick. Serialized to at most one merge per tick (spec §4) inside
   // `runMergePass` itself.
   await runMergePass(deps.workspaceId)
+
+  // Conductor Plan 4a: after the merge pass, which is what integrates the last package of a goal
+  // version. Wrapped like the Supervisor pass: a goal pass that throws must not stop scheduling.
+  await runGoalPass(deps.workspaceId).catch((error: unknown) => {
+    console.error(`[tick] the goal pass for workspace ${deps.workspaceId} failed:`, error)
+  })
 
   // Last, after every pass that could have changed what is stuck: the Supervisor decides about the
   // workspace this tick leaves behind, not the one it found. A run started, a review dispatched or
