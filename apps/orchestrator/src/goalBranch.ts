@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import { integrationWorktreeKey } from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
 import { gitIn, worktreeRootFor } from './worktree.js'
 
 /**
@@ -57,6 +58,39 @@ export async function integrationTargetFor(taskId: string): Promise<IntegrationT
     select: { id: true, goalVersion: true, integrationBranch: true },
   })
   return delivery === null ? null : { deliveryId: delivery.id, goalVersion: delivery.goalVersion, branch: delivery.integrationBranch }
+}
+
+/**
+ * Plan 4a D10 (controller ruling P1): a package of an abandoned goal version never runs or lands.
+ * `abandonGoal` cancels every unfinished package of the version, but a person can put one back
+ * afterwards (`retry-task`), and a task can reach the merge pass around it; wherever one turns up
+ * -- dispatch, the merge pass -- it is taken off the board the same way: cancelled from the status
+ * it was found in (a guarded write, so a task something else moved meanwhile is left alone), any
+ * merge claim released, the reason naming the version. Returns whether the task was cancelled.
+ */
+export async function cancelIfVersionAbandoned(
+  task: { readonly id: string; readonly workspaceId: string; readonly goalVersion: number | null },
+  target: IntegrationTarget | null,
+  from: 'ready' | 'rework' | 'merging',
+): Promise<boolean> {
+  if (target === null) return false
+  const delivery = await prisma.goalDelivery.findUnique({ where: { id: target.deliveryId }, select: { status: true } })
+  if (delivery?.status !== 'abandoned') return false
+  const reason = `goal v${String(target.goalVersion)} abandoned`
+  const cancelled = await prisma.task.updateMany({
+    where: { id: task.id, status: from },
+    data: { status: 'cancelled', mergeClaimedAt: null, lastRejectionReason: reason },
+  })
+  if (cancelled.count === 1) {
+    await appendEvent({
+      type: 'task.cancelled',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      actor: 'system',
+      payload: { reason, goalVersion: task.goalVersion },
+    })
+  }
+  return true
 }
 
 /** The ref a task's work is measured from: its integration branch, else the workspace's base branch. */
