@@ -109,8 +109,8 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
     // Conductor spec R4, for the same reason as the task's grants: a package run that lost its
     // ownership on the way back in could write any file. Implementation runs only, as at dispatch:
     // a review run on a package task carries a `taskId` too but was never given ownership. The
-    // worktree is the checkpoint's -- the run row does not record one, and the checkpoint is what
-    // the child resumes in.
+    // worktree is the checkpoint's: its path is the directory `adapter.resume` respawns the child
+    // in, so it is the root the gate must resolve the resumed run's paths against.
     ownership:
       run.kind !== 'implementation' || run.taskId === null
         ? undefined
