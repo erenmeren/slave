@@ -56,6 +56,10 @@
 //                  patches the ask legs below. Absent, the work run has no
 //                  report at all. ARGV and base64 for `--ask-json-base64`'s
 //                  reasons.
+//                  Conductor Plan 4a: `--work-file <path>` in ARGV names the
+//                  file that work body writes (default `m8a-work.txt`), so
+//                  two package workers of one goal version each write a file
+//                  only their own package owns.
 //   M52 R8 hangs three optional side effects off the `--work-fixture` arm,
 //   so they reach every mode that has one and change nothing in any mode
 //   that is not asked for them. `--env-out <path>` appends this child's own
@@ -218,7 +222,7 @@
 //                  hook-deny, and permission-denied runs, so the fake matches
 //                  that rather than inventing a nonzero exit for them.
 import { execFileSync, spawnSync } from 'node:child_process'
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -1344,7 +1348,9 @@ async function main() {
     // A work run: the m8a-flow work body verbatim -- leave a real commit in the worktree
     // (cwd), then replay success.
     if (await workFixtureArm()) return
-    writeFileSync(path.join(process.cwd(), 'm8a-work.txt'), `${prompt.slice(0, 80)}\n`)
+    const workFile = path.join(process.cwd(), flagValue('--work-file') ?? 'm8a-work.txt')
+    mkdirSync(path.dirname(workFile), { recursive: true })
+    writeFileSync(workFile, `${prompt.slice(0, 80)}\n`)
     execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
     // `--allow-empty`: a REWORK run adopts its previous attempt's worktree, where this same file
     // with the same first line is already committed -- without it the commit finds nothing, git
