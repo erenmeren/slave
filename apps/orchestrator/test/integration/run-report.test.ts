@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { CONDUCTOR_ROLE, PACKAGE_WORKER_ROLE, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import { ClaudeCodeAdapter } from '@slave-of-ai/providers'
@@ -49,10 +50,14 @@ const goodReport = {
 const repos: string[] = []
 
 /** The `m8-flow` fake, whose work run ends with `report` as its `<slave-report>` block (none when
- *  `null`) -- `--report-json-base64` on argv, the channel a run's child actually receives. */
+ *  `null`; a string is sent as it is, so a test can script a broken block) -- `--report-json-base64`
+ *  on argv, the channel a run's child actually receives. */
 function depsFor(workspaceId: string, report: unknown): TickDeps {
   const extraArgs = [FAKE, '--fixture', 'm8-flow']
-  if (report !== null) extraArgs.push('--report-json-base64', Buffer.from(JSON.stringify(report)).toString('base64'))
+  if (report !== null) {
+    const body = typeof report === 'string' ? report : JSON.stringify(report)
+    extraArgs.push('--report-json-base64', Buffer.from(body).toString('base64'))
+  }
   const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs, hookPath: REAL_GATE })
   return { workspaceId: brandWorkspaceId(workspaceId), registry: { resolve: () => adapter } }
 }
@@ -90,7 +95,7 @@ async function seedWorkspace(delivery: 'planned' | 'conducted'): Promise<{ reado
 /** A conducted workspace with requirements R1 and R2, one package `main` that owns everything and
  *  both requirements, and its task pinned to the one seat that holds the package-worker role --
  *  the shape `conductor.ts`'s `materialise` writes. */
-async function seedPackageTask(options: { readonly report: unknown }): Promise<Fixture> {
+async function seedPackageTask(options: { readonly report: unknown; readonly maxAttempts?: number }): Promise<Fixture> {
   const { workspaceId, teamId } = await seedWorkspace('conducted')
   await prisma.requirementSet.create({
     data: {
@@ -132,7 +137,7 @@ async function seedPackageTask(options: { readonly report: unknown }): Promise<F
       requiredRole: PACKAGE_WORKER_ROLE,
       requiredCapabilities: [],
       createdBy: 'system',
-      maxAttempts: 3,
+      maxAttempts: options.maxAttempts ?? 3,
       goalVersion: 1,
       assigneeId: seat.id,
       workPackageId: pkg.id,
@@ -160,13 +165,19 @@ async function seedPlainTask(): Promise<Fixture> {
 
 /** Ticks, letting every pump (and the conclusion it awaits) finish between ticks, until `done`
  *  holds -- bounded, so a flow that never gets there fails instead of hanging. */
-async function tickUntil(f: Fixture, done: () => Promise<boolean>): Promise<void> {
+async function tickUntil(f: Fixture, done: () => Promise<boolean>, deps: TickDeps = f.deps): Promise<void> {
   for (let i = 0; i < 40; i += 1) {
-    await tick(f.deps)
+    await tick(deps)
     await drainPumps()
     if (await done()) return
   }
   throw new Error('tickUntil: the condition never held')
+}
+
+/** The domain event types written about one task, in order. */
+async function taskEventTypes(taskId: string): Promise<readonly string[]> {
+  const rows = await prisma.executionEvent.findMany({ where: { taskId }, orderBy: { seq: 'asc' }, select: { type: true } })
+  return rows.map((row) => DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? row.type)
 }
 
 const taskStatus = async (taskId: string): Promise<string> =>
@@ -214,6 +225,32 @@ describe('a package run files its report before verify', () => {
     const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: f.taskId } })
     expect(run.status).toBe('failed')
     expect(await prisma.runReport.count()).toBe(0)
+    expect(await taskEventTypes(f.taskId)).toContain('task.rework')
+  })
+
+  it('fails the task at the attempt cap, and says so with task.failed', async (): Promise<void> => {
+    const f = await seedPackageTask({ report: null, maxAttempts: 1 })
+    await tickUntil(f, async () => (await taskStatus(f.taskId)) === 'failed')
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })
+    expect(task.lastRejectionReason).toContain('no <slave-report> block')
+    const events = await taskEventTypes(f.taskId)
+    expect(events).toContain('task.failed')
+    expect(events).not.toContain('task.rework')
+  })
+
+  it('accepts a well-formed report on the run after one without a usable report', async (): Promise<void> => {
+    // One fake per phase: the report rides on the spawn's argv, so the second run is given one by
+    // ticking with a second set of deps -- the worker that forgot, then the worker that remembered.
+    const f = await seedPackageTask({ report: '{not json' })
+    await tickUntil(f, async () => (await taskStatus(f.taskId)) === 'rework')
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })).lastRejectionReason).toContain('not valid JSON')
+    expect(await prisma.runReport.count()).toBe(0)
+
+    await tickUntil(f, async () => (await taskStatus(f.taskId)) === 'reviewing', depsFor(f.workspaceId, goodReport))
+    const runs = await prisma.slaveRun.findMany({ where: { taskId: f.taskId, kind: 'implementation' }, orderBy: { startedAt: 'asc' } })
+    expect(runs.map((r) => r.status)).toEqual(['failed', 'succeeded'])
+    const report = await prisma.runReport.findFirstOrThrow({ where: { taskId: f.taskId } })
+    expect(report.runId).toBe(runs[1]?.id)
   })
 
   it('sends each report question to the conductor, tied to the task', async (): Promise<void> => {

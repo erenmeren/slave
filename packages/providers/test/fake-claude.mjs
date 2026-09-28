@@ -1346,7 +1346,10 @@ async function main() {
     if (await workFixtureArm()) return
     writeFileSync(path.join(process.cwd(), 'm8a-work.txt'), `${prompt.slice(0, 80)}\n`)
     execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
-    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '-m', 'fake work'], { cwd: process.cwd() })
+    // `--allow-empty`: a REWORK run adopts its previous attempt's worktree, where this same file
+    // with the same first line is already committed -- without it the commit finds nothing, git
+    // exits non-zero, and the run dies with no terminal result instead of doing its rework.
+    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '--allow-empty', '-m', 'fake work'], { cwd: process.cwd() })
     // Conductor Plan 2: a package worker ends with a `<slave-report>` block. Scripted on argv, and
     // patched into the same `complete` capture the ask legs patch, so the report reaches the pump
     // through the stream shape a real run produces.
