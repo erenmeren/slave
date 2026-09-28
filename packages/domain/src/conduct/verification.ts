@@ -52,21 +52,30 @@ function skipWhitespace(text: string, pos: number): number {
   return i
 }
 
+/** What {@link scanJsonObjectEnd} found: the index right after the object's closing brace, or
+ *  `null` if it never balanced before the text (or the budget) ran out, plus how many characters it
+ *  examined -- charged against {@link parseSlaveVerification}'s work budget. */
+interface ObjectScan {
+  readonly end: number | null
+  readonly examined: number
+}
+
 /**
  * Walks `text` from `start` (which must be the object's opening `{`) tracking combined
  * brace/bracket depth and JSON string state, and returns the index right after the character where
  * that depth first returns to zero -- the top-level object's own closing brace -- or `null` if it
- * never does before the text ends (an unclosed or truncated object). Inside a string, `\` escapes
- * the next character and an unescaped `"` ends the string; a brace or bracket inside a string is
- * plain text and does not change the depth. This is a STRUCTURAL scanner, not a JSON validator: a
- * candidate this finds balanced may still fail `JSON.parse` (e.g. an unquoted key) -- that is
- * `parseSlaveVerification`'s job, not this one's.
+ * never does before the text ends or `budget` characters have been examined. Inside a string, `\`
+ * escapes the next character and an unescaped `"` ends the string; a brace or bracket inside a
+ * string is plain text and does not change the depth. This is a STRUCTURAL scanner, not a JSON
+ * validator: a candidate this finds balanced may still fail `JSON.parse` (e.g. an unquoted key) --
+ * that is `parseSlaveVerification`'s job, not this one's.
  */
-function scanJsonObjectEnd(text: string, start: number): number | null {
+function scanJsonObjectEnd(text: string, start: number, budget: number): ObjectScan {
   let depth = 0
   let inString = false
   let escaped = false
-  for (let i = start; i < text.length; i += 1) {
+  const stop = Math.min(text.length, start + Math.max(0, budget))
+  for (let i = start; i < stop; i += 1) {
     const ch = text[i]!
     if (inString) {
       if (escaped) escaped = false
@@ -78,11 +87,15 @@ function scanJsonObjectEnd(text: string, start: number): number | null {
     else if (ch === '{' || ch === '[') depth += 1
     else if (ch === '}' || ch === ']') {
       depth -= 1
-      if (depth === 0) return i + 1
+      if (depth === 0) return { end: i + 1, examined: i + 1 - start }
     }
   }
-  return null
+  return { end: null, examined: stop - start }
 }
+
+/** Slack on top of `4 x text.length` for {@link parseSlaveVerification}'s work budget, so a short
+ *  message with a prose candidate or two is never refused for its size. */
+const SCAN_BUDGET_SLACK = 4096
 
 /**
  * The verifier's verdict (spec R8), from the LAST `<slave-verification>` block of its final
@@ -93,48 +106,36 @@ function scanJsonObjectEnd(text: string, start: number): number | null {
  * alone may have no check -- there is none to show. The error names each gap, because it is what
  * the run is failed with (plan D7) and, for a `fail`, what a package reads back on rework (D5).
  *
- * NOT a substring search for `open`/`close` at all (ruling V2c, fix round 3, replaces round 2's
- * V2b): pairing tag SUBSTRINGS, in either search order, has no fixed rule that is always the real
- * tag -- V2b's "try every (open, close) pair" let a later block that structurally closes but is
- * NOT valid JSON (an earlier now-stale block happened to parse) silently fall back to that earlier,
- * stale block instead of failing, and a flood of 50+ tag-like mentions (inside the block's own
- * evidence, or after it) could push the genuine pair outside a fixed candidate cap.
- *
- * Instead this is a forward, JSON-AWARE scan with no pairing and no cap. It walks `text` left to
- * right; at each `open` occurrence not already inside a block recorded below, it skips whitespace
- * and requires the next character to be `{` (otherwise this occurrence is prose or a bare mention --
- * skip past just this `open` and keep scanning); from that `{` it runs {@link scanJsonObjectEnd},
- * a structural brace/bracket/string scanner (NOT a substring search) that finds where the top-level
- * object closes, immune to a `close`-tag-shaped substring quoted inside one of the object's own
- * strings, because such a substring is never seen as a candidate open OR checked against as a close
- * at all -- the object's end is found by depth, not by text search. If that end is found and,
- * after optional whitespace, the literal `close` tag follows, the (start, end) pair is RECORDED and
- * scanning resumes right after that closing tag -- so a `close`-tag-shaped substring elsewhere
- * inside the block's own strings is never independently visited as a candidate boundary either.
- * Otherwise scanning resumes right after this `open` occurrence, so a later, unrelated mention (a
- * recap after the block, prose before it) is free to be tried as its own candidate.
- *
- * The LAST recorded block wins -- no fallback to an earlier one. If its slice fails `JSON.parse`,
- * this reports "not valid JSON", full stop; a structurally-closed-but-invalid LATER block must
- * never resurrect an earlier, valid-looking one (that would silently accept stale content). If NO
- * block was ever recorded: an `open` occurrence existed somewhere (prose, or JSON that never
- * closed) but never actually completed a whole tagged block -- reported "not closed"; if `open`
- * never occurred at all -- reported "has no ... block".
- *
- * An object whose structural scan reaches the end of `text` without balancing (truncated mid-JSON)
- * stops the ENTIRE search rather than moving on to the next `open` occurrence: everything after
- * this point was already walked once looking for a closing brace that was never found, so there is
- * nothing left un-scanned for a later candidate to find that this pass would have missed. (`in
- * practice this only ever guards against a genuinely truncated final message -- the ordinary case
- * this protects is a huge run output with many tag-like substrings near the end, none of which ever
- * close, which would otherwise re-walk the same unclosed tail once per occurrence.)
+ * Finding the block (ruling V2d, fix round 4; amends V2c). Pairing tag SUBSTRINGS cannot tell a
+ * tag quoted inside a JSON string from a real delimiter, so this is a forward, structural scan:
+ * - A CANDIDATE is an opening tag followed, after optional whitespace, by `{`. An opening tag not
+ *   followed by `{` is a bare mention and is ignored.
+ * - From a candidate's `{`, {@link scanJsonObjectEnd} finds where the top-level object closes by
+ *   brace/bracket depth, string- and escape-aware, so a tag-shaped substring inside one of the
+ *   object's own strings is never a boundary. The candidate is RECORDED when the object balances
+ *   and, after optional whitespace, the closing tag follows; scanning then resumes after that
+ *   closing tag. Otherwise the candidate FAILS and scanning resumes right after its opening tag.
+ * - Once a block has been recorded, any candidate after it that fails is an error -- "not closed"
+ *   when its object ran to the end of the text, else "not valid JSON" -- and no earlier block is
+ *   ever returned: a broken revision (a missing or extra `]`, a message cut off mid-string, a prose
+ *   `<slave-verification>{`) may be the verifier's real answer, so the run is retried rather than
+ *   read from a stale block. A candidate that fails before the first recorded block (prose that
+ *   announces the block) is harmless.
+ * - Work is bounded, not capped by count: every structural scan charges the characters it examines
+ *   to one budget of `4 x text.length` (+ {@link SCAN_BUDGET_SLACK}); past it the parse is an error
+ *   ("could not be read within the work budget"), never an earlier block. Nested candidates would
+ *   otherwise re-walk the same text once each (quadratic).
+ * - No block recorded: "not closed" if an opening tag occurred at all, else "has no ... block".
+ * - The last recorded block that fails `JSON.parse` is "not valid JSON"; its items are then
+ *   validated as above.
  */
 export function parseSlaveVerification(text: string, requirementKeys: readonly string[]): Result<readonly VerificationItem[], string> {
   const open = `<${SLAVE_VERIFICATION_TAG}>`
   const close = `</${SLAVE_VERIFICATION_TAG}>`
 
+  let budget = 4 * text.length + SCAN_BUDGET_SLACK
   let hadOpen = false
-  const blocks: { readonly start: number; readonly end: number }[] = []
+  let lastBlock: { readonly start: number; readonly end: number } | undefined
   let cursor = text.indexOf(open)
   while (cursor !== -1) {
     hadOpen = true
@@ -143,18 +144,23 @@ export function parseSlaveVerification(text: string, requirementKeys: readonly s
       cursor = text.indexOf(open, cursor + open.length)
       continue
     }
-    const objectEnd = scanJsonObjectEnd(text, objectStart)
-    if (objectEnd === null) break // see the doc comment: nothing later in the text can close either.
-    const afterObject = skipWhitespace(text, objectEnd)
-    if (text.startsWith(close, afterObject)) {
-      blocks.push({ start: objectStart, end: objectEnd })
-      cursor = text.indexOf(open, afterObject + close.length)
-    } else {
-      cursor = text.indexOf(open, cursor + open.length)
+    const scan = scanJsonObjectEnd(text, objectStart, budget)
+    budget -= scan.examined
+    if (scan.end === null && objectStart + scan.examined < text.length) {
+      return err(`the ${open} block could not be read within the work budget`)
     }
+    const afterObject = scan.end === null ? text.length : skipWhitespace(text, scan.end)
+    if (scan.end !== null && text.startsWith(close, afterObject)) {
+      lastBlock = { start: objectStart, end: scan.end }
+      cursor = text.indexOf(open, afterObject + close.length)
+      continue
+    }
+    if (lastBlock !== undefined) {
+      return scan.end === null ? err(`the ${open} block is not closed`) : err(`the ${open} block is not valid JSON`)
+    }
+    cursor = text.indexOf(open, cursor + open.length)
   }
 
-  const lastBlock = blocks.at(-1)
   if (lastBlock === undefined) {
     return hadOpen ? err(`the ${open} block is not closed`) : err(`the final message has no ${open} block`)
   }

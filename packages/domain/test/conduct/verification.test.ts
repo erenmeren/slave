@@ -114,6 +114,62 @@ describe('parseSlaveVerification', () => {
     expect(parsed.ok).toBe(true)
     expect(parsed.ok && parsed.value[0]?.status).toBe('pass')
   })
+
+  // Ruling V2d (fix round 4): once a block has been recorded, ANY later candidate (an opening tag
+  // followed by `{`) that fails to record is an error -- never a silent read of the earlier block,
+  // whatever way the later one is broken.
+  const revised = (items: unknown): string => `<slave-verification>${JSON.stringify({ items })}</slave-verification>`
+  const failR1 = { key: 'R1', status: 'fail', check: 'pytest -k csv', output: '1 failed', reason: 'revised' }
+
+  it('errors when a revised block after a valid one is missing a closing bracket', () => {
+    const broken = revised([failR1]).replace(']}', '}')
+    const parsed = parseSlaveVerification(`${block([pass('R1')])}
+${broken}`, ['R1'])
+    expect(parsed.ok).toBe(false)
+  })
+
+  it('errors when a revised block after a valid one has an extra closing bracket', () => {
+    const broken = revised([failR1]).replace(']}', ']]}')
+    const parsed = parseSlaveVerification(`${block([pass('R1')])}
+${broken}`, ['R1'])
+    expect(parsed.ok).toBe(false)
+    if (!parsed.ok) expect(parsed.error).toMatch(/not valid JSON/)
+  })
+
+  it('errors "not closed" when a revised block after a valid one is cut off mid-string', () => {
+    const cut = revised([failR1]).slice(0, revised([failR1]).indexOf('1 failed') + 3)
+    const parsed = parseSlaveVerification(`${block([pass('R1')])}
+${cut}`, ['R1'])
+    expect(parsed.ok).toBe(false)
+    if (!parsed.ok) expect(parsed.error).toMatch(/not closed/)
+  })
+
+  it('errors when prose opens a candidate between a valid block and a later one (the run retries)', () => {
+    const text = `${block([pass('R1')])}
+Correcting the <slave-verification>{ block:
+${revised([failR1])}`
+    const parsed = parseSlaveVerification(text, ['R1'])
+    expect(parsed.ok).toBe(false)
+  })
+
+  it('ignores an unclosed prose candidate that comes before the only block', () => {
+    const text = `I will emit <slave-verification>{ like this
+${block([pass('R1')])}`
+    const parsed = parseSlaveVerification(text, ['R1'])
+    expect(parsed.ok).toBe(true)
+    expect(parsed.ok && parsed.value[0]?.status).toBe('pass')
+  })
+
+  it('returns within a second on 400 KB of nested candidates', () => {
+    // Every candidate balances only at the very end and is not followed by the closing tag, so a
+    // scan per candidate would re-walk almost the whole text each time (quadratic).
+    const depth = Math.ceil(400_000 / 22)
+    const text = `${'<slave-verification>{'.repeat(depth)}${'}'.repeat(depth)}`
+    const started = Date.now()
+    const parsed = parseSlaveVerification(text, ['R1'])
+    expect(Date.now() - started).toBeLessThan(1000)
+    expect(parsed.ok).toBe(false)
+  })
 })
 
 describe('trimEvidence', () => {
