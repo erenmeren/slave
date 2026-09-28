@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { settleTaskEvidence } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  isOwned,
   nextMergeCandidate,
   taskId as brandTaskId,
   type GuardrailKind,
@@ -9,6 +10,8 @@ import {
   type WorkspaceId,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { ownershipRuleForTask } from './ownership.js'
+import { logSetAside, setAsideDirFor, setAsideForeignChanges } from './setAside.js'
 import { rejectTask, runVerify, stageGatesFor } from './verify.js'
 import { gitIn } from './worktree.js'
 
@@ -131,106 +134,6 @@ async function failMerge(input: {
 }
 
 /**
- * Drops the stash entry whose commit is `sha`, by looking its index up rather than assuming
- * `stash@{0}`: `refs/stash` is shared by every worktree of the repository, so the operator's own
- * stashes in the primary checkout sit in the same list, and the top entry is not necessarily ours.
- */
-async function dropStash(worktreePath: string, sha: string): Promise<void> {
-  const shas = (await gitIn(worktreePath, 'stash', 'list', '--format=%H')).split('\n')
-  const index = shas.indexOf(sha)
-  if (index >= 0) await gitIn(worktreePath, 'stash', 'drop', '--quiet', `stash@{${String(index)}}`)
-}
-
-/**
- * Puts the worktree back to exactly its HEAD commit: every tracked change undone, every untracked,
- * non-ignored file removed. Used only after a leftover stash failed to re-apply, when everything
- * outside HEAD is either a half-applied leftover (conflict markers, unmerged index entries) or an
- * untracked file restored from it -- the stash still holds all of it, so nothing is lost here.
- */
-async function resetToHead(worktreePath: string): Promise<void> {
-  await gitIn(worktreePath, 'reset', '--hard', '--quiet', 'HEAD')
-  await gitIn(worktreePath, 'clean', '-fd', '--quiet')
-}
-
-/**
- * Rebases the task's worktree onto the base branch, setting aside whatever the worktree holds that
- * the branch does not (Conductor Plan 3, fix round 2, C1).
- *
- * A package task's leftover-work commit stages only the paths its package owns (`wipCommit.ts`), so
- * a foreign change -- a lockfile setup rewrote, a file generated outside the package -- stays
- * uncommitted in the tree by design. `git rebase` refuses a dirty tree, and a refusal here was a
- * charged, JUDGED rework whose next run re-dirtied the same file: the second one halted the
- * workspace, over changes that were never going to merge.
- *
- * `rebase --autostash` is not enough, for two measured reasons (git 2.55): it does not stash
- * untracked files, so an untracked leftover whose path the base branch now tracks still refuses the
- * checkout; and when its re-apply conflicts it still exits 0 and leaves conflict markers and
- * unmerged entries in the tree, which the post-rebase re-verify would then judge. So the stash is
- * explicit, includes untracked files, and is addressed by its commit rather than by position.
- *
- * Outcomes, all bounded:
- *  - the rebase itself conflicts: it is aborted, the leftovers are re-applied onto the unchanged
- *    HEAD (where they came from, so they apply), and the error is rethrown for the caller's judged
- *    `failMerge` -- exactly as for a clean tree;
- *  - the rebase succeeds and the leftovers re-apply: the tree is as the worker left it, rebased;
- *  - the rebase succeeds and they do NOT re-apply (the base branch changed the same file, or now
- *    tracks an untracked leftover's path): the tree is reset to the rebased HEAD and the stash entry
- *    is KEPT, named in a warning. The rebase counts as succeeded -- the branch applies; only
- *    changes that were never part of it did not -- and the re-verify judges the clean rebased
- *    branch, which is exactly the tree that lands.
- */
-async function rebaseOntoBase(worktreePath: string, baseBranch: string, taskKey: string): Promise<void> {
-  const dirty = (await gitIn(worktreePath, 'status', '--porcelain', '--untracked-files=all')) !== ''
-  if (!dirty) {
-    await gitIn(worktreePath, 'rebase', baseBranch)
-    return
-  }
-
-  await gitIn(
-    worktreePath,
-    'stash',
-    'push',
-    '--include-untracked',
-    '--quiet',
-    '-m',
-    `slaveofai: ${taskKey} changes not on its branch, set aside for the merge rebase`,
-  )
-  const stash = await gitIn(worktreePath, 'rev-parse', '--verify', 'refs/stash')
-
-  const restore = async (): Promise<boolean> => {
-    try {
-      await gitIn(worktreePath, 'stash', 'apply', '--quiet', stash)
-    } catch {
-      await resetToHead(worktreePath)
-      return false
-    }
-    // A conflicted apply exits non-zero today; this also catches any git that reports it as success.
-    if ((await gitIn(worktreePath, 'diff', '--name-only', '--diff-filter=U')) !== '') {
-      await resetToHead(worktreePath)
-      return false
-    }
-    await dropStash(worktreePath, stash)
-    return true
-  }
-
-  try {
-    await gitIn(worktreePath, 'rebase', baseBranch)
-  } catch (error) {
-    await gitIn(worktreePath, 'rebase', '--abort').catch(() => {})
-    await restore()
-    throw error
-  }
-
-  if (!(await restore())) {
-    // Not an event: nothing about the task changed, and the stash is an operator's recovery detail.
-    console.warn(
-      `[merge] ${taskKey}: changes not on the branch did not re-apply after the rebase onto ${baseBranch}; ` +
-        `the worktree is the rebased branch, and they are kept in stash ${stash}`,
-    )
-  }
-}
-
-/**
  * One merge-pass step: claim and process at most ONE merging task (spec §4 serialization).
  *
  * Called once per tick, after the review pass. Merges are strictly serial by design (spec §10):
@@ -318,12 +221,32 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
   }
   const worktreePath = latestImpl.worktreePath
 
+  // Conductor Plan 3, fix round 3 (controller Ruling 7): a governed package task's worktree can
+  // still hold changes to files its package does not own -- a verify command that generated a
+  // file, anything that dirtied the tree after the leftover commit set the rest aside. None of them
+  // is on the branch, and `git rebase` refuses a dirty tree: they are set aside the same way
+  // (saved under the implementation run's state directory, removed from the worktree), so the
+  // rebase and the re-verify below see exactly the branch that lands. Never `git stash`:
+  // `refs/stash` is shared by every worktree of the repository. A task with no package, and a
+  // package's own uncommitted changes, meet the rebase exactly as before.
+  if (task.workPackageId !== null && (await gitIn(worktreePath, 'status', '--porcelain', '--untracked-files=all')) !== '') {
+    const rule = await ownershipRuleForTask(task.id)
+    if (rule !== null) {
+      const aside = await setAsideForeignChanges({
+        worktreePath,
+        owns: (path: string): boolean => isOwned(rule, path),
+        saveDir: setAsideDirFor(latestImpl.id, 'merge'),
+      })
+      logSetAside(`[merge] ${taskKey}`, aside)
+    }
+  }
+
   // Rebase onto the current base branch in the preserved worktree -- the real gate is the re-verify
-  // below, but a branch that no longer applies cleanly cannot even be judged. `rebaseOntoBase` has
-  // already aborted a failed rebase and put any leftover changes back.
+  // below, but a branch that no longer applies cleanly cannot even be judged.
   try {
-    await rebaseOntoBase(worktreePath, workspace.baseBranch, taskKey)
+    await gitIn(worktreePath, 'rebase', workspace.baseBranch)
   } catch (error) {
+    await gitIn(worktreePath, 'rebase', '--abort').catch(() => {})
     const message = (error instanceof Error ? error.message : String(error)).slice(0, 2000)
     await failMerge({
       taskId: task.id,
