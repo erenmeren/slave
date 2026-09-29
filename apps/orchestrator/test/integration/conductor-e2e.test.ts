@@ -107,6 +107,11 @@ function reportFor(requirementKeys: readonly string[], workFile: string): object
   }
 }
 
+/** What the verifier reports: every requirement of the version passes. */
+function verificationFor(requirements: readonly { readonly key: string }[]): object {
+  return { items: requirements.map(({ key }) => ({ key, status: 'pass', check: `pytest -k ${key}`, output: '1 passed', reason: '' })) }
+}
+
 const answer = (text: string, costUsd: number): ModelOutcome => ({ kind: 'answer', text, costUsd, tokens: null, numTurns: 1 })
 
 /** The conductor's two answers by prompt; anything else (a Supervisor situation) is counted and
@@ -158,15 +163,27 @@ function routingAdapter(
     async start(input) {
       const run = await prisma.slaveRun.findUniqueOrThrow({
         where: { id: input.runId },
-        select: { kind: true, task: { select: { goalVersion: true, workPackage: { select: { key: true, requirementKeys: true } } } } },
+        select: {
+          kind: true,
+          task: { select: { goalVersion: true, workPackage: { select: { key: true, requirementKeys: true } } } },
+          goalDelivery: { select: { workspaceId: true, goalVersion: true } },
+        },
       })
       const pkg = run.kind === 'implementation' ? (run.task?.workPackage ?? null) : null
-      const goalVersion = run.task?.goalVersion ?? null
+      const goalVersion = run.task?.goalVersion ?? run.goalDelivery?.goalVersion ?? null
       let adapter: SlaveRuntimeAdapter = plain
       if (pkg !== null) {
         const workFile = workFileFor(pkg.key, goalVersion ?? 0)
         const report = Buffer.from(JSON.stringify(reportFor(pkg.requirementKeys, workFile))).toString('base64')
         adapter = make(['--work-file', workFile, '--report-json-base64', report])
+      }
+      if (run.kind === 'verification' && run.goalDelivery !== null) {
+        // Conductor Plan 4b (ruling Q7): the verifier checks every requirement of its version and
+        // passes it, writing nothing in its checkout.
+        const set = await prisma.requirementSet.findUniqueOrThrow({
+          where: { workspaceId_goalVersion: { workspaceId: run.goalDelivery.workspaceId, goalVersion: run.goalDelivery.goalVersion } },
+        })
+        adapter = make(['--verification-json-base64', Buffer.from(JSON.stringify(verificationFor(set.items as { key: string }[]))).toString('base64')])
       }
       starts.push({
         kind: run.kind,
@@ -360,10 +377,25 @@ describe('conductor end to end', () => {
     // Nothing reached main while the package was worked on and reviewed.
     expect(f.starts.map((s) => s.mainTip)).toEqual(f.starts.map(() => f.initialTip))
 
+    // Plan 4b: accepted only by a verification run that passed every requirement, on exactly the
+    // tip that reached main; its checkout is gone.
+    const verification = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'verification', goalDeliveryId: d1?.id ?? '' } })
+    expect(verification).toMatchObject({ status: 'succeeded', taskId: null })
+    expect(d1?.verifiedCommit).toBe(git(['rev-parse', 'main'], f.repoPath))
+    expect(await prisma.verificationResult.findMany({ where: { runId: verification.id }, select: { key: true, status: true }, orderBy: { key: 'asc' } })).toEqual([
+      { key: 'R1', status: 'pass' },
+      { key: 'R2', status: 'pass' },
+    ])
+    const verified = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_verified' } })
+    expect(verified.map((event) => event.payload)).toEqual([
+      { version: 1, round: 1, runId: verification.id, pass: 2, fail: 0, unverifiable: 0, failedKeys: [] },
+    ])
+    expect(git(['worktree', 'list'], f.repoPath)).not.toContain('verify-')
+
     // Accepted, then merged -- each once.
     const goal = await goalEvents(f)
     expect(goal.map((e) => e.type)).toEqual(['workspace.goal_accepted', 'workspace.goal_merged'])
-    expect(goal[0]?.payload).toEqual(expect.objectContaining({ version: 1 }))
+    expect(goal[0]?.payload).toEqual({ version: 1, rounds: 1 })
     expect(goal[1]?.payload).toEqual(
       expect.objectContaining({ version: 1, branch, into: 'main', commit: git(['rev-parse', 'main'], f.repoPath), by: 'system' }),
     )

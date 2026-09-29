@@ -13,26 +13,42 @@ import { createHash, randomBytes } from 'node:crypto'
 import { chmodSync, createReadStream, existsSync, lstatSync, mkdirSync, readlinkSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { admitProvider, implementersOf, refusalText, runFilePaths, staffVerifier, writePermissionsFile } from '@slave-of-ai/control'
+import {
+  admitProvider,
+  goalEventWith,
+  implementersOf,
+  refusalText,
+  runFilePaths,
+  staffVerifier,
+  withDeliveryLock,
+  writePermissionsFile,
+} from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   NON_TERMINAL_RUN_STATUSES,
   VERIFICATION_DIFF_STAT_MAX_CHARS,
   VERIFIER_ROLE,
+  err,
+  parseSlaveVerification,
+  renderVerificationRework,
   requirementItemsSchema,
   runId as brandRunId,
   slaveId as brandSlaveId,
   type RunId,
+  type VerificationItem,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { checkpointRunFiles, runTokenHash, verifyDirPathFor, type RunHandle, type SlaveRuntimeAdapter } from '@slave-of-ai/providers'
 import { tripConductor } from './conductor.js'
+import { acceptInLock, needsHumanInLock } from './goal.js'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { verificationOwnership } from './ownership.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
 import { buildRunContext } from './runContext.js'
-import { createRunUnlessArchived } from './runs.js'
+import { joinRunOutput } from './runOutput.js'
+import { createRunUnlessArchived, failConcludedRun } from './runs.js'
+import { STRANDED_CLAIM_GRACE_MS } from './sweep.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
 import { verifyConcludedRun } from './verify.js'
 import { gitIn, provisionDetachedWorktree, worktreeRootFor } from './worktree.js'
@@ -326,9 +342,18 @@ export async function dispatchVerification(deps: TickDeps, deliveryId: string): 
   const runId = brandRunId(run.id)
   const round = newRound ? delivery.round + 1 : delivery.round
 
-  const claimed = await prisma.goalDelivery.updateMany({
-    where: { id: delivery.id, status: delivery.status, activeRunId: null },
-    data: newRound ? { status: 'verifying', activeRunId: run.id, round, roundRunFailures: 0 } : { activeRunId: run.id },
+  // Ruling Q1: the claim -- for a new round, the `integrating` -> `verifying` move -- is taken under
+  // the delivery's lock, like every other move of a delivery, so a conclusion, a release or a
+  // person's verb holding the lock cannot interleave with it. It is re-read there: the row above
+  // was read without the lock. No event of its own: `workspace.verification_started` follows once
+  // the run is set up, and a lost claim leaves no trace at all.
+  const claimed = await withDeliveryLock(delivery.id, async (tx) => {
+    const now = await tx.goalDelivery.findUniqueOrThrow({ where: { id: delivery.id } })
+    if (now.status !== delivery.status || now.round !== delivery.round || now.activeRunId !== null) return { count: 0 }
+    return tx.goalDelivery.updateMany({
+      where: { id: delivery.id, status: delivery.status, activeRunId: null },
+      data: newRound ? { status: 'verifying', activeRunId: run.id, round, roundRunFailures: 0 } : { activeRunId: run.id },
+    })
   })
   if (claimed.count === 0) {
     // Lost the race (another pass claimed it, or the version moved on): nothing was attempted, so
@@ -509,10 +534,7 @@ export async function dispatchVerification(deps: TickDeps, deliveryId: string): 
     })
     // D7: a run that produced no verdict is not a round -- the claim goes back and the round's run
     // failures count one more, so the goal pass retries the same round (and stops at the cap).
-    await prisma.goalDelivery.updateMany({
-      where: { id: delivery.id, activeRunId: run.id },
-      data: { activeRunId: null, roundRunFailures: { increment: 1 } },
-    })
+    await releaseClaim(delivery.id, run.id)
     await removeVerificationWorktree(workspace.repoPath, worktreePath)
     await appendEvent({
       type: 'run.failed',
@@ -524,4 +546,305 @@ export async function dispatchVerification(deps: TickDeps, deliveryId: string): 
     })
     return null
   }
+}
+
+/**
+ * D7: gives a verification run's claim back and counts one unusable run in the round, under the
+ * delivery's lock (ruling Q1), guarded on the run still holding it. Returns whether THIS call
+ * released it -- the one caller that may then fail the run (ruling Q2), so two concluders racing
+ * cannot both announce the failure.
+ */
+async function releaseClaim(deliveryId: string, runId: string): Promise<boolean> {
+  return withDeliveryLock(deliveryId, async (tx) => {
+    const released = await tx.goalDelivery.updateMany({
+      where: { id: deliveryId, activeRunId: runId },
+      data: { activeRunId: null, roundRunFailures: { increment: 1 } },
+    })
+    return released.count > 0
+  })
+}
+
+/**
+ * The verification run `runId` ended without a usable verdict (D7): a process failure, a stop, a
+ * stranded claim. Its claim is released first, counting one run failure (so the goal pass retries
+ * the same round, and stops at `VERIFICATION_RUN_RETRY_CAP`); the worktree goes either way.
+ * Replay-safe: a run no longer holding the claim changes nothing but the (already removed) worktree.
+ */
+export async function releaseVerification(runId: string): Promise<void> {
+  const run = await prisma.slaveRun.findUnique({
+    where: { id: runId },
+    include: { goalDelivery: { include: { workspace: { select: { repoPath: true } } } } },
+  })
+  if (run === null || run.goalDelivery === null) return
+  await releaseClaim(run.goalDelivery.id, run.id)
+  await removeVerificationWorktree(run.goalDelivery.workspace.repoPath, run.worktreePath)
+}
+
+/**
+ * A claim the goal pass found on a `verifying` delivery (D3, ruling Q2). Nothing while its run is
+ * live -- non-terminal, or still pumped by this process (whose chain concludes it) -- or terminal
+ * for less than {@link STRANDED_CLAIM_GRACE_MS} (another process -- a CLI `tick` beside the daemon
+ * -- may be mid-conclusion; the sweep's own grace, for its reason). Past that: a `succeeded` run
+ * is concluded here; any other, and a claim naming a run that does not exist, is released.
+ */
+export async function settleStrandedClaim(runId: string): Promise<void> {
+  const run = await prisma.slaveRun.findUnique({ where: { id: runId }, select: { id: true, status: true, terminalAt: true } })
+  if (run === null) {
+    // Bad data -- the claim is always written after the row exists -- but a claim naming nothing
+    // would hold the version forever. Released, one run failure, the same as any stranded claim.
+    const delivery = await prisma.goalDelivery.findUnique({ where: { activeRunId: runId }, select: { id: true } })
+    if (delivery !== null) await releaseClaim(delivery.id, runId)
+    return
+  }
+  if ((NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status)) return
+  if (activePumpRunIds.has(run.id)) return
+  if (run.terminalAt !== null && Date.now() - run.terminalAt.getTime() < STRANDED_CLAIM_GRACE_MS) return
+  if (run.status === 'succeeded') {
+    await concludeVerification(brandRunId(run.id))
+    return
+  }
+  await releaseVerification(run.id)
+}
+
+/** How many changed or new paths a tamper reason names. */
+const TAMPER_PATHS_NAMED = 10
+
+/**
+ * Plan D1/D7 and ruling V4b: why a verification's checkout is not the one it was given, or null
+ * when it is. Compares the baseline dispatch recorded after setup with the checkout now, and names
+ * what changed: a moved HEAD, tracked paths whose status changed, new untracked non-artifact paths.
+ */
+async function tamperedReason(worktreePath: string | null, stored: unknown): Promise<string | null> {
+  if (worktreePath === null || !existsSync(worktreePath)) return 'the verification worktree is gone'
+  if (stored === null || typeof stored !== 'object') return 'the verification run has no recorded baseline to compare its worktree with'
+  const before = stored as VerificationBaseline
+  let after: VerificationBaseline
+  try {
+    after = await worktreeBaseline(worktreePath)
+  } catch (error) {
+    return `the verification worktree could not be read: ${error instanceof Error ? error.message : String(error)}`
+  }
+  if (sameBaseline(before, after)) return null
+  if (before.head !== after.head) {
+    return `the verifier moved HEAD in its checkout (from ${before.head.slice(0, 12)} to ${after.head.slice(0, 12)})`
+  }
+  const statusLines = (text: string): ReadonlySet<string> => new Set(text.split('\n').filter((line) => line !== ''))
+  const earlier = statusLines(before.status)
+  const tracked = [...statusLines(after.status)].filter((line) => !earlier.has(line)).map((line) => line.slice(3))
+  const added = newUntrackedPaths(before, after)
+  const named = [...tracked, ...added]
+  if (named.length === 0) return 'the verifier changed files in its checkout'
+  const shown = named.slice(0, TAMPER_PATHS_NAMED).join(', ')
+  return `the verifier changed its checkout: ${shown}${named.length > TAMPER_PATHS_NAMED ? ` and ${String(named.length - TAMPER_PATHS_NAMED)} more` : ''}`
+}
+
+/** Thrown inside the gate's lock when the run no longer holds the claim: a replay, or a release
+ *  that won the race. A refusal inside a Prisma transaction must throw (house rule). */
+class NotTheClaim extends Error {}
+
+type Outcome =
+  | { readonly kind: 'accept' }
+  | { readonly kind: 'rework' }
+  | { readonly kind: 'stale' }
+  | { readonly kind: 'needs_human'; readonly reason: string }
+
+/** The first line of a verifier's reason, for a sentence a person reads in one go. */
+const firstLine = (text: string): string => text.split('\n')[0] ?? ''
+
+/**
+ * The conclusion of a `succeeded` verification run (spec R8/R9): the gate. Replay-safe -- only the
+ * run holding the delivery's claim concludes anything, and every event is written only if missing.
+ *
+ * - An unusable verification (plan D7): no or malformed `<slave-verification>` block, or a checkout
+ *   the verifier changed (D1, V4b) -- the claim is released first (one run failure, the same round
+ *   again), and the run failed only by the call that won the release (ruling Q2).
+ * - Otherwise its verdict is stored as `VerificationResult` rows, `workspace.verified` is written,
+ *   and in the same locked write that releases the claim the version moves on:
+ *   - every requirement `pass` -> `accepted`, with `verifiedCommit` = the tip it checked (Q6) --
+ *     unless the integration branch has moved since, when it goes back to `integrating` and the
+ *     next pass verifies the new tip (`stale`);
+ *   - a `fail` -> each failing requirement's package task `done -> rework`, no attempt charged
+ *     (D5), and the version back to `integrating`; the next round waits for them to be integrated;
+ *   - only `unverifiable` (D6), a `fail` whose package cannot be reworked, or the round cap (R9)
+ *     -> `needs_human`, with the reason and what the person can do (Q9).
+ * The budget is not one of these (D8): it halts the workspace, which pauses this run.
+ *
+ * The verification worktree is removed at every conclusion (D12).
+ */
+export async function concludeVerification(runId: RunId): Promise<void> {
+  const run = await prisma.slaveRun.findUniqueOrThrow({
+    where: { id: runId },
+    include: { goalDelivery: { include: { workspace: true } } },
+  })
+  const delivery = run.goalDelivery
+  if (delivery === null) return
+  const workspace = delivery.workspace
+  if (delivery.activeRunId !== run.id) {
+    // A replay, or the claim was released meanwhile: nothing to decide, and the checkout is spent.
+    await removeVerificationWorktree(workspace.repoPath, run.worktreePath)
+    return
+  }
+  const set = await prisma.requirementSet.findUniqueOrThrow({
+    where: { workspaceId_goalVersion: { workspaceId: workspace.id, goalVersion: delivery.goalVersion } },
+  })
+  const requirements = requirementItemsSchema.parse(set.items)
+  const keys = requirements.map((requirement) => requirement.key)
+
+  // D1/D7: a verifier that changed what it verifies has no verdict worth keeping.
+  const tampered = await tamperedReason(run.worktreePath, run.verificationBaseline)
+  const rows = await prisma.executionEvent.findMany({
+    where: { runId: run.id, type: 'run_output' },
+    orderBy: { seq: 'asc' },
+    select: { payload: true },
+  })
+  const parsed = tampered !== null ? err(tampered) : parseSlaveVerification(joinRunOutput(rows.map((row) => row.payload)), keys)
+  if (!parsed.ok) {
+    if (await releaseClaim(delivery.id, run.id)) {
+      await failConcludedRun(run, workspace.id, `verification: ${parsed.error}`)
+    }
+    await removeVerificationWorktree(workspace.repoPath, run.worktreePath)
+    return
+  }
+  const items = parsed.value
+  const failed = items.filter((item) => item.status === 'fail')
+  const unverifiable = items.filter((item) => item.status === 'unverifiable')
+  const passed = items.filter((item) => item.status === 'pass')
+  const textOf = new Map(requirements.map((requirement) => [requirement.key, requirement.text] as const))
+  const tip = await gitIn(workspace.repoPath, 'rev-parse', delivery.integrationBranch)
+
+  try {
+    await withDeliveryLock(delivery.id, async (tx) => {
+      const now = await tx.goalDelivery.findUniqueOrThrow({ where: { id: delivery.id } })
+      if (now.activeRunId !== run.id || now.status !== 'verifying') throw new NotTheClaim()
+
+      await tx.verificationResult.createMany({
+        data: items.map((item) => ({
+          workspaceId: workspace.id,
+          goalDeliveryId: delivery.id,
+          goalVersion: delivery.goalVersion,
+          round: now.round,
+          runId: run.id,
+          key: item.key,
+          status: item.status,
+          check: item.check,
+          output: item.output,
+          reason: item.reason,
+        })),
+        skipDuplicates: true,
+      })
+
+      const owners = await ownersOf(tx, workspace.id, delivery.goalVersion, failed.map((item) => item.key))
+      const orphaned = failed.filter((item) => owners.get(item.key)?.status !== 'done')
+      const roundsUsed = now.round - now.roundBase
+      const outcome: Outcome =
+        failed.length === 0 && unverifiable.length === 0
+          ? run.verificationTip !== null && run.verificationTip === tip
+            ? { kind: 'accept' }
+            : { kind: 'stale' }
+          : failed.length === 0
+            ? {
+                kind: 'needs_human',
+                reason: `requirement(s) could not be verified: ${unverifiable.map((item) => `${item.key} (${firstLine(item.reason)})`).join('; ')}`,
+              }
+            : orphaned.length > 0
+              ? { kind: 'needs_human', reason: `requirement(s) failed whose package cannot be reworked: ${orphaned.map((item) => item.key).join(', ')}` }
+              : roundsUsed >= workspace.verificationRoundCap
+                ? {
+                    kind: 'needs_human',
+                    reason: `the verification round cap (${String(workspace.verificationRoundCap)}) was reached; still failing: ${failed.map((item) => item.key).join(', ')}`,
+                  }
+                : { kind: 'rework' }
+
+      // Ruling Q1: every event first (each only if a crash did not already write it), then the
+      // guarded moves. A crash in between leaves the claim held by a `succeeded` run, which the
+      // goal pass concludes again (settleStrandedClaim) and finds the events already written.
+      if (!(await goalEventWith(tx, workspace.id, 'workspace_verified', { runId: run.id }))) {
+        await appendEvent({
+          type: 'workspace.verified',
+          workspaceId: workspace.id,
+          runId: run.id,
+          actor: 'system',
+          payload: {
+            version: delivery.goalVersion,
+            round: now.round,
+            runId: run.id,
+            pass: passed.length,
+            fail: failed.length,
+            unverifiable: unverifiable.length,
+            failedKeys: failed.map((item) => item.key).slice(0, 60),
+          },
+        })
+      }
+
+      if (outcome.kind === 'accept') {
+        if (!(await acceptInLock(tx, delivery.id, { runId: run.id, verifiedCommit: tip }))) throw new NotTheClaim()
+        return
+      }
+      if (outcome.kind === 'needs_human') {
+        if (!(await needsHumanInLock(tx, delivery.id, run.id, outcome.reason))) throw new NotTheClaim()
+        return
+      }
+      if (outcome.kind === 'rework') {
+        const byTask = new Map<string, (VerificationItem & { readonly text: string })[]>()
+        for (const item of failed) {
+          const owner = owners.get(item.key)
+          if (owner === undefined) continue
+          byTask.set(owner.taskId, [...(byTask.get(owner.taskId) ?? []), { ...item, text: textOf.get(item.key) ?? '' }])
+        }
+        for (const [taskId, its] of byTask) {
+          const reason = renderVerificationRework(now.round, its)
+          const task = await tx.task.findUniqueOrThrow({ where: { id: taskId }, select: { attempt: true } })
+          if (!(await goalEventWith(tx, workspace.id, 'task_rework', { verificationRound: now.round }, { taskId }))) {
+            await appendEvent({
+              type: 'task.rework',
+              workspaceId: workspace.id,
+              taskId,
+              actor: 'system',
+              // D5: no attempt is charged, so the event carries the task's current count.
+              payload: { reason, attempt: task.attempt, verificationRound: now.round },
+            })
+          }
+          await tx.task.updateMany({
+            where: { id: taskId, status: 'done' },
+            data: { status: 'rework', integratedAt: null, activeRunId: null, lastRejectionReason: reason },
+          })
+        }
+      }
+      // `rework` and `stale`: back to `integrating`, the claim released in the same write. The next
+      // round starts once every package is integrated again (for `stale`, at once: the new tip).
+      const moved = await tx.goalDelivery.updateMany({
+        where: { id: delivery.id, status: 'verifying', activeRunId: run.id },
+        data: { status: 'integrating', activeRunId: null },
+      })
+      if (moved.count === 0) throw new NotTheClaim()
+    })
+  } catch (error) {
+    if (!(error instanceof NotTheClaim)) throw error
+  }
+  await removeVerificationWorktree(workspace.repoPath, run.worktreePath)
+}
+
+/** Which package task owns each of `keys` in the goal version (its package lists the key), and
+ *  that task's status -- a `fail` is reworked only on a `done` owner (D5). */
+async function ownersOf(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  goalVersion: number,
+  keys: readonly string[],
+): Promise<ReadonlyMap<string, { readonly taskId: string; readonly status: string }>> {
+  if (keys.length === 0) return new Map()
+  const packages = await tx.workPackage.findMany({
+    where: { workspaceId, goalVersion, requirementKeys: { hasSome: [...keys] } },
+    orderBy: { key: 'asc' },
+    select: { requirementKeys: true, tasks: { select: { id: true, status: true }, orderBy: { createdAt: 'asc' } } },
+  })
+  const owners = new Map<string, { readonly taskId: string; readonly status: string }>()
+  for (const pkg of packages) {
+    const task = pkg.tasks[0]
+    if (task === undefined) continue
+    for (const key of pkg.requirementKeys) {
+      if (keys.includes(key) && !owners.has(key)) owners.set(key, { taskId: task.id, status: task.status })
+    }
+  }
+  return owners
 }

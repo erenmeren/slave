@@ -298,16 +298,22 @@ describe('executing a resume intent from the daemon', () => {
       readonly ownership?: unknown
     }
     const before = JSON.parse(readFileSync(permissionsPath, 'utf8')) as Verdict
+    // Read while the run is paused: the conclusion (Task 6) removes the checkout.
+    const worktreeRoot = realpathSync(checkpoint.worktreePath)
 
     expect((await requestResume(paused.id, MARKER, 'web')).ok).toBe(true)
     const adapter = fakeAdapter('env-echo')
     await tick({ workspaceId: brandWorkspaceId(fixture.workspaceId), registry: singleAdapterRegistry(adapter) })
     await drainPumps()
 
-    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: paused.id } })).status).toBe('succeeded')
+    // The resumed run finished; `env-echo` ends with no `<slave-verification>`, so the gate
+    // (Task 6) failed it as unusable and gave the claim back -- the resume itself is what counts.
+    expect(await prisma.executionEvent.count({ where: { runId: paused.id, type: 'run_resumed' } })).toBe(1)
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: paused.id } })).status).toBe('failed')
+    expect(await prisma.goalDelivery.findUniqueOrThrow({ where: { id: delivery.id } })).toMatchObject({ activeRunId: null, roundRunFailures: 1 })
     const after = JSON.parse(readFileSync(permissionsPath, 'utf8')) as Verdict
     expect(after.tokenHash).not.toBe(before.tokenHash)
-    expect(after.ownership).toEqual({ worktreeRoot: realpathSync(checkpoint.worktreePath), owned: [], excluded: [] })
+    expect(after.ownership).toEqual({ worktreeRoot, owned: [], excluded: [] })
     const env = z.record(z.string(), z.string()).parse(adapter.rawTerminalPayload(brandRunId(paused.id))?.['env'])
     expect(env['SLAVEOFAI_VERIFY_DIR']).toBe(join(runDir, 'verify'))
   }, 60_000)

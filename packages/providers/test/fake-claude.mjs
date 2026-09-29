@@ -60,6 +60,13 @@
 //                  file that work body writes (default `m8a-work.txt`), so
 //                  two package workers of one goal version each write a file
 //                  only their own package owns.
+//                  Conductor Plan 4b: a VERIFICATION run (its prompt carries
+//                  the `<slave-verification>` protocol) writes and commits
+//                  NOTHING -- a verifier that changed its checkout is thrown
+//                  away -- and ends with a `<slave-verification>` block:
+//                  `--verification-json-base64 <base64 of the JSON>` from
+//                  ARGV verbatim, or, absent, every key on the prompt's
+//                  `Requirement keys:` line as `pass`.
 //   M52 R8 hangs three optional side effects off the `--work-fixture` arm,
 //   so they reach every mode that has one and change nothing in any mode
 //   that is not asked for them. `--env-out <path>` appends this child's own
@@ -1007,6 +1014,38 @@ function fixtureSessionId(name) {
  * placeholder ELEMENT is removed rather than replaced, so the delta reads `"cancel":[]` -- a
  * re-plan that adds work and cancels nothing, which is the shape most of them have.
  */
+/**
+ * Conductor Plan 4b: a verification run's answer, or false for any other prompt. Selected by the
+ * `<slave-verification>` protocol its prompt carries (no other kind's prompt names the tag). It
+ * writes nothing in its checkout -- the conclusion discards a verification whose worktree changed
+ * -- and appends the block to the `complete` capture's final text and result, the report arm's
+ * shape. `--verification-json-base64` scripts the verdict (a failure, an unverifiable item, a
+ * malformed body); without it every key on the prompt's `Requirement keys:` line passes.
+ */
+async function verificationArm(prompt) {
+  if (!prompt.includes('<slave-verification>')) return false
+  const encoded = flagValue('--verification-json-base64')
+  let body
+  if (encoded !== undefined) {
+    body = Buffer.from(encoded, 'base64').toString('utf8')
+  } else {
+    const line = prompt.split('\n').find((text) => text.startsWith('Requirement keys: ')) ?? ''
+    const keys = line.slice('Requirement keys: '.length).split(',').map((key) => key.trim()).filter((key) => key !== '')
+    body = JSON.stringify({
+      items: keys.map((key) => ({ key, status: 'pass', check: `fake check ${key}`, output: 'ok', reason: '' })),
+    })
+  }
+  const lines = readFixtureLines('complete')
+  const suffix = `\n<slave-verification>${body}</slave-verification>`
+  if (!appendToLastAssistantText(lines, suffix)) {
+    process.stderr.write('fake-claude: the verification arm could not find an assistant text block in the complete fixture\n')
+    process.exit(2)
+  }
+  appendToResultText(lines, suffix)
+  await writeLines(lines)
+  process.exit(0)
+}
+
 async function replanArm(prompt) {
   if (!prompt.includes('"replan"')) return false
   // H5: `--replan-replaces <id>` picks the delta that REDOES a board task -- an addition carrying
@@ -1335,6 +1374,7 @@ async function main() {
     if (await supervisorArm(prompt)) return
     if (await answerArm(prompt)) return
     if (await replanArm(prompt)) return
+    if (await verificationArm(prompt)) return
     if (prompt.includes('"task graph"')) {
       await replayFixture(planFixtureName())
       return

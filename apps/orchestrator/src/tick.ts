@@ -440,7 +440,9 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
 
   // Conductor Plan 4a: after the merge pass, which is what integrates the last package of a goal
   // version. Wrapped like the Supervisor pass: a goal pass that throws must not stop scheduling.
-  await runGoalPass(deps.workspaceId).catch((error: unknown) => {
+  // Plan 4b: it starts verification runs, so under H9c's rule -- no new run into a slot `decide()`
+  // just said is not there -- it settles and merges but dispatches nothing while waiting.
+  await runGoalPass(deps, { mayStartRuns: waitingOn === null }).catch((error: unknown) => {
     console.error(`[tick] the goal pass for workspace ${deps.workspaceId} failed:`, error)
   })
 

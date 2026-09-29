@@ -132,7 +132,36 @@ async function integrateAll(f: Fixture): Promise<void> {
   for (const id of f.taskIds) await integrate(id)
 }
 
-const pass = async (f: Fixture): Promise<void> => runGoalPass(brandWorkspaceId(f.workspaceId))
+/** The pass as the tick runs it, with no room for a new run: these tests are about acceptance's
+ *  aftermath and the merge, and a verification run is `verification.test.ts`'s. */
+const pass = async (f: Fixture): Promise<void> =>
+  runGoalPass(
+    {
+      workspaceId: brandWorkspaceId(f.workspaceId),
+      registry: {
+        resolve: () => {
+          throw new Error('the goal pass must not start a run in these tests')
+        },
+      },
+    },
+    { mayStartRuns: false },
+  )
+
+/**
+ * Conductor Plan 4b: a version is accepted only by a verification that passed every requirement
+ * (spec R9). This is that acceptance without the run's process -- a verification run row holding
+ * the claim, then `acceptGoal` with the integration tip as it is now as the verified commit.
+ */
+async function acceptVerified(f: Fixture): Promise<void> {
+  const row = await delivery(f)
+  if (row.status !== 'integrating') return
+  const seat = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: f.workspaceId } } })
+  const run = await prisma.slaveRun.create({
+    data: { slaveId: seat.id, kind: 'verification', status: 'succeeded', terminalAt: new Date(), goalDeliveryId: f.deliveryId },
+  })
+  await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'verifying', round: 1, activeRunId: run.id } })
+  expect(await acceptGoal(f.deliveryId, { runId: run.id, verifiedCommit: git(['rev-parse', f.branch], f.repoPath) })).toBe(true)
+}
 
 async function goalEvents(workspaceId: string): Promise<readonly { readonly type: string; readonly payload: unknown }[]> {
   const rows = await prisma.executionEvent.findMany({
@@ -180,6 +209,7 @@ describe('runGoalPass', () => {
   it('accepts a fully integrated version and fast-forwards the unchanged base branch to it, in the same pass', async (): Promise<void> => {
     const f = await seed()
     await integrateAll(f)
+    await acceptVerified(f)
     const integrationTip = git(['rev-parse', f.branch], f.repoPath)
 
     await pass(f)
@@ -194,7 +224,7 @@ describe('runGoalPass', () => {
     expect(mainTip).toBe(integrationTip)
     expect(git(['show', 'main:a.txt'], f.repoPath)).toBe('the goal changed this')
     expect(await goalEvents(f.workspaceId)).toEqual([
-      { type: 'workspace.goal_accepted', payload: { version: 1, rounds: 0 } },
+      { type: 'workspace.goal_accepted', payload: { version: 1, rounds: 1 } },
       { type: 'workspace.goal_merged', payload: { version: 1, branch: f.branch, into: 'main', commit: mainTip, by: 'system' } },
     ])
     // The worktree is spent; the branch is the version's record and stays.
@@ -210,6 +240,7 @@ describe('runGoalPass', () => {
   it('accepts but does not merge when autoMerge is off, and a second pass changes nothing', async (): Promise<void> => {
     const f = await seed({ autoMerge: false })
     await integrateAll(f)
+    await acceptVerified(f)
     const mainBefore = git(['rev-parse', 'main'], f.repoPath)
 
     await pass(f)
@@ -228,6 +259,7 @@ describe('runGoalPass', () => {
   it('waits for a dirty primary checkout, says so once, and merges on the first pass after it is clean', async (): Promise<void> => {
     const f = await seed()
     await integrateAll(f)
+    await acceptVerified(f)
     const mainBefore = git(['rev-parse', 'main'], f.repoPath)
     const scratch = join(f.repoPath, 'notes.txt')
     writeFileSync(scratch, 'the person is working here\n')
@@ -253,6 +285,7 @@ describe('runGoalPass', () => {
   it('waits the same way for a primary checkout on another branch', async (): Promise<void> => {
     const f = await seed()
     await integrateAll(f)
+    await acceptVerified(f)
     const mainBefore = git(['rev-parse', 'main'], f.repoPath)
     git(['checkout', '-q', '-b', 'side'], f.repoPath)
 
@@ -275,6 +308,7 @@ describe('runGoalPass', () => {
   it('does not merge automatically when the base branch moved since the cut: it waits for a person, base untouched', async (): Promise<void> => {
     const f = await seed()
     await integrateAll(f)
+    await acceptVerified(f)
     // The person commits to `main` after the cut, on the very line the goal changed.
     const moved = commitIn(f.repoPath, 'a.txt', 'the person changed this\n', 'person works on main')
 
@@ -302,6 +336,7 @@ describe('runGoalPass', () => {
   it('attributes a hand merge after the base-moved wait to the person, and confirm-goal-merge still succeeds', async (): Promise<void> => {
     const f = await seed()
     await integrateAll(f)
+    await acceptVerified(f)
     commitIn(f.repoPath, 'mine.txt', 'the person works here\n', 'person works on main')
     await pass(f)
     // The person does what the trip told them: merge by hand, then (later) confirm.
@@ -323,6 +358,7 @@ describe('runGoalPass', () => {
   it('announces a confirmed hand merge once, as the person\'s, when the pass runs after the confirm', async (): Promise<void> => {
     const f = await seed()
     await integrateAll(f)
+    await acceptVerified(f)
     commitIn(f.repoPath, 'mine.txt', 'the person works here\n', 'person works on main')
     await pass(f)
     git(['merge', '-q', '--no-ff', '--no-edit', f.branch], f.repoPath)
@@ -339,6 +375,7 @@ describe('runGoalPass', () => {
   it('says once that an accepted version waits for a hand merge when autoMerge is off', async (): Promise<void> => {
     const f = await seed({ autoMerge: false })
     await integrateAll(f)
+    await acceptVerified(f)
 
     await pass(f)
     await pass(f)
@@ -353,6 +390,7 @@ describe('runGoalPass', () => {
   it('goes on to the open versions when a merged version\'s integration branch is gone', async (): Promise<void> => {
     const f = await seed()
     await integrateAll(f)
+    await acceptVerified(f)
     // A stamped, unannounced row whose branch somebody deleted: the recovery cannot name its commit.
     await prisma.goalDelivery.create({
       data: {
@@ -375,12 +413,14 @@ describe('runGoalPass', () => {
   it('records a merge git refuses, leaves the checkout clean, and never retries it by itself', async (): Promise<void> => {
     const f = await seed()
     await integrateAll(f)
-    // The integration branch no longer descends from the cut (somebody rewrote it): the base branch
-    // has not moved, so the pass tries, and git refuses the fast-forward.
+    // The integration branch no longer descends from the cut (somebody rewrote it, and that tip is
+    // what was verified): the base branch has not moved, so the pass tries, and git refuses the
+    // fast-forward.
     git(['checkout', '-q', '--orphan', 'rewritten'], f.integrationPath)
     git(['rm', '-rfq', '.'], f.integrationPath)
     commitIn(f.integrationPath, 'other.txt', 'unrelated\n', 'unrelated history')
     git(['branch', '-f', f.branch, 'rewritten'], f.repoPath)
+    await acceptVerified(f)
     const mainBefore = git(['rev-parse', 'main'], f.repoPath)
 
     await pass(f)
@@ -415,7 +455,7 @@ describe('runGoalPass', () => {
   it('finishes a merge a crash interrupted after the fast-forward: stamped and announced, no false "base moved" trip', async (): Promise<void> => {
     const f = await seed()
     await integrateAll(f)
-    await acceptGoal(f.deliveryId, 0)
+    await acceptVerified(f)
     // The fast-forward happened; the daemon died before `mergedAt` was written.
     git(['merge', '-q', '--ff-only', f.branch], f.repoPath)
     const mainTip = git(['rev-parse', 'main'], f.repoPath)
@@ -427,7 +467,7 @@ describe('runGoalPass', () => {
     expect(row.mergedAt).not.toBeNull()
     expect(row.mergeError).toBeNull()
     expect(await goalEvents(f.workspaceId)).toEqual([
-      { type: 'workspace.goal_accepted', payload: { version: 1, rounds: 0 } },
+      { type: 'workspace.goal_accepted', payload: { version: 1, rounds: 1 } },
       { type: 'workspace.goal_merged', payload: { version: 1, branch: f.branch, into: 'main', commit: mainTip, by: 'system' } },
     ])
     expect(await mergeTrips(f.workspaceId)).toEqual([])
@@ -461,7 +501,7 @@ describe('runGoalPass', () => {
   it('merges once and announces once when two passes overlap on an accepted version', async (): Promise<void> => {
     const f = await seed()
     await integrateAll(f)
-    await acceptGoal(f.deliveryId, 0)
+    await acceptVerified(f)
 
     await Promise.all([pass(f), pass(f)])
 
@@ -490,14 +530,34 @@ describe('runGoalPass', () => {
     }
   })
 
-  it('accepts and merges once when two passes overlap on a fully integrated version', async (): Promise<void> => {
+  it('never accepts a fully integrated version by itself: acceptance is a passing verification\'s (Plan 4b)', async (): Promise<void> => {
     const f = await seed()
     await integrateAll(f)
 
     await Promise.all([pass(f), pass(f)])
 
-    expect((await goalEvents(f.workspaceId)).map((event) => event.type)).toEqual(['workspace.goal_accepted', 'workspace.goal_merged'])
-    expect((await delivery(f)).mergedAt).not.toBeNull()
+    expect(await delivery(f)).toMatchObject({ status: 'integrating', acceptedAt: null, mergedAt: null })
+    expect(await goalEvents(f.workspaceId)).toEqual([])
+    expect(git(['rev-parse', 'main'], f.repoPath)).not.toBe(git(['rev-parse', f.branch], f.repoPath))
+  })
+
+  it('does not merge a tip nothing verified: an integration branch that moved since its verification waits, base untouched', async (): Promise<void> => {
+    const f = await seed()
+    await integrateAll(f)
+    await acceptVerified(f)
+    const verified = git(['rev-parse', f.branch], f.repoPath)
+    const mainBefore = git(['rev-parse', 'main'], f.repoPath)
+    commitIn(f.integrationPath, 'late.txt', 'late\n', 'a change after the verification')
+
+    await pass(f)
+    await pass(f)
+
+    expect(await delivery(f)).toMatchObject({ status: 'accepted', mergedAt: null, mergeError: null, verifiedCommit: verified })
+    expect(git(['rev-parse', 'main'], f.repoPath)).toBe(mainBefore)
+    const trips = await mergeTrips(f.workspaceId)
+    expect(trips).toHaveLength(1)
+    expect(trips[0]).toContain('not the commit its verification passed on')
+    expect(trips[0]).toContain(verified.slice(0, 12))
   })
 
   it('removes the integration worktree a confirmed hand merge left behind, and keeps the branch', async (): Promise<void> => {
@@ -523,21 +583,34 @@ describe('acceptGoal', () => {
     )
   })
 
-  it('applies once when two calls overlap: one goal_accepted', async (): Promise<void> => {
-    const f = await seed()
+  /** The delivery in round 1 with a verification run holding its claim; returns the verdict. */
+  async function verifying(f: Fixture): Promise<{ readonly runId: string; readonly verifiedCommit: string }> {
+    const seat = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: f.workspaceId } } })
+    const run = await prisma.slaveRun.create({
+      data: { slaveId: seat.id, kind: 'verification', status: 'succeeded', terminalAt: new Date(), goalDeliveryId: f.deliveryId },
+    })
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'verifying', round: 1, activeRunId: run.id } })
+    return { runId: run.id, verifiedCommit: git(['rev-parse', f.branch], f.repoPath) }
+  }
 
-    const results = await Promise.all([acceptGoal(f.deliveryId, 0), acceptGoal(f.deliveryId, 0)])
+  it('applies once when two calls overlap: one goal_accepted, the claim released, the verified commit recorded', async (): Promise<void> => {
+    const f = await seed()
+    const verdict = await verifying(f)
+
+    const results = await Promise.all([acceptGoal(f.deliveryId, verdict), acceptGoal(f.deliveryId, verdict)])
 
     expect(results.toSorted()).toEqual([false, true])
-    expect(await goalEvents(f.workspaceId)).toEqual([{ type: 'workspace.goal_accepted', payload: { version: 1, rounds: 0 } }])
+    expect(await goalEvents(f.workspaceId)).toEqual([{ type: 'workspace.goal_accepted', payload: { version: 1, rounds: 1 } }])
+    expect(await delivery(f)).toMatchObject({ status: 'accepted', activeRunId: null, verifiedCommit: verdict.verifiedCommit })
   })
 
   it('stamps an acceptance whose event a crash already wrote, without a second event', async (): Promise<void> => {
     const f = await seed()
+    const verdict = await verifying(f)
     // The event landed; the daemon died before the status moved.
-    await appendEvent({ type: 'workspace.goal_accepted', workspaceId: f.workspaceId, actor: 'system', payload: { version: 1, rounds: 0 } })
+    await appendEvent({ type: 'workspace.goal_accepted', workspaceId: f.workspaceId, actor: 'system', payload: { version: 1, rounds: 1 } })
 
-    expect(await acceptGoal(f.deliveryId, 0)).toBe(true)
+    expect(await acceptGoal(f.deliveryId, verdict)).toBe(true)
 
     expect((await delivery(f)).status).toBe('accepted')
     expect(await goalEvents(f.workspaceId)).toHaveLength(1)
@@ -545,11 +618,24 @@ describe('acceptGoal', () => {
 
   it('applies once on a replay: one goal_accepted', async (): Promise<void> => {
     const f = await seed()
+    const verdict = await verifying(f)
 
-    expect(await acceptGoal(f.deliveryId, 0)).toBe(true)
-    expect(await acceptGoal(f.deliveryId, 0)).toBe(false)
+    expect(await acceptGoal(f.deliveryId, verdict)).toBe(true)
+    expect(await acceptGoal(f.deliveryId, verdict)).toBe(false)
 
-    expect(await goalEvents(f.workspaceId)).toEqual([{ type: 'workspace.goal_accepted', payload: { version: 1, rounds: 0 } }])
+    expect(await goalEvents(f.workspaceId)).toEqual([{ type: 'workspace.goal_accepted', payload: { version: 1, rounds: 1 } }])
     expect((await delivery(f)).status).toBe('accepted')
+  })
+
+  it('never accepts an integrating version, nor for a run that does not hold the claim', async (): Promise<void> => {
+    const f = await seed()
+    const tip = git(['rev-parse', f.branch], f.repoPath)
+
+    expect(await acceptGoal(f.deliveryId, { runId: 'nobody', verifiedCommit: tip })).toBe(false)
+    await verifying(f)
+    expect(await acceptGoal(f.deliveryId, { runId: 'another-run', verifiedCommit: tip })).toBe(false)
+
+    expect((await delivery(f)).status).toBe('verifying')
+    expect(await goalEvents(f.workspaceId)).toEqual([])
   })
 })
