@@ -274,6 +274,12 @@ export interface CreateWorkspaceInput {
    */
   readonly autoMerge?: boolean
   readonly supervisorAutonomy?: 'propose' | 'act'
+  /**
+   * Conductor Plan 4b (spec §5, D11): how the project's goals are delivered. Absent means
+   * `conducted`, the product default for a new project; `planned` is the opt-out (the CLI's
+   * `--delivery planned`, the intake card's choice) for a project that wants the planner.
+   */
+  readonly delivery?: 'conducted' | 'planned'
 }
 
 let probe: GitProbe = realGitProbe
@@ -333,6 +339,11 @@ export async function createWorkspace(
           // right answer here -- let Postgres answer it.
           ...(input.autoMerge === undefined ? {} : { autoMerge: input.autoMerge }),
           ...(input.supervisorAutonomy === undefined ? {} : { supervisorAutonomy: input.supervisorAutonomy }),
+          // Conductor Plan 4b (spec §5, D11): new projects are conducted. Written here, not as the
+          // column's default: the column stays `planned` so every row inserted outside this
+          // function -- the seed, 139 test files -- keeps today's planner, and every product path
+          // that creates a project goes through here.
+          delivery: input.delivery ?? 'conducted',
         },
       })
       if (provider !== null) {

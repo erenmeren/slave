@@ -2571,6 +2571,33 @@ describe('the orchestrator CLI', () => {
       expect(row.verifyCommands).toEqual(['true'])
     })
 
+    it('creates a conducted project by default, a planned one with --delivery planned, and refuses any other word', async () => {
+      // Conductor Plan 4b (spec §5, D11): new projects are conducted everywhere, the CLI included;
+      // `--delivery planned` is the opt-out a gate that measures the planner passes.
+      const conducted = await runCli(['create-workspace', '--name', 'Conducted', '--repo', makeRepo(), '--verify', 'true'])
+      expect(conducted.code).toBe(0)
+      expect((await prisma.workspace.findFirstOrThrow({ where: { name: 'Conducted' } })).delivery).toBe('conducted')
+
+      const planned = await runCli([
+        'create-workspace',
+        '--name',
+        'Planned',
+        '--repo',
+        makeRepo(),
+        '--verify',
+        'true',
+        '--delivery',
+        'planned',
+      ])
+      expect(planned.code).toBe(0)
+      expect((await prisma.workspace.findFirstOrThrow({ where: { name: 'Planned' } })).delivery).toBe('planned')
+
+      const bogus = await runCli(['create-workspace', '--name', 'Bogus', '--repo', makeRepo(), '--verify', 'true', '--delivery', 'x'])
+      expect(bogus.code).toBe(1)
+      expect(bogus.stderr).toContain('--delivery must be one of conducted, planned')
+      expect(await prisma.workspace.count({ where: { name: 'Bogus' } })).toBe(0)
+    })
+
     it('--no-budget stores null', async () => {
       const result = await runCli(['create-workspace', '--name', 'Free', '--repo', makeRepo(), '--verify', 'true', '--no-budget'])
       expect(result.code).toBe(0)

@@ -72,6 +72,27 @@ describe('createWorkspace', () => {
     expect(row.supervisorAutonomy).toBe('act')
   })
 
+  /**
+   * Conductor Plan 4b (spec §5, D11): a new project is conducted unless the caller says otherwise.
+   * The column default stays `planned` (rows inserted anywhere else keep the planner), so this is
+   * `createWorkspace` writing the value, not Postgres.
+   */
+  it('creates a conducted project when the caller names no delivery', async (): Promise<void> => {
+    const result = await createWorkspace(valid(repo()))
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const row = await prisma.workspace.findUniqueOrThrow({ where: { id: result.value.id } })
+    expect(row.delivery).toBe('conducted')
+  })
+
+  it('creates a planned project when the caller asks for the planner', async (): Promise<void> => {
+    const result = await createWorkspace({ ...valid(repo()), delivery: 'planned' })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const row = await prisma.workspace.findUniqueOrThrow({ where: { id: result.value.id } })
+    expect(row.delivery).toBe('planned')
+  })
+
   it.each([
     ['relative path', (d: string) => ({ ...valid(d), repoPath: 'repo' }), 'repo_path_not_absolute'],
     ['missing dir', (d: string) => ({ ...valid(d), repoPath: join(d, 'nope') }), 'repo_not_found'],

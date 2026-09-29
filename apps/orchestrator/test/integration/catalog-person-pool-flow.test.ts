@@ -190,6 +190,9 @@ describe('Catalog Person Pool: end-to-end proof (Task 6)', () => {
           provider: 'claude_code',
           autoMerge: true,
           autonomy: 'act',
+          // This flow measures the planner's staffing and planning; new projects are conducted
+          // since Conductor Plan 4b.
+          delivery: 'planned',
           team: [
             { templateId: backendId, runtimeRoles: ['backend'] },
             { templateId: designId, runtimeRoles: ['design'] },

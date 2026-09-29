@@ -1407,7 +1407,8 @@ model SlaveRun {
 
 /// Conductor R2/R3 (2026-09-28): how a workspace turns a goal into work. `planned` is the planner
 /// graph (M8 onwards); `conducted` is the conductor: requirements, a size decision, packages that
-/// own disjoint files, one seat each. Default `planned` until Conductor Plan 4 ships the gate.
+/// own disjoint files, one seat each. Default for NEW projects is `conducted` since Conductor Plan
+/// 4b, set by `createWorkspace`; the column default stays `planned` for rows inserted anywhere else.
 enum Delivery {
   conducted
   planned

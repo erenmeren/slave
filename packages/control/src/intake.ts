@@ -13,7 +13,9 @@ import {
   INTAKE_CLAIM_TTL_MS,
   INTAKE_MAX_MODEL_CALLS,
   INTAKE_STEPS,
+  REVIEWER_ROLE,
   SUPERVISOR_DEFAULT_PROVIDER,
+  VERIFIER_ROLE,
   err,
   factsSummary,
   ensureStaffRoles,
@@ -744,6 +746,9 @@ export async function acceptIntake(
           // the person unticked either box before pressing the button.
           autoMerge: draft.autoMerge,
           supervisorAutonomy: draft.autonomy,
+          // Conductor Plan 4b (spec §5, D11): the card's delivery choice, conducted unless the
+          // person picked the planner.
+          delivery: draft.delivery,
         },
         principal,
         { intakeId },
@@ -792,7 +797,17 @@ export async function acceptIntake(
       // The live catalogue, for `claimIntakes`' reason: the division heuristic that decides WHICH
       // seat carries manager and reviewer reads it, and a conversation that never named a path has
       // no `fact` row to take it from.
-      const seats = ensureStaffRoles(draft.team, (await installationFacts()).catalogue)
+      //
+      // Conductor Plan 4b (spec R5, D4): a conducted project's implementers are staffed by the
+      // conductor, one per package, once the goal is split. Intake staffs only the seat that
+      // checks the work: the reviewer, who also verifies (reviewing is not implementing).
+      const approved = ensureStaffRoles(draft.team, (await installationFacts()).catalogue)
+      const seats =
+        draft.delivery === 'conducted'
+          ? approved
+              .filter((seat) => seat.runtimeRoles.includes(REVIEWER_ROLE))
+              .map((seat) => ({ ...seat, runtimeRoles: [...new Set([...seat.runtimeRoles, VERIFIER_ROLE])] }))
+          : approved
       if (seats.length === 0) {
         await appendStep(intakeId, {
           step: 'staff',
