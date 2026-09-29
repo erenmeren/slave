@@ -10,8 +10,8 @@
  */
 import { execFile } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync } from 'node:fs'
-import { basename, dirname, resolve } from 'node:path'
+import { chmodSync, createReadStream, existsSync, lstatSync, mkdirSync, readlinkSync } from 'node:fs'
+import { basename, dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { admitProvider, implementersOf, refusalText, runFilePaths, staffVerifier, writePermissionsFile } from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
@@ -48,10 +48,14 @@ const GIT_TIMEOUT_MS = 30_000
 export const verificationWorktreeKey = (runId: string): string => `verify-${runId.slice(0, 8)}`
 
 /**
- * The state of a verification worktree the tamper check compares (controller ruling Q5): its
- * `HEAD`, the tracked files git reports as changed, and a digest of the tracked changes' CONTENT --
- * a file setup left dirty that the verifier then edits again keeps the same status line, and only
- * the digest sees it. Untracked files are left out (D1: "a tracked file changed or HEAD moved").
+ * The state of a verification worktree the tamper check compares (controller ruling Q5, narrowed
+ * by ruling V4): its `HEAD`, every path git reports as changed or untracked, and a digest of the
+ * CONTENT of both -- the tracked changes (`git diff --binary HEAD`) and every untracked,
+ * non-ignored file. A file setup left dirty that the verifier edits again keeps the same status
+ * line, and only the digest sees it; a missing source file the verifier writes in through its
+ * shell is untracked, and without the untracked half a check would pass against a feature the
+ * verified tip does not have. Gitignored files stay out (a dependency install, a build, a test
+ * cache): writing those is what running checks does.
  */
 export interface VerificationBaseline {
   readonly head: string
@@ -59,11 +63,15 @@ export interface VerificationBaseline {
   readonly diff: string
 }
 
+/** Past this size an untracked file is identified by its size and mtime, not read: the digest
+ *  stays bounded however large a generated file is. */
+const UNTRACKED_HASH_MAX_BYTES = 64 * 1024 * 1024
+
 /** Reads a worktree's {@link VerificationBaseline}. Task 6 calls it again at the conclusion and
  *  compares the two with `sameBaseline`. */
 export async function worktreeBaseline(worktreePath: string): Promise<VerificationBaseline> {
   const head = await gitIn(worktreePath, 'rev-parse', 'HEAD')
-  const { stdout: status } = await execFileAsync('git', ['status', '--porcelain=v1', '--untracked-files=no'], {
+  const { stdout: status } = await execFileAsync('git', ['status', '--porcelain=v1', '--untracked-files=all'], {
     cwd: worktreePath,
     maxBuffer: DIFF_MAX_BUFFER,
     timeout: GIT_TIMEOUT_MS,
@@ -75,7 +83,35 @@ export async function worktreeBaseline(worktreePath: string): Promise<Verificati
     timeout: GIT_TIMEOUT_MS,
     encoding: 'buffer',
   })
-  return { head, status, diff: createHash('sha256').update(diff).digest('hex') }
+  // `-z`: a path with a newline or a quote in it stays one entry, unquoted.
+  const { stdout: untracked } = await execFileAsync('git', ['ls-files', '--others', '--exclude-standard', '-z'], {
+    cwd: worktreePath,
+    maxBuffer: DIFF_MAX_BUFFER,
+    timeout: GIT_TIMEOUT_MS,
+    encoding: 'utf8',
+  })
+  const digest = createHash('sha256').update(diff)
+  for (const name of untracked.split('\0').filter((entry) => entry !== '').toSorted()) {
+    digest.update('\0untracked\0').update(name).update('\0').update(await untrackedFileDigest(join(worktreePath, name)))
+  }
+  return { head, status, diff: digest.digest('hex') }
+}
+
+/** One untracked file's identity: a symlink's target, a small enough file's content hash
+ *  (streamed, so memory stays bounded), a larger one's size and mtime, or `gone`. */
+async function untrackedFileDigest(path: string): Promise<string> {
+  let stat
+  try {
+    stat = lstatSync(path)
+  } catch {
+    return 'gone'
+  }
+  if (stat.isSymbolicLink()) return `link:${readlinkSync(path)}`
+  if (!stat.isFile()) return `other:${String(stat.mode)}`
+  if (stat.size > UNTRACKED_HASH_MAX_BYTES) return `large:${String(stat.size)}:${String(stat.mtimeMs)}`
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer)
+  return `file:${hash.digest('hex')}`
 }
 
 /** True when two baselines describe the same worktree state. */

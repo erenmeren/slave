@@ -1205,8 +1205,12 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
   }
 
   // Conductor Plan 4b (spec R8): what a verifier checks and how it reports. Nothing else is added
-  // for this kind (D4).
-  if (input.kind === 'verification' && input.verification !== undefined) {
+  // for this kind (D4). Fail closed (fix round 1): a verification run built without them would be
+  // dispatched with a profile and nothing to verify.
+  if (input.kind === 'verification') {
+    if (input.verification === undefined) {
+      throw new Error('a verification run was built without its requirements, round and scratch directory: nothing to verify')
+    }
     const v = input.verification
     sections.push({
       kind: 'verification_goal',

@@ -4,7 +4,7 @@
  * spawn is observable without a verdict (the conclusion is Task 6's).
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -19,8 +19,10 @@ import { drainPumps, type TickDeps } from '../../src/tick.js'
 import {
   dispatchVerification,
   removeVerificationWorktree,
+  sameBaseline,
   verificationWorktreeKey,
   worktreeBaseline,
+  type VerificationBaseline,
 } from '../../src/verification.js'
 import { verifyConcludedRun } from '../../src/verify.js'
 import { worktreeRootFor } from '../../src/worktree.js'
@@ -281,6 +283,70 @@ describe('dispatchVerification', () => {
     const delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { id: f.deliveryId } })
     expect(delivery).toMatchObject({ status: 'integrating', round: 0, activeRunId: null })
     expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(0)
+  }, 60_000)
+
+  // Fix round 1, ruling V4: a verifier that CREATES a missing source file through its shell must
+  // not pass -- untracked, non-ignored files are part of the baseline. Ignored ones are not (a
+  // test run's node_modules/ or build output), and whatever setup created is in the baseline.
+  it('sees an untracked file the verifier created, and ignores what is gitignored or came from setup', async (): Promise<void> => {
+    const f = await seed({ setupCommands: ["printf 'node_modules/\\n' > .gitignore && mkdir -p gen && echo from-setup > gen/setup.txt"] })
+    const runId = await dispatchVerification(depsFor(f.workspaceId, envEcho()), f.deliveryId)
+    await drainPumps()
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId ?? '' } })
+    const path = run.worktreePath ?? ''
+    const stored = run.verificationBaseline as unknown as VerificationBaseline
+
+    // What setup left untracked is recorded, so an untouched worktree still matches.
+    expect(sameBaseline(stored, await worktreeBaseline(path))).toBe(true)
+
+    // A gitignored file (a dependency install, a build) changes nothing.
+    mkdirSync(join(path, 'node_modules', 'dep'), { recursive: true })
+    writeFileSync(join(path, 'node_modules', 'dep', 'index.js'), 'module.exports = 1\n')
+    expect(sameBaseline(stored, await worktreeBaseline(path))).toBe(true)
+
+    // Changing the CONTENT of an untracked file setup created is seen.
+    writeFileSync(join(path, 'gen', 'setup.txt'), 'rewritten\n')
+    expect(sameBaseline(stored, await worktreeBaseline(path))).toBe(false)
+    writeFileSync(join(path, 'gen', 'setup.txt'), 'from-setup\n')
+    expect(sameBaseline(stored, await worktreeBaseline(path))).toBe(true)
+
+    // A new, non-ignored file -- the missing feature written in by the verifier -- is seen.
+    mkdirSync(join(path, 'src'), { recursive: true })
+    writeFileSync(join(path, 'src', 'csv.ts'), 'export const csv = true\n')
+    expect(sameBaseline(stored, await worktreeBaseline(path))).toBe(false)
+  }, 60_000)
+
+  it('deletes its row and spawns nothing when it loses the claim', async (): Promise<void> => {
+    const f = await seed()
+    const adapter = envEcho()
+    let spawns = 0
+    const start = adapter.start.bind(adapter)
+    adapter.start = async (input) => {
+      spawns += 1
+      return start(input)
+    }
+    // Another pass claims the delivery between this dispatch's row insert and its claim: the
+    // wrapper takes the claim first, then lets the guarded updateMany run and find nothing.
+    const original = prisma.goalDelivery.updateMany
+    let raced = false
+    prisma.goalDelivery.updateMany = (async (args: Parameters<typeof original>[0]) => {
+      if (!raced) {
+        raced = true
+        await prisma.$executeRaw`UPDATE "GoalDelivery" SET "activeRunId" = 'someone-else' WHERE id = ${f.deliveryId}`
+      }
+      return original(args)
+    }) as unknown as typeof original
+    try {
+      expect(await dispatchVerification(depsFor(f.workspaceId, adapter), f.deliveryId)).toBeNull()
+    } finally {
+      prisma.goalDelivery.updateMany = original
+    }
+
+    expect(raced).toBe(true)
+    expect(spawns).toBe(0)
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(0)
+    const delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { id: f.deliveryId } })
+    expect(delivery).toMatchObject({ status: 'integrating', round: 0, activeRunId: 'someone-else' })
   }, 60_000)
 
   it('retries the same round from verifying with no claim, and a spawn failure releases the claim, counts a run failure and removes the worktree', async (): Promise<void> => {

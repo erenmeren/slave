@@ -2002,5 +2002,24 @@ describe('buildRunContext', () => {
       expect(prompt).not.toContain('writing-plans')
       expect(existsSync(join(fixture.worktreePath, '.claude'))).toBe(false)
     })
+
+    // Fix round 1 (m4): fail closed -- a verifier told only who it is would verify nothing.
+    it('refuses a verification run built without what it verifies', async () => {
+      const run = await prisma.slaveRun.create({ data: { slaveId: fixture.slaveId, status: 'starting', kind: 'verification' } })
+
+      await expect(
+        buildRunContext({
+          runId: run.id,
+          kind: 'verification',
+          slaveId: fixture.slaveId,
+          workspaceId: fixture.workspaceId,
+          taskId: null,
+          worktreePath: fixture.worktreePath,
+          provider: 'claude_code',
+          skillRoots: fixture.skillRoots,
+        }),
+      ).rejects.toThrow(/verification run .*requirements/)
+      expect(await prisma.runContext.count({ where: { runId: run.id } })).toBe(0)
+    })
   })
 })
