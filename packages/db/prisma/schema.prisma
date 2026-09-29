@@ -1550,6 +1550,9 @@ model GoalDelivery {
   /// Controller ruling Q6: the integration tip the latest PASSING verification checked. The final
   /// merge lands only this commit (spec ruling 5), never a later tip nothing has verified.
   verifiedCommit    String?
+  /// Conductor Plan 5 (D10): the resting point (`merged`, `abandoned`, `needs_human:r<n>`,
+  /// `awaiting_merge:r<n>`) the Supervisor chat was last given this version's report summary for.
+  reportNotedKey    String?
   createdAt         DateTime           @default(now())
 
   workspace Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -2057,29 +2060,36 @@ enum SupervisorDecider {
 /// `IntakeMessage.seq` orders an intake; the thread view (`supervisorThreads.ts`) merges these rows
 /// with the event families it already shows, ordered by time.
 model SupervisorMessage {
-  id            String                  @id @default(uuid())
-  workspaceId   String
-  seq           Int
-  role          SupervisorMessageRole
-  status        SupervisorMessageStatus @default(sent)
-  text          String
+  id                String                  @id @default(uuid())
+  workspaceId       String
+  seq               Int
+  role              SupervisorMessageRole
+  status            SupervisorMessageStatus @default(sent)
+  text              String
   /// R6: `{ path, name, bytes, kind: 'text' | 'image' | 'binary' }[]`, paths relative to the repository root.
-  attachments   Json                    @default("[]")
+  attachments       Json                    @default("[]")
   /// R3: the actions the reply proposed, each `{ action, decisionId, tier }`; null on a human row.
-  actions       Json?
-  modelCostUsd  Float?
-  unmeasured    Boolean                 @default(false)
+  actions           Json?
+  modelCostUsd      Float?
+  unmeasured        Boolean                 @default(false)
   /// R2: every citation this reply made checked out against what its own prompt rendered, and it
   /// made at least one. Stored rather than re-derived -- the feed window and the attachment slices
   /// the check ran against are gone by the time anybody reads the row.
-  sourced       Boolean                 @default(false)
-  claimedAt     DateTime?
-  claimedBy     String?
-  failureReason String?
-  createdAt     DateTime                @default(now())
-  workspace     Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  sourced           Boolean                 @default(false)
+  claimedAt         DateTime?
+  claimedBy         String?
+  failureReason     String?
+  /// Conductor Plan 5 (D10): set on a note the orchestrator posted (a goal version's report summary),
+  /// `goal-report:v<n>:<rest key>`; null on every turn of the conversation. Unique per workspace, so
+  /// a note is posted once however many passes try.
+  noteKey           String?
+  /// Conductor Plan 5 (D10): the goal version a note's report link opens.
+  goalReportVersion Int?
+  createdAt         DateTime                @default(now())
+  workspace         Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@unique([workspaceId, seq])
+  @@unique([workspaceId, noteKey])
   @@index([workspaceId, status])
   /// What `claimSupervisorTurns` scans -- a GLOBAL pass over `answering` rows whose claim is
   /// absent or stale, like `tickIntakes`'. The workspace-scoped index above cannot serve it.

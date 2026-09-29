@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { executionEventSchema } from '../../src/events/schema.js'
+import { GOAL_REPORT_FILES_MAX } from '../../src/goalReport/constants.js'
 
 const BASE = {
   seq: 1,
@@ -23,6 +24,26 @@ describe('conductor events', () => {
     const good = { version: 1, mode: 'partitioned', packages: ['cli', 'report', 'integration'], decisionId: 'd1', fallback: false }
     expect(executionEventSchema.safeParse({ ...base, payload: good }).success).toBe(true)
     expect(executionEventSchema.safeParse({ ...base, payload: { ...good, mode: 'both' } }).success).toBe(false)
+  })
+
+  // Conductor Plan 5 (D3): the files a package's merge into its integration branch changed, as git
+  // lists them. Optional, so every `task.done` written before Plan 5 still parses.
+  it('task.done carries the files a package merge changed, and still parses without them', () => {
+    const base = { ...BASE, taskId: 't1', type: 'task.done' }
+    expect(executionEventSchema.safeParse({ ...base, payload: { branch: 'b' } }).success).toBe(true)
+    expect(executionEventSchema.safeParse({ ...base, payload: { branch: 'b', files: ['a.py'], filesTotal: 1 } }).success).toBe(true)
+    const tooMany = Array.from({ length: 501 }, (_, i) => `f${String(i)}`)
+    expect(executionEventSchema.safeParse({ ...base, payload: { branch: 'b', files: tooMany, filesTotal: 501 } }).success).toBe(false)
+    expect(executionEventSchema.safeParse({ ...base, payload: { branch: 'b', files: [''], filesTotal: 1 } }).success).toBe(false)
+    expect(executionEventSchema.safeParse({ ...base, payload: { branch: 'b', files: [], filesTotal: -1 } }).success).toBe(false)
+  })
+
+  it("task.done's files bound is the report's GOAL_REPORT_FILES_MAX", () => {
+    const base = { ...BASE, taskId: 't1', type: 'task.done' }
+    const atMax = Array.from({ length: GOAL_REPORT_FILES_MAX }, (_, i) => `f${String(i)}`)
+    expect(executionEventSchema.safeParse({ ...base, payload: { branch: 'b', files: atMax, filesTotal: 900 } }).success).toBe(true)
+    const overMax = [...atMax, 'one-more']
+    expect(executionEventSchema.safeParse({ ...base, payload: { branch: 'b', files: overMax, filesTotal: 900 } }).success).toBe(false)
   })
 
   // Conductor Plan 4a (spec R9): the goal version's delivery, from waiting to merged or abandoned.

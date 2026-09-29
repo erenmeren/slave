@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { settleTaskEvidence } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  GOAL_REPORT_FILES_MAX,
   isOwned,
   nextMergeCandidate,
   taskId as brandTaskId,
@@ -12,6 +13,7 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import { cancelIfVersionAbandoned, ensureIntegrationWorktree, integrationTargetFor } from './goalBranch.js'
 import { mergeOrAbort, primaryCheckoutReady } from './gitMerge.js'
+import { gitNameOnlyZ } from './gitNameList.js'
 import { ownershipRuleForTask } from './ownership.js'
 import { logSetAside, setAsideDirFor, setAsideForeignChanges } from './setAside.js'
 import { rejectTask, runVerify, stageGatesFor } from './verify.js'
@@ -452,6 +454,14 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       })
       return
     }
+    // Final wave I2: the tip before the merge, so the listing below is against it and not against
+    // `HEAD^1` -- a merge git makes no commit for ("Already up to date": a rework that changed
+    // nothing) leaves HEAD where it was, and `HEAD^1 HEAD` would then list the PREVIOUS merge's
+    // files as this package's. A tip that cannot be read costs the list, never the merge.
+    const tipBefore = await gitIn(integrationPath, 'rev-parse', 'HEAD').catch((error: unknown): null => {
+      console.warn(`[merge] could not read the tip of ${target.branch} before merging ${branch}: ${errorText(error)}`)
+      return null
+    })
     const merged = await mergeOrAbort(integrationPath, ['--no-ff', '--no-verify', branch, '-m', `merge(${taskKey}): ${task.title}`])
     if (!merged.ok) {
       await failMerge({
@@ -464,6 +474,20 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       })
       return
     }
+    // Conductor Plan 5 (D3): the files this package's merge changed, as git lists them against the
+    // integration branch's tip before the merge (`tipBefore`; an empty list when the merge made no
+    // commit). `--no-renames`, so a rename lists the path it left as well as the one it took.
+    // `gitNameOnlyZ`, not `gitIn`: no trimming (a first path starting with a space stays whole), a
+    // 64 MiB buffer (a large list is cut to the bound below, never dropped), and a 30 s timeout
+    // (the listing cannot hold this task's merge claim). A failure costs the report one package's
+    // list ("not recorded"), never the merge.
+    const changed =
+      tipBefore === null
+        ? null
+        : await gitNameOnlyZ(integrationPath, ['diff', '--name-only', '-z', '--no-renames', tipBefore, 'HEAD']).catch((error: unknown): null => {
+            console.warn(`[merge] could not list the files ${branch} changed in ${target.branch}: ${errorText(error)}`)
+            return null
+          })
     // Plan D4: on a package task `integratedAt` means "on its goal's integration branch" -- what
     // the dependency gate needs, since a dependent package is cut from that branch. The integration
     // EVIDENCE waits for the final merge into the base branch: that is what "integrated" means in
@@ -472,7 +496,16 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       where: { id: task.id },
       data: { status: 'done', mergeClaimedAt: null, lastRejectionReason: null, integratedAt: new Date() },
     })
-    await appendEvent({ type: 'task.done', workspaceId, taskId: task.id, actor: 'system', payload: { branch } })
+    await appendEvent({
+      type: 'task.done',
+      workspaceId,
+      taskId: task.id,
+      actor: 'system',
+      payload: {
+        branch,
+        ...(changed === null ? {} : { files: changed.slice(0, GOAL_REPORT_FILES_MAX), filesTotal: changed.length }),
+      },
+    })
     return
   }
 

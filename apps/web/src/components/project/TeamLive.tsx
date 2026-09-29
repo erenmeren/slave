@@ -215,6 +215,18 @@ export function TeamLive({
                   {' · '}
                 </>
               )}
+              {/* Conductor Plan 5 (D9): the newest goal version's report, between the version and
+                * the edit affordance. Absent when no version has a report yet (a planned project).
+                * Final wave M7: when that is not the current version (its requirements are not
+                * extracted yet), the link names the version it goes to. */}
+              {view.stats.reportVersion !== null && (
+                <>
+                  <Link data-testid="goal-report-link" href={`/w/${workspaceId}/goals/${String(view.stats.reportVersion)}`} className="text-accent">
+                    {view.stats.reportVersion === view.stats.goalVersion ? 'Report' : `v${String(view.stats.reportVersion)} report`}
+                  </Link>
+                  {' · '}
+                </>
+              )}
               <Link data-testid="goal-edit" href={`/w/${workspaceId}/settings#goal`} className="text-accent">
                 Edit goal
               </Link>

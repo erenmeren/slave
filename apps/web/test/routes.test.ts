@@ -150,6 +150,15 @@ describe('breadcrumbOf', () => {
     ])
   })
 
+  it('names the goal report in the breadcrumb and lights no tab', () => {
+    expect(breadcrumbOf('/w/w1/goals/3', 'Checkout')).toEqual([
+      { text: 'Projects', last: false },
+      { text: 'Checkout', last: false },
+      { text: 'Goal report', last: true },
+    ])
+    expect(sectionOf('/w/w1/goals/3')).toBe(null)
+  })
+
   it('is one crumb on every global route', () => {
     expect(breadcrumbOf('/', null)).toEqual([{ text: 'Projects', last: true }])
     expect(breadcrumbOf('/workforce', null)).toEqual([{ text: 'Workforce', last: true }])

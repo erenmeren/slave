@@ -151,6 +151,23 @@ describe('the Supervisor panel', () => {
     expect(screen.getByTestId('supervisor-thread').getAttribute('data-thread-id')).toBe('2026-09-14')
   })
 
+  it("links a report note to its goal version's report", async (): Promise<void> => {
+    stubFetch(async (url: string) => {
+      if (url.includes('/supervisor/threads')) {
+        return new Response(
+          JSON.stringify(chatThread({ id: 'msg:n1', messageId: 'n1', who: 'supervisor', text: 'Goal v3 report: merged into main.', at: '2026-09-20T09:00:00.000Z', refs: [], decisionId: null, status: 'answered', reportVersion: 3 })),
+          { status: 200 },
+        )
+      }
+      if (url.endsWith('/supervisor')) return new Response(view(), { status: 200 })
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    })
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    const link = await screen.findByTestId('supervisor-report-link')
+    expect(link.getAttribute('href')).toBe('/w/w1/goals/3')
+    expect(link.textContent).toBe('Open the goal v3 report')
+  })
+
   it('lists the days behind ≡, and switching day switches the messages', async (): Promise<void> => {
     render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
     await waitFor(() => expect(screen.getAllByTestId('supervisor-message')).toHaveLength(2))

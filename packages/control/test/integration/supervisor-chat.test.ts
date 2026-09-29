@@ -24,6 +24,7 @@ import {
   claimSupervisorTurns,
   conversationCost,
   listSupervisorMessages,
+  postSupervisorNote,
   recordSupervisorReply,
   sendSupervisorMessage,
 } from '../../src/supervisorChat.js'
@@ -918,5 +919,49 @@ describe('tickSupervisorChat', () => {
     await run(registryOf(decider))
 
     expect(decider.calls[0]?.prompt).toContain('the task is parked at the review cap')
+  })
+})
+
+describe('postSupervisorNote', () => {
+  // Controller ruling R2: `claimSupervisorTurns` claims across every workspace, so rows another
+  // describe left behind must not leak into the seq case below.
+  beforeEach(reset)
+
+  it('posts a Supervisor row no model wrote, once per key, and leaves the conversation cost alone', async (): Promise<void> => {
+    const workspace = await prisma.workspace.create({ data: { name: 'Notes', repoPath: '/tmp/notes', verifyCommands: [], setupCommands: [] } })
+    const first = await postSupervisorNote(workspace.id, { text: 'Goal v1 report: merged.', noteKey: 'goal-report:v1:merged', goalReportVersion: 1 })
+    const again = await postSupervisorNote(workspace.id, { text: 'Goal v1 report: merged.', noteKey: 'goal-report:v1:merged', goalReportVersion: 1 })
+    expect(first).toEqual({ ok: true, value: { messageId: expect.any(String), created: true } })
+    expect(again).toEqual({ ok: true, value: { messageId: first.ok ? first.value.messageId : '', created: false } })
+    const [row] = await listSupervisorMessages(workspace.id)
+    expect(row).toEqual(expect.objectContaining({ role: 'supervisor', status: 'answered', text: 'Goal v1 report: merged.', modelCostUsd: null, unmeasured: false, goalReportVersion: 1 }))
+    expect(await conversationCost(workspace.id)).toEqual({ usd: 0, unmeasuredTurns: 0 })
+  })
+
+  it('refuses an archived project and writes nothing', async (): Promise<void> => {
+    const workspace = await prisma.workspace.create({ data: { name: 'Archived Notes', repoPath: '/tmp/n', verifyCommands: [], setupCommands: [], archivedAt: new Date() } })
+    expect(await postSupervisorNote(workspace.id, { text: 'x', noteKey: 'k' })).toEqual({ ok: false, error: { kind: 'workspace_archived', workspaceId: workspace.id } })
+    expect(await prisma.supervisorMessage.count({ where: { workspaceId: workspace.id } })).toBe(0)
+  })
+
+  it('takes the next seq after a turn in flight, so the turn is still answered', async (): Promise<void> => {
+    const workspace = await prisma.workspace.create({ data: { name: 'Seq Notes', repoPath: '/tmp/s', verifyCommands: [], setupCommands: [] } })
+    await sendSupervisorMessage(workspace.id, { text: 'how is v1?' })
+    await postSupervisorNote(workspace.id, { text: 'Goal v1 report: merged.', noteKey: 'goal-report:v1:merged' })
+    const [turn] = await claimSupervisorTurns({ by: 'test', limit: 5 })
+    expect(turn?.message).toBe('how is v1?')
+    expect((await listSupervisorMessages(workspace.id)).map((m) => [m.seq, m.role, m.status])).toEqual([
+      [0, 'human', 'sent'],
+      [1, 'supervisor', 'answering'],
+      [2, 'supervisor', 'answered'],
+    ])
+  })
+
+  it('posts one note when two passes race for the same key', async (): Promise<void> => {
+    const workspace = await prisma.workspace.create({ data: { name: 'Race Notes', repoPath: '/tmp/r', verifyCommands: [], setupCommands: [] } })
+    const note = { text: 'Goal v1 report: abandoned.', noteKey: 'goal-report:v1:abandoned', goalReportVersion: 1 }
+    const outcomes = await Promise.all([postSupervisorNote(workspace.id, note), postSupervisorNote(workspace.id, note)])
+    expect(outcomes.map((o) => (o.ok ? o.value.created : null)).sort()).toEqual([false, true])
+    expect(await prisma.supervisorMessage.count({ where: { workspaceId: workspace.id } })).toBe(1)
   })
 })

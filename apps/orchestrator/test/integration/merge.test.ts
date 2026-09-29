@@ -4,10 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { integrationBranchName, workspaceId as brandWorkspaceId, taskId as brandTaskId } from '@slave-of-ai/domain'
+import { GOAL_REPORT_FILES_MAX, integrationBranchName, workspaceId as brandWorkspaceId, taskId as brandTaskId } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { addRunbook, adoptRunbook, confirmIntegration, recordRunEvidence, settleTaskEvidence } from '@slave-of-ai/control'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { gitNameList } from '../../src/gitNameList.js'
 import { ensureIntegrationBranch, ensureIntegrationWorktree, integrationWorktreePath, type IntegrationTarget } from '../../src/goalBranch.js'
 import { runMergePass } from '../../src/merge.js'
 import { loadWorld } from '../../src/world.js'
@@ -1146,6 +1147,148 @@ describe('into the integration branch', () => {
     // The integration worktree is the one helper's path, checked out on the integration branch.
     const path = integrationWorktreePath(workspace.repoPath, 1, workspace.id)
     expect(git(['rev-parse', '--abbrev-ref', 'HEAD'], path)).toBe(target.branch)
+    // Conductor Plan 5 (D3): the merge records what git says it changed -- the report's "files touched".
+    const done = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_done' }, orderBy: { seq: 'desc' } })
+    expect(done.payload).toEqual({ branch, files: ['feature.txt'], filesTotal: 1 })
+  })
+
+  it('records a path with spaces and non-ASCII characters exactly', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    await deliver(workspace)
+    const { taskId } = await seedMergingTask(workspace, { fileName: 'rapor ü.txt' })
+    await packageTask(workspace, taskId, 'feature')
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const done = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_done' }, orderBy: { seq: 'desc' } })
+    expect((done.payload as { files: string[] }).files).toEqual(['rapor ü.txt'])
+  })
+
+  /** Fix round 1: execFile directly, not `gitIn` -- no trimming, so a leading space stays. */
+  it('records a first path that starts with a space exactly', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    await deliver(workspace)
+    const { taskId } = await seedMergingTask(workspace)
+    const implRun = await prisma.slaveRun.findFirstOrThrow({ where: { taskId, kind: 'implementation' } })
+    const tree = implRun.worktreePath as string
+    writeFileSync(join(tree, ' lead.txt'), 'leading space\n')
+    git(['add', '-A'], tree)
+    git(['commit', '-q', '-m', 'lead'], tree)
+    await packageTask(workspace, taskId, 'feature')
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const done = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_done' }, orderBy: { seq: 'desc' } })
+    expect((done.payload as { files: string[] }).files).toEqual([' lead.txt', 'feature.txt'])
+  })
+
+  /** Final wave I2: a merge that makes no commit ("Already up to date") changed nothing, so it
+   *  records an empty list -- never the previous merge's files as this package's. */
+  it('records no files for a package whose merge makes no commit, not the previous package\'s', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    const target = await deliver(workspace)
+    const first = await seedMergingTask(workspace, { title: 'First', fileName: 'a.txt', content: 'a\n' })
+    await packageTask(workspace, first.taskId, 'a')
+    await runMergePass(brandWorkspaceId(workspace.id))
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: first.taskId } })).status).toBe('done')
+
+    const second = await seedMergingTask(workspace, { title: 'Second', fileName: 'b.txt', content: 'b\n' })
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: second.taskId } })
+    // The package's branch holds nothing of its own: it sits on the integration branch's tip.
+    git(['reset', '-q', '--hard', target.branch], run.worktreePath as string)
+    await packageTask(workspace, second.taskId, 'b')
+    const tipBefore = git(['rev-parse', target.branch], workspace.repoPath)
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: second.taskId } })).status).toBe('done')
+    expect(git(['rev-parse', target.branch], workspace.repoPath)).toBe(tipBefore)
+    const done = await prisma.executionEvent.findFirstOrThrow({ where: { taskId: second.taskId, type: 'task_done' }, orderBy: { seq: 'desc' } })
+    expect(done.payload).toEqual({ branch: second.branch, files: [], filesTotal: 0 })
+  })
+
+  /** Final wave I2: `--no-renames`, so a rename lists the path it left as well as the one it took. */
+  it('records both paths of a renamed file', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    await deliver(workspace)
+    const { taskId } = await seedMergingTask(workspace)
+    const implRun = await prisma.slaveRun.findFirstOrThrow({ where: { taskId, kind: 'implementation' } })
+    const tree = implRun.worktreePath as string
+    git(['mv', 'README.md', 'README-renamed.md'], tree)
+    git(['commit', '-q', '-m', 'rename'], tree)
+    await packageTask(workspace, taskId, 'feature')
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const done = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_done' }, orderBy: { seq: 'desc' } })
+    expect([...(done.payload as { files: string[] }).files].sort()).toEqual(['README-renamed.md', 'README.md', 'feature.txt'])
+  })
+
+  /** Fix round 1: a name list over execFile's 1 MiB default is recorded (cut), not dropped. */
+  it('records a name list larger than 1 MiB, cut to GOAL_REPORT_FILES_MAX', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    await deliver(workspace)
+    const { taskId } = await seedMergingTask(workspace)
+    const implRun = await prisma.slaveRun.findFirstOrThrow({ where: { taskId, kind: 'implementation' } })
+    const tree = implRun.worktreePath as string
+    const count = 5000
+    for (let i = 0; i < count; i += 1) writeFileSync(join(tree, `${String(i).padStart(4, '0')}-${'n'.repeat(240)}.txt`), '')
+    git(['add', '-A'], tree)
+    git(['commit', '-q', '-m', 'many long names'], tree)
+    await packageTask(workspace, taskId, 'feature')
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const done = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_done' }, orderBy: { seq: 'desc' } })
+    const payload = done.payload as { files: string[]; filesTotal: number }
+    expect(payload.filesTotal).toBe(count + 1)
+    expect(payload.files).toHaveLength(GOAL_REPORT_FILES_MAX)
+  }, 60_000)
+
+  /** Fix round 1: a listing that fails (or times out) costs the report the list, never the merge. */
+  it('lands the merge and writes task.done without files when the listing fails, with a bounded timeout', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    const target = await deliver(workspace)
+    const { taskId, branch } = await seedMergingTask(workspace)
+    await packageTask(workspace, taskId, 'feature')
+    const original = gitNameList.execFile
+    const seen: { readonly args: readonly string[]; readonly timeout: number | undefined }[] = []
+    gitNameList.execFile = async (file, args, options) => {
+      seen.push({ args, timeout: options.timeout })
+      throw new Error('simulated: git diff timed out')
+    }
+    try {
+      await runMergePass(brandWorkspaceId(workspace.id))
+    } finally {
+      gitNameList.execFile = original
+    }
+
+    expect(seen).toEqual([{ args: ['diff', '--name-only', '-z', '--no-renames', expect.stringMatching(/^[0-9a-f]{40}$/u), 'HEAD'], timeout: 30_000 }])
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+    expect(task.status).toBe('done')
+    expect(task.mergeClaimedAt).toBeNull()
+    expect(isAncestor(workspace.repoPath, branch, target.branch)).toBe(true)
+    const done = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_done' }, orderBy: { seq: 'desc' } })
+    expect(done.payload).toEqual({ branch })
+  })
+
+  it('caps the recorded list at GOAL_REPORT_FILES_MAX and counts every file in filesTotal', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    await deliver(workspace)
+    const { taskId } = await seedMergingTask(workspace)
+    const implRun = await prisma.slaveRun.findFirstOrThrow({ where: { taskId, kind: 'implementation' } })
+    const tree = implRun.worktreePath as string
+    for (let i = 0; i < GOAL_REPORT_FILES_MAX; i += 1) writeFileSync(join(tree, `bulk-${String(i).padStart(3, '0')}.txt`), `${String(i)}\n`)
+    git(['add', '-A'], tree)
+    git(['commit', '-q', '-m', 'many files'], tree)
+    await packageTask(workspace, taskId, 'feature')
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const done = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_done' }, orderBy: { seq: 'desc' } })
+    const payload = done.payload as { files: string[]; filesTotal: number }
+    expect(payload.filesTotal).toBe(GOAL_REPORT_FILES_MAX + 1)
+    expect(payload.files).toHaveLength(GOAL_REPORT_FILES_MAX)
   })
 
   it('does not land a package of an abandoned goal version: it is cancelled, and nothing is merged', async (): Promise<void> => {

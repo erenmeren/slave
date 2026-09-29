@@ -81,6 +81,8 @@ import {
   listTemplateDuplicates,
   listUsers,
   listWorkforceCatalog,
+  latestReportVersion,
+  loadGoalReport,
   loadSimulation,
   loadSupervisorWorld,
   mapExternalRepository,
@@ -195,6 +197,7 @@ import {
   manifestFor,
   observe,
   provenanceLine,
+  renderGoalReportMarkdown,
   runContextManifestSchema,
   stageOrder,
   userPersonStatus,
@@ -357,6 +360,14 @@ const USAGE = `usage: orchestrator <command> [options]
                                        round's verdict (pass/fail/unverifiable counts and the failed
                                        requirement keys), and each package task with its status and
                                        whether it is on the integration branch. As JSON.
+  goal-report --workspace <id> [--version <n>] [--json]
+                                       one goal version's report (by default the newest one that has
+                                       a report), as Markdown: its state, what the report cannot vouch for, the
+                                       requirement table with each verdict's check and output, the
+                                       verification rounds, each package with its seat and the files
+                                       it merged, the version's spend against the project's budget,
+                                       the decision trail and the questions. --json prints the same
+                                       report as JSON.
   abandon-goal --workspace <id> --version <n>
                                        move on from a goal version: every unfinished package task of
                                        it is cancelled and the version is abandoned, which lets the
@@ -966,6 +977,8 @@ const VALUELESS: ReadonlySet<string> = new Set([
   // instruction, which is E3's rule for every bare flag a milestone adds.
   'clear-provider',
   'clear-model',
+  // R1: `goal-report --json --version <n>` otherwise swallows --version as --json's own value.
+  'json',
 ])
 
 /**
@@ -2317,6 +2330,29 @@ export async function main(argv: readonly string[]): Promise<number> {
       const result = await goalDeliveries(workspaceId, version)
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`${JSON.stringify(result.value, null, 2)}\n`)
+      return 0
+    }
+
+    case 'goal-report': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const versionText = flagText(flags, 'version')
+      let version: number
+      if (versionText === undefined) {
+        // R9: an unknown workspace gets the control layer's own refusal text, not
+        // `findUniqueOrThrow`'s Prisma stack-trace prose -- the same shape every other refusal
+        // here goes through.
+        const found = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { goalVersion: true } })
+        if (found === null) throw new Error(refusalText({ kind: 'workspace_not_found', workspaceId }))
+        // Final wave M7: the newest version that HAS a report, the Team page's link -- the current
+        // goal version may have none yet (its requirements not extracted). With none at all, the
+        // refusal names the current version.
+        version = (await latestReportVersion(workspaceId)) ?? found.goalVersion
+      } else {
+        version = goalVersionFlag(versionText)
+      }
+      const result = await loadGoalReport(workspaceId, version)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write('json' in flags ? `${JSON.stringify(result.value, null, 2)}\n` : renderGoalReportMarkdown(result.value))
       return 0
     }
 

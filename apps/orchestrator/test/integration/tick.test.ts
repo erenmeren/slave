@@ -1435,6 +1435,26 @@ describe('tick', () => {
     expect(report.started).toEqual([])
   })
 
+  // Conductor Plan 5 (D10): the report-notes pass runs on the halt branch too -- a version that
+  // came to rest under a halt (here, abandoned) is still announced, once.
+  it('posts a goal version report note on a halted tick, exactly once', async (): Promise<void> => {
+    await prisma.workspace.update({
+      where: { id: fixture.workspaceId },
+      data: { delivery: 'conducted', haltedReason: 'emergency stop by meren', haltedAt: new Date() },
+    })
+    await prisma.requirementSet.create({ data: { workspaceId: fixture.workspaceId, goalVersion: 1, items: [{ key: 'R1', text: 'a', source: 'a' }] } })
+    await prisma.goalDelivery.create({
+      data: { workspaceId: fixture.workspaceId, goalVersion: 1, integrationBranch: 'slaveofai/goal-v1-x', baseCommit: 'b'.repeat(40), status: 'abandoned' },
+    })
+
+    const report = await tick(deps)
+    expect(report.halted).toBe('emergency_stop')
+    await tick(deps)
+
+    const notes = await prisma.supervisorMessage.findMany({ where: { workspaceId: fixture.workspaceId, noteKey: { not: null } }, select: { noteKey: true, text: true } })
+    expect(notes).toEqual([{ noteKey: 'goal-report:v1:abandoned', text: expect.stringContaining('Goal v1 report: abandoned') as unknown as string }])
+  })
+
   it('gives a reworked task a second run instead of burning its attempts on provisioning', async (): Promise<void> => {
     await tick(deps)
     await drainPumps()
