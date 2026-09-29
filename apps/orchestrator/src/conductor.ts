@@ -1,6 +1,7 @@
 import { isUniqueConstraintViolation, staffPackages, staffVerifier, type ModelDecider } from '@slave-of-ai/control'
 import { Prisma, prisma } from '@slave-of-ai/db/client'
 import {
+  CONDUCT_CALL_TIMEOUT_MS,
   CONDUCT_PER_CALL_CAP_USD,
   CONDUCT_RETRY_CAP,
   PACKAGE_WORKER_ROLE,
@@ -530,7 +531,12 @@ async function callConductor<T>(
   let costUsd: number | null = null
   let result: { readonly value: T } | { readonly failure: string }
   try {
-    const outcome = await call.decider({ model: call.model, prompt, maxBudgetUsd: CONDUCT_PER_CALL_CAP_USD })
+    const outcome = await call.decider({
+      model: call.model,
+      prompt,
+      maxBudgetUsd: CONDUCT_PER_CALL_CAP_USD,
+      timeoutMs: CONDUCT_CALL_TIMEOUT_MS,
+    })
     costUsd = outcome.costUsd
     if (outcome.kind === 'failed') result = { failure: outcome.reason }
     else if (outcome.kind === 'isolation_breach') result = { failure: 'the model tried to use tools' }

@@ -14,6 +14,7 @@ import {
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  CONDUCT_CALL_TIMEOUT_MS,
   CONDUCT_PER_CALL_CAP_USD,
   CONDUCT_RETRY_CAP,
   PACKAGE_WORKER_ROLE,
@@ -146,6 +147,21 @@ afterAll(async (): Promise<void> => {
   await removeTemplates()
   for (const repo of repos) rmSync(repo, { recursive: true, force: true })
   await prisma.$disconnect()
+})
+
+describe('conduct: the model call', () => {
+  it('gives every conductor call the conductor\'s own timeout, not the two-minute default', async () => {
+    const f = await seed({ delivery: 'conducted', goal: 'Add a CSV mode. Add a JSON mode.' })
+    const timeouts: (number | undefined)[] = []
+    const decider: ModelDecider = async (input) => {
+      timeouts.push(input.timeoutMs)
+      return input.prompt.includes('"requirementsAnswer"') ? answer(REQUIREMENTS) : failed('not now')
+    }
+    await conduct(depsFor(f, decider))
+    await conduct(depsFor(f, decider))
+    expect(timeouts).toEqual([CONDUCT_CALL_TIMEOUT_MS, CONDUCT_CALL_TIMEOUT_MS])
+    expect(CONDUCT_CALL_TIMEOUT_MS).toBeGreaterThan(120_000)
+  })
 })
 
 describe('conduct: requirements', () => {
