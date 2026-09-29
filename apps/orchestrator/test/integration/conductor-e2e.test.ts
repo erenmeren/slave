@@ -18,6 +18,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   confirmGoalMerge,
+  loadGoalReport,
   loadSupervisorWorld,
   retryGoal,
   setGoal,
@@ -29,7 +30,15 @@ import {
 } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { PACKAGE_WORKER_ROLE, VERIFIER_ROLE, integrationBranchName, observe, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import {
+  PACKAGE_WORKER_ROLE,
+  VERIFIER_ROLE,
+  integrationBranchName,
+  observe,
+  renderGoalReportMarkdown,
+  reportCaveats,
+  workspaceId as brandWorkspaceId,
+} from '@slave-of-ai/domain'
 import { ClaudeCodeAdapter, type SlaveRuntimeAdapter } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
@@ -361,6 +370,11 @@ async function goalEvents(f: Fixture): Promise<{ readonly type: string; readonly
   return rows.map((row) => ({ type: DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? row.type, payload: row.payload }))
 }
 
+/** The Supervisor chat's goal-report notes (Conductor Plan 5, D10), oldest first. */
+async function reportNotes(f: Fixture): Promise<{ readonly noteKey: string | null; readonly text: string }[]> {
+  return prisma.supervisorMessage.findMany({ where: { workspaceId: f.workspaceId, noteKey: { not: null } }, orderBy: { seq: 'asc' }, select: { noteKey: true, text: true } })
+}
+
 const filesOn = (f: Fixture, ref: string): string[] => git(['ls-tree', '-r', '--name-only', ref], f.repoPath).split('\n')
 
 /** The verification worktrees still on disk under the repository's worktree root. */
@@ -506,6 +520,53 @@ describe('conductor end to end', () => {
     expect(spend.conductorMeasuredUsd).toBeCloseTo(0.05, 6)
     expect(spend.spentUsd).toBeGreaterThanOrEqual(0.05)
     expect(f.others).toEqual([])
+
+    // Conductor Plan 5 (spec R10, §7): the version's report, from what was recorded.
+    const goalReport = await loadGoalReport(f.workspaceId, 1)
+    expect(goalReport.ok).toBe(true)
+    if (!goalReport.ok) return
+    const r = goalReport.value
+    expect(r.state).toBe('merged')
+    expect(r.delivery?.merge).toEqual({ by: 'system', commit: git(['rev-parse', 'main'], f.repoPath), into: 'main' })
+    expect(r.requirements?.map((item) => [item.key, item.verdict?.status, item.packageKey])).toEqual([
+      ['R1', 'pass', packages[0]?.key],
+      ['R2', 'pass', packages[0]?.key],
+    ])
+    expect(r.requirements?.[1]?.verdict).toEqual(expect.objectContaining({ round: 1, runId: verification.id, check: 'pytest -k R2', output: '1 passed' }))
+    expect(r.rounds).toEqual([expect.objectContaining({ round: 1, runId: verification.id, pass: 2, fail: 0, unverifiable: 0, commit: d1?.verifiedCommit })])
+    expect(r.packages).toHaveLength(1)
+    // Git's own list at the package's merge, next to the worker's claim.
+    expect(r.packages[0]?.mergedFiles).toEqual(['m8a-work.txt'])
+    expect(r.packages[0]?.reportedFiles).toEqual(['m8a-work.txt'])
+    expect(r.packages[0]?.seat).toBe((await prisma.person.findUniqueOrThrow({ where: { id: seat.personId ?? '' } })).name)
+    expect(r.decision).toEqual(expect.objectContaining({ mode: 'single', decidedBy: 'model', fallback: false }))
+    expect(r.decision?.reason).toContain('fits one session')
+    expect(r.spend.conductorMeasuredUsd).toBeCloseTo(0.05, 6)
+    expect(r.spend.projectSpentUsd).toBeCloseTo(spend.spentUsd, 6)
+    expect(r.spend.versionUsd).toBeGreaterThanOrEqual(0.05)
+    expect(r.spend.projectBudgetUsd).toBe((await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })).budgetUsd)
+    expect(r.trail.length).toBeGreaterThan(0)
+    expect(r.trailOmitted).toBe(0)
+    // Merged by the goal pass as the verified commit, every run finished, every file recorded:
+    // nothing left to caveat.
+    expect(reportCaveats(r)).toEqual([])
+    const md = renderGoalReportMarkdown(r)
+    expect(md).toContain('| R1 |')
+    expect(md).toContain('### Evidence for R2')
+    expect(md).toContain('m8a-work.txt')
+    expect(md).toContain('| Conductor calls | $0.05 |')
+    expect(md).toMatch(/\| Project so far \| \$[0-9.]+ of a \$20(\.00)? budget \|/)
+    expect(md.endsWith('\n')).toBe(true)
+    // Deterministic across two reads of the same rows (plan D7).
+    const again = await loadGoalReport(f.workspaceId, 1)
+    expect(again.ok && renderGoalReportMarkdown(again.value)).toBe(md)
+    // ... and the Supervisor chat's last word about it, posted on the tick it merged.
+    const notes = await reportNotes(f)
+    expect(notes.map((n) => n.noteKey)).toEqual(['goal-report:v1:merged'])
+    expect(notes[0]?.text).toContain('Goal v1 report: merged into main')
+    expect(notes[0]?.text).toContain('the verified commit')
+    expect(notes[0]?.text).toContain('Requirements: 2 of 2 pass (round 1).')
+    expect((await delivery(f, 1))?.reportNotedKey).toBe('merged')
   })
 
   it('cuts a dependent package from the integration branch after its dependency merged there; main gets both only at the final merge', async (): Promise<void> => {
@@ -543,6 +604,35 @@ describe('conductor end to end', () => {
     expect(git(['show', 'main:src/config.py'], f.repoPath)).not.toBe(ORIGINAL_SOURCE.trim())
     expect((await goalEvents(f)).map((e) => e.type)).toEqual(['workspace.goal_accepted', 'workspace.goal_merged'])
     expect(f.others).toEqual([])
+
+    // Conductor Plan 5: the report names every package, each with the files git says its merge
+    // into the integration branch changed -- its own file, not its dependency's.
+    const report = await loadGoalReport(f.workspaceId, 1)
+    expect(report.ok).toBe(true)
+    if (!report.ok) return
+    expect(report.value.state).toBe('merged')
+    expect(report.value.packages.map((p) => [p.key, p.isIntegration, p.dependsOn])).toEqual([
+      ['config', false, ['report']],
+      ['integration', true, ['report', 'config']],
+      ['report', false, []],
+    ])
+    const files = (key: string): readonly string[] | null => report.value.packages.find((p) => p.key === key)?.mergedFiles ?? null
+    expect(files('report')).toEqual(['src/report/csv.py'])
+    expect(files('config')).toEqual(['src/config.py'])
+    expect(files('integration')).toEqual(['wiring.txt'])
+    expect(report.value.requirements?.map((r) => [r.key, r.packageKey, r.verdict?.status])).toEqual([
+      ['R1', 'report', 'pass'],
+      ['R2', 'config', 'pass'],
+    ])
+    expect(report.value.decision).toEqual(expect.objectContaining({ mode: 'partitioned', reason: 'config builds on the report modes' }))
+    const md = renderGoalReportMarkdown(report.value)
+    expect(md).toContain('src/report/csv.py')
+    expect(md).toContain('wiring.txt')
+    const again = await loadGoalReport(f.workspaceId, 1)
+    expect(again.ok && renderGoalReportMarkdown(again.value)).toBe(md)
+    const notes = await reportNotes(f)
+    expect(notes.map((n) => n.noteKey)).toEqual(['goal-report:v1:merged'])
+    expect(notes[0]?.text).toContain('Packages: config (')
   })
 
   it('conducts the next goal version from main as the previous one left it', async (): Promise<void> => {
@@ -623,6 +713,15 @@ describe('conductor end to end', () => {
     expect(d1?.mergedAt).toBeNull()
     expect(filesOn(f, 'main')).not.toContain('m8a-work.txt')
     expect(git(['rev-parse', 'main'], f.repoPath)).toBe(f.initialTip)
+    // Conductor Plan 5: verified and waiting for a person is a resting point -- one note, telling
+    // them how to land it; the report says accepted.
+    const waiting = await reportNotes(f)
+    expect(waiting.map((n) => n.noteKey)).toEqual(['goal-report:v1:awaiting_merge:r1'])
+    expect(waiting[0]?.text).toContain('it waits for you')
+    expect(waiting[0]?.text).toContain('confirm-goal-merge')
+    const accepted = await loadGoalReport(f.workspaceId, 1)
+    expect(accepted.ok && accepted.value.state).toBe('accepted')
+    expect(accepted.ok && reportCaveats(accepted.value)).toEqual([])
 
     expect((await setGoal(f.workspaceId, 'Add a CSV mode. Add a JSON mode. Keep both fast.')).ok).toBe(true)
     for (let i = 0; i < 3; i += 1) {
@@ -646,6 +745,19 @@ describe('conductor end to end', () => {
     expect(f.starts.find((s) => s.kind === 'implementation' && s.goalVersion === 2)?.worktreeFiles).toContain('m8a-work.txt')
     expect((await goalEvents(f)).filter((e) => e.type === 'workspace.goal_waiting')).toHaveLength(1)
     expect(f.others).toEqual([])
+
+    // The hand merge is v1's next resting point, and v2 waits in turn. The person's `--no-ff`
+    // merge commit is not the verified commit: the note and the report say so. v2 was accepted by a
+    // pump after the last tick, so its note is the next tick's.
+    await tick(f.deps)
+    await drainPumps()
+    const notes = await reportNotes(f)
+    expect(notes.map((n) => n.noteKey)).toEqual(['goal-report:v1:awaiting_merge:r1', 'goal-report:v1:merged', 'goal-report:v2:awaiting_merge:r1'])
+    expect(notes[1]?.text).toContain('by a person')
+    expect(notes[1]?.text).toContain('that tree was not itself verified')
+    const v1 = await loadGoalReport(f.workspaceId, 1)
+    expect(v1.ok && v1.value.delivery?.merge).toEqual({ by: 'human', commit: handTip, into: 'main' })
+    expect(v1.ok && reportCaveats(v1.value).some((c) => c.includes('by hand') && c.includes('was not itself verified'))).toBe(true)
   })
 
   it('reworks only the package whose requirement failed verification, verifies again, and lands the verified tip', async (): Promise<void> => {
@@ -731,6 +843,10 @@ describe('conductor end to end', () => {
     }
     expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(1)
     expect((await delivery(f, 1))?.status).toBe('needs_human')
+    expect((await reportNotes(f)).map((n) => n.noteKey)).toEqual(['goal-report:v1:needs_human:r1'])
+    const atStop = await loadGoalReport(f.workspaceId, 1)
+    expect(atStop.ok && atStop.value.state).toBe('needs_human')
+    expect(atStop.ok && reportCaveats(atStop.value)).toEqual(['The verifier could not check R2; the version cannot be accepted until it is.'])
 
     // The person retries: the unchanged tree is verified again (round 2), and this time it passes.
     expect(await retryGoal(f.workspaceId, 1)).toEqual(expect.objectContaining({ ok: true }))
@@ -749,6 +865,24 @@ describe('conductor end to end', () => {
     ])
     expect(git(['rev-parse', 'main'], f.repoPath)).toBe(d1?.verifiedCommit)
     expect(verifyWorktrees(f)).toEqual([])
+
+    // Conductor Plan 5: one note per resting point -- the stop in round 1, then the merge.
+    const notes = await reportNotes(f)
+    expect(notes.map((n) => n.noteKey)).toEqual(['goal-report:v1:needs_human:r1', 'goal-report:v1:merged'])
+    expect(notes[0]?.text).toContain('Goal v1 report: stopped, and needs you:')
+    expect(notes[0]?.text).toContain('could not be checked: R2')
+    // The report keeps both rounds, and R2's history says what round 1 found.
+    const report = await loadGoalReport(f.workspaceId, 1)
+    expect(report.ok && report.value.rounds.map((round) => [round.round, round.pass, round.unverifiable])).toEqual([
+      [1, 1, 1],
+      [2, 2, 0],
+    ])
+    expect(report.ok && report.value.requirements?.find((r) => r.key === 'R2')?.history).toEqual([
+      { round: 1, status: 'unverifiable' },
+      { round: 2, status: 'pass' },
+    ])
+    // Once R2 passed, the stop's caveat is gone.
+    expect(report.ok && reportCaveats(report.value)).toEqual([])
   })
 
   it('ends in needs_human when the round cap runs out, without a rework the cap has no round left for', async (): Promise<void> => {
@@ -780,5 +914,23 @@ describe('conductor end to end', () => {
     expect(git(['rev-parse', 'main'], f.repoPath)).toBe(f.initialTip)
     expect((await goalEvents(f)).map((e) => e.type)).toEqual(['workspace.goal_needs_human'])
     expect(verifyWorktrees(f)).toEqual([])
+
+    // Conductor Plan 5: the report of a version the cap stopped, with the rework and why.
+    const stopped = await loadGoalReport(f.workspaceId, 1)
+    expect(stopped.ok).toBe(true)
+    if (!stopped.ok) return
+    expect(stopped.value.state).toBe('needs_human')
+    expect(stopped.value.requirements?.map((r) => [r.key, r.verdict?.status, r.verdict?.round])).toEqual([
+      ['R1', 'pass', 2],
+      ['R2', 'fail', 2],
+    ])
+    expect(stopped.value.packages.find((p) => p.key === 'config')?.implementationRuns).toBe(2)
+    expect(stopped.value.trail.map((e) => e.text)).toContain('config: sent back for rework by verification round 1.')
+    expect(stopped.value.trail.find((e) => e.text === 'config: sent back for rework by verification round 1.')?.detail).toContain('R2 prints nothing')
+    expect(renderGoalReportMarkdown(stopped.value)).toContain('sent back for rework by verification round 1')
+    const notes = await reportNotes(f)
+    expect(notes.map((n) => n.noteKey)).toEqual(['goal-report:v1:needs_human:r2'])
+    expect(notes[0]?.text).toContain('the verification round cap (2) was reached')
+    expect(notes[0]?.text).toContain('failing: R2')
   })
 })
