@@ -1,5 +1,6 @@
 import { handMergeInstruction } from '../conduct/goalBranch.js'
 import { sanitisePersonText } from '../handoff/contract.js'
+import { packagesWithoutDelivery, roundCanStillCome } from './caveats.js'
 import { GOAL_REPORT_SUMMARY_MAX_CHARS } from './constants.js'
 import { formatReportUsd, shortCommit } from './escape.js'
 import type { GoalReport } from './types.js'
@@ -53,15 +54,17 @@ function headline(report: GoalReport, options: GoalReportSummaryOptions): string
       return `merged into ${merge.into}${merge.by === 'human' ? ' by a person' : ''} (commit ${shortCommit(merge.commit)}${verified}).`
     }
     case 'conducted_without_delivery':
-      return `conducted before Slave built goal versions on an integration branch; its packages merged straight into ${base}.`
+      return `conducted before Slave built goal versions on an integration branch; ${packagesWithoutDelivery(report.packages, base)}.`
     case 'accepted':
       if (d === null) return 'every requirement is verified.'
       // Final wave M8: with autoMerge on, a dirty or switched checkout is all the merge waits for.
-      // The person has to act, but by cleaning the checkout, never by merging by hand.
+      // The person has to act, but by cleaning the checkout, never by merging by hand. Wording fix
+      // W2: the note promises the retry, not the merge -- the base can move meanwhile, and then the
+      // version waits for a hand merge (which gets its own note: the resting key names the wait).
       if (options.waitsForCleanCheckout === true) {
         return (
           `every requirement is verified, and it waits for a clean checkout of ${d.baseBranch}: the project checkout has uncommitted changes ` +
-          `or is not on ${d.baseBranch}. Once it is clean and on ${d.baseBranch}, Slave merges it.`
+          `or is not on ${d.baseBranch}. Once the checkout is clean and on ${d.baseBranch}, Slave tries the merge again.`
         )
       }
       return `every requirement is verified, and it waits for you: ${handMergeInstruction(d.integrationBranch, d.baseBranch, report.workspaceId, report.goalVersion, d.verifiedCommit)}.`
@@ -84,7 +87,7 @@ function requirementsLine(report: GoalReport): string {
   const unverifiable = all.filter((item) => item.verdict?.status === 'unverifiable').map((item) => item.key)
   const last = report.rounds.at(-1)
   return (
-    `Requirements: ${String(pass)} of ${String(all.length)} pass${last === undefined ? ', none verified yet' : ` (round ${String(last.round)})`}` +
+    `Requirements: ${String(pass)} of ${String(all.length)} pass${last === undefined ? `, none verified${roundCanStillCome(report.state) ? ' yet' : ''}` : ` (round ${String(last.round)})`}` +
     `${failing.length === 0 ? '' : `; failing: ${failing.join(', ')}`}${unverifiable.length === 0 ? '' : `; could not be checked: ${unverifiable.join(', ')}`}.`
   )
 }

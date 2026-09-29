@@ -6,7 +6,7 @@
  * Every timestamp is an ISO string (UTC), so the value crosses a route unchanged.
  */
 /** `conducted_without_delivery` (final wave I1): a version conducted under Plans 2/3 -- a `conduct`
- *  decision and packages, but no `GoalDelivery` -- whose packages merged straight into the base
+ *  decision and packages, but no `GoalDelivery` -- whose packages merge straight into the base
  *  branch. Plan 4a's conductor writes the delivery in the packages' own transaction, so a version
  *  conducted since then is never in this state. */
 export const GOAL_REPORT_STATES = [

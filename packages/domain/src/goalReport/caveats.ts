@@ -15,6 +15,24 @@ export const GOAL_REPORT_STATE_LABEL: Readonly<Record<GoalReportState, string>> 
   abandoned: 'abandoned',
 }
 
+/** A version in one of these states can still get a verification round, so a requirement with no
+ *  verdict is not verified YET. In every other state (merged, accepted or abandoned without a
+ *  recorded round, or conducted before verification existed) no round will come. */
+const ROUND_CAN_COME: ReadonlySet<GoalReportState> = new Set(['not_conducted', 'integrating', 'verifying', 'needs_human'])
+
+/** What the page and the export print for a requirement with no verdict (wording fix W3): one
+ *  phrase for both, with "yet" only where a round can still come. */
+export function unverifiedRequirementLabel(state: GoalReportState): string {
+  return ROUND_CAN_COME.has(state) ? 'not verified yet' : 'not verified'
+}
+
+/** What the page and the export print for a version with no packages: "yet" only before conduct,
+ *  since a conducted version that has none will not get any. */
+export const noPackagesLabel = (state: GoalReportState): string => (state === 'not_conducted' ? 'No packages yet.' : 'No packages.')
+
+/** Whether no requirement verdict is "yet" to come, for the chat note's requirements line. */
+export const roundCanStillCome = (state: GoalReportState): boolean => ROUND_CAN_COME.has(state)
+
 const keysOf = (items: readonly { readonly key: string }[]): string => items.map((item) => item.key).join(', ')
 const count = (n: number, one: string, many: string): string => `${String(n)} ${n === 1 ? one : many}`
 
@@ -23,6 +41,29 @@ const count = (n: number, one: string, many: string): string => `${String(n)} ${
  *  plain `string | null` here (the report's own shape, D1), so the check widens `TERMINAL` rather
  *  than narrowing the status to `TaskStatus`. */
 const isFinishedTaskStatus = (status: string): boolean => (TERMINAL as readonly string[]).includes(status)
+
+/**
+ * Where the packages of a version conducted before integration branches stand
+ * (`conducted_without_delivery`, wording fix W1). They merge straight into the base branch, but a
+ * Plans 2/3 package can still be in flight after the upgrade, and a version can have no packages,
+ * so "merged" is said only of what `integrated` (`Task.integratedAt`, set by the base-branch merge)
+ * records. The caveat and the chat note share it.
+ */
+export function packagesWithoutDelivery(packages: GoalReport['packages'], base: string): string {
+  const n = packages.length
+  if (n === 0) return 'it has no packages'
+  const merged = packages.filter((pkg) => pkg.integrated).length
+  const noun = n === 1 ? 'its package' : 'its packages'
+  if (merged === n) return `${noun} merged straight into ${base}`
+  const moving = packages.some((pkg) => !pkg.integrated && pkg.taskStatus !== null && !isFinishedTaskStatus(pkg.taskStatus))
+  const where =
+    merged > 0
+      ? `${String(merged)} of ${String(n)} ${merged === 1 ? 'has' : 'have'} merged`
+      : n === 1
+        ? moving ? 'it has not merged yet' : 'it did not merge'
+        : moving ? 'none has merged yet' : 'none of them merged'
+  return `${noun} ${n === 1 ? 'merges' : 'merge'} straight into ${base}, and ${where}`
+}
 
 /**
  * What this report cannot vouch for (plan D8), in the order a reader should see it. The page and
@@ -40,8 +81,8 @@ export function reportCaveats(report: GoalReport): readonly string[] {
   if (report.state === 'not_conducted') out.push('This goal version has not been conducted yet: it has no packages and no verification.')
   if (report.state === 'conducted_without_delivery') {
     out.push(
-      `This version was conducted before Slave built goal versions on an integration branch; its packages merged straight into ${base}, ` +
-        'and no integration, verification or merge of the version is recorded.',
+      `This version was conducted before Slave built goal versions on an integration branch: ${packagesWithoutDelivery(report.packages, base)}. ` +
+        'No integration, verification or merge of the version is recorded.',
     )
   }
   if (report.decision?.fallback === true) {

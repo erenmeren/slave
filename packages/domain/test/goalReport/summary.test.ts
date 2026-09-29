@@ -123,16 +123,40 @@ describe('goalReportSummary', () => {
 
   it('says a version conducted before integration branches merged straight into the base branch (final wave I1)', () => {
     const text = goalReportSummary(report({ state: 'conducted_without_delivery', delivery: null, rounds: [], baseBranch: 'trunk' }))
-    expect(text).toContain('Goal v2 report: conducted before Slave built goal versions on an integration branch; its packages merged straight into trunk.')
+    expect(text).toContain('Goal v2 report: conducted before Slave built goal versions on an integration branch; its package merged straight into trunk.')
+  })
+
+  // Wording fix W1: "merged" only for packages that did.
+  it('does not say the packages of a version with no delivery merged when they have not', () => {
+    const without = (packages: readonly GoalReportPackage[]): string =>
+      goalReportSummary(report({ state: 'conducted_without_delivery', delivery: null, rounds: [], baseBranch: 'trunk', packages })).split('\n')[0] ?? ''
+    const head = 'Goal v2 report: conducted before Slave built goal versions on an integration branch; '
+    expect(without([pkg({ taskStatus: 'running', integrated: false })])).toBe(`${head}its package merges straight into trunk, and it has not merged yet.`)
+    expect(without([])).toBe(`${head}it has no packages.`)
+    expect(without([pkg({ key: 'a' }), pkg({ key: 'b' })])).toBe(`${head}its packages merged straight into trunk.`)
+  })
+
+  // Wording fix W3: "yet" only where a round can still come.
+  it('says no requirement is verified, with "yet" only while a round can still come', () => {
+    const none = [requirement({ verdict: null, history: [] })]
+    const d = report().delivery!
+    expect(goalReportSummary(report({ state: 'needs_human', delivery: { ...d, mergedAt: null, merge: null, needsHumanReason: 'x' }, rounds: [], requirements: none }))).toContain(
+      'Requirements: 0 of 1 pass, none verified yet.',
+    )
+    expect(goalReportSummary(report({ state: 'merged', rounds: [], requirements: none }))).toContain('Requirements: 0 of 1 pass, none verified.')
+    expect(goalReportSummary(report({ state: 'conducted_without_delivery', delivery: null, rounds: [], requirements: none }))).toContain(
+      'Requirements: 0 of 1 pass, none verified.',
+    )
   })
 
   it('tells the person to clean the checkout, not to merge by hand, when that is all the merge waits for (final wave M8)', () => {
     const d = report().delivery!
     const text = goalReportSummary(report({ state: 'accepted', delivery: { ...d, mergedAt: null, merge: null } }), { waitsForCleanCheckout: true })
     expect(text).toContain(
-      'Goal v2 report: every requirement is verified, and it waits for a clean checkout of main: the project checkout has uncommitted changes or is not on main. Once it is clean and on main, Slave merges it.',
+      'Goal v2 report: every requirement is verified, and it waits for a clean checkout of main: the project checkout has uncommitted changes or is not on main. Once the checkout is clean and on main, Slave tries the merge again.',
     )
     expect(text).not.toContain('confirm-goal-merge')
+    expect(text).not.toContain('Slave merges it')
   })
 
   it('says what a stopped version needs, with the failing and unverifiable keys', () => {

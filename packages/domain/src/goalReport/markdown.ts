@@ -1,5 +1,5 @@
 import { CONDUCT_PER_CALL_CAP_USD } from '../conduct/constants.js'
-import { GOAL_REPORT_STATE_LABEL, reportCaveats } from './caveats.js'
+import { GOAL_REPORT_STATE_LABEL, noPackagesLabel, reportCaveats, unverifiedRequirementLabel } from './caveats.js'
 import { evidenceAnchor, evidenceCut, formatReportUsd, mdFence, mdInline, mdQuote, shortCommit } from './escape.js'
 import type { GoalReport, GoalReportAuthor } from './types.js'
 
@@ -45,7 +45,7 @@ export function renderGoalReportMarkdown(report: GoalReport): string {
     for (const item of report.requirements) {
       const v = item.verdict
       lines.push(
-        `| ${mdInline(item.key)} | ${mdInline(item.text)} | ${v === null ? 'not verified yet' : mdInline(v.status)} | ${v === null ? '—' : String(v.round)} | ` +
+        `| ${mdInline(item.key)} | ${mdInline(item.text)} | ${v === null ? unverifiedRequirementLabel(report.state) : mdInline(v.status)} | ${v === null ? '—' : String(v.round)} | ` +
           `${item.packageKey === null ? '—' : mdInline(item.packageKey)} | ${v === null ? '—' : `[check and output](#${evidenceAnchor(item.key)})`} |`,
       )
     }
@@ -86,7 +86,7 @@ export function renderGoalReportMarkdown(report: GoalReport): string {
   }
 
   lines.push('## Packages', '')
-  if (report.packages.length === 0) lines.push('No packages yet.', '')
+  if (report.packages.length === 0) lines.push(noPackagesLabel(report.state), '')
   for (const pkg of report.packages) {
     lines.push(`### ${mdInline(pkg.key)}: ${mdInline(pkg.title)}${pkg.isIntegration ? ' (the integration package)' : ''}`, '')
     lines.push(`- Seat: ${pkg.seat === null ? 'none' : mdInline(pkg.seat)}${pkg.persona === null ? '' : ` (persona ${mdInline(pkg.persona)})`}`)

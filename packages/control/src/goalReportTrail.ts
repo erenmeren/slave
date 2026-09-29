@@ -217,7 +217,7 @@ export async function versionTrail(
 ): Promise<{ readonly entries: readonly GoalReportTrailEntry[]; readonly omitted: number }> {
   const { workspaceId, goalVersion } = scope
   // Final wave I1: a version with no delivery was conducted before integration branches, and its
-  // packages merged straight into the base branch.
+  // packages merge straight into the base branch.
   const mergesInto = scope.deliveryId === null ? scope.baseBranch : 'the integration branch'
   const keyOf = new Map(scope.tasks.map((task) => [task.taskId, task.packageKey] as const))
   const taskIds = [...keyOf.keys()]

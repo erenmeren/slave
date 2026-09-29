@@ -8,8 +8,10 @@ import {
   evidenceCut,
   formatReportUsd,
   integratedWhere,
+  noPackagesLabel,
   reportCaveats,
   shortCommit,
+  unverifiedRequirementLabel,
   type GoalReport,
   type GoalReportState,
   type GoalReportVerdictStatus,
@@ -145,7 +147,7 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
                     <td className={CELL}>{item.text}</td>
                     <td className={CELL}>
                       {item.verdict === null ? (
-                        <span className="text-t3">not verified yet</span>
+                        <span className="text-t3">{unverifiedRequirementLabel(report.state)}</span>
                       ) : (
                         <StatusPill tone={VERDICT_TONE[item.verdict.status]} label={item.verdict.status} title={item.verdict.status} />
                       )}
@@ -224,7 +226,7 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
       )}
 
       <Panel title="Packages">
-        {report.packages.length === 0 && <p className="text-[13px] text-t2">No packages yet.</p>}
+        {report.packages.length === 0 && <p className="text-[13px] text-t2">{noPackagesLabel(report.state)}</p>}
         {report.packages.map((pkg) => (
           <section
             key={pkg.key}

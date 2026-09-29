@@ -280,12 +280,21 @@ describe('loadGoalReport', () => {
   })
 
   // Final wave I1: a version conducted under Plans 2/3 has a conduct decision and packages, but no
-  // delivery; its packages merged straight into the base branch.
+  // delivery; its packages merge straight into the base branch.
   it('reports a version conducted before integration branches as such, not as not conducted', async (): Promise<void> => {
     const w = await world()
     await prisma.workspace.update({ where: { id: w.workspaceId }, data: { baseBranch: 'trunk' } })
-    const c = await conduct(w)
+    const c = await conduct(w, { taskStatus: 'running' })
     await prisma.goalDelivery.delete({ where: { id: c.deliveryId } })
+    // Before the package merged (wording fix W1): the caveat does not say it merged.
+    const before = await loadGoalReport(w.workspaceId, 1)
+    expect(before.ok).toBe(true)
+    if (!before.ok) return
+    expect(reportCaveats(before.value)).toContain(
+      'This version was conducted before Slave built goal versions on an integration branch: its package merges straight into trunk, and it has not merged yet. No integration, verification or merge of the version is recorded.',
+    )
+    // The base-branch merge (merge.ts) sets `integratedAt` and writes `task.done`.
+    await prisma.task.update({ where: { id: c.taskId }, data: { status: 'done', integratedAt: new Date() } })
     await appendEvent({ type: 'task.done', workspaceId: w.workspaceId, taskId: c.taskId, actor: 'system', payload: { branch: 'b1' } })
     const result = await loadGoalReport(w.workspaceId, 1)
     expect(result.ok).toBe(true)
@@ -296,7 +305,7 @@ describe('loadGoalReport', () => {
     expect(result.value.packages.map((pkg) => pkg.key)).toEqual(['report'])
     const caveats = reportCaveats(result.value)
     expect(caveats).toContain(
-      'This version was conducted before Slave built goal versions on an integration branch; its packages merged straight into trunk, and no integration, verification or merge of the version is recorded.',
+      'This version was conducted before Slave built goal versions on an integration branch: its package merged straight into trunk. No integration, verification or merge of the version is recorded.',
     )
     expect(caveats.join('\n')).not.toContain('has not been conducted yet')
     const texts = result.value.trail.map((e) => e.text)

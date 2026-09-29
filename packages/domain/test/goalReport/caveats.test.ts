@@ -138,10 +138,33 @@ describe('reportCaveats', () => {
       report({ state: 'conducted_without_delivery', delivery: null, rounds: [], baseBranch: 'trunk', requirements: [requirement({ verdict: null, history: [] })], packages: [pkg({ mergedFiles: null })] }),
     )
     expect(caveats).toContain(
-      'This version was conducted before Slave built goal versions on an integration branch; its packages merged straight into trunk, and no integration, verification or merge of the version is recorded.',
+      'This version was conducted before Slave built goal versions on an integration branch: its package merged straight into trunk. No integration, verification or merge of the version is recorded.',
     )
     expect(caveats.join('\n')).not.toMatch(/has not been conducted yet|No verification round|merged before Slave recorded them/u)
     expect(caveats).toContain("The files report merged into trunk were not recorded (Slave records them only for a merge into an integration branch); the worker's own list is shown.")
+  })
+
+  // Wording fix W1: the packages of a version with no delivery merge straight into the base branch,
+  // but "merged" is only true of the ones that did.
+  it('says only what merged of a version conducted before integration branches: in flight, none, some, all', () => {
+    const without = (packages: readonly GoalReportPackage[]): string =>
+      reportCaveats(report({ state: 'conducted_without_delivery', delivery: null, rounds: [], baseBranch: 'trunk', packages })).find((line) =>
+        line.startsWith('This version was conducted before'),
+      ) ?? ''
+    const tail = ' No integration, verification or merge of the version is recorded.'
+    const head = 'This version was conducted before Slave built goal versions on an integration branch: '
+    expect(without([pkg({ taskStatus: 'running', integrated: false, mergedFiles: null })])).toBe(`${head}its package merges straight into trunk, and it has not merged yet.${tail}`)
+    expect(without([])).toBe(`${head}it has no packages.${tail}`)
+    expect(without([pkg({ key: 'a' }), pkg({ key: 'b' })])).toBe(`${head}its packages merged straight into trunk.${tail}`)
+    expect(without([pkg({ key: 'a' }), pkg({ key: 'b', taskStatus: 'ready', integrated: false })])).toBe(
+      `${head}its packages merge straight into trunk, and 1 of 2 has merged.${tail}`,
+    )
+    expect(without([pkg({ key: 'a', taskStatus: 'ready', integrated: false }), pkg({ key: 'b', taskStatus: 'running', integrated: false })])).toBe(
+      `${head}its packages merge straight into trunk, and none has merged yet.${tail}`,
+    )
+    expect(without([pkg({ key: 'a', taskStatus: 'cancelled', integrated: false }), pkg({ key: 'b', taskStatus: 'failed', integrated: false })])).toBe(
+      `${head}its packages merge straight into trunk, and none of them merged.${tail}`,
+    )
   })
 
   it('says nothing about a person who fast-forwarded to the verified commit', () => {

@@ -109,6 +109,25 @@ describe('renderGoalReportMarkdown', () => {
     expect(md).toContain('No verification round has run yet')
   })
 
+  // Wording fix W3: "yet" only where a round can still come.
+  it('says "not verified", without "yet", where no round will come', () => {
+    const none = [requirement({ verdict: null, history: [] })]
+    const row = (state: GoalReport['state'], over: Partial<GoalReport> = {}): string =>
+      renderGoalReportMarkdown(report({ state, rounds: [], requirements: none, ...over })).split('\n').find((line) => line.startsWith('| R1 |')) ?? ''
+    for (const state of ['merged', 'accepted', 'abandoned'] as const) expect(row(state)).toBe('| R1 | hsql --format csv prints CSV | not verified | — | report | — |')
+    expect(row('conducted_without_delivery', { delivery: null })).toBe('| R1 | hsql --format csv prints CSV | not verified | — | report | — |')
+    for (const state of ['integrating', 'verifying', 'needs_human', 'not_conducted'] as const) {
+      expect(row(state)).toBe('| R1 | hsql --format csv prints CSV | not verified yet | — | report | — |')
+    }
+  })
+
+  it('says "No packages yet." only for a version not conducted yet', () => {
+    const lines = (state: GoalReport['state']): readonly string[] => renderGoalReportMarkdown(report({ state, delivery: null, rounds: [], packages: [] })).split('\n')
+    expect(lines('conducted_without_delivery')).toContain('No packages.')
+    expect(lines('conducted_without_delivery')).not.toContain('No packages yet.')
+    expect(lines('not_conducted')).toContain('No packages yet.')
+  })
+
   it('keeps hostile text inert: no raw tag, no forged marker, no broken row, no closed fence', () => {
     const md = renderGoalReportMarkdown(
       report({

@@ -130,8 +130,33 @@ describe('GoalReportView', () => {
     expect(pkg.textContent).toContain('Task: done, merged into trunk')
     expect(pkg.textContent).not.toContain('integration branch')
     expect(screen.getAllByTestId('goal-report-caveat').map((node) => node.textContent)).toContain(
-      'This version was conducted before Slave built goal versions on an integration branch; its packages merged straight into trunk, and no integration, verification or merge of the version is recorded.',
+      'This version was conducted before Slave built goal versions on an integration branch: its package merged straight into trunk. No integration, verification or merge of the version is recorded.',
     )
+  })
+
+  // Wording fix W3: the same phrase as the Markdown, "yet" only where a round can still come.
+  it('says "not verified", without "yet", where no round will come, and "not verified yet" where one can', () => {
+    const none = [{ ...report().requirements![0]!, verdict: null, history: [] }]
+    const d = report().delivery!
+    const cell = (over: Partial<GoalReport>): string => {
+      const { unmount } = render(<GoalReportView report={report({ rounds: [], requirements: none, ...over })} />)
+      const text = within(screen.getByTestId('goal-report-requirement')).getAllByRole('cell')[2]?.textContent ?? ''
+      unmount()
+      return text
+    }
+    expect(cell({ state: 'merged' })).toBe('not verified')
+    expect(cell({ state: 'abandoned', delivery: { ...d, mergedAt: null, merge: null } })).toBe('not verified')
+    expect(cell({ state: 'conducted_without_delivery', delivery: null })).toBe('not verified')
+    expect(cell({ state: 'verifying', delivery: { ...d, mergedAt: null, merge: null } })).toBe('not verified yet')
+    expect(cell({ state: 'needs_human', delivery: { ...d, mergedAt: null, merge: null, needsHumanReason: 'x' } })).toBe('not verified yet')
+  })
+
+  it('says "No packages yet." only for a version not conducted yet, as the Markdown does', () => {
+    const { unmount } = render(<GoalReportView report={report({ state: 'conducted_without_delivery', delivery: null, rounds: [], packages: [] })} />)
+    expect(screen.getByText('No packages.')).toBeTruthy()
+    unmount()
+    render(<GoalReportView report={report({ state: 'not_conducted', delivery: null, rounds: [], packages: [] })} />)
+    expect(screen.getByText('No packages yet.')).toBeTruthy()
   })
 
   it('labels a quoted trail detail and an answer with the shared words', () => {
