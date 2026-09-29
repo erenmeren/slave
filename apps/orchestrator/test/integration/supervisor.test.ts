@@ -1172,3 +1172,74 @@ describe('supervise -- the mailbox (M39)', () => {
     expect(seen).toEqual([sentinel])
   })
 })
+
+/**
+ * Conductor Plan 4b, fix round 1 (I2): a failed verification round is news the loop is already
+ * acting on. It is recorded by the rules -- never asked of the model, which might escalate it -- and
+ * once per round, however long the round's rework lasts.
+ */
+describe('supervise -- verification_failed', () => {
+  beforeEach(reset)
+
+  it('records no_action by the rules with a decider wired, and nothing more 20 minutes later in the same round', async (): Promise<void> => {
+    const fixture = await seed({ blockedTasks: 0 })
+    const verifier = await prisma.slave.create({
+      data: { teamId: fixture.teamId, role: 'reviewer', runtimeRoles: ['reviewer', 'verifier'], personId: (await prisma.person.create({ data: { name: 'Vera' } })).id },
+    })
+    const delivery = await prisma.goalDelivery.create({
+      data: { workspaceId: fixture.workspaceId, goalVersion: 1, integrationBranch: 'slaveofai/goal-v1', baseCommit: 'abc', round: 1 },
+    })
+    const run = await prisma.slaveRun.create({ data: { slaveId: verifier.id, status: 'succeeded', kind: 'verification', goalDeliveryId: delivery.id } })
+    await prisma.verificationResult.create({
+      data: { workspaceId: fixture.workspaceId, goalDeliveryId: delivery.id, goalVersion: 1, round: 1, runId: run.id, key: 'R1', status: 'fail', check: 'node c.mjs', output: 'no', reason: 'it does not' },
+    })
+    const recorder = recordingDecider(answering('{"candidateIndex": 0, "rationale": "escalate it"}'))
+
+    const first = await supervise({ workspaceId: fixture.workspaceId, decider: recorder.decider, model: 'claude-sonnet-5', now: clock })
+
+    expect(recorder.calls).toHaveLength(0)
+    expect(first.modelCalls).toBe(0)
+    const rows = await decisions(fixture.workspaceId)
+    expect(rows.map((row) => [row.situationKind, row.subjectId, row.decidedBy, (row.action as { kind: string }).kind])).toEqual([
+      ['verification_failed', `${fixture.workspaceId}:v1:r1`, 'rules', 'no_action'],
+    ])
+
+    await supervise({ workspaceId: fixture.workspaceId, decider: recorder.decider, model: 'claude-sonnet-5', now: () => new Date(NOW.getTime() + 20 * 60_000) })
+    expect(await decisions(fixture.workspaceId)).toHaveLength(1)
+    expect(recorder.calls).toHaveLength(0)
+  })
+})
+
+/**
+ * Conductor Plan 4b, final wave I3: a goal version waiting for a person is escalated by the rules,
+ * never asked of the model -- which could pick `no_action` and be asked again (and paid again)
+ * every fifteen minutes while the version waits.
+ */
+describe('supervise -- goal_needs_human', () => {
+  beforeEach(reset)
+
+  it('escalates by the rules with a decider wired that would have said no_action', async (): Promise<void> => {
+    const fixture = await seed({ blockedTasks: 0 })
+    await prisma.goalDelivery.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        goalVersion: 1,
+        integrationBranch: 'slaveofai/goal-v1',
+        baseCommit: 'abc',
+        round: 2,
+        status: 'needs_human',
+        needsHumanReason: 'requirement(s) could not be verified: R1 (no browser)',
+      },
+    })
+    const recorder = recordingDecider(answering('{"candidateIndex": 1, "rationale": "nothing to do"}'))
+
+    const report = await supervise({ workspaceId: fixture.workspaceId, decider: recorder.decider, model: 'claude-sonnet-5', now: clock })
+
+    expect(recorder.calls).toHaveLength(0)
+    expect(report.modelCalls).toBe(0)
+    const rows = await decisions(fixture.workspaceId)
+    expect(rows.map((row) => [row.situationKind, row.subjectId, row.decidedBy, (row.action as { kind: string }).kind])).toEqual([
+      ['goal_needs_human', `${fixture.workspaceId}:v1:r2`, 'rules', 'escalate_to_human'],
+    ])
+  })
+})

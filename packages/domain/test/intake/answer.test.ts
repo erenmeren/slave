@@ -29,6 +29,7 @@ const draft: IntakeDraft = {
   provider: null,
   autoMerge: true,
   autonomy: 'act',
+  delivery: 'conducted',
   team: [],
 }
 

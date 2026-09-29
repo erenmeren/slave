@@ -138,12 +138,15 @@ export async function buildSupervisorTimeline(
     const type = (DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? row.type) as DomainEventType
     const payload = row.payload as Record<string, unknown>
     const memoryStatus = memoryStatusOf(type, payload)
+    const retryCause = retryCauseOf(type, payload)
     const subject: TimelineSubject = {
       source: 'event',
       type,
       actor: row.actor as 'human' | 'slave' | 'system',
       // M49 R4 (plan erratum E5): the lane of a `memory.recorded` is its payload's status.
       ...(memoryStatus === null ? {} : { memoryStatus }),
+      // Final wave M5: a branch-moved retry is the goal pass's, not a person's request.
+      ...(retryCause === null ? {} : { retryCause }),
     }
     const lane = laneFor(subject)
     if (lane === null) continue
@@ -208,6 +211,15 @@ export async function buildSupervisorTimeline(
   }
 
   return entries.sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+}
+
+/**
+ * Final wave M5: `workspace.goal_retried`'s `cause`, or `null` for every other row and for a retry
+ * that carries none (a person's). Narrowed to the one type and the one value, like
+ * {@link memoryStatusOf} below. Exported because it is PURE.
+ */
+export function retryCauseOf(type: DomainEventType, payload: Record<string, unknown>): 'branch_moved' | null {
+  return type === 'workspace.goal_retried' && payload['cause'] === 'branch_moved' ? 'branch_moved' : null
 }
 
 /**
@@ -291,6 +303,55 @@ function titleFor(
       const packages = asIds(payload['packages'])
       const what = mode === 'partitioned' ? `partitioned into ${packages.length} package${packages.length === 1 ? '' : 's'}` : 'kept as a single package'
       return `conducted goal v${v}: ${what}`
+    }
+    // Conductor Plan 4a: a goal version's gate passed, and its branch reached the base branch.
+    case 'workspace.goal_accepted': {
+      const version = payload['version']
+      return `accepted goal v${typeof version === 'number' ? String(version) : '?'}`
+    }
+    case 'workspace.goal_merged': {
+      const version = payload['version']
+      const into = payload['into']
+      return `merged goal v${typeof version === 'number' ? String(version) : '?'} into ${typeof into === 'string' ? into : 'the base branch'}`
+    }
+    case 'workspace.goal_abandoned': {
+      const version = payload['version']
+      return `abandoned goal v${typeof version === 'number' ? String(version) : '?'}`
+    }
+    // Conductor Plan 4b (spec R8): a verification round starting. The payload carries no `title`,
+    // so without a case of its own this would read as its own type name on the WORK lane.
+    case 'workspace.verification_started': {
+      const version = payload['version']
+      const round = payload['round']
+      const v = typeof version === 'number' ? String(version) : '?'
+      const r = typeof round === 'number' ? String(round) : '?'
+      return `verifying goal v${v} (round ${r})`
+    }
+    // Conductor Plan 4b (spec R8/R9): a verification round's verdict. The payload carries no
+    // `title`, so without a case of its own this would read as its own type name on the VERIFIED
+    // lane.
+    case 'workspace.verified': {
+      const version = payload['version']
+      const round = payload['round']
+      const fail = payload['fail']
+      const v = typeof version === 'number' ? String(version) : '?'
+      const r = typeof round === 'number' ? String(round) : '?'
+      const f = typeof fail === 'number' ? fail : 0
+      return `verified goal v${v} round ${r}: ${f} failed`
+    }
+    // Conductor Plan 4b (plan D6/D7): the verification loop ended without acceptance, or the
+    // version's final merge failed. `reason` is the second line (`detailFor`'s field loop already
+    // reads it).
+    case 'workspace.goal_needs_human': {
+      const version = payload['version']
+      return `goal v${typeof version === 'number' ? String(version) : '?'} needs a person`
+    }
+    // Conductor Plan 4b (plan D9): a person's retry-goal, with a fresh round window.
+    case 'workspace.goal_retried': {
+      const version = payload['version']
+      const v = typeof version === 'number' ? String(version) : '?'
+      // Final wave M5: the goal pass's own retry, after the integration branch moved.
+      return payload['cause'] === 'branch_moved' ? `goal v${v} went back to verification` : `retried goal v${v}`
     }
     // M48 R5/R7: a runbook adopted, or stopped. The payload's `title` is not a field this event
     // carries, so without a case of its own it would read as its own type name on the PLAN CHANGE

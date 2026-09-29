@@ -27,7 +27,7 @@
 //
 // TWELVE STAGES, each measuring one thing the milestone claims:
 //   1.  Two manifests, complete, and nobody holds a second copy of the union.
-//   2.  The permission verdict is byte-identical -- twelve files, byte for byte -- and the two
+//   2.  The permission verdict is byte-identical -- sixteen files, byte for byte -- and the two
 //       per-vendor tables that feed it now derive from the manifests (R5's inversion, from the
 //       tables' own side).
 //   3.  The argv is byte-identical, and the two silent failures are still refused.
@@ -149,9 +149,13 @@ const HOOK_PLANE_SCRIPTS = [
 ]
 
 // The fixed inputs `scripts/fixtures/m56a-goldens/permissions-*.json` were captured with, so the
-// twelve comparisons are total rather than field-wise (spec §3 stage 2).
+// sixteen comparisons are total rather than field-wise (spec §3 stage 2).
 const GOLDEN_RUN_ID = '00000000-0000-4000-8000-000000000m56'
 const GOLDEN_RUN_TOKEN = 'm56a-golden-token-not-a-secret'
+// Conductor Plan 4b (fix round 1): `writePermissionsFile` refuses a `verification` file without the
+// ownership rule that owns nothing, so the four verification goldens are written with this fixed
+// rule -- and pin the confinement byte for byte, not only the grants.
+const GOLDEN_VERIFICATION_OWNERSHIP = { worktreeRoot: '/m56a-golden/verify-worktree', owned: [], excluded: [] }
 // Claude's governed vocabulary, as a count somebody can re-run (M56a erratum E22). The `mcp__*`
 // prefix rule covers every name this list cannot enumerate, and it is asserted separately.
 const CLAUDE_VOCABULARY_NAMES = 38
@@ -521,7 +525,7 @@ try {
   console.log('stage 1 complete: two measured manifests, one union literal, one array literal')
 
   // ================= Stage 2: the permission verdict, byte for byte ===============================
-  console.log('\n=== stage 2: the permission verdict is byte-identical -- twelve files, byte for byte')
+  console.log('\n=== stage 2: the permission verdict is byte-identical -- sixteen files, byte for byte')
 
   const grantSets = { baseline: [], granted: PERMISSION_KINDS.map((kind) => ({ kind, mode: 'allow' })) }
   let compared = 0
@@ -536,6 +540,7 @@ try {
             runKind,
             runId: GOLDEN_RUN_ID,
             runToken: GOLDEN_RUN_TOKEN,
+            ...(runKind === 'verification' ? { ownership: GOLDEN_VERIFICATION_OWNERSHIP } : {}),
           })
           const goldenPath = join(GOLDENS, `permissions-${provider}-${runKind}-${setName}.json`)
           const actual = readFileSync(written)
@@ -559,7 +564,7 @@ try {
       }
     }
   }
-  if (compared !== 12) await fail(`stage 2: compared ${compared} permission files, expected twelve`)
+  if (compared !== 16) await fail(`stage 2: compared ${compared} permission files, expected sixteen`)
 
   // R5's inversion, from the tables' own side: the two per-vendor tables still hold what they held,
   // and each one now DERIVES from the manifest it was inverted into.
@@ -590,7 +595,7 @@ try {
   }
   const prefixes = readGolden('permissions-claude_code-implementation-granted.json').prefixes
   await assertEqual(prefixes, [{ prefix: 'mcp__', kind: 'network_fetch' }], 'the one prefix rule the vocabulary cannot enumerate')
-  console.log('stage 2 complete: twelve verdicts byte for byte, and both per-vendor tables derive from the manifests')
+  console.log('stage 2 complete: sixteen verdicts byte for byte, and both per-vendor tables derive from the manifests')
 
   // ================= Stage 3: the argv, byte for byte =============================================
   console.log('\n=== stage 3: the argv is byte-identical, and the two silent failures are still refused')
@@ -1241,11 +1246,15 @@ try {
   // change that bumps one still fails here. Conductor Plan 2 added the `conduct` situation and
   // action, and two events: `workspace.requirements_set` and `workspace.conducted`; its final
   // review the `package_seat_lost` situation. Conductor Plan 3 added the `foreign_file` situation and
-  // one event, `task.ownership_violated`.
-  if (SITUATION_KINDS.length !== 22) await fail(`stage 12: SITUATION_KINDS is ${SITUATION_KINDS.length}, expected twenty-two`)
+  // one event, `task.ownership_violated`. Conductor Plan 4a added four events:
+  // `workspace.goal_waiting`, `workspace.goal_accepted`, `workspace.goal_merged`,
+  // `workspace.goal_abandoned`. Conductor Plan 4b added the `verification_failed` and
+  // `goal_needs_human` situations and four events: `workspace.verification_started`,
+  // `workspace.verified`, `workspace.goal_needs_human`, `workspace.goal_retried`.
+  if (SITUATION_KINDS.length !== 24) await fail(`stage 12: SITUATION_KINDS is ${SITUATION_KINDS.length}, expected twenty-four`)
   if (ACTION_KINDS.length !== 25) await fail(`stage 12: ACTION_KINDS is ${ACTION_KINDS.length}, expected twenty-five`)
-  if (Object.keys(LANE_BY_TYPE).length !== 65) {
-    await fail(`stage 12: LANE_BY_TYPE holds ${Object.keys(LANE_BY_TYPE).length} event types, expected 65 -- a provider change adds none`)
+  if (Object.keys(LANE_BY_TYPE).length !== 73) {
+    await fail(`stage 12: LANE_BY_TYPE holds ${Object.keys(LANE_BY_TYPE).length} event types, expected 73 -- a provider change adds none`)
   }
 
   const enumRows = await prisma.$queryRaw`SELECT unnest(enum_range(NULL::"ProviderKind"))::text AS value`
@@ -1302,7 +1311,7 @@ try {
   console.log('stage 12 complete: two catalogues, one lane map, one enum, no migration, twelve names, five scripts, one clean tree')
 
   console.log(
-    '\nPASS: nothing a provider does changed, and here are the bytes -- twelve permission verdicts byte for byte, five argv ' +
+    '\nPASS: nothing a provider does changed, and here are the bytes -- sixteen permission verdicts byte for byte, five argv ' +
       'shapes element for element, both capability rows two different ways, one paused run per provider whose two checkpoint ' +
       'columns hold the two files its adapter actually wrote, and a grep that fails the build the moment a second copy of the ' +
       'provider list appears anywhere in the tree',

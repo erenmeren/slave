@@ -106,7 +106,36 @@ describe('the intake routes', () => {
     )
     expect(response.status).toBe(200)
     const body = (await response.json()) as { workspaceId: string }
-    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: body.workspaceId } })).name).toBe('From The Route')
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: body.workspaceId } })
+    expect(workspace.name).toBe('From The Route')
+    // Conductor Plan 4b (spec §5, D11): a draft that names no delivery makes a conducted project.
+    expect(workspace.delivery).toBe('conducted')
+  })
+
+  it('carries the card s planned choice into the project it creates', async (): Promise<void> => {
+    const repo = makeRepo()
+    const id = await open()
+    await messagePOST(post({ text: `it is at ${repo}` }), params(id))
+    const response = await acceptPOST(
+      post({
+        draft: {
+          name: 'Planned From The Route',
+          goal: 'Add rate limiting',
+          repo: { mode: 'existing', path: repo },
+          baseBranch: 'main',
+          verifyCommands: [{ command: 'npm test', source: 'detected' }],
+          setupCommands: [],
+          budgetUsd: 20,
+          provider: null,
+          delivery: 'planned',
+          team: [],
+        },
+      }),
+      params(id),
+    )
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { workspaceId: string }
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: body.workspaceId } })).delivery).toBe('planned')
   })
 
   it('abandons a conversation', async (): Promise<void> => {

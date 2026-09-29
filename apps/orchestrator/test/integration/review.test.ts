@@ -6,13 +6,15 @@ import { fileURLToPath } from 'node:url'
 import { recordRunEvidence, refusalText } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { integrationBranchName, runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { ClaudeCodeAdapter, type AdapterRegistry } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ensureIntegrationBranch } from '../../src/goalBranch.js'
 import { concludeReview, dispatchReviews } from '../../src/review.js'
 import { supervise } from '../../src/supervisor.js'
-import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
+import { drainPumps, taskKeyFor, tick, type TickDeps } from '../../src/tick.js'
+import { provisionWorktree } from '../../src/worktree.js'
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 const FAKE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
@@ -573,6 +575,67 @@ describe('dispatchReviews', () => {
     // has to hand the claim back -- a `reviewing` task pointing at a terminal run is one no later
     // dispatch could ever claim, which would make this failed review the last one it ever got.
     expect(task.activeRunId).toBeNull()
+  })
+
+  /** Plan 4a (D12): a package task is reviewed against the branch it was cut from, so the diff is
+   *  its own work and not the dependency work already merged into its integration branch. */
+  it("diffs a package task against its goal version's integration branch", async (): Promise<void> => {
+    const branch = integrationBranchName(1, fixture.workspaceId)
+    const { baseCommit } = await ensureIntegrationBranch(fixture.repoPath, 'main', branch)
+    await prisma.goalDelivery.create({ data: { workspaceId: fixture.workspaceId, goalVersion: 1, integrationBranch: branch, baseCommit } })
+    const scratchTree = join(mkdtempSync(join(tmpdir(), 'slaveofai-review-dep-')), 'tree')
+    git(['worktree', 'add', '-q', scratchTree, branch], fixture.repoPath)
+    writeFileSync(join(scratchTree, 'dep.txt'), 'the dependency\n')
+    git(['add', '-A'], scratchTree)
+    git(['commit', '-q', '-m', 'the dependency package, merged'], scratchTree)
+    git(['worktree', 'remove', '--force', scratchTree], fixture.repoPath)
+    const pkg = await prisma.workPackage.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        goalVersion: 1,
+        key: 'report',
+        title: 'report',
+        requirementKeys: ['R1'],
+        ownedPaths: ['task.txt'],
+        interface: '',
+        isIntegration: false,
+        templateId: 'tpl',
+      },
+    })
+
+    const handle = await provisionWorktree({ repoPath: fixture.repoPath, baseBranch: branch, taskKey: taskKeyFor(fixture.taskId), slug: 'report', setupCommands: [] })
+    writeFileSync(join(handle.path, 'task.txt'), 'the package work\n')
+    git(['add', '-A'], handle.path)
+    git(['commit', '-q', '-m', 'package work'], handle.path)
+    await prisma.slaveRun.create({
+      data: {
+        taskId: fixture.taskId,
+        slaveId: fixture.slaveId,
+        kind: 'implementation',
+        status: 'succeeded',
+        worktreePath: handle.path,
+        terminalAt: new Date(),
+        endedAt: new Date(),
+      },
+    })
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: 'reviewing', branch: handle.branch, goalVersion: 1, workPackageId: pkg.id, assigneeId: fixture.slaveId },
+    })
+    await addReviewer()
+    const reviewDeps: TickDeps = {
+      workspaceId: brandWorkspaceId(fixture.workspaceId),
+      registry: singleAdapterRegistry(new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'review-approve'], hookPath: REAL_GATE })),
+    }
+
+    expect(await dispatchReviews(reviewDeps)).toHaveLength(1)
+
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'review' } })
+    const context = await prisma.runContext.findUniqueOrThrow({ where: { runId: run.id } })
+    const manifest = context.sections as unknown as { readonly sections: readonly unknown[] }
+    expect(manifest.sections).toContainEqual({ kind: 'review_diff', base: branch, head: handle.branch, capped: false })
+    expect(context.prompt).toContain('task.txt')
+    expect(context.prompt).not.toContain('dep.txt')
   })
 
   it('approves: moves the task to merging and records the reason', async (): Promise<void> => {

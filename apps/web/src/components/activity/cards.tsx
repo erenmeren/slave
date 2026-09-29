@@ -103,12 +103,19 @@ function TaskDoneCard(props: ActivityCardProps): ReactElement {
 }
 
 function TaskReworkCard(props: ActivityCardProps): ReactElement {
-  const payload = props.event.payload as { reason: string; attempt: number }
+  const payload = props.event.payload as { reason: string; attempt: number; verificationRound?: number }
   return (
     <ActivityCard {...props}>
       <Transition tone="warn" label="sent back for rework">
         <span data-testid="rework-reason">{payload.reason}</span>{' '}
-        <span className="text-text-3">(attempt {payload.attempt})</span>
+        <span className="text-text-3">
+          (attempt {payload.attempt})
+          {/* Conductor Plan 4b (plan D5): a verification rework charges no attempt, so the round it
+           *  came from is what tells two rework cards on the same task apart. */}
+          {payload.verificationRound !== undefined && (
+            <span data-testid="rework-verification-round"> (verification round {payload.verificationRound})</span>
+          )}
+        </span>
       </Transition>
     </ActivityCard>
   )
@@ -733,6 +740,129 @@ function WorkspaceConductedCard(props: ActivityCardProps): ReactElement {
       <Transition tone="idle" label={`conducted goal v${String(payload.version)}: ${what}${payload.fallback ? ' (fallback)' : ''}`}>
         {payload.mode === 'partitioned' && <span data-testid="conducted-packages">{payload.packages.join(', ')}</span>}
       </Transition>
+    </ActivityCard>
+  )
+}
+
+/** Conductor Plan 4a: a goal version waiting for an earlier one to reach the base branch. */
+function WorkspaceGoalWaitingCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; waitingOn: number | null }
+  const on = payload.waitingOn === null ? 'the work already on the board' : `goal v${String(payload.waitingOn)} to be merged`
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label={`goal v${String(payload.version)} waits for ${on}`} />
+    </ActivityCard>
+  )
+}
+
+/** Conductor Plan 4a: every package of a goal version integrated (4b: every requirement verified).
+ *  `working` tone, the same tone `task.done`'s card uses -- this file's `TRANSITION_COLOR` has no
+ *  `success` (controller ruling P3). */
+function WorkspaceGoalAcceptedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; rounds: number }
+  const rounds = payload.rounds === 0 ? '' : ` after ${plural(payload.rounds, 'verification round')}`
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="working" label={`goal v${String(payload.version)} accepted${rounds}`} />
+    </ActivityCard>
+  )
+}
+
+/** Conductor Plan 4a: a goal version's integration branch reached the base branch. `working` tone,
+ *  the same tone `task.done`'s card uses -- this file's `TRANSITION_COLOR` has no `success`
+ *  (controller ruling P3). */
+function WorkspaceGoalMergedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; into: string; commit: string; by: 'system' | 'human' }
+  return (
+    <ActivityCard {...props}>
+      <Transition
+        tone="working"
+        label={`goal v${String(payload.version)} merged into ${payload.into}${payload.by === 'human' ? ' by hand' : ''}`}
+      >
+        <span data-testid="goal-merged-commit">{payload.commit.slice(0, 12)}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+/** Conductor Plan 4a: the person moved on from a goal version. */
+function WorkspaceGoalAbandonedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; cancelled: readonly string[] }
+  return (
+    <ActivityCard {...props}>
+      <Transition
+        tone="idle"
+        label={`goal v${String(payload.version)} abandoned; ${plural(payload.cancelled.length, 'unfinished package')} cancelled`}
+      />
+    </ActivityCard>
+  )
+}
+
+/** Conductor Plan 4b (spec R8): a verification round started, in a fresh worktree of the goal
+ *  version's integration branch. `idle`, the same tone `workspace.goal_waiting`'s card carries --
+ *  nothing has a verdict yet. */
+function WorkspaceVerificationStartedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; round: number; runId: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label={`verifying goal v${String(payload.version)}, round ${String(payload.round)}`} />
+    </ActivityCard>
+  )
+}
+
+/** Conductor Plan 4b (spec R8/R9): a verification round's verdict. `danger` when the round found
+ *  anything not `pass` -- the same tone `task.verify_failed`'s card carries -- `working` otherwise,
+ *  the same tone `task.verify_passed`'s card carries. */
+function WorkspaceVerifiedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    version: number
+    round: number
+    pass: number
+    fail: number
+    unverifiable: number
+    failedKeys: readonly string[]
+  }
+  const failed = payload.fail + payload.unverifiable > 0
+  return (
+    <ActivityCard {...props}>
+      <Transition
+        tone={failed ? 'danger' : 'working'}
+        label={`goal v${String(payload.version)} round ${String(payload.round)}: ${payload.pass} passed, ${payload.fail} failed, ${payload.unverifiable} unverifiable`}
+      >
+        {payload.failedKeys.length > 0 && <span data-testid="verified-failed-keys">{payload.failedKeys.join(', ')}</span>}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+/** Conductor Plan 4b (plan D6/D7): the verification loop ended without acceptance, or the version's
+ *  final merge failed. The same tone `guardrail.tripped`'s card carries -- this is the same kind of
+ *  thing, a person's turn. */
+function WorkspaceGoalNeedsHumanCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; reason: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="warn" label={`goal v${String(payload.version)} needs you`}>
+        <span data-testid="goal-needs-human-reason">{payload.reason}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+/** Conductor Plan 4b (plan D9): a person's `retry-goal` moved a `needs_human` version back to
+ *  `integrating`. `idle`, the same tone `workspace.goal_waiting`'s card carries. */
+function WorkspaceGoalRetriedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; round: number; cause?: 'branch_moved' }
+  const v = String(payload.version)
+  // Final wave M5: `cause: 'branch_moved'` is the goal pass's own retry of an ACCEPTED version, not
+  // a person's retry-goal -- it has no "round it was stuck after" to report.
+  const label =
+    payload.cause === 'branch_moved'
+      ? `goal v${v} went back to verification: its integration branch moved after acceptance`
+      : `goal v${v} retried after round ${String(payload.round)}`
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label={label} />
     </ActivityCard>
   )
 }
@@ -1596,6 +1726,14 @@ export const ACTIVITY_CARDS = {
   'workspace.goal_set': WorkspaceGoalSetCard,
   'workspace.requirements_set': WorkspaceRequirementsSetCard,
   'workspace.conducted': WorkspaceConductedCard,
+  'workspace.goal_waiting': WorkspaceGoalWaitingCard,
+  'workspace.goal_accepted': WorkspaceGoalAcceptedCard,
+  'workspace.goal_merged': WorkspaceGoalMergedCard,
+  'workspace.goal_abandoned': WorkspaceGoalAbandonedCard,
+  'workspace.verification_started': WorkspaceVerificationStartedCard,
+  'workspace.verified': WorkspaceVerifiedCard,
+  'workspace.goal_needs_human': WorkspaceGoalNeedsHumanCard,
+  'workspace.goal_retried': WorkspaceGoalRetriedCard,
   'workspace.plan_created': WorkspacePlanCreatedCard,
   'workspace.replan_started': WorkspaceReplanStartedCard,
   'workspace.replanned': WorkspaceReplannedCard,

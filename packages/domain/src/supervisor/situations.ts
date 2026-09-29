@@ -171,6 +171,21 @@ export const SITUATION_KINDS = [
    * by the conductor. `subjectId` is `<workspaceId>:v<version>`.
    */
   'conduct',
+  /**
+   * Conductor Plan 4b (spec R11, R9): a goal version's verification round found requirements not
+   * met, and their packages are back in rework. INFORMATIONAL: the loop is already acting, so the
+   * rules record `no_action` (plan D10). `subjectId` is `<workspaceId>:v<n>:r<round>`, so every
+   * round is its own decision.
+   */
+  'verification_failed',
+  /**
+   * Conductor Plan 4b (spec R11, R9): a goal version's loop ended without acceptance -- a cap, an
+   * unverifiable requirement, a failing requirement nobody can rework -- or its final merge into the
+   * base branch failed. `subjectId` is `<workspaceId>:v<n>:r<round>` for a stopped loop -- one per
+   * stop, so a retried version that stops again is escalated again -- and `<workspaceId>:v<n>:merge`
+   * for a failed merge.
+   */
+  'goal_needs_human',
 ] as const
 
 export type SituationKind = (typeof SITUATION_KINDS)[number]
@@ -218,7 +233,7 @@ export const situationSchema: z.ZodType<Situation> = z.object({
  * `no_reviewer · proposed · pending · by model`.
  *
  * `Record<SituationKind, string>` is load-bearing: a new kind fails the build here rather than
- * turning up on the page as an identifier (twenty-two as of Conductor Plan 3's `foreign_file`).
+ * turning up on the page as an identifier (twenty-four as of Conductor Plan 4b's `goal_needs_human`).
  * Each label says what is STUCK, in the words the report already uses; the decision's own
  * `situation.summary` carries the specifics beside it.
  */
@@ -250,4 +265,6 @@ export const SITUATION_LABEL: Record<SituationKind, string> = {
   workspace_halted: 'Project halted',
   operator_request: 'Something you asked for',
   conduct: 'How a goal is delivered',
+  verification_failed: 'A verification round failed',
+  goal_needs_human: 'A goal needs you',
 }

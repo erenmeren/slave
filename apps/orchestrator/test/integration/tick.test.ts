@@ -254,6 +254,30 @@ describe('tick', () => {
     expect(existsSync(worktreeRootFor(fixture.repoPath))).toBe(false)
   })
 
+  // Final wave M6 (Plan 4a D10): `retry-task` after `abandon-goal` puts a package of an abandoned
+  // version back on the board; dispatch must not start it -- it is cancelled, as the merge pass does.
+  it('cancels, rather than starts, a package task of an abandoned goal version', async (): Promise<void> => {
+    await prisma.goalDelivery.create({
+      data: { workspaceId: fixture.workspaceId, goalVersion: 1, integrationBranch: 'slaveofai/goal-v1-x', baseCommit: 'abc', status: 'abandoned' },
+    })
+    const pkg = await prisma.workPackage.create({
+      data: { workspaceId: fixture.workspaceId, goalVersion: 1, key: 'core', title: 'core', requirementKeys: ['R1'], ownedPaths: ['**'], interface: '', templateId: 'tpl' },
+    })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { workPackageId: pkg.id, goalVersion: 1 } })
+
+    const report = await tick(deps)
+
+    expect(report.started).toHaveLength(0)
+    expect(await prisma.slaveRun.count({ where: { taskId: fixture.taskId } })).toBe(0)
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('cancelled')
+    expect(task.activeRunId).toBeNull()
+    expect(task.lastRejectionReason).toBe('goal v1 abandoned')
+    const cancelled = await prisma.executionEvent.findMany({ where: { taskId: fixture.taskId, type: 'task_cancelled' } })
+    expect(cancelled.map((event) => event.payload)).toEqual([{ reason: 'goal v1 abandoned', goalVersion: 1 }])
+    expect(await eventTypesFor(fixture.workspaceId)).not.toContain('task.started')
+  })
+
   it('hands the task to the seat its run actually went to (H2)', async (): Promise<void> => {
     // The task arrives assigned to somebody else: a plan named the holder of its role at creation,
     // the roster moved since, and dispatch put the work in front of whoever holds the role NOW. The

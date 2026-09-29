@@ -26,10 +26,13 @@ import {
   renderPackageContract,
   renderReportProtocol,
   renderRunContext,
+  renderVerificationGoal,
+  renderVerificationProtocol,
   requirementItemsSchema,
   stageOrder,
   type FittedSkillBodies,
   type Manifest,
+  type RequirementItem,
   type Runbook,
   type Section,
 } from '@slave-of-ai/domain'
@@ -119,6 +122,20 @@ export interface BuildRunContextInput {
   readonly replan?: {
     readonly previousVersion: number
     readonly version: number
+  }
+  /**
+   * Present only on a `verification` run (Conductor Plan 4b, spec R8): the goal version and round
+   * it checks, the requirements, the integrated diff summary, and the scratch directory its checks
+   * go in. The two sections it becomes are the whole of the run's instructions beside its profile
+   * (D4: no roster, inbox, memory, skills or workflow).
+   */
+  readonly verification?: {
+    readonly goalVersion: number
+    readonly round: number
+    readonly requirements: readonly RequirementItem[]
+    readonly diffStat: string
+    readonly diffCapped: boolean
+    readonly verifyDir: string
   }
   /** Test seam. Production passes nothing and gets `skillRoots()` -- which is itself redirectable
    *  through `SLAVEOFAI_SKILL_ROOTS_JSON` for the gate's real daemon subprocess. */
@@ -1009,7 +1026,9 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
   // worktree nor its catalog root actually holds.
   const roots = input.skillRoots ?? skillRoots()
   const injection = await injectSkills({
-    worktreePath: input.worktreePath,
+    // Conductor Plan 4b (D4): a verification run gets no skills, and its worktree must stay exactly
+    // the checkout it verifies -- nothing is copied into it (the `no_worktree` answer, as planning).
+    worktreePath: input.kind === 'verification' ? null : input.worktreePath,
     provider: input.provider,
     skills: assigned,
     roots,
@@ -1182,6 +1201,41 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
       kind: 'review_diff',
       text: `DIFF (base...branch):\n\`\`\`diff\n${diff.text}\n\`\`\``,
       source: { kind: 'review_diff', base: diff.base, head: diff.head, capped: diff.capped },
+    })
+  }
+
+  // Conductor Plan 4b (spec R8): what a verifier checks and how it reports. Nothing else is added
+  // for this kind (D4). Fail closed (fix round 1): a verification run built without them would be
+  // dispatched with a profile and nothing to verify.
+  if (input.kind === 'verification') {
+    if (input.verification === undefined) {
+      throw new Error('a verification run was built without its requirements, round and scratch directory: nothing to verify')
+    }
+    const v = input.verification
+    sections.push({
+      kind: 'verification_goal',
+      text: renderVerificationGoal({
+        goalVersion: v.goalVersion,
+        round: v.round,
+        requirements: v.requirements,
+        diffStat: v.diffStat,
+        diffCapped: v.diffCapped,
+      }),
+      source: {
+        kind: 'verification_goal',
+        goalVersion: v.goalVersion,
+        round: v.round,
+        requirements: v.requirements.length,
+        diffCapped: v.diffCapped,
+      },
+    })
+    sections.push({
+      kind: 'verification_protocol',
+      text: renderVerificationProtocol(
+        v.requirements.map((r) => r.key),
+        v.verifyDir,
+      ),
+      source: { kind: 'verification_protocol', requirements: v.requirements.length },
     })
   }
 

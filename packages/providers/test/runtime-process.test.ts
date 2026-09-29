@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { dirname } from 'node:path'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   CHILD_ENV_ALLOW,
@@ -12,6 +14,8 @@ import {
   runTokenHash,
   signalRun,
   terminateChild,
+  verifyDirIfPresent,
+  verifyDirPathFor,
 } from '../src/runtime/process.js'
 
 function spawnSleeper() {
@@ -231,5 +235,36 @@ describe('buildChildEnv and the tool-result tap (M51 R6)', () => {
     // is there with nothing in it would be a registration of nothing, exactly as an empty
     // `PostToolUse` array would be in the settings file.
     expect('SLAVEOFAI_TOOL_RESULTS' in env).toBe(false)
+  })
+})
+
+describe('buildChildEnv and the verification scratch directory (Conductor Plan 4b, D2)', () => {
+  const base = {
+    gitIdentity: { name: 'AI Worker', email: 'worker@example.com' },
+    pauseFlagPath: '/x/pause.flag',
+    permissionsFilePath: '/x/permissions.json',
+  }
+
+  it('sets SLAVEOFAI_VERIFY_DIR when a scratch directory is given', () => {
+    expect(buildChildEnv({ ...base, verifyDir: '/x/verify' })['SLAVEOFAI_VERIFY_DIR']).toBe('/x/verify')
+  })
+
+  it('leaves the key ABSENT when none is given -- every run that is not a verification', () => {
+    expect('SLAVEOFAI_VERIFY_DIR' in buildChildEnv(base)).toBe(false)
+  })
+
+  it('names the scratch directory `<runDir>/verify`, in one place', () => {
+    expect(verifyDirPathFor('/state/runs/r1')).toBe('/state/runs/r1/verify')
+  })
+
+  it('declares the scratch directory by its presence, so a resume exports exactly what the start did', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'verify-dir-'))
+    try {
+      expect(verifyDirIfPresent(dir)).toEqual({})
+      mkdirSync(join(dir, 'verify'))
+      expect(verifyDirIfPresent(dir)).toEqual({ verifyDir: join(dir, 'verify') })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

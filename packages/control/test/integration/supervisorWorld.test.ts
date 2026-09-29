@@ -1,5 +1,6 @@
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
+  CONDUCTOR_ROLE,
   MEMORY_CANDIDATE_STALE_MS,
   PERMISSION_DENIAL_WINDOW_MS,
   PERMISSION_TRIP_COUNT,
@@ -15,6 +16,7 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { recordMemory } from '../../src/memory.js'
+import { reportQuestionKey, sendMessage } from '../../src/messaging.js'
 import { adoptRunbook, syncRunbooks } from '../../src/runbook.js'
 import { workspaceSpend } from '../../src/spend.js'
 import { workspaceStats } from '../../src/stats.js'
@@ -2217,5 +2219,154 @@ describe('loadSupervisorWorld -- the planning facts (H4a)', () => {
     const stalled = observe(world).find((situation) => situation.kind === 'planning_stalled')
     expect(stalled?.subjectId).toBe(`${fixture.workspaceId}:no_runtime`)
     expect(stalled?.facts).toEqual({ reason: 'no_runtime', goalVersion: 1 })
+  })
+})
+
+describe('loadSupervisorWorld -- goal versions and their verification (Conductor Plan 4b)', () => {
+  beforeEach(reset)
+
+  const delivery = async (
+    fixture: Fixture,
+    goalVersion: number,
+    data: Partial<Prisma.GoalDeliveryUncheckedCreateInput> = {},
+  ): Promise<string> =>
+    (
+      await prisma.goalDelivery.create({
+        data: { workspaceId: fixture.workspaceId, goalVersion, integrationBranch: `slave/goal-v${String(goalVersion)}`, baseCommit: 'abc123', ...data },
+      })
+    ).id
+
+  const seat = async (fixture: Fixture, name: string, roles: readonly string[]): Promise<string> =>
+    (
+      await prisma.slave.create({
+        data: { teamId: fixture.teamId, role: roles[0] ?? 'backend', runtimeRoles: [...roles], personId: (await prisma.person.create({ data: { name } })).id },
+      })
+    ).id
+
+  it('carries each open version with its latest round\'s verdict, and leaves a merged one out', async (): Promise<void> => {
+    const fixture = await seed()
+    const verifier = await seat(fixture, 'Vera', ['reviewer', 'verifier'])
+    const stopped = await delivery(fixture, 1, { status: 'needs_human', round: 2, needsHumanReason: 'the round cap ended it' })
+    await delivery(fixture, 2, { status: 'accepted', acceptedAt: NOW, mergedAt: NOW })
+    await delivery(fixture, 3, { status: 'accepted', acceptedAt: NOW, mergeError: 'CONFLICT (content): src/a.ts', verifiedCommit: 'c0ffee' })
+    await delivery(fixture, 4, { status: 'abandoned' })
+    const run = async (): Promise<string> =>
+      (await prisma.slaveRun.create({ data: { slaveId: verifier, status: 'succeeded', kind: 'verification', goalDeliveryId: stopped } })).id
+    const round1 = await run()
+    const round2 = await run()
+    const result = (runId: string, round: number, key: string, status: 'pass' | 'fail' | 'unverifiable'): Prisma.VerificationResultUncheckedCreateInput => ({
+      workspaceId: fixture.workspaceId,
+      goalDeliveryId: stopped,
+      goalVersion: 1,
+      round,
+      runId,
+      key,
+      status,
+      check: 'node check.mjs',
+      output: 'ok',
+      reason: status === 'pass' ? '' : 'it did not',
+    })
+    await prisma.verificationResult.createMany({
+      data: [
+        result(round1, 1, 'R1', 'fail'),
+        result(round1, 1, 'R2', 'fail'),
+        result(round1, 1, 'R3', 'fail'),
+        result(round2, 2, 'R1', 'pass'),
+        result(round2, 2, 'R3', 'fail'),
+        result(round2, 2, 'R2', 'fail'),
+      ],
+    })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.goalDeliveries).toEqual([
+      {
+        goalVersion: 1,
+        status: 'needs_human',
+        round: 2,
+        integrationBranch: 'slave/goal-v1',
+        baseBranch: 'main',
+        needsHumanReason: 'the round cap ended it',
+        mergeError: null,
+        verifiedCommit: null,
+        latestVerification: { round: 2, pass: 1, fail: 2, unverifiable: 0, failedKeys: ['R2', 'R3'] },
+      },
+      {
+        goalVersion: 3,
+        status: 'accepted',
+        round: 0,
+        integrationBranch: 'slave/goal-v3',
+        baseBranch: 'main',
+        needsHumanReason: null,
+        mergeError: 'CONFLICT (content): src/a.ts',
+        verifiedCommit: 'c0ffee',
+        latestVerification: null,
+      },
+    ])
+    expect(observe(world).filter((s) => s.kind === 'goal_needs_human').map((s) => s.subjectId)).toEqual([
+      `${fixture.workspaceId}:v1:r2`,
+      `${fixture.workspaceId}:v3:merge`,
+    ])
+  })
+
+  it('carries no goal version on a project that has none', async (): Promise<void> => {
+    const fixture = await seed()
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.goalDeliveries).toEqual([])
+  })
+
+  // Plan D13 (deferred Plan 2 item): a report question is answered into the seat's next run ON THAT
+  // TASK, and a task that is over -- or whose version is closed -- has none.
+  it('drops a report question whose task is over or whose goal version is closed, and keeps a live one', async (): Promise<void> => {
+    const fixture = await seed()
+    const worker = await seat(fixture, 'Wes', ['implementer'])
+    await seat(fixture, 'Cora', [CONDUCTOR_ROLE])
+    await delivery(fixture, 1, { status: 'accepted', acceptedAt: NOW, mergedAt: NOW })
+    await delivery(fixture, 2, { status: 'abandoned' })
+    await delivery(fixture, 3, { status: 'verifying', round: 1 })
+    const packaged = async (goalVersion: number, key: string, status: 'done' | 'cancelled' | 'rework'): Promise<string> => {
+      const pkg = await prisma.workPackage.create({
+        data: { workspaceId: fixture.workspaceId, goalVersion, key, title: key, requirementKeys: ['R1'], ownedPaths: [`${key}/**`], interface: '', templateId: 't-backend' },
+      })
+      return (
+        await prisma.task.create({
+          data: { workspaceId: fixture.workspaceId, title: key, description: 'x', status, requiredRole: 'implementer', maxAttempts: 3, assigneeId: worker, workPackageId: pkg.id },
+        })
+      ).id
+    }
+    const plain = async (title: string, status: 'cancelled' | 'failed'): Promise<string> =>
+      (await prisma.task.create({ data: { workspaceId: fixture.workspaceId, title, description: 'x', status, requiredRole: 'implementer', maxAttempts: 3 } })).id
+    const tasks = {
+      cancelled: await plain('cancelled one', 'cancelled'),
+      failed: await plain('failed one', 'failed'),
+      accepted: await packaged(1, 'accepted-pkg', 'done'),
+      abandoned: await packaged(2, 'abandoned-pkg', 'cancelled'),
+      live: await packaged(3, 'live-pkg', 'rework'),
+    }
+    // Through the real send path, exactly as `report.ts` sends a `<slave-report>` question: after the
+    // run concluded, to the conductor role, under the report key.
+    const asked = new Map<string, string>()
+    for (const [name, taskId] of Object.entries(tasks)) {
+      const run = await prisma.slaveRun.create({ data: { slaveId: worker, taskId, status: 'succeeded', kind: 'implementation' } })
+      const sent = await sendMessage(run.id, {
+        kind: 'question',
+        body: `which format for ${name}?`,
+        recipientRole: CONDUCTOR_ROLE,
+        expectsReply: true,
+        taskId,
+        idempotencyKey: reportQuestionKey(run.id, 0),
+      })
+      if (!sent.ok) throw new Error(`send failed: ${JSON.stringify(sent.error)}`)
+      asked.set(name, sent.value.id)
+    }
+    // A parked `<slave-ask>` question on a cancelled task is not a report question: its run is still
+    // waiting, and this filter is not about it.
+    const parked = await prisma.slaveRun.create({
+      data: { slaveId: worker, taskId: tasks.cancelled, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' },
+    })
+    const ask = await sendMessage(parked.id, { kind: 'question', body: 'still there?', recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId: tasks.cancelled })
+    if (!ask.ok) throw new Error(`send failed: ${JSON.stringify(ask.error)}`)
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.questions.map((q) => q.messageId).sort()).toEqual([asked.get('live'), ask.value.id].sort())
   })
 })

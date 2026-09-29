@@ -162,6 +162,23 @@ export function sectionLine(source: SectionSource): SectionLine {
         detail: `Report required: ${plural(source.requirements, 'requirement')}, ${source.workflowSteps === 0 ? 'no workflow' : plural(source.workflowSteps, 'workflow step')}`,
         missing: [],
       }
+    // Conductor Plan 4b (Task 3): which goal version and round a verification run checked, how
+    // many requirements it covers, and whether the diff summary it read was cut -- the
+    // `review_diff.capped` idiom, for the verifier's own diff.
+    case 'verification_goal':
+      return {
+        kind: source.kind,
+        detail: `Verification round ${String(source.round)} of goal v${String(source.goalVersion)}: ${plural(source.requirements, 'requirement')}${source.diffCapped ? ' (diff capped)' : ''}`,
+        missing: [],
+      }
+    // Conductor Plan 4b (Task 3): what the verifier's own report had to cover -- the
+    // `report_protocol` idiom, for the `<slave-verification>` shape instead of `<slave-report>`.
+    case 'verification_protocol':
+      return {
+        kind: source.kind,
+        detail: `Verification required: ${plural(source.requirements, 'requirement')}`,
+        missing: [],
+      }
     // M40 t1, minimal: a re-plan run's own section. Task 4 gives it the diff a human reads.
     case 'replan':
       return {

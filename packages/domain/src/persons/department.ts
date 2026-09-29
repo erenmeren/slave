@@ -51,6 +51,8 @@ const ROLE_DEPARTMENT: Readonly<Record<string, FunctionalDepartment>> = {
   qa: 'QA',
   testing: 'QA',
   reviewer: 'QA',
+  // Conductor Plan 4b (D4): a goal version's verifier checks the integrated work -- QA's job.
+  verifier: 'QA',
 
   operations: 'Operations',
   support: 'Operations',

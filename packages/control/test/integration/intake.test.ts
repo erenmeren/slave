@@ -213,6 +213,7 @@ describe('the intake conversation', () => {
           provider: null,
           autoMerge: true,
           autonomy: 'act',
+          delivery: 'conducted',
           team: [],
         },
       },

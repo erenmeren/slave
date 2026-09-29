@@ -11,6 +11,7 @@ import {
   type WorkspaceStatsSnapshot,
 } from '@slave-of-ai/control'
 import {
+  RULES_ONLY_SITUATION_KINDS,
   SUPERVISOR_MAX_MODEL_DECISIONS_PER_TICK,
   SUPERVISOR_PER_CALL_CAP_USD,
   answerTier,
@@ -257,7 +258,10 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
     const catalogue = candidates(situation, world)
     let choice: Choice | null = null
 
-    if (seam !== null && modelCalls < SUPERVISOR_MAX_MODEL_DECISIONS_PER_TICK) {
+    // Conductor Plan 4b (fix round 1, I2): news the loop is already acting on is recorded by the
+    // rules; a model call could only spend money on it, or escalate what needs nobody.
+    const rulesOnlyKind = RULES_ONLY_SITUATION_KINDS.includes(situation.kind)
+    if (seam !== null && !rulesOnlyKind && modelCalls < SUPERVISOR_MAX_MODEL_DECISIONS_PER_TICK) {
       modelCalls += 1
       choice = await askTheModel({
         decider: seam.decider,

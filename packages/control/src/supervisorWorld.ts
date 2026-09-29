@@ -25,6 +25,7 @@ import {
   type SupervisorCatalogEntry,
   type SupervisorPoolPerson,
   type SupervisorDenial,
+  type SupervisorGoalDelivery,
   type SupervisorProfileEvidence,
   type SupervisorQuestion,
   type SupervisorRun,
@@ -41,8 +42,9 @@ import {
   type Tier,
 } from '@slave-of-ai/domain'
 import { evidenceForProfiles } from './evidence.js'
+import { latestVerifications } from './goalDelivery.js'
 import { staleCandidateCount } from './memory.js'
-import { stillPendingQuestion, waitingSenderRunIds } from './messaging.js'
+import { STORED_REPORT_QUESTION_KEY_PREFIX, stillPendingQuestion, waitingSenderRunIds } from './messaging.js'
 import { planningCountSince } from './planningCount.js'
 import { workspaceDefaultProvider } from './runtime.js'
 import { breakerCountedFailures, workspaceStats, type WorkspaceStatsSnapshot } from './stats.js'
@@ -772,6 +774,98 @@ async function loadRunPrompts(
   return new Map(rows.map((row) => [row.runId, cap(row.prompt, RUN_PROMPT_MAX_CHARS)]))
 }
 
+/**
+ * Conductor Plan 4b (D13, deferred Plan 2 item): a report question to the conductor is answered
+ * into the seat's next run ON THAT TASK (`inbox.ts`). A task that is over, or whose goal version is
+ * accepted or abandoned, has no next run, so the question is no longer pending for anybody -- and
+ * `unanswerable_question` stops firing for it. Only report questions (the stored
+ * `send:report:` key, the marker `stillPendingQuestion` reads): a parked `<slave-ask>` question is
+ * pending while its run waits, whatever its task. Two bounded reads, and none on a mailbox with no
+ * report question in it.
+ */
+async function dropUnusableReportQuestions<T extends { readonly taskId: string | null; readonly idempotencyKey: string | null }>(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  rows: readonly T[],
+): Promise<readonly T[]> {
+  const isReport = (row: T): boolean => row.idempotencyKey?.startsWith(STORED_REPORT_QUESTION_KEY_PREFIX) === true
+  const reportTaskIds = [...new Set(rows.flatMap((row) => (isReport(row) && row.taskId !== null ? [row.taskId] : [])))]
+  if (reportTaskIds.length === 0) return rows
+  const closedVersions = new Set(
+    (
+      await tx.goalDelivery.findMany({
+        where: { workspaceId, status: { in: ['accepted', 'abandoned'] } },
+        select: { goalVersion: true },
+      })
+    ).map((row) => row.goalVersion),
+  )
+  const tasks = new Map(
+    (
+      await tx.task.findMany({
+        where: { workspaceId, id: { in: reportTaskIds } },
+        select: { id: true, status: true, workPackage: { select: { goalVersion: true } } },
+      })
+    ).map((row) => [row.id, row] as const),
+  )
+  const stillUseful = (row: T): boolean => {
+    if (!isReport(row)) return true
+    const task = row.taskId === null ? undefined : tasks.get(row.taskId)
+    if (task === undefined) return true
+    if (task.status === 'failed' || task.status === 'cancelled') return false
+    return task.workPackage === null || !closedVersions.has(task.workPackage.goalVersion)
+  }
+  return rows.filter(stillUseful)
+}
+
+/** Conductor Plan 4b (R11): `SupervisorGoalDelivery`'s loader contract -- the versions still open
+ *  (a loop in flight or stopped, or an accepted version whose merge git refused), each with its
+ *  latest verdict from `latestVerifications`, the one loader `goal-status` reads as well. */
+async function loadGoalDeliveries(tx: Prisma.TransactionClient, workspaceId: string): Promise<SupervisorGoalDelivery[]> {
+  const rows = await tx.goalDelivery.findMany({
+    where: {
+      workspaceId,
+      OR: [
+        { status: { in: ['integrating', 'verifying', 'needs_human'] } },
+        { status: 'accepted', mergedAt: null, mergeError: { not: null } },
+      ],
+    },
+    orderBy: { goalVersion: 'asc' },
+    select: {
+      id: true,
+      goalVersion: true,
+      status: true,
+      round: true,
+      integrationBranch: true,
+      needsHumanReason: true,
+      mergeError: true,
+      verifiedCommit: true,
+      workspace: { select: { baseBranch: true } },
+    },
+  })
+  const latest = await latestVerifications(
+    rows.map((row) => row.id),
+    tx,
+  )
+  return rows.flatMap((row): SupervisorGoalDelivery[] =>
+    // Narrowing only: the `where` above admits exactly these four.
+    row.status === 'abandoned'
+      ? []
+      : [
+          {
+            goalVersion: row.goalVersion,
+            status: row.status,
+            round: row.round,
+            integrationBranch: row.integrationBranch,
+            baseBranch: row.workspace.baseBranch,
+            needsHumanReason: row.needsHumanReason,
+            mergeError: row.mergeError,
+            verifiedCommit: row.verifiedCommit,
+            latestVerification: latest.get(row.id) ?? null,
+          },
+        ],
+  )
+}
+
 /** The title, description and required role of each asking task -- the `task` source, plus the
  *  role {@link holdersOf} reads for a slave-addressed question. Read separately from
  *  {@link loadTaskRows} because that one carries no description and DROPS a task with no required
@@ -1208,7 +1302,7 @@ export async function loadSupervisorWorld(
       // is built from, so reading it outside the snapshot would let a run stop waiting between the
       // two halves of one predicate.
       const waitingRunIds = await waitingSenderRunIds(workspaceId, tx)
-      const questionRows = await tx.slaveMessage.findMany({
+      const pendingRows = await tx.slaveMessage.findMany({
         where: { workspaceId, ...stillPendingQuestion(waitingRunIds) },
         select: {
           id: true,
@@ -1220,9 +1314,11 @@ export async function loadSupervisorWorld(
           createdAt: true,
           recipientRole: true,
           recipientSlaveId: true,
+          idempotencyKey: true,
         },
         orderBy: { seq: 'asc' },
       })
+      const questionRows = await dropUnusableReportQuestions(tx, workspaceId, pendingRows)
 
       // The four sources an answer may be quoted from, loaded for ALL the pending questions at
       // once (M39 section 3). Each is one query keyed on ids this transaction already holds --
@@ -1467,6 +1563,7 @@ export async function loadSupervisorWorld(
         // -- so the Supervisor's ordinary tick is unchanged for a project with nothing to staff.
         staffingPreferences,
         evidence,
+        goalDeliveries: await loadGoalDeliveries(tx, workspaceId),
       }
 
       return {

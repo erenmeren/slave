@@ -361,6 +361,11 @@ export function chooseByRules(cands: readonly Candidate[], situationKind: Situat
     // and `candidates` escalates like anything else the rules cannot settle.
     if (offered !== -1) return offered
   }
+  // Conductor Plan 4b (D10): news, not a request. The loop is already acting on it.
+  if (situationKind === 'verification_failed') {
+    const quiet = cands.findIndex((candidate) => candidate.action.kind === 'no_action')
+    if (quiet !== -1) return quiet
+  }
   const routine = cands.flatMap((candidate, index) =>
     candidate.tier === 'applied' &&
     candidate.action.kind !== 'no_action' &&

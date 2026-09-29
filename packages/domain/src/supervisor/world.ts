@@ -31,7 +31,7 @@ export type TaskStatusName = TaskStatus
  */
 export interface TaskFailure {
   /** The kind of run the row names: for a rejection, the `review` run that judged the work. */
-  readonly runKind: 'implementation' | 'review' | 'planning'
+  readonly runKind: 'implementation' | 'review' | 'planning' | 'verification'
   /** The run's recorded reason -- for a rejection, the REVIEWER's reason, which is the steer. */
   readonly reason: string
   readonly at: number
@@ -77,7 +77,7 @@ export interface TaskFailure {
  */
 export interface BreakerFailure {
   readonly runId: string
-  readonly runKind: 'implementation' | 'review' | 'planning'
+  readonly runKind: 'implementation' | 'review' | 'planning' | 'verification'
   /** The task the run worked on; null for a planning run, which has none. */
   readonly taskTitle: string | null
   /** The newest `run.failed` reason the run recorded, or null when it recorded none. */
@@ -473,6 +473,40 @@ export interface SupervisorProfileEvidence extends RankEvidence {
 }
 
 /**
+ * Conductor Plan 4b (spec R11): a conducted goal version still open, and its latest verification.
+ * LOADER CONTRACT: every `GoalDelivery` of the workspace whose status is `integrating`, `verifying`
+ * or `needs_human`, and every `accepted` one with `mergedAt` null and `mergeError` set. The status
+ * is the ROW's, never read off `workspace.goal_accepted`: a reopened version accepted a second time
+ * writes no second event, so the event log cannot say whether the current tip is accepted.
+ */
+export interface SupervisorGoalDelivery {
+  readonly goalVersion: number
+  readonly status: 'integrating' | 'verifying' | 'accepted' | 'needs_human'
+  /** The verification round the version is on (0 before the first). */
+  readonly round: number
+  /** The version's integration branch, and the workspace's base branch -- what a person merges by
+   *  hand when the final merge failed (ruling V6). */
+  readonly integrationBranch: string
+  readonly baseBranch: string
+  /** Why the loop stopped, while `needs_human` -- it already names the remedy. */
+  readonly needsHumanReason: string | null
+  /** Why the final merge into the base branch failed (Plan 4a D9), or null. */
+  readonly mergeError: string | null
+  /** The integration commit the passing verification checked (ruling Q6), once accepted -- what
+   *  the hand-merge instruction names (final wave I2); null before, or on a pre-4b row. */
+  readonly verifiedCommit: string | null
+  /** The latest concluded round's verdict (`latestVerifications`, the one loader `goal-status`
+   *  reads too), or null before any. */
+  readonly latestVerification: {
+    readonly round: number
+    readonly pass: number
+    readonly fail: number
+    readonly unverifiable: number
+    readonly failedKeys: readonly string[]
+  } | null
+}
+
+/**
  * Everything the Supervisor is allowed to know about a workspace at one instant (M38 §3), built
  * by `packages/control/src/supervisorWorld.ts` from Prisma (spec E2) and handed to the pure
  * functions here. No Prisma types, no `Date` objects (epoch ms throughout, so a fixture is a
@@ -617,6 +651,9 @@ export interface SupervisorWorld {
    *  by a window: `WHERE profileKey = ANY(...)` is an index probe on
    *  `(profileKey, model, repositoryKey)` (plan erratum E8). */
   readonly evidence: readonly SupervisorProfileEvidence[]
+  /** Conductor Plan 4b (R11): the goal versions still open -- see {@link SupervisorGoalDelivery}'s
+   *  loader contract. EMPTY on a planner-graph project, which has none. */
+  readonly goalDeliveries: readonly SupervisorGoalDelivery[]
 }
 
 /**

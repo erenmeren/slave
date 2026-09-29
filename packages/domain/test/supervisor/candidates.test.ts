@@ -16,6 +16,7 @@ import {
   NOW,
   TAXONOMY,
   decision,
+  goalDelivery,
   question,
   runbook,
   slave,
@@ -114,6 +115,17 @@ describe('candidates -- the shape every list shares', () => {
       ['escalate_to_human', 'escalated'],
       ['no_action', 'noop'],
     ])
+  })
+})
+
+describe('candidates -- the verification loop (Conductor Plan 4b, D10)', () => {
+  it('offers only the last resorts for a failed round and for a goal that needs a person', () => {
+    const failed = world({
+      goalDeliveries: [goalDelivery({ latestVerification: { round: 1, pass: 0, fail: 1, unverifiable: 0, failedKeys: ['R1'] } })],
+    })
+    const stopped = world({ goalDeliveries: [goalDelivery({ status: 'needs_human', needsHumanReason: 'the round cap ended it' })] })
+    const merge = world({ goalDeliveries: [goalDelivery({ status: 'accepted', mergeError: 'conflict' })] })
+    for (const w of [failed, stopped, merge]) expect(kinds(offered(w))).toEqual(['escalate_to_human', 'no_action'])
   })
 })
 

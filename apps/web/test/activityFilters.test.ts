@@ -95,7 +95,16 @@ describe('parseActivityFilters', () => {
       // decision, beside `workspace.goal_set` and `workspace.plan_created`.
       'workspace.conducted',
       'workspace.created',
+      // Conductor Plan 4a (spec R9): a goal version's delivery -- waiting, accepted, merged or
+      // abandoned -- beside `workspace.conducted`.
+      'workspace.goal_abandoned',
+      'workspace.goal_accepted',
+      'workspace.goal_merged',
+      // Conductor Plan 4b (spec R8/R9): the goal version's verification loop, beside its delivery.
+      'workspace.goal_needs_human',
+      'workspace.goal_retried',
       'workspace.goal_set',
+      'workspace.goal_waiting',
       'workspace.plan_created',
       // H4a: the planning retry cap given back for one goal version, beside the re-plan pair.
       'workspace.planning_reset',
@@ -105,6 +114,8 @@ describe('parseActivityFilters', () => {
       'workspace.restored',
       'workspace.runbook_adopted',
       'workspace.settings_changed',
+      'workspace.verification_started',
+      'workspace.verified',
     ])
   })
   it('returns EMPTY-shaped filters for no params', () => {

@@ -1,19 +1,25 @@
 /**
- * Conductor Plan 2, end to end: a conducted goal goes from requirements to a reported, merged
- * package through nothing but `tick` -- the injected decider answers the conductor, the fake CLI
- * (`m8-flow`) is every worker and the reviewer.
+ * Conductor Plans 2, 4a and 4b, end to end: a conducted goal goes from requirements to a reported
+ * package, onto its goal version's integration branch, through verification -- reworked where a
+ * requirement fails, stopped for a person where one cannot be checked or the round cap runs out --
+ * and from there into the base branch once, through nothing but `tick`. The injected decider
+ * answers the conductor, the fake CLI (`m8-flow`) is every worker, the reviewer and the verifier.
  *
- * `mode: 'single'` only: the fake replays one `<slave-report>` for every run and cannot tell
- * packages apart, and `parseSlaveReport` refuses keys a package does not own, so a partitioned run
- * cannot be driven end to end until Plan 4 gives the fake per-package reports. The partitioned path
- * is covered up to materialisation by `conductor.test.ts` and up to the report by `run-report.test.ts`.
+ * Each package worker is its own fake: `routingAdapter` reads the run's package off its row and
+ * spawns the fake with that package's own `<slave-report>` (its requirement keys) and its own
+ * `--work-file` (a file only that package owns), so a partitioned goal is driven end to end too.
+ * The verifier is a fake of its own: every requirement passes, or, when a test scripts the loop,
+ * `--verification-rounds-base64` answers each round (`Verification round N` in its prompt) in turn.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  confirmGoalMerge,
+  loadSupervisorWorld,
+  retryGoal,
   setGoal,
   syncCapabilityTaxonomy,
   syncPersonPool,
@@ -23,8 +29,8 @@ import {
 } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { PACKAGE_WORKER_ROLE, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
-import { ClaudeCodeAdapter } from '@slave-of-ai/providers'
+import { PACKAGE_WORKER_ROLE, VERIFIER_ROLE, integrationBranchName, observe, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { ClaudeCodeAdapter, type SlaveRuntimeAdapter } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 import { worktreeRootFor } from '../../src/worktree.js'
@@ -73,57 +79,210 @@ const REQUIREMENTS = JSON.stringify({
   ],
 })
 const SINGLE = JSON.stringify({ conductAnswer: { mode: 'single', reason: 'fits one session', templateId: 't-backend' } })
+/** Two packages with disjoint files, `config` depending on `report` (plus the integration package
+ *  the conductor always adds, depending on both). */
+const DEPENDENT = JSON.stringify({
+  conductAnswer: {
+    mode: 'partitioned',
+    reason: 'config builds on the report modes',
+    packages: [
+      { key: 'report', title: 'Report modes', requirementKeys: ['R1'], ownedPaths: ['src/report/**'], newPaths: ['src/report/csv.py'], interface: 'render(rows, mode)', dependsOn: [], templateId: 't-backend' },
+      { key: 'config', title: 'Config', requirementKeys: ['R2'], ownedPaths: ['src/config.py'], newPaths: [], interface: 'load()', dependsOn: ['report'], templateId: 't-backend' },
+    ],
+  },
+})
+/** Two independent packages with disjoint files (`conductor.test.ts`'s partitioned answer): `report`
+ *  owns R1, `config` owns R2 -- so a failing R2 is `config`'s to fix, and only `config`'s. */
+const PARTITIONED = JSON.stringify({
+  conductAnswer: {
+    mode: 'partitioned',
+    reason: 'two large disjoint parts',
+    packages: [
+      { key: 'report', title: 'Report modes', requirementKeys: ['R1'], ownedPaths: ['src/report/**'], newPaths: ['src/report/csv.py'], interface: 'render(rows, mode)', dependsOn: [], templateId: 't-backend' },
+      { key: 'config', title: 'Config', requirementKeys: ['R2'], ownedPaths: ['src/config.py'], newPaths: [], interface: 'load()', dependsOn: [], templateId: 't-backend' },
+    ],
+  },
+})
+const ORIGINAL_SOURCE = 'def main():\n    pass\n'
 
-/** What the package worker files: both requirements done. */
-const REPORT = {
-  requirements: [
-    { key: 'R1', status: 'done', evidence: 'pytest -k csv passed' },
-    { key: 'R2', status: 'done', evidence: 'pytest -k json passed' },
-  ],
-  filesTouched: ['m8a-work.txt'],
-  workflow: [{ step: 1, done: true, note: '' }],
-  questions: [],
+/** One verifier item, as a scripted round lists it. */
+function checked(key: string, status: 'pass' | 'fail' | 'unverifiable'): object {
+  return {
+    key,
+    status,
+    check: `pytest -k ${key}`,
+    output: status === 'pass' ? '1 passed' : `1 ${status === 'fail' ? 'failed' : 'skipped'}`,
+    reason: status === 'pass' ? '' : status === 'fail' ? `${key} prints nothing` : `${key} needs a network this checkout lacks`,
+  }
+}
+
+/** The file each package's worker writes: one its own package owns. A `single` package owns
+ *  everything, and each version writes a file of its own so its commit is never empty. */
+function workFileFor(packageKey: string, goalVersion: number): string {
+  if (packageKey === 'report') return 'src/report/csv.py'
+  if (packageKey === 'config') return 'src/config.py'
+  if (packageKey === 'integration') return 'wiring.txt'
+  return goalVersion === 1 ? 'm8a-work.txt' : `m8a-work-v${String(goalVersion)}.txt`
+}
+
+/** What a package worker files: every requirement of its package done, its one file touched. */
+function reportFor(requirementKeys: readonly string[], workFile: string): object {
+  return {
+    requirements: requirementKeys.map((key) => ({ key, status: 'done', evidence: `pytest -k ${key} passed` })),
+    filesTouched: [workFile],
+    workflow: [{ step: 1, done: true, note: '' }],
+    questions: [],
+  }
+}
+
+/** What the verifier reports: every requirement of the version passes. */
+function verificationFor(requirements: readonly { readonly key: string }[]): object {
+  return { items: requirements.map(({ key }) => ({ key, status: 'pass', check: `pytest -k ${key}`, output: '1 passed', reason: '' })) }
 }
 
 const answer = (text: string, costUsd: number): ModelOutcome => ({ kind: 'answer', text, costUsd, tokens: null, numTurns: 1 })
 
 /** The conductor's two answers by prompt; anything else (a Supervisor situation) is counted and
  *  refused, so the test can say the happy path never needed one. */
-function scripted(): { readonly decider: ModelDecider; readonly others: string[] } {
+function scripted(conductAnswer: string): { readonly decider: ModelDecider; readonly others: string[] } {
   const others: string[] = []
   const decider: ModelDecider = async (input) => {
     if (input.prompt.includes('"requirementsAnswer"')) return answer(REQUIREMENTS, 0.02)
-    if (input.prompt.includes('"conductAnswer"')) return answer(SINGLE, 0.03)
+    if (input.prompt.includes('"conductAnswer"')) return answer(conductAnswer, 0.03)
     others.push(input.prompt)
     return { kind: 'failed', reason: 'not scripted in this test', costUsd: null, tokens: null }
   }
   return { decider, others }
 }
 
+/** What the repository looked like when a run was spawned -- the dispatch-time facts a test asserts
+ *  (a finished run's worktree no longer shows what it was cut with). */
+interface Start {
+  readonly runId: string
+  readonly kind: string
+  readonly packageKey: string | null
+  readonly goalVersion: number | null
+  /** The files tracked at the run's worktree HEAD, before the worker wrote anything. */
+  readonly worktreeFiles: readonly string[]
+  /** `src/config.py` in that worktree, before the worker wrote anything. */
+  readonly configSource: string
+  readonly mainTip: string
+  readonly mainFiles: readonly string[]
+  /** The prompt the run was given (a rework's carries its rejection section). */
+  readonly prompt: string
+  readonly runDir: string
+}
+
+/**
+ * One adapter per package worker, chosen per run: the run's package (read off its row) decides the
+ * fake's `<slave-report>` and `--work-file`. Reviews go to a plain fake (its verdict arm ignores
+ * both). `onImplementationStart` runs after a worker is spawned, while it is running.
+ */
+function routingAdapter(
+  repoPath: () => string,
+  starts: Start[],
+  onImplementationStart: (goalVersion: number) => Promise<void>,
+  verificationRounds?: readonly (readonly object[])[],
+): SlaveRuntimeAdapter {
+  const make = (extra: readonly string[]): ClaudeCodeAdapter =>
+    new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'm8-flow', ...extra], hookPath: REAL_GATE })
+  const plain = make([])
+  const byRun = new Map<string, SlaveRuntimeAdapter>()
+  const pick = (runId: string): SlaveRuntimeAdapter => byRun.get(runId) ?? plain
+  return {
+    kind: plain.kind,
+    getCapabilities: () => plain.getCapabilities(),
+    listModels: () => plain.listModels(),
+    async start(input) {
+      const run = await prisma.slaveRun.findUniqueOrThrow({
+        where: { id: input.runId },
+        select: {
+          kind: true,
+          task: { select: { goalVersion: true, workPackage: { select: { key: true, requirementKeys: true } } } },
+          goalDelivery: { select: { workspaceId: true, goalVersion: true } },
+        },
+      })
+      const pkg = run.kind === 'implementation' ? (run.task?.workPackage ?? null) : null
+      const goalVersion = run.task?.goalVersion ?? run.goalDelivery?.goalVersion ?? null
+      let adapter: SlaveRuntimeAdapter = plain
+      if (pkg !== null) {
+        const workFile = workFileFor(pkg.key, goalVersion ?? 0)
+        const report = Buffer.from(JSON.stringify(reportFor(pkg.requirementKeys, workFile))).toString('base64')
+        adapter = make(['--work-file', workFile, '--report-json-base64', report])
+      }
+      if (run.kind === 'verification' && verificationRounds !== undefined) {
+        // A scripted loop: the fake answers each round with that round's items.
+        adapter = make(['--verification-rounds-base64', Buffer.from(JSON.stringify(verificationRounds)).toString('base64')])
+      } else if (run.kind === 'verification' && run.goalDelivery !== null) {
+        // Conductor Plan 4b (ruling Q7): the verifier checks every requirement of its version and
+        // passes it, writing nothing in its checkout.
+        const set = await prisma.requirementSet.findUniqueOrThrow({
+          where: { workspaceId_goalVersion: { workspaceId: run.goalDelivery.workspaceId, goalVersion: run.goalDelivery.goalVersion } },
+        })
+        adapter = make(['--verification-json-base64', Buffer.from(JSON.stringify(verificationFor(set.items as { key: string }[]))).toString('base64')])
+      }
+      starts.push({
+        runId: input.runId,
+        kind: run.kind,
+        packageKey: pkg?.key ?? null,
+        goalVersion,
+        worktreeFiles: git(['ls-files'], input.worktreePath).split('\n'),
+        configSource: readFileSync(join(input.worktreePath, 'src/config.py'), 'utf8'),
+        mainTip: git(['rev-parse', 'refs/heads/main'], repoPath()),
+        mainFiles: git(['ls-tree', '-r', '--name-only', 'main'], repoPath()).split('\n'),
+        prompt: input.prompt,
+        runDir: input.runDir,
+      })
+      byRun.set(input.runId, adapter)
+      const handle = await adapter.start(input)
+      if (pkg !== null && goalVersion !== null) await onImplementationStart(goalVersion)
+      return handle
+    },
+    events: (runId) => pick(runId).events(runId),
+    cancel: (runId) => pick(runId).cancel(runId),
+    resume: (runId, checkpoint, queuedInstruction, runToken) => pick(runId).resume(runId, checkpoint, queuedInstruction, runToken),
+  }
+}
+
 interface Fixture {
   readonly workspaceId: string
+  readonly repoPath: string
+  /** `main` when the goal was set, before anything ran. */
+  readonly initialTip: string
   readonly deps: TickDeps
   readonly others: readonly string[]
+  readonly starts: readonly Start[]
+}
+
+interface SeedOptions {
+  readonly conductAnswer?: string
+  readonly autoMerge?: boolean
+  readonly onImplementationStart?: (workspaceId: string, goalVersion: number) => Promise<void>
+  /** The verifier's answer per round (`--verification-rounds-base64`); absent, everything passes. */
+  readonly verificationRounds?: readonly (readonly object[])[]
+  readonly verificationRoundCap?: number
 }
 
 /** A conducted workspace with its goal set, the backend template's managed pool, a reviewer seat,
- *  the injected conductor and the `m8-flow` fake that ends every work run with `REPORT`. */
-async function seed(): Promise<Fixture> {
+ *  the injected conductor and a routed `m8-flow` fake whose every work run ends with its report. */
+async function seed(options: SeedOptions = {}): Promise<Fixture> {
   await syncCapabilityTaxonomy()
   await prisma.slaveTemplate.create({
     data: { id: 't-backend', name: 'Backend Developer', role: 'backend', description: 'x', active: true, capabilityKeys: [] },
   })
   await syncPersonPool()
+  const repoPath = makeRepo()
   const workspace = await prisma.workspace.create({
     data: {
       name: 'Report Modes E2E',
-      repoPath: makeRepo(),
+      repoPath,
       baseBranch: 'main',
       verifyCommands: ['true'],
       setupCommands: [],
       delivery: 'conducted',
       // Merged for real, so "merged" means the base branch has the worker's commit.
-      autoMerge: true,
+      autoMerge: options.autoMerge ?? true,
+      ...(options.verificationRoundCap === undefined ? {} : { verificationRoundCap: options.verificationRoundCap }),
     },
   })
   await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
@@ -139,12 +298,18 @@ async function seed(): Promise<Fixture> {
   const goal = await setGoal(workspace.id, 'Add a CSV mode. Add a JSON mode.')
   if (!goal.ok) throw new Error('the fixture goal was refused')
 
-  const extraArgs = [FAKE, '--fixture', 'm8-flow', '--report-json-base64', Buffer.from(JSON.stringify(REPORT)).toString('base64')]
-  const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs, hookPath: REAL_GATE })
-  const { decider, others } = scripted()
+  const starts: Start[] = []
+  const hook = options.onImplementationStart
+  const adapter = routingAdapter(() => repoPath, starts, async (goalVersion) => {
+    if (hook !== undefined) await hook(workspace.id, goalVersion)
+  }, options.verificationRounds)
+  const { decider, others } = scripted(options.conductAnswer ?? SINGLE)
   return {
     workspaceId: workspace.id,
+    repoPath,
+    initialTip: git(['rev-parse', 'main'], repoPath),
     others,
+    starts,
     deps: {
       workspaceId: brandWorkspaceId(workspace.id),
       registry: { resolve: () => adapter },
@@ -155,20 +320,85 @@ async function seed(): Promise<Fixture> {
 }
 
 /** Ticks, letting every pump finish between ticks, until `done` holds -- bounded, so a flow that
- *  never gets there fails instead of hanging. */
-async function tickUntil(f: Fixture, done: () => Promise<boolean>): Promise<void> {
-  for (let i = 0; i < 40; i += 1) {
+ *  never gets there fails instead of hanging. `after` runs after every tick (an invariant check). */
+async function tickUntil(f: Fixture, done: () => Promise<boolean>, after?: () => Promise<void>): Promise<void> {
+  for (let i = 0; i < 60; i += 1) {
     await tick(f.deps)
     await drainPumps()
+    if (after !== undefined) await after()
     if (await done()) return
   }
   throw new Error('tickUntil: the condition never held')
 }
 
+type Delivery = NonNullable<Awaited<ReturnType<typeof prisma.goalDelivery.findUnique>>>
+
+async function delivery(f: Fixture, goalVersion: number): Promise<Delivery | null> {
+  return prisma.goalDelivery.findUnique({ where: { workspaceId_goalVersion: { workspaceId: f.workspaceId, goalVersion } } })
+}
+
+const merged = (f: Fixture, goalVersion: number) => async (): Promise<boolean> => (await delivery(f, goalVersion))?.mergedAt != null
+
+/** The workspace's goal-delivery events, oldest first, as `type` + payload. */
+async function goalEvents(f: Fixture): Promise<{ readonly type: string; readonly payload: unknown }[]> {
+  const rows = await prisma.executionEvent.findMany({
+    where: {
+      workspaceId: f.workspaceId,
+      type: {
+        in: [
+          'workspace_goal_accepted',
+          'workspace_goal_merged',
+          'workspace_goal_waiting',
+          'workspace_goal_abandoned',
+          'workspace_goal_needs_human',
+          'workspace_goal_retried',
+        ],
+      },
+    },
+    orderBy: { seq: 'asc' },
+    select: { type: true, payload: true },
+  })
+  return rows.map((row) => ({ type: DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? row.type, payload: row.payload }))
+}
+
+const filesOn = (f: Fixture, ref: string): string[] => git(['ls-tree', '-r', '--name-only', ref], f.repoPath).split('\n')
+
+/** The verification worktrees still on disk under the repository's worktree root. */
+function verifyWorktrees(f: Fixture): string[] {
+  const root = worktreeRootFor(f.repoPath)
+  return existsSync(root) ? readdirSync(root).filter((name) => name.startsWith('verify-')) : []
+}
+
+/** The implementation runs of the package `key`'s task, in the order they were spawned, with the
+ *  prompt each was given. Every one of them was spawned through the routing adapter (checked). */
+async function implementationRunsOf(f: Fixture, key: string): Promise<Start[]> {
+  const task = await prisma.task.findFirstOrThrow({ where: { workspaceId: f.workspaceId, workPackage: { key } } })
+  const ids = (await prisma.slaveRun.findMany({ where: { taskId: task.id, kind: 'implementation' }, select: { id: true } })).map((run) => run.id)
+  const started = f.starts.filter((s) => ids.includes(s.runId))
+  expect(started).toHaveLength(ids.length)
+  return started
+}
+
+/** The `task.rework` events that verification sent, as `{ package key, verificationRound }`. */
+async function verificationReworks(f: Fixture): Promise<{ readonly key: string; readonly round: unknown }[]> {
+  const rows = await prisma.executionEvent.findMany({
+    where: { workspaceId: f.workspaceId, type: 'task_rework' },
+    orderBy: { seq: 'asc' },
+    select: { payload: true, taskId: true },
+  })
+  const tasks = await prisma.task.findMany({ where: { workspaceId: f.workspaceId }, select: { id: true, workPackage: { select: { key: true } } } })
+  const keyOf = (taskId: string | null): string => tasks.find((task) => task.id === taskId)?.workPackage?.key ?? ''
+  return rows
+    .filter((row) => (row.payload as { verificationRound?: number }).verificationRound !== undefined)
+    .map((row) => ({ key: keyOf(row.taskId), round: (row.payload as { verificationRound?: number }).verificationRound }))
+}
+
+const status = (f: Fixture, goalVersion: number, wanted: string) => async (): Promise<boolean> => (await delivery(f, goalVersion))?.status === wanted
+
 describe('conductor end to end', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "ConductorCall", "RequirementSet", "WorkPackage", "RunReport", "SupervisorDecision", "SlaveMessage", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "ProviderConfiguration", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "ConductorCall", "RequirementSet", "WorkPackage", "GoalDelivery", "RunReport", "SupervisorDecision", "SlaveMessage", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "ProviderConfiguration", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
     await removeTemplates()
   })
@@ -186,11 +416,11 @@ describe('conductor end to end', () => {
     await prisma.$disconnect()
   })
 
-  it('takes a conducted goal from requirements to a reported, merged package', async (): Promise<void> => {
+  it('takes a conducted goal from requirements to a reported package, through its integration branch into the base branch', async (): Promise<void> => {
     const f = await seed()
-    const packageTask = async (): Promise<{ readonly id: string; readonly status: string } | null> =>
-      prisma.task.findFirst({ where: { workspaceId: f.workspaceId, workPackageId: { not: null } }, select: { id: true, status: true } })
-    await tickUntil(f, async () => (await packageTask())?.status === 'done')
+    await tickUntil(f, merged(f, 1))
+    const packageTask = await prisma.task.findFirstOrThrow({ where: { workspaceId: f.workspaceId, workPackageId: { not: null } } })
+    expect(packageTask.status).toBe('done')
 
     // The requirement set for v1, and the size decision recorded.
     const set = await prisma.requirementSet.findUniqueOrThrow({
@@ -203,21 +433,69 @@ describe('conductor end to end', () => {
     expect(packages).toEqual([expect.objectContaining({ goalVersion: 1, requirementKeys: ['R1', 'R2'], templateId: 't-backend' })])
 
     // The package task: pinned to a package-worker seat, ready -> running -> ... -> done.
-    const task = await prisma.task.findUniqueOrThrow({ where: { id: (await packageTask())?.id ?? '' } })
-    const seat = await prisma.slave.findUniqueOrThrow({ where: { id: task.assigneeId ?? '' } })
+    const seat = await prisma.slave.findUniqueOrThrow({ where: { id: packageTask.assigneeId ?? '' } })
     expect(seat.runtimeRoles).toContain(PACKAGE_WORKER_ROLE)
-    const events = await prisma.executionEvent.findMany({ where: { taskId: task.id }, orderBy: { seq: 'asc' }, select: { type: true } })
+    const events = await prisma.executionEvent.findMany({ where: { taskId: packageTask.id }, orderBy: { seq: 'asc' }, select: { type: true } })
     const types = events.map((row) => DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? row.type)
     expect(types).toEqual(expect.arrayContaining(['task.started', 'task.verify_passed', 'task.review_approved', 'task.done']))
     expect(types.indexOf('task.started')).toBeLessThan(types.indexOf('task.done'))
 
-    // Merged: the worker's commit is on the base branch.
-    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })
-    expect(git(['ls-tree', '--name-only', 'main'], workspace.repoPath).split('\n')).toContain('m8a-work.txt')
+    // The goal version's delivery: cut from main as it was, accepted, merged once.
+    const d1 = await delivery(f, 1)
+    expect(d1).toEqual(
+      expect.objectContaining({
+        status: 'accepted',
+        integrationBranch: integrationBranchName(1, f.workspaceId),
+        baseCommit: f.initialTip,
+        mergeError: null,
+      }),
+    )
+    expect(d1?.acceptedAt).not.toBeNull()
+    expect(d1?.mergedAt).not.toBeNull()
+    const branch = d1?.integrationBranch ?? ''
+    // The worker's commit is on the integration branch AND on main, and main is exactly that branch
+    // (the final merge is a fast-forward from the commit it was cut at).
+    expect(filesOn(f, branch)).toContain('m8a-work.txt')
+    expect(filesOn(f, 'main')).toContain('m8a-work.txt')
+    expect(git(['rev-parse', 'main'], f.repoPath)).toBe(git(['rev-parse', branch], f.repoPath))
+    // Nothing reached main while the package was worked on and reviewed.
+    expect(f.starts.map((s) => s.mainTip)).toEqual(f.starts.map(() => f.initialTip))
+
+    // Plan 4b: accepted only by a verification run that passed every requirement, on exactly the
+    // tip that reached main; its checkout is gone.
+    const verification = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'verification', goalDeliveryId: d1?.id ?? '' } })
+    expect(verification).toMatchObject({ status: 'succeeded', taskId: null })
+    expect(d1?.verifiedCommit).toBe(git(['rev-parse', 'main'], f.repoPath))
+    expect(await prisma.verificationResult.findMany({ where: { runId: verification.id }, select: { key: true, status: true }, orderBy: { key: 'asc' } })).toEqual([
+      { key: 'R1', status: 'pass' },
+      { key: 'R2', status: 'pass' },
+    ])
+    const verified = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_verified' } })
+    expect(verified.map((event) => event.payload)).toEqual([
+      { version: 1, round: 1, runId: verification.id, pass: 2, fail: 0, unverifiable: 0, failedKeys: [] },
+    ])
+    expect(git(['worktree', 'list'], f.repoPath)).not.toContain('verify-')
+    expect(verifyWorktrees(f)).toEqual([])
+    // By a seat that implemented nothing in this version and holds `verifier`, which left one check
+    // per requirement in its own scratch directory, outside the repository.
+    expect(verification.slaveId).not.toBe(packageTask.assigneeId)
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: verification.slaveId } })).runtimeRoles).toContain(VERIFIER_ROLE)
+    const verifierStart = f.starts.find((s) => s.runId === verification.id)
+    expect(verifierStart?.prompt).toContain('Verification round 1 of goal v1.')
+    expect(readdirSync(join(verifierStart?.runDir ?? '', 'verify')).sort()).toEqual(['check-R1.sh', 'check-R2.sh'])
+    expect(filesOn(f, 'main').filter((file) => file.startsWith('check-'))).toEqual([])
+
+    // Accepted, then merged -- each once.
+    const goal = await goalEvents(f)
+    expect(goal.map((e) => e.type)).toEqual(['workspace.goal_accepted', 'workspace.goal_merged'])
+    expect(goal[0]?.payload).toEqual({ version: 1, rounds: 1 })
+    expect(goal[1]?.payload).toEqual(
+      expect.objectContaining({ version: 1, branch, into: 'main', commit: git(['rev-parse', 'main'], f.repoPath), by: 'system' }),
+    )
 
     // The worker's report, filed for its run.
-    const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: task.id, kind: 'implementation', status: 'succeeded' } })
-    const report = await prisma.runReport.findFirstOrThrow({ where: { taskId: task.id } })
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: packageTask.id, kind: 'implementation', status: 'succeeded' } })
+    const report = await prisma.runReport.findFirstOrThrow({ where: { taskId: packageTask.id } })
     expect(report.runId).toBe(run.id)
     expect((report.report as { requirements: { key: string }[] }).requirements.map((r) => r.key)).toEqual(['R1', 'R2'])
 
@@ -228,5 +506,279 @@ describe('conductor end to end', () => {
     expect(spend.conductorMeasuredUsd).toBeCloseTo(0.05, 6)
     expect(spend.spentUsd).toBeGreaterThanOrEqual(0.05)
     expect(f.others).toEqual([])
+  })
+
+  it('cuts a dependent package from the integration branch after its dependency merged there; main gets both only at the final merge', async (): Promise<void> => {
+    const f = await seed({ conductAnswer: DEPENDENT })
+    await tickUntil(f, merged(f, 1))
+
+    const packages = await prisma.workPackage.findMany({ where: { workspaceId: f.workspaceId }, include: { tasks: true }, orderBy: { key: 'asc' } })
+    expect(packages.map((p) => p.key)).toEqual(['config', 'integration', 'report'])
+    const taskOf = (key: string): string => packages.find((p) => p.key === key)?.tasks[0]?.id ?? ''
+    expect(await prisma.taskDependency.findMany({ where: { taskId: taskOf('config') }, select: { dependsOnTaskId: true } })).toEqual([
+      { dependsOnTaskId: taskOf('report') },
+    ])
+    expect(packages.every((p) => p.tasks[0]?.status === 'done')).toBe(true)
+
+    const startOf = (key: string): Start | undefined => f.starts.find((s) => s.kind === 'implementation' && s.packageKey === key)
+    // `report` was cut before any package merged: no csv.py anywhere yet.
+    expect(startOf('report')?.worktreeFiles).not.toContain('src/report/csv.py')
+    // `config` was cut from the integration branch after `report` merged into it: its worktree has
+    // report's file at dispatch time, while main does not.
+    expect(startOf('config')?.worktreeFiles).toContain('src/report/csv.py')
+    expect(startOf('config')?.mainFiles).not.toContain('src/report/csv.py')
+    // The integration package sees both packages' work; main still has neither.
+    expect(startOf('integration')?.worktreeFiles).toContain('src/report/csv.py')
+    expect(startOf('integration')?.configSource).not.toBe(ORIGINAL_SOURCE)
+    expect(startOf('integration')?.mainFiles).not.toContain('src/report/csv.py')
+    // Nothing reached main until the final merge.
+    expect(f.starts.length).toBeGreaterThanOrEqual(3)
+    expect(f.starts.map((s) => s.mainTip)).toEqual(f.starts.map(() => f.initialTip))
+
+    // The final merge lands all three at once, as the integration branch's exact tip.
+    const d1 = await delivery(f, 1)
+    const branch = d1?.integrationBranch ?? ''
+    expect(git(['rev-parse', 'main'], f.repoPath)).toBe(git(['rev-parse', branch], f.repoPath))
+    expect(filesOn(f, 'main')).toEqual(expect.arrayContaining(['src/report/csv.py', 'wiring.txt']))
+    expect(git(['show', 'main:src/config.py'], f.repoPath)).not.toBe(ORIGINAL_SOURCE.trim())
+    expect((await goalEvents(f)).map((e) => e.type)).toEqual(['workspace.goal_accepted', 'workspace.goal_merged'])
+    expect(f.others).toEqual([])
+  })
+
+  it('conducts the next goal version from main as the previous one left it', async (): Promise<void> => {
+    const f = await seed()
+    await tickUntil(f, merged(f, 1))
+    const d1 = await delivery(f, 1)
+    const v1Tip = git(['rev-parse', 'main'], f.repoPath)
+    expect(v1Tip).toBe(git(['rev-parse', d1?.integrationBranch ?? ''], f.repoPath))
+
+    const goal = await setGoal(f.workspaceId, 'Add a CSV mode. Add a JSON mode. Keep both fast.')
+    expect(goal.ok).toBe(true)
+    await tickUntil(f, merged(f, 2))
+
+    const d2 = await delivery(f, 2)
+    expect(d2).toEqual(expect.objectContaining({ status: 'accepted', integrationBranch: integrationBranchName(2, f.workspaceId), baseCommit: v1Tip }))
+    expect(d2?.mergedAt).not.toBeNull()
+    // v2's worker was cut from main's new tip: it had v1's work before it wrote anything.
+    const v2Start = f.starts.find((s) => s.kind === 'implementation' && s.goalVersion === 2)
+    expect(v2Start?.worktreeFiles).toContain('m8a-work.txt')
+    expect(v2Start?.worktreeFiles).not.toContain('m8a-work-v2.txt')
+    expect(filesOn(f, 'main')).toEqual(expect.arrayContaining(['m8a-work.txt', 'm8a-work-v2.txt']))
+    expect(git(['rev-parse', 'main'], f.repoPath)).toBe(git(['rev-parse', d2?.integrationBranch ?? ''], f.repoPath))
+
+    const goalTypes = (await goalEvents(f)).map((e) => e.type)
+    expect(goalTypes).toEqual(['workspace.goal_accepted', 'workspace.goal_merged', 'workspace.goal_accepted', 'workspace.goal_merged'])
+    expect(f.others).toEqual([])
+  })
+
+  it('holds the next goal version, conducted and dispatching nothing, while the previous one is still being worked on', async (): Promise<void> => {
+    let v2Set: { readonly v1TaskStatus: string; readonly v1Delivery: string } | null = null
+    const f = await seed({
+      // Set v2 the moment v1's worker is spawned: v1 is running, not merely accepted.
+      onImplementationStart: async (workspaceId, goalVersion) => {
+        if (goalVersion !== 1 || v2Set !== null) return
+        const task = await prisma.task.findFirstOrThrow({ where: { workspaceId, goalVersion: 1, workPackageId: { not: null } } })
+        const d1 = await prisma.goalDelivery.findUniqueOrThrow({ where: { workspaceId_goalVersion: { workspaceId, goalVersion: 1 } } })
+        const goal = await setGoal(workspaceId, 'Add a CSV mode. Add a JSON mode. Keep both fast.')
+        if (!goal.ok) throw new Error('v2 was refused')
+        v2Set = { v1TaskStatus: task.status, v1Delivery: d1.status }
+      },
+    })
+
+    // Until v1 is on main, v2 has no package, no task, and no run.
+    const v2Held = async (): Promise<void> => {
+      if ((await delivery(f, 1))?.mergedAt != null) return
+      expect(await prisma.workPackage.count({ where: { workspaceId: f.workspaceId, goalVersion: 2 } })).toBe(0)
+      expect(await prisma.task.count({ where: { workspaceId: f.workspaceId, goalVersion: 2 } })).toBe(0)
+      expect(await prisma.requirementSet.count({ where: { workspaceId: f.workspaceId, goalVersion: 2 } })).toBe(0)
+    }
+    await tickUntil(f, merged(f, 2), v2Held)
+
+    expect(v2Set).toEqual({ v1TaskStatus: 'running', v1Delivery: 'integrating' })
+    // Said once, naming what it waits on.
+    const waiting = (await goalEvents(f)).filter((e) => e.type === 'workspace.goal_waiting')
+    expect(waiting.map((e) => e.payload)).toEqual([{ version: 2, waitingOn: 1 }])
+    // v2's worker was dispatched only once v1 was on main, and was cut from main's new tip.
+    const d1 = await delivery(f, 1)
+    const d2 = await delivery(f, 2)
+    const v1Tip = git(['rev-parse', d1?.integrationBranch ?? ''], f.repoPath)
+    expect(d2?.baseCommit).toBe(v1Tip)
+    const v2Starts = f.starts.filter((s) => s.goalVersion === 2)
+    expect(v2Starts.length).toBeGreaterThan(0)
+    expect(v2Starts.every((s) => s.mainFiles.includes('m8a-work.txt'))).toBe(true)
+    expect(v2Starts.find((s) => s.kind === 'implementation')?.worktreeFiles).toContain('m8a-work.txt')
+    expect(filesOn(f, 'main')).toEqual(expect.arrayContaining(['m8a-work.txt', 'm8a-work-v2.txt']))
+    expect(f.others).toEqual([])
+  })
+
+  it('with autoMerge off, holds the next goal version behind an accepted one until a person merges it and confirms', async (): Promise<void> => {
+    const f = await seed({ autoMerge: false })
+    await tickUntil(f, async () => (await delivery(f, 1))?.status === 'accepted')
+    // A few more ticks: accepted is where it stays.
+    for (let i = 0; i < 2; i += 1) {
+      await tick(f.deps)
+      await drainPumps()
+    }
+    const d1 = await delivery(f, 1)
+    expect(d1?.mergedAt).toBeNull()
+    expect(filesOn(f, 'main')).not.toContain('m8a-work.txt')
+    expect(git(['rev-parse', 'main'], f.repoPath)).toBe(f.initialTip)
+
+    expect((await setGoal(f.workspaceId, 'Add a CSV mode. Add a JSON mode. Keep both fast.')).ok).toBe(true)
+    for (let i = 0; i < 3; i += 1) {
+      await tick(f.deps)
+      await drainPumps()
+    }
+    expect((await goalEvents(f)).filter((e) => e.type === 'workspace.goal_waiting').map((e) => e.payload)).toEqual([{ version: 2, waitingOn: 1 }])
+    expect(await prisma.workPackage.count({ where: { workspaceId: f.workspaceId, goalVersion: 2 } })).toBe(0)
+    expect(await prisma.task.count({ where: { workspaceId: f.workspaceId, goalVersion: 2 } })).toBe(0)
+
+    // The person merges by hand and says so.
+    git(['merge', '--no-edit', '--no-ff', d1?.integrationBranch ?? ''], f.repoPath)
+    const handTip = git(['rev-parse', 'main'], f.repoPath)
+    const confirmed = await confirmGoalMerge(f.workspaceId, 1)
+    expect(confirmed).toEqual({ ok: true, value: { commit: handTip } })
+
+    await tickUntil(f, async () => (await delivery(f, 2))?.status === 'accepted')
+    const d2 = await delivery(f, 2)
+    expect(d2?.baseCommit).toBe(handTip)
+    expect(d2?.mergedAt).toBeNull()
+    expect(f.starts.find((s) => s.kind === 'implementation' && s.goalVersion === 2)?.worktreeFiles).toContain('m8a-work.txt')
+    expect((await goalEvents(f)).filter((e) => e.type === 'workspace.goal_waiting')).toHaveLength(1)
+    expect(f.others).toEqual([])
+  })
+
+  it('reworks only the package whose requirement failed verification, verifies again, and lands the verified tip', async (): Promise<void> => {
+    const f = await seed({
+      conductAnswer: PARTITIONED,
+      verificationRounds: [
+        [checked('R1', 'pass'), checked('R2', 'fail')],
+        [checked('R1', 'pass'), checked('R2', 'pass')],
+      ],
+    })
+    await tickUntil(f, merged(f, 1))
+
+    // `config` owns R2: it ran twice, and its second run was told what round 1 found. `report` owns
+    // R1, which passed: it ran once. The integration package owns no requirement: once.
+    const config = await implementationRunsOf(f, 'config')
+    expect(config).toHaveLength(2)
+    expect(config[0]?.prompt).not.toContain('Verification round 1')
+    expect(config[1]?.prompt).toContain('Verification round 1 found requirement(s) your package owns not met.')
+    expect(config[1]?.prompt).toContain('R2 prints nothing')
+    expect(await implementationRunsOf(f, 'report')).toHaveLength(1)
+    expect(await implementationRunsOf(f, 'integration')).toHaveLength(1)
+    expect(await verificationReworks(f)).toEqual([{ key: 'config', round: 1 }])
+    const configTask = await prisma.task.findFirstOrThrow({ where: { workspaceId: f.workspaceId, workPackage: { key: 'config' } } })
+    expect(configTask.status).toBe('done')
+
+    // Two rounds, each with its own run and evidence; the second passed everything.
+    const d1 = await delivery(f, 1)
+    const runs = await prisma.slaveRun.findMany({ where: { kind: 'verification', goalDeliveryId: d1?.id ?? '' }, select: { id: true } })
+    expect(runs).toHaveLength(2)
+    const verified = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_verified' }, orderBy: { seq: 'asc' } })
+    expect(verified.map((event) => event.payload)).toEqual([
+      expect.objectContaining({ version: 1, round: 1, pass: 1, fail: 1, failedKeys: ['R2'] }),
+      expect.objectContaining({ version: 1, round: 2, pass: 2, fail: 0, failedKeys: [] }),
+    ])
+    expect(await prisma.verificationResult.count({ where: { runId: { in: runs.map((run) => run.id) } } })).toBe(4)
+    expect(f.starts.filter((s) => s.kind === 'verification').map((s) => /Verification round (\d+)/.exec(s.prompt)?.[1])).toEqual(['1', '2'])
+
+    // Accepted after two rounds, and exactly the verified commit reached main, with both packages' work.
+    expect(d1).toEqual(expect.objectContaining({ status: 'accepted', mergeError: null }))
+    const goal = await goalEvents(f)
+    expect(goal.map((e) => e.type)).toEqual(['workspace.goal_accepted', 'workspace.goal_merged'])
+    expect(goal[0]?.payload).toEqual({ version: 1, rounds: 2 })
+    expect(git(['rev-parse', 'main'], f.repoPath)).toBe(d1?.verifiedCommit)
+    expect(git(['rev-parse', 'main'], f.repoPath)).toBe(git(['rev-parse', d1?.integrationBranch ?? ''], f.repoPath))
+    expect(filesOn(f, 'main')).toContain('src/report/csv.py')
+    expect(git(['show', 'main:src/config.py'], f.repoPath)).not.toBe(ORIGINAL_SOURCE.trim())
+    // Nothing reached main before the final merge, and no verification checkout is left.
+    expect(f.starts.map((s) => s.mainTip)).toEqual(f.starts.map(() => f.initialTip))
+    expect(verifyWorktrees(f)).toEqual([])
+    expect(f.others).toEqual([])
+  })
+
+  it('stops for a person when a requirement cannot be checked, escalates it, and accepts once a retry verifies it', async (): Promise<void> => {
+    const f = await seed({
+      verificationRounds: [
+        [checked('R1', 'pass'), checked('R2', 'unverifiable')],
+        [checked('R1', 'pass'), checked('R2', 'pass')],
+      ],
+    })
+    await tickUntil(f, status(f, 1, 'needs_human'))
+
+    // Stopped at once (another round would ask the same question), naming the key and why; nothing
+    // reworked, nothing merged, the evidence kept, the checkout gone.
+    const stopped = await delivery(f, 1)
+    expect(stopped).toEqual(expect.objectContaining({ status: 'needs_human', round: 1, activeRunId: null, verifiedCommit: null, mergedAt: null }))
+    expect(stopped?.needsHumanReason).toContain('R2')
+    expect(stopped?.needsHumanReason).toContain('needs a network this checkout lacks')
+    expect(await verificationReworks(f)).toEqual([])
+    expect(git(['rev-parse', 'main'], f.repoPath)).toBe(f.initialTip)
+    expect(await prisma.verificationResult.findMany({ where: { status: 'unverifiable' }, select: { key: true, reason: true } })).toEqual([
+      { key: 'R2', reason: 'R2 needs a network this checkout lacks' },
+    ])
+    expect(verifyWorktrees(f)).toEqual([])
+
+    // The Supervisor's world raises it for a person, keyed by the version and round.
+    const { world } = await loadSupervisorWorld(f.workspaceId, new Date())
+    expect(observe(world).filter((s) => s.kind === 'goal_needs_human').map((s) => s.subjectId)).toEqual([`${f.workspaceId}:v1:r1`])
+
+    // A few more ticks change nothing: it waits for the person.
+    for (let i = 0; i < 2; i += 1) {
+      await tick(f.deps)
+      await drainPumps()
+    }
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(1)
+    expect((await delivery(f, 1))?.status).toBe('needs_human')
+
+    // The person retries: the unchanged tree is verified again (round 2), and this time it passes.
+    expect(await retryGoal(f.workspaceId, 1)).toEqual(expect.objectContaining({ ok: true }))
+    await tickUntil(f, merged(f, 1))
+    const d1 = await delivery(f, 1)
+    expect(d1).toEqual(expect.objectContaining({ status: 'accepted', round: 2, needsHumanReason: null }))
+    const verifiers = f.starts.filter((s) => s.kind === 'verification')
+    expect(verifiers.map((s) => /Verification round (\d+)/.exec(s.prompt)?.[1])).toEqual(['1', '2'])
+    // No package was worked again: the retry re-verified what was already integrated.
+    expect(f.starts.filter((s) => s.kind === 'implementation')).toHaveLength(1)
+    expect((await goalEvents(f)).map((e) => e.type)).toEqual([
+      'workspace.goal_needs_human',
+      'workspace.goal_retried',
+      'workspace.goal_accepted',
+      'workspace.goal_merged',
+    ])
+    expect(git(['rev-parse', 'main'], f.repoPath)).toBe(d1?.verifiedCommit)
+    expect(verifyWorktrees(f)).toEqual([])
+  })
+
+  it('ends in needs_human when the round cap runs out, without a rework the cap has no round left for', async (): Promise<void> => {
+    const f = await seed({
+      conductAnswer: PARTITIONED,
+      verificationRoundCap: 2,
+      verificationRounds: [[checked('R1', 'pass'), checked('R2', 'fail')]],
+    })
+    await tickUntil(f, status(f, 1, 'needs_human'))
+
+    const d1 = await delivery(f, 1)
+    expect(d1).toEqual(expect.objectContaining({ status: 'needs_human', round: 2, activeRunId: null, verifiedCommit: null, mergedAt: null }))
+    expect(d1?.needsHumanReason).toContain('the verification round cap (2) was reached; still failing: R2')
+    // `config` ran twice: its first run and one rework after round 1. Round 2's failure spent the
+    // cap, so no rework follows it -- the cap ends paid work.
+    expect(await implementationRunsOf(f, 'config')).toHaveLength(2)
+    expect(await implementationRunsOf(f, 'report')).toHaveLength(1)
+    expect(await verificationReworks(f)).toEqual([{ key: 'config', round: 1 }])
+    expect((await prisma.task.findFirstOrThrow({ where: { workspaceId: f.workspaceId, workPackage: { key: 'config' } } })).status).toBe('done')
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(2)
+
+    // More ticks start nothing: no third round, no further rework, nothing on main.
+    for (let i = 0; i < 2; i += 1) {
+      await tick(f.deps)
+      await drainPumps()
+    }
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(2)
+    expect(await implementationRunsOf(f, 'config')).toHaveLength(2)
+    expect(git(['rev-parse', 'main'], f.repoPath)).toBe(f.initialTip)
+    expect((await goalEvents(f)).map((e) => e.type)).toEqual(['workspace.goal_needs_human'])
+    expect(verifyWorktrees(f)).toEqual([])
   })
 })

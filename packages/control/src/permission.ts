@@ -1,4 +1,5 @@
 import { writeFileSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import {
   ENFORCE_BY_PROVIDER,
@@ -81,6 +82,27 @@ export function writePermissionsFile(
       | undefined
   },
 ): string {
+  // Conductor Plan 4b fix round 1 (V1): a verification run's baseline carries `write_repo` (its
+  // checks are written with the write tools, into the scratch directory), and the ONLY thing that
+  // keeps those tools out of the repository is an ownership rule that owns nothing inside the
+  // worktree (plan D1). A verification file without that rule would let the verifier edit the code
+  // it verifies, so the one writer refuses to produce one -- fail closed, never a silent open.
+  if (input.runKind === 'verification') {
+    const rule = input.ownership
+    const ownsNothing =
+      rule !== undefined &&
+      isAbsolute(rule.worktreeRoot) &&
+      rule.owned !== null &&
+      rule.owned.length === 0 &&
+      rule.excluded.length === 0
+    if (!ownsNothing) {
+      throw new Error(
+        'writePermissionsFile: a verification run needs the ownership rule that owns nothing ' +
+          '({ worktreeRoot: <absolute worktree path>, owned: [], excluded: [] }); ' +
+          `got ${JSON.stringify(rule ?? null)}`,
+      )
+    }
+  }
   const permissionsFilePath = permissionsFilePathFor(runDir)
   const rows = input.rows.filter((row): row is PermissionRowInput =>
     (PERMISSION_KINDS as readonly string[]).includes(row.kind),

@@ -993,6 +993,19 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
       // (the seat is there; it is the partition that is wrong), so the last resorts are all.
       break
 
+    case 'verification_failed':
+      // Conductor Plan 4b (D10): news, not a request. The failing packages are already back in
+      // rework and the next round is the loop's own; no grant, no hire -- the last resorts are all,
+      // and `chooseByRules` records the `no_action` among them.
+      break
+
+    case 'goal_needs_human':
+      // Conductor Plan 4b (D10): the loop has stopped, or the verified version could not be merged.
+      // The remedy is a person's: `retry-goal` or `abandon-goal` for a stopped loop (never accepted
+      // unverified, ruling 5), a hand merge and `confirm-goal-merge` for a verified version whose
+      // merge failed (ruling V6). Nothing the Supervisor may do for them, so it escalates.
+      break
+
     case 'workspace_halted': {
       // R4: the ONE halt the Supervisor may retract, and three clauses that say when:
       //   - the breaker is what halted it. `budget_exhausted` is money and `emergency_stop` is a

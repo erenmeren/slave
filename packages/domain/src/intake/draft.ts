@@ -95,6 +95,14 @@ export const intakeDraftSchema = z.object({
    */
   autoMerge: z.boolean().default(true),
   autonomy: z.enum(['propose', 'act']).default('act'),
+  /**
+   * Conductor Plan 4b (spec §5, D11): how the project's goals are delivered -- `conducted` (the
+   * conductor splits each goal into packages and verifies the result) or `planned` (the planner's
+   * board). The person's call, never the model's: the prompt does not mention it, the card offers
+   * it. A draft stored before this field reads as conducted, the product default, for the
+   * `.default()` reason above.
+   */
+  delivery: z.enum(['conducted', 'planned']).default('conducted'),
   team: z.array(intakeSeatSchema).max(12),
 })
   // The requirement the field's own `min(1)` used to carry, narrowed to the case it is true of.

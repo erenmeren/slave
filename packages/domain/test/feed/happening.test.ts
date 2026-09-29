@@ -130,6 +130,41 @@ describe('happeningSentence', () => {
     }
   })
 
+  // Conductor Plan 4a (controller ruling P7): both join Home's feed, beside `workspace.goal_set`.
+  it('says a goal version was accepted, and where it merged', () => {
+    expect(happeningSentence('workspace.goal_accepted', { version: 2, rounds: 0 }, { actor: null, taskTitle: null })).toBe(
+      'Goal v2 was accepted',
+    )
+    expect(
+      happeningSentence(
+        'workspace.goal_merged',
+        { version: 2, branch: 'slaveofai/goal-v2-0c1d2e3f', into: 'main', commit: 'abc1234', by: 'system' },
+        { actor: null, taskTitle: null },
+      ),
+    ).toBe('Goal v2 was merged into main')
+  })
+
+  it('includes workspace.goal_accepted and workspace.goal_merged among HAPPENING_TYPES', () => {
+    expect(HAPPENING_TYPES).toContain('workspace.goal_accepted')
+    expect(HAPPENING_TYPES).toContain('workspace.goal_merged')
+  })
+
+  // Conductor Plan 4b (controller ruling Q13): the verification loop ending without acceptance
+  // joins Home's feed, beside `workspace.goal_accepted`.
+  it('says a goal version needs a person, and why', () => {
+    expect(
+      happeningSentence(
+        'workspace.goal_needs_human',
+        { version: 2, reason: 'the verification round cap (3) was reached' },
+        { actor: null, taskTitle: null },
+      ),
+    ).toBe('Goal v2 needs you: the verification round cap (3) was reached')
+  })
+
+  it('includes workspace.goal_needs_human among HAPPENING_TYPES', () => {
+    expect(HAPPENING_TYPES).toContain('workspace.goal_needs_human')
+  })
+
   it('never leaks a bare event type', () => {
     for (const type of HAPPENING_TYPES) {
       expect(happeningSentence(type, {}, { actor: null, taskTitle: null })).not.toMatch(/^[a-z_]+\.[a-z_]+$/)

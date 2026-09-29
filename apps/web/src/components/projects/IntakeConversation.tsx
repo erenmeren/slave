@@ -494,6 +494,34 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
                 </span>
               )}
             </label>
+            {/* Conductor Plan 4b (spec §5, D11): how the project's goals are delivered, the
+              * person's call and never the model's. `conducted` is the product default the draft
+              * schema writes; `?? 'conducted'` only covers a view that reached the card without
+              * passing through it. The planner is the opt-out. */}
+            <label className="flex flex-col gap-1">
+              <FieldLabel>delivery</FieldLabel>
+              <select
+                data-testid="intake-delivery"
+                aria-label="project delivery"
+                value={edited.delivery ?? 'conducted'}
+                onChange={(event) =>
+                  setEdited({ ...edited, delivery: event.target.value === 'planned' ? 'planned' : 'conducted' })
+                }
+                disabled={pending}
+                className={INPUT_SHELL}
+              >
+                <option value="conducted">conducted: split into packages, verified</option>
+                <option value="planned">planned: the manager plans a task board</option>
+              </select>
+              {/* Final wave M7: a conducted project hires its implementers when the goal is split,
+                * one per work package -- without this line the one reviewer the card hires now
+                * reads as the whole team. */}
+              {(edited.delivery ?? 'conducted') === 'conducted' && (
+                <span data-testid="intake-delivery-conducted-note" className="text-[11.5px] text-text-3">
+                  The conductor hires implementers per work package; only the reviewer is hired now.
+                </span>
+              )}
+            </label>
           </div>
 
           {/* E R7/R1 §4: the two switches a project is born with, both on -- `intakeDraftSchema`

@@ -1,16 +1,17 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { requestResume } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { integrationBranchName, runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import { ClaudeCodeAdapter, type AdapterRegistry } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { reconcileOrphans, resetTickObservation } from '../../src/sweep.js'
 import { drainPumps, tick } from '../../src/tick.js'
+import { dispatchVerification } from '../../src/verification.js'
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 const FAKE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
@@ -261,6 +262,60 @@ describe('executing a resume intent from the daemon', () => {
     const after = JSON.parse(readFileSync(permissionsPath, 'utf8')) as Verdict
     expect(after.grants).toEqual(['read_repo', 'write_repo', 'run_commands', 'network_fetch'])
     expect(after.allow.map((entry) => entry.tool)).toContain('WebFetch')
+  }, 60_000)
+
+  // Conductor Plan 4b (D1/D2): a verification run paused (budget, a person) and resumed keeps its
+  // confinement -- the rewritten permissions file still carries the owns-nothing rule, which the
+  // writer would otherwise refuse -- and its child still sees the scratch directory.
+  it('keeps a verification run confined and its scratch directory exported across a resume', async (): Promise<void> => {
+    // Nothing else startable in this workspace: the tick below is only the resume.
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'done' } })
+    const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const verifier = await prisma.slave.create({
+      data: { teamId: team.id, role: 'Verifier', runtimeRoles: ['reviewer', 'verifier'], personId: (await prisma.person.create({ data: { name: 'Vera' } })).id },
+    })
+    await prisma.requirementSet.create({
+      data: { workspaceId: fixture.workspaceId, goalVersion: 1, items: [{ key: 'R1', text: 'the thing', source: 'add the thing' }] },
+    })
+    const branch = integrationBranchName(1, fixture.workspaceId)
+    execFileSync('git', ['branch', branch], { cwd: fixture.repoPath })
+    const baseCommit = execFileSync('git', ['rev-parse', 'main'], { cwd: fixture.repoPath, encoding: 'utf8' }).trim()
+    const delivery = await prisma.goalDelivery.create({
+      data: { workspaceId: fixture.workspaceId, goalVersion: 1, integrationBranch: branch, baseCommit, verifierSlaveId: verifier.id },
+    })
+
+    const deps = { workspaceId: brandWorkspaceId(fixture.workspaceId), registry: singleAdapterRegistry(fakeAdapter('hook-deny')) }
+    const runId = await dispatchVerification(deps, delivery.id)
+    expect(runId).not.toBeNull()
+    await drainPumps()
+    const paused = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId ?? '' } })
+    expect(paused).toMatchObject({ kind: 'verification', status: 'paused' })
+    const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: paused.id } })
+    const runDir = dirname(checkpoint.pauseFlagPath)
+    const permissionsPath = join(runDir, 'permissions.json')
+    interface Verdict {
+      readonly tokenHash: string
+      readonly ownership?: unknown
+    }
+    const before = JSON.parse(readFileSync(permissionsPath, 'utf8')) as Verdict
+    // Read while the run is paused: the conclusion (Task 6) removes the checkout.
+    const worktreeRoot = realpathSync(checkpoint.worktreePath)
+
+    expect((await requestResume(paused.id, MARKER, 'web')).ok).toBe(true)
+    const adapter = fakeAdapter('env-echo')
+    await tick({ workspaceId: brandWorkspaceId(fixture.workspaceId), registry: singleAdapterRegistry(adapter) })
+    await drainPumps()
+
+    // The resumed run finished; `env-echo` ends with no `<slave-verification>`, so the gate
+    // (Task 6) failed it as unusable and gave the claim back -- the resume itself is what counts.
+    expect(await prisma.executionEvent.count({ where: { runId: paused.id, type: 'run_resumed' } })).toBe(1)
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: paused.id } })).status).toBe('failed')
+    expect(await prisma.goalDelivery.findUniqueOrThrow({ where: { id: delivery.id } })).toMatchObject({ activeRunId: null, roundRunFailures: 1 })
+    const after = JSON.parse(readFileSync(permissionsPath, 'utf8')) as Verdict
+    expect(after.tokenHash).not.toBe(before.tokenHash)
+    expect(after.ownership).toEqual({ worktreeRoot, owned: [], excluded: [] })
+    const env = z.record(z.string(), z.string()).parse(adapter.rawTerminalPayload(brandRunId(paused.id))?.['env'])
+    expect(env['SLAVEOFAI_VERIFY_DIR']).toBe(join(runDir, 'verify'))
   }, 60_000)
 
   it('leaves nothing to do on the tick after the one that claimed the intent', async (): Promise<void> => {

@@ -56,6 +56,23 @@
 //                  patches the ask legs below. Absent, the work run has no
 //                  report at all. ARGV and base64 for `--ask-json-base64`'s
 //                  reasons.
+//                  Conductor Plan 4a: `--work-file <path>` in ARGV names the
+//                  file that work body writes (default `m8a-work.txt`), so
+//                  two package workers of one goal version each write a file
+//                  only their own package owns.
+//                  Conductor Plan 4b: a VERIFICATION run (its prompt carries
+//                  the `<slave-verification>` protocol) writes and commits
+//                  NOTHING -- a verifier that changed its checkout is thrown
+//                  away -- and ends with a `<slave-verification>` block:
+//                  `--verification-json-base64 <base64 of the JSON>` from
+//                  ARGV verbatim, or `--verification-rounds-base64 <base64 of
+//                  items[][]>` answering the prompt's `Verification round N`
+//                  with element min(N, length) - 1 (one fake scripts a whole
+//                  fail-then-pass loop), or, absent both, every key on the
+//                  prompt's `Requirement keys:` line as `pass`. With
+//                  `$SLAVEOFAI_VERIFY_DIR` set it writes `check-<key>.sh`
+//                  there, one per key -- a verifier's evidence, outside the
+//                  repository.
 //   M52 R8 hangs three optional side effects off the `--work-fixture` arm,
 //   so they reach every mode that has one and change nothing in any mode
 //   that is not asked for them. `--env-out <path>` appends this child's own
@@ -218,7 +235,7 @@
 //                  hook-deny, and permission-denied runs, so the fake matches
 //                  that rather than inventing a nonzero exit for them.
 import { execFileSync, spawnSync } from 'node:child_process'
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -1003,6 +1020,68 @@ function fixtureSessionId(name) {
  * placeholder ELEMENT is removed rather than replaced, so the delta reads `"cancel":[]` -- a
  * re-plan that adds work and cancels nothing, which is the shape most of them have.
  */
+/**
+ * Conductor Plan 4b: a verification run's answer, or false for any other prompt. Selected by the
+ * `<slave-verification>` protocol its prompt carries (no other kind's prompt names the tag live --
+ * a rework prompt quoting "Verification round N" goes to the work body). It writes and commits
+ * nothing in its checkout -- the conclusion discards a verification whose worktree changed -- and
+ * appends the block to the `complete` capture's final text and result, the report arm's shape.
+ *
+ * The verdict, first match wins:
+ *   - `--verification-json-base64 <base64 JSON>`: that body verbatim, every round (a malformed
+ *     body, a repeated key -- the refusal tests' shape);
+ *   - `--verification-rounds-base64 <base64 JSON: items[][]>`: round N (the prompt's
+ *     `Verification round N`) is answered with `{ items: rounds[min(N, length) - 1] }`, so one
+ *     fake scripts a whole loop -- fail, then pass -- and a round past the end repeats the last;
+ *   - neither: every key on the prompt's `Requirement keys:` line passes.
+ * When `$SLAVEOFAI_VERIFY_DIR` is set (the adapters export it for a verification run only) it
+ * writes `check-<key>.sh` there for every key -- the evidence a real verifier leaves in its
+ * scratch directory, outside the repository -- carrying that key's item `check` when there is one.
+ */
+async function verificationArm(prompt) {
+  if (!prompt.includes('<slave-verification>')) return false
+  const line = prompt.split('\n').find((text) => text.startsWith('Requirement keys: ')) ?? ''
+  const keys = line.slice('Requirement keys: '.length).split(',').map((key) => key.trim()).filter((key) => key !== '')
+  const encoded = flagValue('--verification-json-base64')
+  const rounds = flagValue('--verification-rounds-base64')
+  let body
+  if (encoded !== undefined) {
+    body = Buffer.from(encoded, 'base64').toString('utf8')
+  } else if (rounds !== undefined) {
+    const answers = JSON.parse(Buffer.from(rounds, 'base64').toString('utf8'))
+    const round = Number(/Verification round (\d+)/.exec(prompt)?.[1] ?? 1)
+    body = JSON.stringify({ items: answers[Math.min(round, answers.length) - 1] })
+  } else {
+    body = JSON.stringify({
+      items: keys.map((key) => ({ key, status: 'pass', check: `fake check ${key}`, output: 'ok', reason: '' })),
+    })
+  }
+  const verifyDir = process.env.SLAVEOFAI_VERIFY_DIR
+  if (verifyDir !== undefined && verifyDir !== '') {
+    let items = []
+    try {
+      const parsed = JSON.parse(body)
+      if (Array.isArray(parsed?.items)) items = parsed.items
+    } catch {
+      // A deliberately malformed verdict still leaves its checks: the scratch directory is not the verdict.
+    }
+    mkdirSync(verifyDir, { recursive: true })
+    for (const key of keys) {
+      const check = items.find((item) => item?.key === key)?.check ?? 'true'
+      writeFileSync(path.join(verifyDir, `check-${key}.sh`), `#!/bin/sh\n# fake check for ${key}\n${String(check)}\n`)
+    }
+  }
+  const lines = readFixtureLines('complete')
+  const suffix = `\n<slave-verification>${body}</slave-verification>`
+  if (!appendToLastAssistantText(lines, suffix)) {
+    process.stderr.write('fake-claude: the verification arm could not find an assistant text block in the complete fixture\n')
+    process.exit(2)
+  }
+  appendToResultText(lines, suffix)
+  await writeLines(lines)
+  process.exit(0)
+}
+
 async function replanArm(prompt) {
   if (!prompt.includes('"replan"')) return false
   // H5: `--replan-replaces <id>` picks the delta that REDOES a board task -- an addition carrying
@@ -1331,6 +1410,7 @@ async function main() {
     if (await supervisorArm(prompt)) return
     if (await answerArm(prompt)) return
     if (await replanArm(prompt)) return
+    if (await verificationArm(prompt)) return
     if (prompt.includes('"task graph"')) {
       await replayFixture(planFixtureName())
       return
@@ -1344,7 +1424,9 @@ async function main() {
     // A work run: the m8a-flow work body verbatim -- leave a real commit in the worktree
     // (cwd), then replay success.
     if (await workFixtureArm()) return
-    writeFileSync(path.join(process.cwd(), 'm8a-work.txt'), `${prompt.slice(0, 80)}\n`)
+    const workFile = path.join(process.cwd(), flagValue('--work-file') ?? 'm8a-work.txt')
+    mkdirSync(path.dirname(workFile), { recursive: true })
+    writeFileSync(workFile, `${prompt.slice(0, 80)}\n`)
     execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
     // `--allow-empty`: a REWORK run adopts its previous attempt's worktree, where this same file
     // with the same first line is already committed -- without it the commit finds nothing, git

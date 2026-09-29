@@ -228,8 +228,8 @@ describe('toolKindFor', () => {
 })
 
 describe('PERMISSION_RUN_KINDS (fix round 1, m6)', () => {
-  it('is the three run kinds a baseline is keyed on, in the Prisma enum\u2019s own order', () => {
-    expect(PERMISSION_RUN_KINDS).toEqual(['implementation', 'review', 'planning'])
+  it('is the four run kinds a baseline is keyed on, in the Prisma enum\u2019s own order', () => {
+    expect(PERMISSION_RUN_KINDS).toEqual(['implementation', 'review', 'planning', 'verification'])
   })
 
   it('is exactly what BASELINE_GRANTS answers for -- a fourth member with no list would be a deny-all baseline', () => {
@@ -246,7 +246,12 @@ describe('BASELINE_GRANTS', () => {
       implementation: ['read_repo', 'write_repo', 'run_commands'],
       review: ['read_repo', 'run_commands'],
       planning: ['read_repo'],
+      verification: ['read_repo', 'write_repo', 'run_commands'],
     })
+  })
+
+  it('lets a verifier write (its checks, into its scratch directory) -- confinement is the ownership rule, not a missing grant (Plan 4b D1)', () => {
+    expect(BASELINE_GRANTS.verification).toEqual(['read_repo', 'write_repo', 'run_commands'])
   })
 
   it('never contains a broker-only kind -- a baseline is about TOOLS, and a credential is never a default', () => {

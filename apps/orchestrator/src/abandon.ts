@@ -33,7 +33,7 @@ export interface AbandonedRun {
   readonly id: string
   readonly taskId: string | null
   readonly slaveId: string
-  readonly kind: 'implementation' | 'review' | 'planning'
+  readonly kind: 'implementation' | 'review' | 'planning' | 'verification'
   readonly pid: number | null
   readonly workspaceId: string
 }

@@ -10,6 +10,8 @@ import {
   type WorkspaceId,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { cancelIfVersionAbandoned, ensureIntegrationWorktree, integrationTargetFor } from './goalBranch.js'
+import { mergeOrAbort, primaryCheckoutReady } from './gitMerge.js'
 import { ownershipRuleForTask } from './ownership.js'
 import { logSetAside, setAsideDirFor, setAsideForeignChanges } from './setAside.js'
 import { rejectTask, runVerify, stageGatesFor } from './verify.js'
@@ -25,6 +27,19 @@ import { gitIn } from './worktree.js'
  */
 const taskKeyFor = (id: string): string => `T-${id.slice(0, 8)}`
 
+/** A thrown value as the text a `task.merge_failed` reason carries, cut to what a payload holds. */
+const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error)).slice(0, 2000)
+
+/**
+ * Final wave M5: git's own refusal when the integration branch is checked out somewhere else (the
+ * person's primary checkout, most often) names a path but not what to do; this says it. Both
+ * spellings: git 2.42 changed "is already checked out at" to "is already used by worktree at".
+ */
+const checkedOutHint = (error: unknown): string =>
+  /already (checked out|used by worktree) at/u.test(errorText(error))
+    ? ' (the integration branch may be checked out in another worktree or the primary checkout; check it out elsewhere to free it)'
+    : ''
+
 /**
  * The branch a task was worked on. `Task.branch` is nullable in the schema, but a task cannot
  * reach `merging` without having passed verify once (`advance()` sets it there), so a `null` here
@@ -38,8 +53,41 @@ function requireBranch(task: { readonly id: string; readonly branch: string | nu
 }
 
 /**
- * Emits `task.merge_failed`, escalates a second failure on the same task into a workspace halt
- * (spec §4 step 4), and either way sends the task back to rework and releases the merge claim.
+ * The task's `task.merge_failed` events that count toward "failed to merge twice" (controller
+ * ruling Q4, Plan 4a note M3): those since the task was last `done` or last sent back by a
+ * verification round (Plan 4b D5 -- a package that merged, was verified and reworked is on a new
+ * try, and its old failures are history), and never the sweep's `merge interrupted` (a process
+ * that died mid-merge, not a branch that will not merge).
+ */
+async function mergeFailuresThisTry(taskId: string): Promise<number> {
+  const [done, reworks] = await Promise.all([
+    prisma.executionEvent.findFirst({ where: { taskId, type: 'task_done' }, orderBy: { seq: 'desc' }, select: { seq: true } }),
+    prisma.executionEvent.findMany({ where: { taskId, type: 'task_rework' }, orderBy: { seq: 'desc' }, select: { seq: true, payload: true } }),
+  ])
+  const verificationRework = reworks.find((row) => typeof (row.payload as { readonly verificationRound?: unknown }).verificationRound === 'number')
+  const since = [done?.seq, verificationRework?.seq].reduce<bigint>((max, seq) => (seq !== undefined && seq > max ? seq : max), 0n)
+  return prisma.executionEvent.count({
+    where: {
+      taskId,
+      type: 'task_merge_failed',
+      seq: { gt: since },
+      NOT: { payload: { path: ['reason'], equals: MERGE_INTERRUPTED_REASON } },
+    },
+  })
+}
+
+/** The reason the sweep's crash recovery writes on `task.merge_failed` (`sweep.ts`): an
+ *  interrupted merge, which {@link mergeFailuresThisTry} does not count. */
+const MERGE_INTERRUPTED_REASON = 'merge interrupted'
+
+/**
+ * Emits `task.merge_failed`, escalates a second failure on the same task, and otherwise sends the
+ * task back to rework and releases the merge claim.
+ *
+ * The escalation depends on where the task was merging (Conductor Plan 4a, D7). A task with no
+ * integration target (planned delivery, or a package of a version from before goal deliveries)
+ * halts the workspace (spec §4 step 4), and still goes back to rework. A package of a goal version
+ * is blocked alone (spec §5): the task goes `blocked`, a person is told, and the workspace goes on.
  *
  * The escalation check counts this task's `task.merge_failed` events *after* appending the current
  * one: a count greater than one means a prior failure already existed, without a separate
@@ -62,13 +110,19 @@ async function failMerge(input: {
    * so a workspace with no verify commands would mark down every worker whose task reached this
    * pass.
    *
-   * Required rather than defaulted: the FOUR callers are the whole question, and a default is how
+   * Required rather than defaulted: the callers are the whole question, and a default is how
    * a fifth one would get it wrong silently.
    *
    * A JUDGEMENT IS NOT YET A VERDICT (erratum E24, final wave): being judged is necessary for
    * `integrated: false` and no longer sufficient -- see the settle below.
    */
   readonly judged: boolean
+  /**
+   * Conductor Plan 4a (D7): the goal version whose integration branch this task was merging into,
+   * or `null` when it was merging into the base branch. A version decides how a second failure
+   * escalates, and names the version in what the person reads.
+   */
+  readonly goalVersion: number | null
 }): Promise<void> {
   await appendEvent({
     type: 'task.merge_failed',
@@ -78,10 +132,36 @@ async function failMerge(input: {
     payload: { reason: input.reason },
   })
 
-  const failureCount = await prisma.executionEvent.count({
-    where: { taskId: input.taskId, type: 'task_merge_failed' },
-  })
-  if (failureCount > 1) {
+  const failureCount = await mergeFailuresThisTry(input.taskId)
+  if (input.goalVersion !== null) {
+    if (failureCount > 1) {
+      // Spec §5: a conducted workspace is not halted by one package that will not merge. The
+      // package is escalated alone -- `blocked` is "a person must look at this" (`unblock-task`
+      // leaves it; the Supervisor's `task_blocked_human` picks it up) -- and every other package
+      // keeps going. No attempt is charged: the person, not another run, decides what happens next.
+      // Conditioned on `merging`, like every claim release here: a task something else moved on
+      // is not dragged back.
+      await prisma.task.updateMany({
+        where: { id: input.taskId, status: 'merging' },
+        data: { status: 'blocked', mergeClaimedAt: null, lastRejectionReason: input.reason },
+      })
+      await appendEvent({
+        type: 'guardrail.tripped',
+        workspaceId: input.workspaceId,
+        taskId: input.taskId,
+        actor: 'system',
+        payload: {
+          guardrail: 'merge_failure' satisfies GuardrailKind,
+          detail:
+            `package task ${input.taskKey} failed to merge into goal v${String(input.goalVersion)}'s ` +
+            `integration branch twice; blocked for a person: ${input.reason}. Run ` +
+            `\`unblock-task --task ${input.taskId}\` to send it back, or ` +
+            `\`abandon-goal --workspace ${input.workspaceId} --version ${String(input.goalVersion)}\``,
+        },
+      })
+      return
+    }
+  } else if (failureCount > 1) {
     // Conditioned: the first halt reason stands, matching the halt precedent in `verify.ts`'s
     // `not_configured` path.
     await prisma.workspace.updateMany({
@@ -188,10 +268,28 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
   const branch = requireBranch(task)
   const taskKey = taskKeyFor(task.id)
 
+  // Conductor Plan 4a (spec R9, D5): a package of a goal version with a `GoalDelivery` merges into
+  // that version's integration branch; everything else into the base branch, as before. The same
+  // `integrationTargetFor` dispatch, the ownership audit and review read, so all four judge the
+  // task against one branch (D12).
+  const target = await integrationTargetFor(task.id)
+  const into = target?.branch ?? workspace.baseBranch
+  const goalVersion = target?.goalVersion ?? null
+
+  // Plan 4a D10 (controller ruling P1): a package of an abandoned goal version does not land.
+  // `abandonGoal` refuses while any package is merging, so this is only reached by a task that got
+  // here around it; its version is one nobody wants, so it is taken off the board -- cancelled,
+  // claim released, nothing rebased or merged -- rather than left `merging`, where it would head
+  // the FIFO on every later pass.
+  if (await cancelIfVersionAbandoned(task, target, 'merging')) return
+
   // spec Decision 5: `autoMerge` is consulted here, not at review time -- a workspace that does not
   // trust auto-merge still wants the task marked done and out of the queue, with the branch and
   // worktree left for a human to merge by hand.
-  if (!workspace.autoMerge) {
+  //
+  // Plan 4a D3: only for a merge into the base branch. The integration branch is Slave's staging
+  // area, and `autoMerge` governs the goal version's one final merge into the base branch instead.
+  if (target === null && !workspace.autoMerge) {
     await prisma.task.update({
       where: { id: task.id },
       // M35 t2: no git merge happened here, on purpose -- `integratedAt` stays null (explicit,
@@ -261,6 +359,7 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
             taskKey,
             reason: `could not set aside changes to files this package does not own: ${aside.reason}`,
             judged: false,
+            goalVersion,
           })
           return
         }
@@ -268,20 +367,21 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       }
     }
 
-    await gitIn(worktreePath, 'rebase', workspace.baseBranch)
+    await gitIn(worktreePath, 'rebase', into)
   } catch (error) {
     await gitIn(worktreePath, 'rebase', '--abort').catch(() => {})
-    const message = (error instanceof Error ? error.message : String(error)).slice(0, 2000)
     await failMerge({
       taskId: task.id,
       workspaceId,
       taskKey,
-      reason: `rebase onto ${workspace.baseBranch} conflicted: ${message}`,
-      // The branch no longer applies to the base branch. That is the work -- so it is JUDGED. It
+      reason: `rebase onto ${into} conflicted: ${errorText(error)}`,
+      // The branch no longer applies to the branch it merges into (`into`: the goal version's
+      // integration branch, or the base branch). That is the work -- so it is JUDGED. It
       // still settles nothing unless this failure spent the task's last attempt (E24): the task
       // goes back to rework, the conflict is resolved and the work merges, and a `false` written
       // here could never be taken back.
       judged: true,
+      goalVersion,
     })
     return
   }
@@ -322,16 +422,63 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
     // for). Even `failed` settles nothing while the task can still be re-done and merged again
     // (E24): a gate that fails once and passes the second time is the ordinary case this rule is
     // about.
-    await failMerge({ taskId: task.id, workspaceId, taskKey, reason, judged: result.kind === 'failed' })
+    await failMerge({ taskId: task.id, workspaceId, taskKey, reason, judged: result.kind === 'failed', goalVersion })
     return
   }
 
-  // Guard the primary checkout before touching it: it is shared by every task in this workspace,
-  // and merging onto anything other than a clean base branch would land the work somewhere no one
-  // asked for or lose someone else's uncommitted state.
-  const currentBranch = await gitIn(workspace.repoPath, 'rev-parse', '--abbrev-ref', 'HEAD')
-  const status = await gitIn(workspace.repoPath, 'status', '--porcelain')
-  if (currentBranch !== workspace.baseBranch || status !== '') {
+  if (target !== null) {
+    // Plan 4a (spec R9, D2): into the goal version's integration branch, in the worktree kept on
+    // it. The primary checkout is neither read nor touched: it is the person's, and the base branch
+    // changes only when the goal version is accepted (spec §5). `--no-ff` and `--no-verify` for the
+    // base-branch merge's reasons below.
+    //
+    // Two failures, told apart (controller ruling T4-1). A worktree that cannot be prepared is this
+    // machine's fault -- a stale directory, a registration `worktree add` refuses -- so it is NOT
+    // judged: charging the worker would, on a second occurrence, block every package of the
+    // version for something no worker did. A merge git refuses is the branch not fitting, which is
+    // judged like the rebase above; `mergeOrAbort` aborts it so the next package's merge is not
+    // refused by this one's leftovers.
+    let integrationPath: string
+    try {
+      integrationPath = await ensureIntegrationWorktree(workspace.repoPath, target, workspaceId)
+    } catch (error) {
+      await failMerge({
+        taskId: task.id,
+        workspaceId,
+        taskKey,
+        reason: `could not prepare the integration worktree for ${target.branch}: ${errorText(error)}${checkedOutHint(error)}`,
+        judged: false,
+        goalVersion,
+      })
+      return
+    }
+    const merged = await mergeOrAbort(integrationPath, ['--no-ff', '--no-verify', branch, '-m', `merge(${taskKey}): ${task.title}`])
+    if (!merged.ok) {
+      await failMerge({
+        taskId: task.id,
+        workspaceId,
+        taskKey,
+        reason: `merge of ${branch} into ${target.branch} failed: ${merged.error}`,
+        judged: true,
+        goalVersion,
+      })
+      return
+    }
+    // Plan D4: on a package task `integratedAt` means "on its goal's integration branch" -- what
+    // the dependency gate needs, since a dependent package is cut from that branch. The integration
+    // EVIDENCE waits for the final merge into the base branch: that is what "integrated" means in
+    // the ranker.
+    await prisma.task.update({
+      where: { id: task.id },
+      data: { status: 'done', mergeClaimedAt: null, lastRejectionReason: null, integratedAt: new Date() },
+    })
+    await appendEvent({ type: 'task.done', workspaceId, taskId: task.id, actor: 'system', payload: { branch } })
+    return
+  }
+
+  // Guard the primary checkout before touching it: it is shared by every task in this workspace
+  // (`primaryCheckoutReady` is the one rule, shared with the goal pass's final merge).
+  if (!(await primaryCheckoutReady(workspace.repoPath, workspace.baseBranch))) {
     await failMerge({
       taskId: task.id,
       workspaceId,
@@ -340,32 +487,30 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       // Somebody left the shared repository dirty, or it is on the wrong branch. Nothing here is
       // about the work, and no worker did it.
       judged: false,
+      goalVersion,
     })
     return
   }
 
   // `--no-ff`: the merge commit is what a `git revert -m 1` undoes as one unit, and what makes this
   // task's contribution visible in `git log` as one entry rather than disappearing into a
-  // fast-forward. Wrapped like the rebase above: a merge can still fail here -- `main` moved
-  // between the rebase and this command, or a lock collision with concurrent provisioning -- and
-  // an uncaught throw would wedge the primary checkout mid-merge and stall the whole workspace's
-  // merge queue (the stuck claim silences every later pass) until a restart. `--no-verify`, for the
+  // fast-forward. A merge can still fail here -- `main` moved between the rebase and this command,
+  // or a lock collision with concurrent provisioning -- and `mergeOrAbort` aborts it: a primary
+  // checkout wedged mid-merge would stall the whole workspace's merge queue. `--no-verify`, for the
   // WIP commit's reason (`wipCommit.ts`): the repository's own commit hooks are the worker's to
   // satisfy on its own commits, and a `commit-msg` hook enforcing a message convention (commitlint
   // installed by `npm ci`) would otherwise refuse this commit's subject on every task, forever.
-  try {
-    await gitIn(workspace.repoPath, 'merge', '--no-ff', '--no-verify', branch, '-m', `merge(${taskKey}): ${task.title}`)
-  } catch (error) {
-    await gitIn(workspace.repoPath, 'merge', '--abort').catch(() => {})
-    const message = (error instanceof Error ? error.message : String(error)).slice(0, 2000)
+  const merged = await mergeOrAbort(workspace.repoPath, ['--no-ff', '--no-verify', branch, '-m', `merge(${taskKey}): ${task.title}`])
+  if (!merged.ok) {
     await failMerge({
       taskId: task.id,
       workspaceId,
       taskKey,
-      reason: `merge of ${branch} onto ${workspace.baseBranch} failed: ${message}`,
+      reason: `merge of ${branch} onto ${workspace.baseBranch} failed: ${merged.error}`,
       // The same class as the rebase above: the branch would not go onto the base branch, and the
       // same E24 rule applies -- `main` moving under a task is not a verdict on the worker.
       judged: true,
+      goalVersion,
     })
     return
   }

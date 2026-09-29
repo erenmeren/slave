@@ -268,6 +268,26 @@ describe('CursorAdapter', () => {
     expect(readFileSync(envOut, 'utf8')).toBe(`${input.permissionsFilePath}\n`)
   })
 
+  // Conductor Plan 4b (D2): `workerEnv` exports the scratch directory when the run directory has one.
+  it('sets SLAVEOFAI_VERIFY_DIR on the child exactly when the run directory has a verify/ directory', async () => {
+    const envOut = path.join(worktreePath, 'verify-env.txt')
+    const script = writeScript(
+      worktreePath,
+      'verify-env-echo.sh',
+      `#!/bin/sh\nprintf '[%s]\\n' "\${SLAVEOFAI_VERIFY_DIR-unset}" > ${JSON.stringify(envOut)}\n`,
+    )
+    const plain = adapterFor(script)
+    await plain.start(input)
+    await drain(plain, input.runId)
+    expect(readFileSync(envOut, 'utf8')).toBe('[unset]\n')
+
+    mkdirSync(path.join(input.runDir, 'verify'))
+    const verifying = adapterFor(script)
+    await verifying.start(input)
+    await drain(verifying, input.runId)
+    expect(readFileSync(envOut, 'utf8')).toBe(`[${path.join(input.runDir, 'verify')}]\n`)
+  })
+
   it('ends the stream when the child exits, even while a grandchild holds its stdout open', async () => {
     // THE ONLY SCENARIO THE QUIESCENCE MECHANISM EXISTS FOR, and until this test nothing exercised
     // it: every other script here is well-behaved, so `child.once('close', finalize)` always won
@@ -474,6 +494,24 @@ describe('CursorAdapter', () => {
       await drain(adapter, input.runId)
 
       expect(readFileSync(envOut, 'utf8')).toBe(`${path.join(divergentPauseDir, 'permissions.json')}\n`)
+    })
+
+    // Conductor Plan 4b (D2, fix round 1): a resumed verification run sees the SAME scratch
+    // directory -- the one under the run directory the checkpoint's pause flag lives in.
+    it('sets SLAVEOFAI_VERIFY_DIR on the child at resume when the run directory has a verify/ directory', async () => {
+      const resumeRunDir = path.dirname(checkpointFor().pauseFlagPath)
+      mkdirSync(path.join(resumeRunDir, 'verify'), { recursive: true })
+      const envOut = path.join(worktreePath, 'resume-verify-env.txt')
+      const script = writeScript(
+        worktreePath,
+        'resume-verify-env-echo.sh',
+        `#!/bin/sh\nprintf '[%s]\\n' "\${SLAVEOFAI_VERIFY_DIR-unset}" > ${JSON.stringify(envOut)}\n`,
+      )
+      const adapter = adapterFor(script)
+      await adapter.resume(input.runId, checkpointFor(), null)
+      await drain(adapter, input.runId)
+
+      expect(readFileSync(envOut, 'utf8')).toBe(`[${path.join(resumeRunDir, 'verify')}]\n`)
     })
 
     it('rewrites the hooks file and clears the pause flag before spawning', async () => {

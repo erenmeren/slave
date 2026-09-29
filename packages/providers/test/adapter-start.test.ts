@@ -124,6 +124,20 @@ describe('ClaudeCodeAdapter', () => {
     expect(env['SLAVEOFAI_BROKER_CLI']).toBe('/opt/slaveofai/cli.js')
   })
 
+  // Conductor Plan 4b (D2): the scratch directory's presence under the run directory is what makes
+  // a spawn a verification run's, measured off the child itself.
+  it('exports SLAVEOFAI_VERIFY_DIR exactly when the run directory has a verify/ directory', async (): Promise<void> => {
+    const plain = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'], hookPath })
+    await plain.start(input)
+    expect('SLAVEOFAI_VERIFY_DIR' in (await collectEnvFrom(plain, input.runId))).toBe(false)
+
+    mkdirSync(path.join(input.runDir, 'verify'))
+    const verifying = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'], hookPath })
+    await verifying.start(input)
+    const env = await collectEnvFrom(verifying, input.runId)
+    expect(env['SLAVEOFAI_VERIFY_DIR']).toBe(path.join(input.runDir, 'verify'))
+  })
+
   it('leaves SLAVEOFAI_RUN_TOKEN absent on a spawn with no token, rather than empty', async (): Promise<void> => {
     // Absent is the FAIL-CLOSED direction, not the permissive one: the child then meets a
     // `tokenHash` it cannot match and every tool call is refused.

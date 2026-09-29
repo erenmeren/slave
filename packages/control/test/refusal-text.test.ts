@@ -154,3 +154,37 @@ describe('refusalText for the M58 person kinds (R14, plan additions)', () => {
     expect(texts[2]).toContain('r1')
   })
 })
+
+describe('refusalText for the goal-version verbs (Conductor Plan 4a)', () => {
+  it('names the version and what to do next', () => {
+    expect(refusalText({ kind: 'goal_version_not_found', workspaceId: 'w1', goalVersion: 3 })).toBe('workspace w1 has no conducted goal v3')
+    expect(refusalText({ kind: 'goal_version_closed', goalVersion: 2, status: 'merged' })).toBe('goal v2 is already merged')
+    expect(refusalText({ kind: 'goal_version_busy', goalVersion: 1, holder: 'task t1' })).toBe(
+      'goal v1 still has work in flight (task t1); stop it before abandoning the version',
+    )
+    expect(refusalText({ kind: 'goal_not_accepted', goalVersion: 1, status: 'integrating' })).toBe(
+      'goal v1 is integrating, not accepted; there is nothing to confirm yet',
+    )
+    expect(refusalText({ kind: 'goal_not_merged', goalVersion: 1, branch: 'slaveofai/goal-v1-abcd1234', into: 'main' })).toBe(
+      'slaveofai/goal-v1-abcd1234 is not merged into main; merge it by hand first',
+    )
+    // Conductor Plan 4b (D9): only a version the loop stopped on can be retried.
+    expect(refusalText({ kind: 'goal_not_needs_human', goalVersion: 1, status: 'integrating' })).toBe(
+      'goal v1 is integrating, not waiting for a person; there is nothing to retry',
+    )
+    // Final wave I2: a hand merge is confirmed only for the commit the verification passed on.
+    expect(
+      refusalText({
+        kind: 'goal_tip_not_verified',
+        goalVersion: 1,
+        branch: 'slaveofai/goal-v1-abcd1234',
+        verifiedCommit: '0123456789abcdef0123456789abcdef01234567',
+        tip: 'fedcba9876543210fedcba9876543210fedcba98',
+      }),
+    ).toBe(
+      'slaveofai/goal-v1-abcd1234 has moved since goal v1 was verified at 0123456789ab (it is now at fedcba987654): ' +
+        'only the verified commit can be confirmed. Point slaveofai/goal-v1-abcd1234 back at 0123456789ab and merge exactly ' +
+        'that commit by hand, or abandon the version',
+    )
+  })
+})

@@ -35,11 +35,13 @@ import {
   unassignPerson,
   CREDENTIAL_KINDS,
   CREDENTIAL_KIND_LABEL,
+  abandonGoal,
   claimResume,
   cloneSimulation,
   compareSimulations,
   condenseWorkspaceMemories,
   conductorView,
+  confirmGoalMerge,
   confirmIntegration,
   createCompany,
   createProjectTeam,
@@ -54,6 +56,7 @@ import {
   deleteUser,
   emergencyStop,
   EXTERNAL_IGNORED_REASON_LABEL,
+  goalDeliveries,
   haltSimulation,
   hireFromTemplate,
   importCatalog,
@@ -99,6 +102,7 @@ import {
   renameCompanyTeam,
   renameTeam,
   requestChange,
+  retryGoal,
   requestPause,
   requestStop,
   restoreWorkspace,
@@ -344,6 +348,34 @@ const USAGE = `usage: orchestrator <command> [options]
                                        package with its seat and its task's id/status/reported flag,
                                        and every model call it made, ok or failed, oldest first. As
                                        JSON.
+  goal-status --workspace <id> [--version <n>]
+                                       each conducted goal version's delivery, oldest first (or one,
+                                       with --version): its integration branch and the commit it was
+                                       cut at, integrating/verifying/accepted/needs_human/abandoned,
+                                       when it was accepted and merged, a merge git refused, the
+                                       verification round it is on, why it needs a person, the latest
+                                       round's verdict (pass/fail/unverifiable counts and the failed
+                                       requirement keys), and each package task with its status and
+                                       whether it is on the integration branch. As JSON.
+  abandon-goal --workspace <id> --version <n>
+                                       move on from a goal version: every unfinished package task of
+                                       it is cancelled and the version is abandoned, which lets the
+                                       next version be conducted. Refused (non-zero) while any of its
+                                       package tasks is running, in review or merging -- stop it
+                                       first. The integration branch is kept. Prints the cancelled
+                                       task ids as JSON.
+  retry-goal --workspace <id> --version <n>
+                                       send a goal version the verification loop stopped on
+                                       (needs_human) round again: back to integrating with a fresh
+                                       round window, verified again once every package is on its
+                                       integration branch. Refused (non-zero) for a version in any
+                                       other state. Prints the round it was retried at as JSON.
+  confirm-goal-merge --workspace <id> --version <n>
+                                       say you merged an accepted goal version's integration branch
+                                       into the base branch by hand (after a merge git refused, the
+                                       base branch moved, or autoMerge is off). Checked against git:
+                                       refused (non-zero) unless the branch is in the base branch.
+                                       Prints the base branch's commit as JSON.
   request-change --workspace <id> --request "<text>"
                                        tell the Supervisor what changed. The request AMENDS the
                                        standing goal -- the document keeps its body and gains a
@@ -369,7 +401,7 @@ const USAGE = `usage: orchestrator <command> [options]
                                        never recorded, and it starts nothing.
   create-workspace --name <n> --repo <abs path> [--base main] --verify "<cmd>" [--verify "<cmd>" ...]
                    [--setup "<cmd>" ...] [--budget <usd> | --no-budget] [--provider claude_code|cursor]
-                   [--auto-merge]
+                   [--auto-merge] [--delivery conducted|planned]
                                        attach an existing local clone as a workspace. The path
                                        must be absolute and a git work tree, the base branch must
                                        exist, and at least one verify command is required -- a
@@ -377,7 +409,10 @@ const USAGE = `usage: orchestrator <command> [options]
                                        --setup repeat, one command each, run in the order given.
                                        --auto-merge starts the project merging its own approved
                                        work; without it every task merges by hand (set-auto-merge
-                                       changes it later either way).
+                                       changes it later either way). New projects are
+                                       conducted (the conductor splits each goal into packages
+                                       and verifies the result); --delivery planned keeps the
+                                       planner instead (set-delivery changes it later).
   archive-workspace --workspace <id>   archive a project: every row stays, nothing runs until
                                        restore-workspace. Refused while a run is live.
   restore-workspace --workspace <id>   bring an archived project back
@@ -1398,6 +1433,13 @@ function requireFlag(flags: Flags, name: string): string {
   return value
 }
 
+/** A `--version` naming a goal version: the whole string a positive integer or nothing, the
+ *  `conductor` check's shape, so `--version 1abc` is refused rather than read as 1. */
+function goalVersionFlag(text: string): number {
+  if (!/^[1-9]\d*$/.test(text)) throw new Error('--version must be a positive integer')
+  return Number.parseInt(text, 10)
+}
+
 /**
  * A flag whose value must be one of a closed list (M49 R4), or `undefined` when it was not given.
  *
@@ -2268,6 +2310,40 @@ export async function main(argv: readonly string[]): Promise<number> {
       return 0
     }
 
+    case 'goal-status': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const versionText = flagText(flags, 'version')
+      const version = versionText === undefined ? undefined : goalVersionFlag(versionText)
+      const result = await goalDeliveries(workspaceId, version)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`${JSON.stringify(result.value, null, 2)}\n`)
+      return 0
+    }
+
+    case 'abandon-goal': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const result = await abandonGoal(workspaceId, goalVersionFlag(requireFlag(flags, 'version')))
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`${JSON.stringify(result.value)}\n`)
+      return 0
+    }
+
+    case 'retry-goal': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const result = await retryGoal(workspaceId, goalVersionFlag(requireFlag(flags, 'version')))
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`${JSON.stringify(result.value)}\n`)
+      return 0
+    }
+
+    case 'confirm-goal-merge': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const result = await confirmGoalMerge(workspaceId, goalVersionFlag(requireFlag(flags, 'version')))
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`${JSON.stringify(result.value)}\n`)
+      return 0
+    }
+
     case 'request-change': {
       const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
       const request = requireFlag(flags, 'request')
@@ -2595,6 +2671,10 @@ export async function main(argv: readonly string[]): Promise<number> {
       const noBudget = 'no-budget' in flags
       if (budgetText !== undefined && noBudget) throw new Error('--budget and --no-budget are exclusive')
       const budgetUsd = noBudget ? null : budgetText === undefined ? undefined : Number(budgetText)
+      // Conductor Plan 4b (spec §5, D11): absent, `createWorkspace` makes the project conducted;
+      // `--delivery planned` keeps the planner. Read before anything is written, so a mistyped
+      // word refuses with the list and creates nothing.
+      const delivery = oneOfFlag(flags, 'delivery', ['conducted', 'planned'] as const)
       const result = await createWorkspace({
         name,
         repoPath,
@@ -2607,6 +2687,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         // nothing is passed at all and the column's `false` stands -- a project created from the
         // CLI stays hand-merge unless the operator asks for the other thing.
         ...('auto-merge' in flags ? { autoMerge: true } : {}),
+        ...(delivery !== undefined ? { delivery } : {}),
       })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`workspace ${result.value.id} created\n`)

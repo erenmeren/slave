@@ -633,6 +633,153 @@ describe('fake-claude', () => {
     })
   })
 
+  describe('the verification arm (Conductor Plan 4b)', () => {
+    /** A verification prompt as `renderVerificationGoal` + `renderVerificationProtocol` lay it out:
+     *  the round, the key line, and the live protocol tag. */
+    const promptFor = (round: number): string =>
+      [
+        `Verification round ${String(round)} of goal v1.`,
+        'Requirement keys: R1, R2',
+        '',
+        'End your final message with this block, exactly once, one item per requirement key:',
+        '<slave-verification>{"items":[]}</slave-verification>',
+      ].join('\n')
+    const item = (key: string, status: string): object => ({ key, status, check: `test-${key}-${status}`, output: 'out', reason: status === 'pass' ? '' : 'why' })
+    const ROUND_1 = [item('R1', 'pass'), item('R2', 'fail')]
+    const ROUND_2 = [item('R1', 'pass'), item('R2', 'pass')]
+    const b64 = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64')
+
+    let repoDir: string
+    let verifyDir: string
+
+    beforeEach(() => {
+      repoDir = mkdtempSync(path.join(tmpdir(), 'fake-claude-verification-'))
+      verifyDir = mkdtempSync(path.join(tmpdir(), 'fake-claude-verify-dir-'))
+      execFileSync('git', ['init', '-q'], { cwd: repoDir })
+      execFileSync(
+        'git',
+        ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'initial commit'],
+        { cwd: repoDir },
+      )
+    })
+
+    afterEach(() => {
+      rmSync(repoDir, { recursive: true, force: true })
+      rmSync(verifyDir, { recursive: true, force: true })
+    })
+
+    /** The `<slave-verification>` body the run ended with, from its result AND its last assistant
+     *  text (they must agree), parsed. */
+    function verdictOf(stdout: string): { items: { key: string; status: string; check: string }[] } {
+      const lines = parseLines(stdout)
+      const result = (lines.find((l) => l.type === 'result') as { result?: string } | undefined)?.result ?? ''
+      const texts = lines
+        .filter((l) => l.type === 'assistant')
+        .flatMap((l) => ((l.message as { content?: { type?: string; text?: string }[] }).content ?? []).filter((c) => c.type === 'text'))
+      const last = texts.at(-1)?.text ?? ''
+      const pick = (text: string): string => /<slave-verification>([\s\S]*)<\/slave-verification>/.exec(text)?.[1] ?? ''
+      expect(pick(last)).toBe(pick(result))
+      return JSON.parse(pick(result)) as { items: { key: string; status: string; check: string }[] }
+    }
+
+    const statuses = (verdict: { items: { key: string; status: string }[] }): string[] => verdict.items.map((i) => `${i.key}:${i.status}`)
+
+    it('answers round N with the rounds flag\'s element N, writing and committing nothing in its checkout', async (): Promise<void> => {
+      const argv = [FAKE, '--fixture', 'm8-flow', '--verification-rounds-base64', b64([ROUND_1, ROUND_2])]
+      const second = await run('node', [...argv, '-p', promptFor(2)], { cwd: repoDir })
+      expect(statuses(verdictOf(second.stdout))).toEqual(['R1:pass', 'R2:pass'])
+      const first = await run('node', [...argv, '-p', promptFor(1)], { cwd: repoDir })
+      expect(statuses(verdictOf(first.stdout))).toEqual(['R1:pass', 'R2:fail'])
+      expect(readdirSync(repoDir).filter((name) => name !== '.git')).toEqual([])
+      expect(execFileSync('git', ['log', '--oneline'], { cwd: repoDir, encoding: 'utf8' }).trim().split('\n')).toHaveLength(1)
+    })
+
+    it('answers a round past the last element with the last element', async (): Promise<void> => {
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm8-flow', '--verification-rounds-base64', b64([ROUND_1]), '-p', promptFor(3)], {
+        cwd: repoDir,
+      })
+      expect(statuses(verdictOf(stdout))).toEqual(['R1:pass', 'R2:fail'])
+    })
+
+    it('writes check-<key>.sh into $SLAVEOFAI_VERIFY_DIR, one per requirement key, carrying the item\'s check', async (): Promise<void> => {
+      await run('node', [FAKE, '--fixture', 'm8-flow', '--verification-rounds-base64', b64([ROUND_1]), '-p', promptFor(1)], {
+        cwd: repoDir,
+        env: { ...process.env, SLAVEOFAI_VERIFY_DIR: verifyDir },
+      })
+      expect(readdirSync(verifyDir).sort()).toEqual(['check-R1.sh', 'check-R2.sh'])
+      expect(readFileSync(path.join(verifyDir, 'check-R2.sh'), 'utf8')).toContain('test-R2-fail')
+      expect(readdirSync(repoDir).filter((name) => name !== '.git')).toEqual([])
+    })
+
+    it('writes checks only where $SLAVEOFAI_VERIFY_DIR points, and none anywhere when it is unset', async (): Promise<void> => {
+      // One sandbox holds everything the child could plausibly write to: its cwd (a fresh repo
+      // inside the sandbox), the repo's parent, and its HOME. A check written relative to the cwd,
+      // beside the repo or under ~ is found by the recursive search below.
+      const sandbox = mkdtempSync(path.join(tmpdir(), 'fake-claude-verify-sandbox-'))
+      try {
+        const repo = path.join(sandbox, 'repo')
+        execFileSync('git', ['init', '-q', repo])
+        execFileSync(
+          'git',
+          ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'initial commit'],
+          { cwd: repo },
+        )
+        const checksUnder = (dir: string): string[] =>
+          (readdirSync(dir, { recursive: true }) as string[]).filter((name) => /(^|\/)check-[^/]*\.sh$/.test(name)).sort()
+        const base: NodeJS.ProcessEnv = { ...process.env, HOME: sandbox }
+        delete base.SLAVEOFAI_VERIFY_DIR
+        const argv = [FAKE, '--fixture', 'm8-flow', '-p', promptFor(1)]
+
+        // Unset: the run still answers, and no check exists anywhere in the sandbox.
+        const unset = await run('node', argv, { cwd: repo, env: base })
+        expect(statuses(verdictOf(unset.stdout))).toEqual(['R1:pass', 'R2:pass'])
+        expect(checksUnder(sandbox)).toEqual([])
+
+        // The positive twin, same setup with the variable set: the checks appear there, and only there.
+        const scratch = path.join(sandbox, 'scratch')
+        await run('node', argv, { cwd: repo, env: { ...base, SLAVEOFAI_VERIFY_DIR: scratch } })
+        expect(checksUnder(sandbox)).toEqual(['scratch/check-R1.sh', 'scratch/check-R2.sh'])
+      } finally {
+        rmSync(sandbox, { recursive: true, force: true })
+      }
+    })
+
+    it('still writes its checks when the scripted verdict is malformed', async (): Promise<void> => {
+      const malformed = Buffer.from('{"items": [{"key": "R1", "status": "pass"').toString('base64')
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm8-flow', '--verification-json-base64', malformed, '-p', promptFor(1)], {
+        cwd: repoDir,
+        env: { ...process.env, SLAVEOFAI_VERIFY_DIR: verifyDir },
+      })
+      const result = (parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined)?.result ?? ''
+      expect(result).toContain('<slave-verification>{"items": [{"key": "R1", "status": "pass"</slave-verification>')
+      expect(readdirSync(verifyDir).sort()).toEqual(['check-R1.sh', 'check-R2.sh'])
+      // No item parsed, so each check falls back to `true`.
+      expect(readFileSync(path.join(verifyDir, 'check-R1.sh'), 'utf8')).toBe('#!/bin/sh\n# fake check for R1\ntrue\n')
+      expect(readdirSync(repoDir).filter((name) => name !== '.git')).toEqual([])
+    })
+
+    it('passes every key on the prompt\'s key line when given no flag', async (): Promise<void> => {
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm8-flow', '-p', promptFor(2)], { cwd: repoDir })
+      expect(statuses(verdictOf(stdout))).toEqual(['R1:pass', 'R2:pass'])
+    })
+
+    it('still answers --verification-json-base64 verbatim, whatever the round', async (): Promise<void> => {
+      const { stdout } = await run(
+        'node',
+        [FAKE, '--fixture', 'm8-flow', '--verification-json-base64', b64({ items: [item('R1', 'unverifiable'), item('R2', 'pass')] }), '-p', promptFor(2)],
+        { cwd: repoDir },
+      )
+      expect(statuses(verdictOf(stdout))).toEqual(['R1:unverifiable', 'R2:pass'])
+    })
+
+    it('leaves a work prompt (no protocol tag) to the work body', async (): Promise<void> => {
+      await run('node', [FAKE, '--fixture', 'm8-flow', '--verification-rounds-base64', b64([ROUND_1]), '-p', 'Verification round 1 found requirement(s) not met'], {
+        cwd: repoDir,
+      })
+      expect(readdirSync(repoDir).filter((name) => name !== '.git')).toEqual(['m8a-work.txt'])
+    })
+  })
+
   describe('the supervisor arm (M38)', () => {
     const ANSWER = '"candidateIndex":0'
     /** A prompt with the one literal `buildDecisionPrompt` always emits. */

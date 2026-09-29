@@ -15,8 +15,8 @@ describe('LANE_BY_TYPE', () => {
     expect(Object.keys(LANE_BY_TYPE).sort()).toEqual(Object.keys(EVENT_TYPE_BY_DOMAIN_TYPE).sort())
   })
 
-  it('lanes every event type -- 65 as of Conductor Plan 3 Task 4', () => {
-    expect(Object.keys(LANE_BY_TYPE)).toHaveLength(65)
+  it('lanes every event type -- 73 as of Conductor Plan 4b Task 1', () => {
+    expect(Object.keys(LANE_BY_TYPE)).toHaveLength(73)
   })
 
   it('puts BOTH external events on NO lane -- a delivery arriving is plumbing (M54 R5)', () => {
@@ -99,6 +99,10 @@ describe('laneFor', () => {
     expect(laneFor({ source: 'event', type: 'task.created', actor: 'human' })).toBe('user_request')
     expect(laneFor({ source: 'event', type: 'task.cancelled', actor: 'system' })).toBe('plan_change')
     expect(laneFor({ source: 'event', type: 'task.cancelled', actor: 'human' })).toBe('user_request')
+    // Final wave M5: a person's retry-goal is their request; the goal pass sending an accepted
+    // version back to verification because its branch moved is work, not a request.
+    expect(laneFor({ source: 'event', type: 'workspace.goal_retried', actor: 'human' })).toBe('user_request')
+    expect(laneFor({ source: 'event', type: 'workspace.goal_retried', actor: 'system', retryCause: 'branch_moved' })).toBe('work')
   })
 
   it('keeps finished work apart from work in flight', () => {

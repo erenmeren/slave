@@ -26,6 +26,7 @@ describe('functionalDepartmentFor (Catalog Person Pool Task 4)', () => {
     ['qa', 'QA'],
     ['testing', 'QA'],
     ['reviewer', 'QA'],
+    ['verifier', 'QA'],
     ['operations', 'Operations'],
     ['support', 'Operations'],
   ] as const)('maps the primary role %s to %s', (role, department) => {

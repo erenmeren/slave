@@ -271,6 +271,49 @@ export async function provisionWorktree(input: ProvisionWorktreeInput): Promise<
   return { path, branch, headCommit }
 }
 
+/**
+ * A DETACHED checkout of `ref` at `<worktreeRoot>/<key>`, with the workspace's setup commands run
+ * in it (Conductor Plan 4b, D12): the verification run's fresh worktree of a goal version's
+ * integration branch. Detached, not on the branch: the integration branch stays checked out only in
+ * Plan 4a's integration worktree, and git refuses a second checkout of a branch anyway.
+ *
+ * `ref` is resolved to a commit BEFORE the add and that commit is what is checked out, so
+ * `refCommit` is exactly the tip being verified even if the branch moves during the add.
+ * `headCommit` is read after setup, `provisionWorktree`'s rule. An existing path is refused, never
+ * adopted: a fresh checkout is the point. On a setup failure the worktree is left for the caller to
+ * remove (`removeVerificationWorktree`), which knows the path from the key.
+ */
+export async function provisionDetachedWorktree(input: {
+  readonly repoPath: string
+  readonly ref: string
+  readonly key: string
+  readonly setupCommands: readonly string[]
+  readonly setupTimeoutMs?: number
+}): Promise<{ readonly path: string; readonly headCommit: string; readonly refCommit: string }> {
+  if (!SAFE_SEGMENT.test(input.key)) {
+    throw new Error(`key must match ${String(SAFE_SEGMENT)} to be safe as a path segment, got: ${input.key}`)
+  }
+  const repoPath = resolve(input.repoPath)
+  const path = join(worktreeRootFor(repoPath), input.key)
+  if (existsSync(path)) throw new Error(`refusing to provision ${path}: something is already there`)
+
+  // `--end-of-options` keeps a ref that starts with `-` from being read as an option.
+  const refCommit = await gitIn(repoPath, 'rev-parse', '--verify', '--end-of-options', `${input.ref}^{commit}`)
+  await gitIn(repoPath, 'worktree', 'add', '--detach', path, refCommit)
+
+  const timeoutMs = input.setupTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS
+  for (const command of input.setupCommands) {
+    const outcome = await runShellCommand({ command, cwd: path, timeoutMs, env: setupEnv() }).catch((cause: unknown) => {
+      throw new Error(`setup command could not start: ${command}`, { cause })
+    })
+    if (outcome.timedOut || outcome.signal !== null || outcome.code !== 0) {
+      throw new Error(`setup ${commandFailure(command, timeoutMs, outcome).message}`)
+    }
+  }
+
+  return { path, headCommit: await gitIn(path, 'rev-parse', 'HEAD'), refCommit }
+}
+
 export interface AdoptWorktreeInput {
   readonly repoPath: string
   readonly taskKey: string

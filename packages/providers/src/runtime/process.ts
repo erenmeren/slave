@@ -1,5 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 /**
@@ -110,6 +111,24 @@ export function terminateChild(child: ChildProcess, graceMs: number): Promise<vo
  */
 export function permissionsFilePathFor(runDir: string): string {
   return join(runDir, 'permissions.json')
+}
+
+/**
+ * The scratch directory of a verification run (Conductor Plan 4b, spec R8): `<runDir>/verify`,
+ * outside the repository, where the verifier writes the checks it runs. The ONE definition of the
+ * name, for `permissionsFilePathFor`'s reason. The orchestrator creates it for verification runs
+ * only; {@link verifyDirIfPresent} is how a spawn -- first or resumed -- learns it is one.
+ */
+export function verifyDirPathFor(runDir: string): string {
+  return join(runDir, 'verify')
+}
+
+/** `{ verifyDir }` when this run has a scratch directory, `{}` otherwise: the directory's presence
+ *  is the declaration, so a resume (which has only the run directory) exports exactly what the
+ *  start did, with no checkpoint column (plan D2). */
+export function verifyDirIfPresent(runDir: string): { readonly verifyDir?: string } {
+  const dir = verifyDirPathFor(runDir)
+  return existsSync(dir) ? { verifyDir: dir } : {}
 }
 
 /**
@@ -230,6 +249,8 @@ export function buildChildEnv(input: {
    * is how the worker finds one.
    */
   readonly brokerCliPath?: string
+  /** Conductor Plan 4b: `SLAVEOFAI_VERIFY_DIR`, absent unless given, for `toolResultsPath`'s reason. */
+  readonly verifyDir?: string
 }): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const name of CHILD_ENV_ALLOW) {
@@ -250,6 +271,7 @@ export function buildChildEnv(input: {
     ...(input.runToken === undefined ? {} : { SLAVEOFAI_RUN_TOKEN: input.runToken }),
     ...(input.brokerChannelPath === undefined ? {} : { SLAVEOFAI_BROKER_CHANNEL: input.brokerChannelPath }),
     ...(input.brokerCliPath === undefined ? {} : { SLAVEOFAI_BROKER_CLI: input.brokerCliPath }),
+    ...(input.verifyDir === undefined ? {} : { SLAVEOFAI_VERIFY_DIR: input.verifyDir }),
   }
 }
 

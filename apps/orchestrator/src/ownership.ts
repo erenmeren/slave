@@ -58,6 +58,16 @@ export async function permissionOwnership(taskId: string, worktreeRoot: string):
   return rule === null ? undefined : { worktreeRoot: resolvedRoot(worktreeRoot), ...ownershipPatterns(rule) }
 }
 
+/**
+ * The ownership rule of every verification run (Conductor Plan 4b, D1): it owns nothing, so the
+ * gate denies `Write`/`Edit`/`NotebookEdit` on any path inside its worktree, and a path outside it
+ * (the scratch directory `$SLAVEOFAI_VERIFY_DIR`) is not judged. Written at dispatch AND at resume
+ * -- `writePermissionsFile` refuses a verification run's file without it.
+ */
+export function verificationOwnership(worktreePath: string): PermissionOwnership {
+  return { worktreeRoot: resolvedRoot(worktreePath), owned: [], excluded: [] }
+}
+
 function resolvedRoot(worktreeRoot: string): string {
   try {
     return realpathSync(worktreeRoot)

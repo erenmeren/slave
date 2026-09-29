@@ -6,6 +6,7 @@ import {
   TIMELINE_LIMIT_MAX,
   buildSupervisorTimeline,
   memoryStatusOf,
+  retryCauseOf,
 } from '../../src/server/timeline.js'
 import {
   seedPendingDecision,
@@ -153,6 +154,20 @@ describe('buildSupervisorTimeline', () => {
     expect(entries.map((entry) => entry.title).join(' ')).not.toContain('feature-delivery')
   })
 
+  // Final wave M5: the goal pass's retry of a version whose branch moved is not the person's.
+  it('puts a person\'s retry-goal on USER REQUEST and a branch-moved retry on WORK IN PROGRESS', async (): Promise<void> => {
+    const { workspaceId } = await seedWorkspace({})
+    await appendEvent({ type: 'workspace.goal_retried', workspaceId, actor: 'human', payload: { version: 1, round: 3 } })
+    await appendEvent({ type: 'workspace.goal_retried', workspaceId, actor: 'system', payload: { version: 1, round: 4, cause: 'branch_moved' } })
+
+    const entries = await buildSupervisorTimeline(workspaceId)
+
+    expect(entries.map((entry) => [entry.lane, entry.title])).toEqual([
+      ['work', 'goal v1 went back to verification'],
+      ['user_request', 'retried goal v1'],
+    ])
+  })
+
   it('shows a goal set with no request as the goal it set', async (): Promise<void> => {
     const { workspaceId } = await seedWorkspace({})
     await appendEvent({
@@ -296,6 +311,15 @@ describe('buildSupervisorTimeline', () => {
  * erratum E5), and this builder used to stamp it from any payload carrying a string `status`. Pure,
  * so the narrowing is provable without a row: it is a reading of the payload, not of the database.
  */
+describe('retryCauseOf', () => {
+  it('reads the cause of a workspace.goal_retried and of nothing else', () => {
+    expect(retryCauseOf('workspace.goal_retried', { version: 1, round: 2, cause: 'branch_moved' })).toBe('branch_moved')
+    expect(retryCauseOf('workspace.goal_retried', { version: 1, round: 2 })).toBeNull()
+    expect(retryCauseOf('workspace.goal_retried', { cause: 'nonsense' })).toBeNull()
+    expect(retryCauseOf('workspace.goal_set', { cause: 'branch_moved' })).toBeNull()
+  })
+})
+
 describe('memoryStatusOf', () => {
   it('reads the status of a memory.recorded and of nothing else', () => {
     expect(memoryStatusOf('memory.recorded', { status: 'verified' })).toBe('verified')

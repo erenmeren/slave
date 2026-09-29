@@ -11,7 +11,7 @@ deliberate act somebody has to reconstruct, not a convenience one keystroke away
 
 | File | What it holds | Where it came from |
 |---|---|---|
-| `permissions-<provider>-<runKind>-<grants>.json` (12) | `permissions.json` v2, byte for byte | `writePermissionsFile`, `runId` and `runToken` fixed |
+| `permissions-<provider>-<runKind>-<grants>.json` (16) | `permissions.json` v2, byte for byte | `writePermissionsFile`, `runId` and `runToken` fixed |
 | `argv.json` | `claudeFlags` once, `cursorFlags` four ways | `packages/providers/src/claude/flags.ts`, `cursor/flags.ts` |
 | `capabilities.json` | the five members per kind | `capabilitiesOf` |
 | `models.json` | Claude's static listing; Cursor's parse of the recorded capture | `listProviderModels`, `parseCursorModels` over `packages/providers/test/fixtures/cursor/models.txt` |
@@ -20,7 +20,9 @@ deliberate act somebody has to reconstruct, not a convenience one keystroke away
 | `provider-literal-allowlist.json`, `run-files-allowlist.json` | what the gate's two greps may match | written in Task 6 |
 | `hook-plane-sha256.json` | the sha256 of the five hook-plane scripts | `createHash('sha256')` over the files as they stand, which is byte for byte as they stand on `main` (`cff28066`) |
 
-Twenty-one files and this README, twenty-two entries in all (`ls scripts/fixtures/m56a-goldens | wc -l`).
+Twenty-five files and this README, twenty-six entries in all (`ls scripts/fixtures/m56a-goldens | wc -l`).
+
+Conductor Plan 4b (2026-09-29) added the four `verification` files when the run kind was added, written by `writePermissionsFile` with the gate's fixed run id and token (the command is in `docs/superpowers/plans/2026-09-28-conductor-4b-verification.md`, Task 2); the twelve earlier files did not change. They carry the ownership rule that owns nothing, rooted at the fixed `/m56a-golden/verify-worktree` (`GOLDEN_VERIFICATION_OWNERSHIP` in the gate): `writePermissionsFile` refuses a verification file without that rule, so the goldens pin the verifier's confinement byte for byte, not only its grants.
 
 `hook-plane-sha256.json` is the one golden captured during the milestone rather than before it, and it
 records a NON-change: `scripts/pause-gate.sh`, `scripts/cursor-shell-gate.sh`, `scripts/tool-result-tap.sh`,

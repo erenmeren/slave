@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   ANSWER_MAX_CHARS,
+  COOLDOWN_BY_KIND,
   COOLDOWN_MS,
   DECISION_RETENTION_MS,
   FAILURE_REASON_MAX_CHARS,
@@ -10,6 +11,7 @@ import {
   PENDING_TTL_MS,
   PRUNE_BATCH,
   RETRIES_MAX,
+  RULES_ONLY_SITUATION_KINDS,
   RUN_PROMPT_MAX_CHARS,
   SOURCES_MAX,
   SOURCE_QUOTE_MAX_CHARS,
@@ -85,5 +87,13 @@ describe('supervisor constants', () => {
    */
   it('is the planning retry cap the tick and the Supervisor both count to', () => {
     expect(PLANNING_RETRY_CAP).toBe(2)
+  })
+})
+
+// Conductor Plan 4b, fix round 1 (I2): `verification_failed` is news the loop is already acting on.
+describe('verification_failed is decided once per round, by the rules', () => {
+  it('cools for the whole decision window and never goes to the model', () => {
+    expect(COOLDOWN_BY_KIND.verification_failed).toBe(PENDING_TTL_MS)
+    expect(RULES_ONLY_SITUATION_KINDS).toEqual(['verification_failed', 'goal_needs_human'])
   })
 })

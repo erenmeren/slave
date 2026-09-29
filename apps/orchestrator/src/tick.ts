@@ -36,6 +36,8 @@ import {
 } from '@slave-of-ai/providers'
 import { conduct, type ConductStep } from './conductor.js'
 import { deliverAnswers } from './deliver.js'
+import { cancelIfVersionAbandoned, integrationTargetFor } from './goalBranch.js'
+import { runGoalPass } from './goal.js'
 import { runMergePass } from './merge.js'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { permissionOwnership } from './ownership.js'
@@ -436,6 +438,14 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   // `runMergePass` itself.
   await runMergePass(deps.workspaceId)
 
+  // Conductor Plan 4a: after the merge pass, which is what integrates the last package of a goal
+  // version. Wrapped like the Supervisor pass: a goal pass that throws must not stop scheduling.
+  // Plan 4b: it starts verification runs, so under H9c's rule -- no new run into a slot `decide()`
+  // just said is not there -- it settles and merges but dispatches nothing while waiting.
+  await runGoalPass(deps, { mayStartRuns: waitingOn === null }).catch((error: unknown) => {
+    console.error(`[tick] the goal pass for workspace ${deps.workspaceId} failed:`, error)
+  })
+
   // Last, after every pass that could have changed what is stuck: the Supervisor decides about the
   // workspace this tick leaves behind, not the one it found. A run started, a review dispatched or
   // a merge landed above all remove situations it would otherwise have decided about.
@@ -586,7 +596,7 @@ async function concludeFailedResume(
     readonly id: string
     readonly taskId: string | null
     readonly slaveId: string
-    readonly kind: 'implementation' | 'review' | 'planning'
+    readonly kind: 'implementation' | 'review' | 'planning' | 'verification'
   },
   error: unknown,
 ): Promise<void> {
@@ -748,6 +758,14 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
   })
   const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: task.workspaceId } })
 
+  // Plan 4a D10, final wave M6: a package of an abandoned goal version is not started -- it is
+  // cancelled, the way the merge pass cancels one that reaches it (`retry-task` after
+  // `abandon-goal` puts one back on the board). Before the run row: nothing is attempted.
+  const target = await integrationTargetFor(task.id)
+  if (task.status === 'ready' || task.status === 'rework') {
+    if (await cancelIfVersionAbandoned(task, target, task.status)) return null
+  }
+
   const taskKey = taskKeyFor(task.id)
   const prefix = `slaveofai/${taskKey}-`
   // The slug is read back from the branch the first attempt recorded, not re-derived from the
@@ -872,7 +890,9 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
 
     const worktree = await acquireWorktree({
       repoPath: workspace.repoPath,
-      baseBranch: workspace.baseBranch,
+      // Plan 4a (D12): a package of a delivered goal version is cut from its integration branch,
+      // so it starts with its dependencies' merged work. A rework adopts its tree and ignores this.
+      baseBranch: target?.branch ?? workspace.baseBranch,
       taskKey,
       slug,
       branch,

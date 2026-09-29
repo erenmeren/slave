@@ -17,6 +17,7 @@ import {
   permissionsFilePathFor,
   terminateChild,
   toolResultsPathFor,
+  verifyDirIfPresent,
 } from '../runtime/process.js'
 import { isRecord } from '../runtime/summary.js'
 import { TOOL_ERROR_CLASSES, type ToolErrorClass } from '../tool-result.js'
@@ -289,6 +290,8 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         // is the pre-flight's answer, not the adapter's field, so a spawn that was downgraded to no
         // tap (fix round 1, Important 4) arms nothing.
         ...(tapPath === undefined ? {} : { toolResultsPath: toolResultsPathFor(input.runDir) }),
+        // Conductor Plan 4b (D2): a verification run's scratch directory, declared by its presence.
+        ...verifyDirIfPresent(input.runDir),
       }),
       startInput: input,
       // `settings` and `hook` are this provider's declared channels
@@ -642,6 +645,9 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         ...(runToken === undefined ? {} : { runId: String(runId), runToken }),
         brokerChannelPath: brokerChannelPathFor(resumedInput.runDir),
         ...(this.brokerCliPath === undefined ? {} : { brokerCliPath: this.brokerCliPath }),
+        // Conductor Plan 4b (D2): the SAME scratch directory the start exported -- it lives under
+        // the original run directory, so its presence there is the whole of the resume's evidence.
+        ...verifyDirIfPresent(resumedInput.runDir),
         // The resumed run's scratch directory is the ORIGINAL one (`resumedInput.runDir`, recovered
         // from `checkpoint.settingsPath`), so a resumed run appends to the same file its first half
         // wrote. What makes that safe is `startTapTailer`'s own rule -- it starts at the file's

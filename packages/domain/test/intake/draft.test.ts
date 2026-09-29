@@ -12,6 +12,7 @@ const draft: IntakeDraft = {
   provider: null,
   autoMerge: true,
   autonomy: 'act',
+  delivery: 'conducted',
   team: [{ templateId: 't1', runtimeRoles: ['backend', 'manager'] }],
 }
 
@@ -103,6 +104,27 @@ describe('IntakeDraft', () => {
   it('refuses an autonomy that is not one of the two words', () => {
     expect(intakeDraftSchema.safeParse({ ...draft, autonomy: 'whenever' }).success).toBe(false)
     expect(intakeDraftSchema.safeParse({ ...draft, autoMerge: 'yes' }).success).toBe(false)
+  })
+
+  /**
+   * Conductor Plan 4b (spec §5, D11): how the project is delivered is the person's call on the
+   * card, never the model's; a draft that says nothing -- every draft stored before this field --
+   * reads as conducted, the product default.
+   */
+  it('reads a draft that names no delivery as conducted', () => {
+    const { delivery: _delivery, ...without } = draft
+    const parsed = intakeDraftSchema.safeParse(without)
+    expect(parsed.success).toBe(true)
+    if (!parsed.success) return
+    expect(parsed.data.delivery).toBe('conducted')
+  })
+
+  it('keeps a planned delivery and refuses any other word', () => {
+    const parsed = intakeDraftSchema.safeParse({ ...draft, delivery: 'planned' })
+    expect(parsed.success).toBe(true)
+    if (!parsed.success) return
+    expect(parsed.data.delivery).toBe('planned')
+    expect(intakeDraftSchema.safeParse({ ...draft, delivery: 'x' }).success).toBe(false)
   })
 
   it('accepts an empty team -- "I will staff it myself" is a real answer (R13)', () => {

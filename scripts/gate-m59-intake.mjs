@@ -486,6 +486,8 @@ try {
   // ============================================================================================
   await page.locator('[data-testid="intake-verify"][data-command="npm run typecheck"]').uncheck()
   await page.getByTestId('intake-draft-name').fill('Public API')
+  // This gate measures the planner (stage 5); new projects are conducted since Conductor Plan 4b.
+  await page.getByTestId('intake-delivery').selectOption('planned')
   await clickUntil(page.getByTestId('intake-create'), async () => page.url().includes('/w/'), 'Create project')
   const workspaceId = page.url().split('/w/')[1]?.split(/[/?#]/)[0] ?? ''
   workspaceIds.push(workspaceId)
@@ -500,6 +502,7 @@ try {
     await fail(`stage 4: the project verifies with ${JSON.stringify(created.verifyCommands)}; one was unchecked`)
   }
   if (created.goalVersion !== 1) await fail(`stage 4: the project is on goal v${String(created.goalVersion)}, expected v1`)
+  if (created.delivery !== 'planned') await fail(`stage 4: the project is ${JSON.stringify(created.delivery)}, and the card chose planned`)
   const firstIntake = await prisma.intake.findUnique({ where: { workspaceId }, select: { id: true } })
   if (firstIntake === null) await fail('stage 4: the created project is not linked to its conversation')
   intakeIds.push(firstIntake.id)

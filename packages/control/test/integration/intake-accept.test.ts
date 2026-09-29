@@ -64,6 +64,8 @@ const draftFor = (repo: string, name: string): IntakeDraft => ({
   provider: null,
   autoMerge: true,
   autonomy: 'act',
+  // These cases measure the planner's staffing; new projects are conducted since Conductor Plan 4b.
+  delivery: 'planned',
   team: [],
 })
 
@@ -227,6 +229,59 @@ describe('acceptIntake', () => {
     expect(staff).toMatchObject({ status: 'done' })
     expect(staff?.detail).toContain('Design')
     expect(staff?.detail).toContain('Engineering')
+  })
+
+  /**
+   * Conductor Plan 4b (spec R5, D4): a conducted project's implementers are staffed by the
+   * conductor, one per package, once a goal is split. Intake staffs only the seat that checks the
+   * work -- the reviewer, who also verifies -- and the project is created conducted.
+   */
+  it('staffs only the reviewer seat, holding reviewer and verifier, for a conducted draft', async (): Promise<void> => {
+    const repo = makeRepo()
+    const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+    const qaId = await seedTemplate('QA Engineer', 'testing', 'qa')
+    const id = await opened(`it is at ${repo}`)
+    const accepted = await acceptIntake(id, {
+      ...draftFor(repo, 'Conducted'),
+      delivery: 'conducted',
+      team: [
+        { templateId: backendId, runtimeRoles: ['backend'] },
+        { templateId: qaId, runtimeRoles: ['reviewer'] },
+      ],
+    })
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) throw new Error('unreachable')
+
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: accepted.value.workspaceId } })
+    expect(workspace.delivery).toBe('conducted')
+    const seats = await prisma.slave.findMany({
+      where: { team: { workspaceId: accepted.value.workspaceId } },
+      include: { person: { select: { templateId: true } } },
+    })
+    expect(seats).toHaveLength(1)
+    expect(seats[0]?.person.templateId).toBe(qaId)
+    expect(seats[0]?.runtimeRoles).toEqual(['reviewer', 'verifier'])
+  })
+
+  it('creates a planned project with every approved seat when the card chose the planner', async (): Promise<void> => {
+    const repo = makeRepo()
+    const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+    const qaId = await seedTemplate('QA Engineer', 'testing', 'qa')
+    const id = await opened(`it is at ${repo}`)
+    const accepted = await acceptIntake(id, {
+      ...draftFor(repo, 'Planned'),
+      team: [
+        { templateId: backendId, runtimeRoles: ['backend'] },
+        { templateId: qaId, runtimeRoles: ['reviewer'] },
+      ],
+    })
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) throw new Error('unreachable')
+
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: accepted.value.workspaceId } })
+    expect(workspace.delivery).toBe('planned')
+    const seats = await prisma.slave.findMany({ where: { team: { workspaceId: accepted.value.workspaceId } } })
+    expect(seats.map((seat) => seat.runtimeRoles).sort()).toEqual([['backend', 'manager'], ['reviewer']])
   })
 
   /**
@@ -499,6 +554,7 @@ describe('acceptIntake', () => {
       provider: null,
       autoMerge: true,
       autonomy: 'act',
+      delivery: 'planned',
       team: [],
     }
     const accepted = await acceptIntake(id, draft)
@@ -536,6 +592,7 @@ describe('acceptIntake', () => {
       provider: null,
       autoMerge: true,
       autonomy: 'act',
+      delivery: 'planned',
       team: [],
     }
     const accepted = await acceptIntake(id, draft)
@@ -583,6 +640,7 @@ describe('acceptIntake', () => {
       provider: null,
       autoMerge: true,
       autonomy: 'act',
+      delivery: 'planned',
       team: [],
     }
     const accepted = await acceptIntake(id, draft)

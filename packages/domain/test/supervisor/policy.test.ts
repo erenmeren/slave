@@ -528,6 +528,13 @@ describe('chooseByRules', () => {
     })
   })
 
+  // Conductor Plan 4b (D10): news, not a request -- the loop is already reworking the packages.
+  it('records no_action for a failed verification round, and escalates a goal that needs a person', () => {
+    const cands = [candidate(ACTIONS.escalate_to_human, 'escalated'), candidate(ACTIONS.no_action, 'noop')]
+    expect(chooseByRules(cands, 'verification_failed')).toBe(1)
+    expect(chooseByRules(cands, 'goal_needs_human')).toBe(0)
+  })
+
   it('escalates when two routine actions compete -- the rules do not rank them', () => {
     const cands = [
       candidate(ACTIONS.unblock_task, 'applied'),

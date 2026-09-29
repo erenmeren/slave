@@ -1144,9 +1144,17 @@ export async function resolveSettledDecisions(input: {
   readonly situationKind: SituationKind
   readonly reason: string
   readonly principal?: Principal
+  /** Only decisions whose subject starts with this (Conductor Plan 4b: one goal version's
+   *  `<workspaceId>:v<n>:` escalations, not a sibling version's). Omitted: every one of the kind. */
+  readonly subjectIdPrefix?: string
 }): Promise<number> {
   const open = await prisma.supervisorDecision.findMany({
-    where: { workspaceId: input.workspaceId, situationKind: input.situationKind, status: 'pending' },
+    where: {
+      workspaceId: input.workspaceId,
+      situationKind: input.situationKind,
+      status: 'pending',
+      ...(input.subjectIdPrefix === undefined ? {} : { subjectId: { startsWith: input.subjectIdPrefix } }),
+    },
     orderBy: { createdAt: 'asc' },
     select: { id: true },
   })

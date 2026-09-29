@@ -353,6 +353,51 @@ describe('IntakeConversation', () => {
   })
 
   /**
+   * Conductor Plan 4b (spec §5, D11): how the project is delivered is the person's call on the
+   * card. It arrives on `conducted` -- the product default, which the draft schema writes -- and
+   * the planner is the other choice; what the person leaves it at is what is posted.
+   */
+  it('offers the delivery choice on conducted, and posts planned when the person picks it', async (): Promise<void> => {
+    const fetchMock = stubFetch([view({ status: 'drafted', draft: { ...DRAFT, delivery: 'conducted' }, facts: FACTS })])
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
+
+    const select = screen.getByTestId('intake-delivery') as HTMLSelectElement
+    expect(select.value).toBe('conducted')
+    fireEvent.change(select, { target: { value: 'planned' } })
+    expect((screen.getByTestId('intake-delivery') as HTMLSelectElement).value).toBe('planned')
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('intake-create'))
+    })
+
+    const accept = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/accept'))
+    const posted = JSON.parse(String((accept?.[1] as { body: string }).body)).draft as { delivery: string }
+    expect(posted.delivery).toBe('planned')
+  })
+
+  // Final wave M7: a conducted project hires its implementers later, per work package -- the card
+  // says so, or the one reviewer it hires now reads as the whole team.
+  it('says under a conducted delivery that implementers are hired per work package, and not under planned', async (): Promise<void> => {
+    stubFetch([view({ status: 'drafted', draft: { ...DRAFT, delivery: 'conducted' }, facts: FACTS })])
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
+
+    expect(screen.getByTestId('intake-delivery-conducted-note').textContent).toBe(
+      'The conductor hires implementers per work package; only the reviewer is hired now.',
+    )
+    fireEvent.change(screen.getByTestId('intake-delivery'), { target: { value: 'planned' } })
+    expect(screen.queryByTestId('intake-delivery-conducted-note')).toBeNull()
+  })
+
+  it('reads a draft stored before the choice existed as conducted', async (): Promise<void> => {
+    stubFetch([view({ status: 'drafted', draft: DRAFT, facts: FACTS })])
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
+    expect((screen.getByTestId('intake-delivery') as HTMLSelectElement).value).toBe('conducted')
+  })
+
+  /**
    * H3: a project born from a conversation is born with a runtime. The card shows the
    * INSTALLATION default preselected rather than an empty "none" when the model left `provider`
    * at `null`, with a sentence saying so; `acceptIntake` is what actually resolves the `null`, so
