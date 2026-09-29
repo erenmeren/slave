@@ -119,6 +119,8 @@ async function advanceDelivery(
     return
   }
   if (delivery.status !== 'accepted' || delivery.mergedAt !== null || delivery.mergeError !== null) return
+  // Final wave M4: a deleted integration branch can be neither merged nor waited on.
+  if ((await integrationTipOrTrip(workspace.repoPath, delivery)) === null) return
   // Fix round 1, M2 (ruling V5): an accepted version whose branch moved since its verification is
   // verified again, whether or not this pass would merge it -- never handed to a person to merge.
   if (await withDeliveryLock(delivery.id, async (tx) => reopenIfMovedInLock(tx, delivery.id))) return
@@ -270,6 +272,8 @@ export async function mergeGoalIntoBase(deliveryId: string): Promise<'merged' | 
     const version = delivery.goalVersion
     const handMerge = handMergeInstruction(delivery.integrationBranch, baseBranch, delivery.workspaceId, version, delivery.verifiedCommit)
 
+    const integrationTip = await integrationTipOrTrip(repoPath, delivery)
+    if (integrationTip === null) return 'waiting'
     const baseTip = await gitIn(repoPath, 'rev-parse', `refs/heads/${baseBranch}`)
     // Already in the base branch: a pass that crashed after the fast-forward and before the stamp,
     // or the overlapping pass this lock just waited for. The base tip no longer equals
@@ -285,7 +289,6 @@ export async function mergeGoalIntoBase(deliveryId: string): Promise<'merged' | 
     // (base moved, or a refused merge), and is recorded as theirs -- their `confirm-goal-merge`
     // then finds it recorded. A person who fast-forwarded by hand lands the same tree this pass
     // would have, so `system` is true enough of it.
-    const integrationTip = await gitIn(repoPath, 'rev-parse', delivery.integrationBranch)
     if (contained) {
       return landed(tx, delivery, baseTip, baseTip === integrationTip ? 'system' : 'human')
     }
@@ -339,7 +342,9 @@ export async function mergeGoalIntoBase(deliveryId: string): Promise<'merged' | 
 async function reopenIfMovedInLock(tx: Prisma.TransactionClient, deliveryId: string): Promise<boolean> {
   const delivery = await tx.goalDelivery.findUniqueOrThrow({ where: { id: deliveryId }, include: { workspace: { select: { repoPath: true } } } })
   if (delivery.status !== 'accepted' || delivery.mergedAt !== null || delivery.mergeError !== null) return false
-  const tip = await gitIn(delivery.workspace.repoPath, 'rev-parse', delivery.integrationBranch)
+  const tip = await integrationTipOrTrip(delivery.workspace.repoPath, delivery)
+  // A branch that is gone is not a branch that moved: there is nothing to verify again.
+  if (tip === null) return false
   if (delivery.verifiedCommit !== null && tip === delivery.verifiedCommit) return false
   const version = delivery.goalVersion
   if (!(await goalEventWith(tx, delivery.workspaceId, 'workspace_goal_retried', { version, round: delivery.round }))) {
@@ -406,6 +411,27 @@ async function removeIntegrationWorktree(repoPath: string, version: number, work
   await gitIn(repoPath, 'worktree', 'remove', '--force', path).catch((error: unknown) => {
     console.warn(`[goal] could not remove ${path}: ${String(error)}`)
   })
+}
+
+/**
+ * Final wave M4: the integration branch's tip, or null -- after saying once what the person can do
+ * -- when the branch is gone (somebody deleted it). Without this the `rev-parse` threw on every
+ * tick, the pass only logged it, and the version (and every later one, D6) waited in silence.
+ */
+async function integrationTipOrTrip(
+  repoPath: string,
+  delivery: { readonly workspaceId: string; readonly goalVersion: number; readonly integrationBranch: string },
+): Promise<string | null> {
+  try {
+    return await gitIn(repoPath, 'rev-parse', '--verify', '--quiet', `refs/heads/${delivery.integrationBranch}^{commit}`)
+  } catch {
+    const v = String(delivery.goalVersion)
+    await tripOnce(
+      delivery.workspaceId,
+      `the integration branch ${delivery.integrationBranch} of goal v${v} is gone: restore it or run abandon-goal --workspace ${delivery.workspaceId} --version ${v}`,
+    )
+    return null
+  }
 }
 
 /** A `merge_failure` trip, workspace-scoped, said once per detail (the conductor's dedup rule). */

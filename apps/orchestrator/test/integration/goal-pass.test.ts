@@ -425,6 +425,26 @@ describe('runGoalPass', () => {
     expect(git(['rev-parse', 'main'], f.repoPath)).toBe(git(['rev-parse', f.branch], f.repoPath))
   })
 
+  // Final wave M4: an accepted version whose integration branch was deleted cannot be merged or
+  // waited on; the pass says so once, with the person's two ways out, instead of throwing each tick.
+  for (const autoMerge of [true, false]) {
+    it(`says once that an accepted version's integration branch is gone (autoMerge ${String(autoMerge)})`, async (): Promise<void> => {
+      const f = await seed({ autoMerge })
+      await integrateAll(f)
+      await acceptVerified(f)
+      git(['worktree', 'remove', '--force', f.integrationPath], f.repoPath)
+      git(['branch', '-D', f.branch], f.repoPath)
+
+      await pass(f)
+      await pass(f)
+
+      expect(await mergeTrips(f.workspaceId)).toEqual([
+        `the integration branch ${f.branch} of goal v1 is gone: restore it or run abandon-goal --workspace ${f.workspaceId} --version 1`,
+      ])
+      expect(await delivery(f)).toMatchObject({ status: 'accepted', mergedAt: null, mergeError: null })
+    })
+  }
+
   it('records a merge git refuses, leaves the checkout clean, and never retries it by itself', async (): Promise<void> => {
     const f = await seed()
     await integrateAll(f)
