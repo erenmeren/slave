@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { settleTaskEvidence } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  GOAL_REPORT_FILES_MAX,
   isOwned,
   nextMergeCandidate,
   taskId as brandTaskId,
@@ -464,6 +465,17 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       })
       return
     }
+    // Conductor Plan 5 (D3): the files this package's merge changed, as git lists them against the
+    // integration branch's previous tip (`HEAD^1` of a `--no-ff` merge). `-z` so a name with a
+    // newline, a space or a non-ASCII letter comes back exactly. A failure costs the report one
+    // package's list ("not recorded"), never the merge.
+    const changed = await gitIn(integrationPath, 'diff', '--name-only', '-z', 'HEAD^1', 'HEAD').then(
+      (out) => out.split('\0').filter((name) => name.length > 0),
+      (error: unknown): null => {
+        console.warn(`[merge] could not list the files ${branch} changed in ${target.branch}: ${errorText(error)}`)
+        return null
+      },
+    )
     // Plan D4: on a package task `integratedAt` means "on its goal's integration branch" -- what
     // the dependency gate needs, since a dependent package is cut from that branch. The integration
     // EVIDENCE waits for the final merge into the base branch: that is what "integrated" means in
@@ -472,7 +484,16 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       where: { id: task.id },
       data: { status: 'done', mergeClaimedAt: null, lastRejectionReason: null, integratedAt: new Date() },
     })
-    await appendEvent({ type: 'task.done', workspaceId, taskId: task.id, actor: 'system', payload: { branch } })
+    await appendEvent({
+      type: 'task.done',
+      workspaceId,
+      taskId: task.id,
+      actor: 'system',
+      payload: {
+        branch,
+        ...(changed === null ? {} : { files: changed.slice(0, GOAL_REPORT_FILES_MAX), filesTotal: changed.length }),
+      },
+    })
     return
   }
 

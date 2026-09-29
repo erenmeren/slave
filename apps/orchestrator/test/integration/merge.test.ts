@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { integrationBranchName, workspaceId as brandWorkspaceId, taskId as brandTaskId } from '@slave-of-ai/domain'
+import { GOAL_REPORT_FILES_MAX, integrationBranchName, workspaceId as brandWorkspaceId, taskId as brandTaskId } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { addRunbook, adoptRunbook, confirmIntegration, recordRunEvidence, settleTaskEvidence } from '@slave-of-ai/control'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -1146,6 +1146,40 @@ describe('into the integration branch', () => {
     // The integration worktree is the one helper's path, checked out on the integration branch.
     const path = integrationWorktreePath(workspace.repoPath, 1, workspace.id)
     expect(git(['rev-parse', '--abbrev-ref', 'HEAD'], path)).toBe(target.branch)
+    // Conductor Plan 5 (D3): the merge records what git says it changed -- the report's "files touched".
+    const done = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_done' }, orderBy: { seq: 'desc' } })
+    expect(done.payload).toEqual({ branch, files: ['feature.txt'], filesTotal: 1 })
+  })
+
+  it('records a path with spaces and non-ASCII characters exactly', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    await deliver(workspace)
+    const { taskId } = await seedMergingTask(workspace, { fileName: 'rapor ü.txt' })
+    await packageTask(workspace, taskId, 'feature')
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const done = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_done' }, orderBy: { seq: 'desc' } })
+    expect((done.payload as { files: string[] }).files).toEqual(['rapor ü.txt'])
+  })
+
+  it('caps the recorded list at GOAL_REPORT_FILES_MAX and counts every file in filesTotal', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    await deliver(workspace)
+    const { taskId } = await seedMergingTask(workspace)
+    const implRun = await prisma.slaveRun.findFirstOrThrow({ where: { taskId, kind: 'implementation' } })
+    const tree = implRun.worktreePath as string
+    for (let i = 0; i < GOAL_REPORT_FILES_MAX; i += 1) writeFileSync(join(tree, `bulk-${String(i).padStart(3, '0')}.txt`), `${String(i)}\n`)
+    git(['add', '-A'], tree)
+    git(['commit', '-q', '-m', 'many files'], tree)
+    await packageTask(workspace, taskId, 'feature')
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const done = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_done' }, orderBy: { seq: 'desc' } })
+    const payload = done.payload as { files: string[]; filesTotal: number }
+    expect(payload.filesTotal).toBe(GOAL_REPORT_FILES_MAX + 1)
+    expect(payload.files).toHaveLength(GOAL_REPORT_FILES_MAX)
   })
 
   it('does not land a package of an abandoned goal version: it is cancelled, and nothing is merged', async (): Promise<void> => {

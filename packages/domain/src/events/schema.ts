@@ -3,6 +3,7 @@ import { err, ok, type Result } from '../result.js'
 import { BREAKER_TRIP_KINDS } from '../breaker/detect.js'
 import { externalOriginSchema } from '../external/origin.js'
 import { EXTERNAL_EVENT_KINDS } from '../external/request.js'
+import { GOAL_REPORT_FILES_MAX } from '../goalReport/constants.js'
 import { MEMORY_SCOPES, MEMORY_SOURCE_KINDS, MEMORY_STATUSES, MEMORY_TYPES } from '../memory/types.js'
 import { ACTION_KINDS, DECIDERS, TIERS } from '../supervisor/actions.js'
 import { SITUATION_KINDS } from '../supervisor/situations.js'
@@ -82,7 +83,20 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('task.started'),
     payload: z.object({ title: z.string(), grants: z.array(z.string().min(1)).optional() }),
   }),
-  z.object({ ...envelope, type: z.literal('task.done'), payload: z.object({ branch: z.string() }) }),
+  z.object({
+    ...envelope,
+    type: z.literal('task.done'),
+    payload: z.object({
+      branch: z.string(),
+      // Conductor Plan 5 (D3): what git says a package's merge into its goal version's integration
+      // branch changed -- the report's "files touched", recorded rather than taken from the
+      // worker's claim. Bounded by the report's own `GOAL_REPORT_FILES_MAX`, imported so the two
+      // cannot drift; `filesTotal` counts all of them when the list is cut. Absent on every other
+      // `task.done` and on every row written before Plan 5.
+      files: z.array(z.string().min(1)).max(GOAL_REPORT_FILES_MAX).optional(),
+      filesTotal: z.number().int().nonnegative().optional(),
+    }),
+  }),
   z.object({
     ...envelope,
     type: z.literal('task.rework'),
