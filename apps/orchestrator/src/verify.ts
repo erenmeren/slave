@@ -343,6 +343,9 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
   // `decide()` (`STARTABLE` never includes `running`) and to the sweep (`ORPHANABLE`/`SWEEPABLE`
   // only reconcile NON-terminal runs) -- permanently stranded, no attempt charged.
   if (run.status === 'failed') {
+    // Conductor Plan 4b (Task 5): a verification run is task-less and its failure is the goal
+    // version's to settle (release the claim, count a run failure) -- Task 6's conclusion.
+    if (run.kind === 'verification') return
     if (run.kind === 'implementation') {
       const { task } = run
       // Every `implementation` run has a task by construction (M8b) -- a null one here is data
@@ -399,6 +402,10 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
     return
   }
   if (run.status !== 'succeeded') return
+
+  // Conductor Plan 4b (Task 5): without this a succeeded verification run falls into the
+  // implementation path below and throws "has no task"; Task 6 concludes it here.
+  if (run.kind === 'verification') return
 
   if (run.kind === 'planning') {
     // A planning run's succeeded process has produced a task graph, not a tree to check out --

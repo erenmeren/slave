@@ -10,6 +10,7 @@ import {
   adoptWorktree,
   discardStaleWorktree,
   legacyWorktreeRootFor,
+  provisionDetachedWorktree,
   provisionWorktree,
   reattachWorktree,
   worktreeRootFor,
@@ -698,5 +699,42 @@ describe('a worktree made in the old in-repository location', () => {
     expect(again.path).toBe(join(worktreeRootFor(repoPath), 'TASK-001'))
     expect(again.headCommit).toBe(onBranch)
     expect(existsSync(join(again.path, 'WORK_IN_PROGRESS'))).toBe(true)
+  })
+})
+
+// Conductor Plan 4b (D12): the verification run's fresh checkout of an integration branch.
+describe('provisionDetachedWorktree', () => {
+  let repoPath: string
+
+  beforeEach((): void => {
+    repoPath = makeRepo()
+  })
+
+  afterEach((): void => {
+    removeRepo(repoPath)
+  })
+
+  it('checks the ref out detached under the worktree root, runs setup, and reads HEAD after it', async (): Promise<void> => {
+    const tip = run('git', ['rev-parse', 'develop'], repoPath)
+    const handle = await provisionDetachedWorktree({
+      repoPath,
+      ref: 'develop',
+      key: 'verify-12345678',
+      setupCommands: ['echo more >> README.md && git add -A && git commit -q -m setup'],
+    })
+
+    expect(handle.path).toBe(join(worktreeRootFor(repoPath), 'verify-12345678'))
+    expect(handle.refCommit).toBe(tip)
+    expect(handle.headCommit).toBe(run('git', ['rev-parse', 'HEAD'], handle.path))
+    expect(handle.headCommit).not.toBe(tip)
+    expect(() => run('git', ['symbolic-ref', '-q', 'HEAD'], handle.path)).toThrow()
+    // The branch itself did not move: the setup commit is on the detached HEAD only.
+    expect(run('git', ['rev-parse', 'develop'], repoPath)).toBe(tip)
+  })
+
+  it('refuses an unsafe key and an existing path', async (): Promise<void> => {
+    await expect(provisionDetachedWorktree({ repoPath, ref: 'main', key: '../escape', setupCommands: [] })).rejects.toThrow(/key must match/)
+    mkdirSync(join(worktreeRootFor(repoPath), 'verify-taken'), { recursive: true })
+    await expect(provisionDetachedWorktree({ repoPath, ref: 'main', key: 'verify-taken', setupCommands: [] })).rejects.toThrow(/already there/)
   })
 })

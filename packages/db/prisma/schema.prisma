@@ -1368,6 +1368,18 @@ model SlaveRun {
   /// Conductor Plan 4b (plan D3): the goal version a `verification` run verifies. Null on every
   /// other run kind. SetNull, not Cascade: the run's own history outlives a deleted delivery row.
   goalDeliveryId    String?
+  /// Conductor Plan 4b (controller ruling Q6): the integration-branch commit a `verification` run
+  /// checked out -- the tip it verifies. A passing conclusion copies it to
+  /// `GoalDelivery.verifiedCommit`, so the final merge lands only a commit something verified.
+  /// Null on every other run kind, and on a verification run that never got a worktree.
+  verificationTip   String?
+  /// Conductor Plan 4b (controller ruling Q5): the verification worktree as it stood AFTER the
+  /// setup commands ran and before the verifier was spawned -- `{ head, status, diff }` (`HEAD`,
+  /// `git status --porcelain --untracked-files=no`, and a sha256 of `git diff --binary HEAD`). The
+  /// conclusion's tamper check compares against this, not the bare tip: a setup that dirties a
+  /// lockfile must not throw every verification away. On the row, not in the run directory, where
+  /// the verifier's own shell could rewrite it.
+  verificationBaseline Json?
   startedAt         DateTime      @default(now())
   terminalAt        DateTime?
   endedAt           DateTime?

@@ -277,7 +277,7 @@ async function fallbackTemplate(
  * workspace's newest trip already carries the same detail, so an empty pool is not repeated on
  * every tick.
  */
-async function tripConductor(workspaceId: string, detail: string): Promise<void> {
+export async function tripConductor(workspaceId: string, detail: string): Promise<void> {
   const newest = await prisma.executionEvent.findFirst({
     where: { workspaceId, type: 'guardrail_tripped' },
     orderBy: { seq: 'desc' },

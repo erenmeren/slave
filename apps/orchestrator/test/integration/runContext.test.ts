@@ -15,6 +15,7 @@ import {
   REVIEW_VERDICT_INSTRUCTIONS,
   RUN_PROMPT_MAX_BYTES,
   SKILL_BODY_MAX_CHARS,
+  VERIFICATION_INSTRUCTIONS,
   emptyProfileSpec,
   runContextManifestSchema,
   type Manifest,
@@ -1959,6 +1960,47 @@ describe('buildRunContext', () => {
 
       expect(built.prompt).toContain('My own mistake.')
       expect(built.prompt).not.toContain('Somebody else’s mistake.')
+    })
+  })
+
+  describe('a verification run (Conductor Plan 4b)', () => {
+    it('carries the profile, the goal and the protocol, and neither skills nor anything copied into its checkout', async () => {
+      await assign(fixture, 'writing-plans')
+      const run = await prisma.slaveRun.create({ data: { slaveId: fixture.slaveId, status: 'starting', kind: 'verification' } })
+
+      const { prompt, manifest } = await buildRunContext({
+        runId: run.id,
+        kind: 'verification',
+        slaveId: fixture.slaveId,
+        workspaceId: fixture.workspaceId,
+        taskId: null,
+        worktreePath: fixture.worktreePath,
+        provider: 'claude_code',
+        skillRoots: fixture.skillRoots,
+        verification: {
+          goalVersion: 2,
+          round: 3,
+          requirements: [
+            { key: 'R1', text: 'a CSV mode', source: 'csv' },
+            { key: 'R2', text: 'a JSON mode', source: 'json' },
+          ],
+          diffStat: ' a.txt | 2 +-\n 1 file changed',
+          diffCapped: false,
+          verifyDir: '/scratch/run/verify',
+        },
+      })
+
+      expect(manifest.kind).toBe('verification')
+      expect(manifest.sections.map((section) => section.kind)).toEqual(['profile', 'verification_goal', 'verification_protocol'])
+      expect(manifest.sections).toContainEqual({ kind: 'verification_goal', goalVersion: 2, round: 3, requirements: 2, diffCapped: false })
+      expect(manifest.sections).toContainEqual({ kind: 'verification_protocol', requirements: 2 })
+      expect(prompt).toContain('You are Alex.')
+      expect(prompt).toContain('Verification round 3 of goal v2.')
+      expect(prompt).toContain('Requirement keys: R1, R2')
+      expect(prompt).toContain('/scratch/run/verify')
+      expect(prompt.endsWith(VERIFICATION_INSTRUCTIONS)).toBe(true)
+      expect(prompt).not.toContain('writing-plans')
+      expect(existsSync(join(fixture.worktreePath, '.claude'))).toBe(false)
     })
   })
 })

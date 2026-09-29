@@ -10,7 +10,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { runTokenHash, type AdapterRegistry } from '@slave-of-ai/providers'
-import { permissionOwnership } from './ownership.js'
+import { permissionOwnership, verificationOwnership } from './ownership.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
 import { OWNER_INSTANCE } from './runs.js'
@@ -111,10 +111,15 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
     // a review run on a package task carries a `taskId` too but was never given ownership. The
     // worktree is the checkpoint's: its path is the directory `adapter.resume` respawns the child
     // in, so it is the root the gate must resolve the resumed run's paths against.
+    //
+    // Conductor Plan 4b (D1): a resumed verification run keeps the rule that confines its writes;
+    // without it its `write_repo` baseline would reach the repository.
     ownership:
-      run.kind !== 'implementation' || run.taskId === null
-        ? undefined
-        : await permissionOwnership(run.taskId, checkpoint.worktreePath),
+      run.kind === 'verification'
+        ? verificationOwnership(checkpoint.worktreePath)
+        : run.kind !== 'implementation' || run.taskId === null
+          ? undefined
+          : await permissionOwnership(run.taskId, checkpoint.worktreePath),
   })
 
   // The checkpoint is the whole point of `resume`'s signature: this process may never have called
