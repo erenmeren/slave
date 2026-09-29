@@ -600,6 +600,28 @@ describe('the orchestrator CLI', () => {
     expect(JSON.parse(none.stdout)).toEqual([])
   })
 
+  it('goal-report prints the version report as Markdown, and as JSON with --json', async (): Promise<void> => {
+    await seedGoalDelivery(1, 'integrating', 'ready')
+
+    const md = await runCli(['goal-report', '--workspace', fixture.workspaceId, '--version', '1'])
+    expect(md.code).toBe(0)
+    expect(md.stdout).toMatch(/^# Goal v1 report: /u)
+    expect(md.stdout).toContain('State: **being built**')
+
+    // R1: `--json` is a bare (VALUELESS) flag, so it must report correctly even placed BEFORE
+    // `--version` -- otherwise `parseArgs` would read `--version` as `--json`'s own value.
+    const json = await runCli(['goal-report', '--workspace', fixture.workspaceId, '--json', '--version', '1'])
+    expect(JSON.parse(json.stdout)).toEqual(expect.objectContaining({ goalVersion: 1, state: 'integrating' }))
+  })
+
+  it('goal-report refuses a version with no report, and a version that is not a number', async (): Promise<void> => {
+    const none = await runCli(['goal-report', '--workspace', fixture.workspaceId, '--version', '7'])
+    expect(none.code).not.toBe(0)
+    expect(`${none.stdout}${none.stderr}`).toContain(`workspace ${fixture.workspaceId} has no conducted goal v7`)
+    const bad = await runCli(['goal-report', '--workspace', fixture.workspaceId, '--version', 'abc'])
+    expect(bad.code).not.toBe(0)
+  })
+
   it('abandon-goal cancels the unfinished packages and prints them', async (): Promise<void> => {
     const { taskId } = await seedGoalDelivery(1, 'integrating', 'ready')
 
