@@ -726,7 +726,7 @@ describe('fake-claude', () => {
         )
         const checksUnder = (dir: string): string[] =>
           (readdirSync(dir, { recursive: true }) as string[]).filter((name) => /(^|\/)check-[^/]*\.sh$/.test(name)).sort()
-        const base = { ...process.env, HOME: sandbox }
+        const base: NodeJS.ProcessEnv = { ...process.env, HOME: sandbox }
         delete base.SLAVEOFAI_VERIFY_DIR
         const argv = [FAKE, '--fixture', 'm8-flow', '-p', promptFor(1)]
 
