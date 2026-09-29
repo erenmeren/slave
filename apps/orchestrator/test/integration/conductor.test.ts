@@ -1,6 +1,3 @@
-    // Every managed person but the backend pool (which PARTITIONED's three packages take) is
-    // released: no open seat, no persona of the plan and no catalogue persona has anybody left.
-    await prisma.person.updateMany({ where: { poolSlot: { not: null }, NOT: { templateId: 't-backend' } }, data: { releasedAt: new Date() } })
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -414,9 +411,7 @@ describe('conduct: the size decision', () => {
     git(['commit', '-q', '-m', 'foreign'], repoPath)
     git(['checkout', '-q', 'main'], repoPath)
     const { decider } = scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) })
-    console.log('DBG0', await prisma.person.count({ where: { poolSlot: { not: null }, releasedAt: null, NOT: { templateId: 't-backend' } } }))
-    const DBG = await conduct(depsFor(f, decider)); if (DBG !== 'conduct_failed') { const d = await prisma.goalDelivery.findFirstOrThrow({}); console.log('DBG', JSON.stringify(await prisma.slave.findUnique({ where: { id: d.verifierSlaveId ?? '' }, include: { person: true } }), null, 1), await prisma.person.count({ where: { poolSlot: { not: null }, releasedAt: null, NOT: { templateId: 't-backend' } } })) }
-    expect(DBG).toBe('conduct_failed')
+    expect(await conduct(depsFor(f, decider))).toBe('conduct_failed')
     expect(await conduct(depsFor(f, decider))).toBe('conduct_failed')
     expect(await prisma.workPackage.count({ where: { workspaceId: f.workspaceId } })).toBe(0)
     expect(await prisma.goalDelivery.count({ where: { workspaceId: f.workspaceId } })).toBe(0)
