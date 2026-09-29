@@ -376,6 +376,20 @@ describe('IntakeConversation', () => {
     expect(posted.delivery).toBe('planned')
   })
 
+  // Final wave M7: a conducted project hires its implementers later, per work package -- the card
+  // says so, or the one reviewer it hires now reads as the whole team.
+  it('says under a conducted delivery that implementers are hired per work package, and not under planned', async (): Promise<void> => {
+    stubFetch([view({ status: 'drafted', draft: { ...DRAFT, delivery: 'conducted' }, facts: FACTS })])
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
+
+    expect(screen.getByTestId('intake-delivery-conducted-note').textContent).toBe(
+      'The conductor hires implementers per work package; only the reviewer is hired now.',
+    )
+    fireEvent.change(screen.getByTestId('intake-delivery'), { target: { value: 'planned' } })
+    expect(screen.queryByTestId('intake-delivery-conducted-note')).toBeNull()
+  })
+
   it('reads a draft stored before the choice existed as conducted', async (): Promise<void> => {
     stubFetch([view({ status: 'drafted', draft: DRAFT, facts: FACTS })])
     render(<IntakeConversation onClose={vi.fn()} />)
