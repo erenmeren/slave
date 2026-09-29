@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { abandonGoal, confirmGoalMerge, goalDeliveries } from '../../src/goalDelivery.js'
+import { abandonGoal, confirmGoalMerge, goalDeliveries, latestVerifications, retryGoal } from '../../src/goalDelivery.js'
 import { recordRunEvidence } from '../../src/evidence.js'
 
 const repos: string[] = []
@@ -355,5 +355,134 @@ describe('confirmGoalMerge', () => {
       ok: false,
       error: { kind: 'goal_version_not_found', workspaceId: f.workspaceId, goalVersion: 9 },
     })
+  })
+})
+
+/** Conductor Plan 4b: a verification run of `deliveryId` by the fixture's seat, and its verdict rows. */
+async function seedVerification(
+  f: Fixture,
+  deliveryId: string,
+  round: number,
+  items: readonly { readonly key: string; readonly status: 'pass' | 'fail' | 'unverifiable' }[],
+): Promise<string> {
+  const run = await prisma.slaveRun.create({
+    data: { slaveId: f.slaveId, kind: 'verification', goalDeliveryId: deliveryId, status: 'succeeded', terminalAt: new Date() },
+  })
+  for (const item of items) {
+    await prisma.verificationResult.create({
+      data: { workspaceId: f.workspaceId, goalDeliveryId: deliveryId, goalVersion: 1, round, runId: run.id, key: item.key, status: item.status, check: 'c', output: 'o', reason: '' },
+    })
+  }
+  return run.id
+}
+
+describe('goalDeliveries (Conductor Plan 4b)', () => {
+  it('shows the round, why a person is needed, and the latest verification', async (): Promise<void> => {
+    const f = await seedWorkspace()
+    const v1 = await seedDelivery(f, 1)
+    await seedVerification(f, v1.id, 1, [
+      { key: 'R1', status: 'fail' },
+      { key: 'R2', status: 'fail' },
+    ])
+    await seedVerification(f, v1.id, 2, [
+      { key: 'R1', status: 'pass' },
+      { key: 'R2', status: 'fail' },
+      { key: 'R3', status: 'unverifiable' },
+    ])
+    await prisma.goalDelivery.update({ where: { id: v1.id }, data: { status: 'needs_human', round: 2, needsHumanReason: 'the cap' } })
+
+    const all = await goalDeliveries(f.workspaceId)
+
+    expect(all.ok && all.value[0]).toMatchObject({
+      status: 'needs_human',
+      round: 2,
+      needsHumanReason: 'the cap',
+      latestVerification: { round: 2, pass: 1, fail: 1, unverifiable: 1, failedKeys: ['R2'] },
+    })
+  })
+
+  it('has no latest verification before a round has concluded', async (): Promise<void> => {
+    const f = await seedWorkspace()
+    const v1 = await seedDelivery(f, 1)
+
+    expect((await latestVerifications([v1.id])).get(v1.id)).toBeUndefined()
+    const all = await goalDeliveries(f.workspaceId)
+    expect(all.ok && all.value[0]).toMatchObject({ round: 0, needsHumanReason: null, latestVerification: null })
+  })
+})
+
+describe('retryGoal', () => {
+  it('moves a needs_human version back to integrating with a fresh round window, and says so once', async (): Promise<void> => {
+    const f = await seedWorkspace()
+    const v1 = await seedDelivery(f, 1)
+    await prisma.goalDelivery.update({
+      where: { id: v1.id },
+      data: { status: 'needs_human', round: 3, roundBase: 0, roundRunFailures: 2, needsHumanReason: 'the cap' },
+    })
+
+    expect(await retryGoal(f.workspaceId, 1)).toEqual({ ok: true, value: { round: 3 } })
+
+    expect(await prisma.goalDelivery.findUniqueOrThrow({ where: { id: v1.id } })).toMatchObject({
+      status: 'integrating',
+      round: 3,
+      roundBase: 3,
+      roundRunFailures: 0,
+      needsHumanReason: null,
+    })
+    const retried = await eventsOf(f.workspaceId, 'workspace_goal_retried')
+    expect(retried).toEqual([{ taskId: null, payload: { version: 1, round: 3 }, actor: 'human' }])
+
+    // A second retry finds nothing to retry.
+    expect(await retryGoal(f.workspaceId, 1)).toEqual({ ok: false, error: { kind: 'goal_not_needs_human', goalVersion: 1, status: 'integrating' } })
+    expect(await eventsOf(f.workspaceId, 'workspace_goal_retried')).toHaveLength(1)
+  })
+
+  it('refuses a version that does not need a person, and one that does not exist', async (): Promise<void> => {
+    const f = await seedWorkspace()
+    await seedDelivery(f, 1)
+    await seedDelivery(f, 2, { status: 'accepted' })
+
+    expect(await retryGoal(f.workspaceId, 1)).toEqual({ ok: false, error: { kind: 'goal_not_needs_human', goalVersion: 1, status: 'integrating' } })
+    expect(await retryGoal(f.workspaceId, 2)).toEqual({ ok: false, error: { kind: 'goal_not_needs_human', goalVersion: 2, status: 'accepted' } })
+    expect(await retryGoal(f.workspaceId, 9)).toEqual({ ok: false, error: { kind: 'goal_version_not_found', workspaceId: f.workspaceId, goalVersion: 9 } })
+    expect(await eventsOf(f.workspaceId, 'workspace_goal_retried')).toHaveLength(0)
+  })
+
+  it('stamps a retry whose event a crash already wrote, without a second event', async (): Promise<void> => {
+    const f = await seedWorkspace()
+    const v1 = await seedDelivery(f, 1)
+    await prisma.goalDelivery.update({ where: { id: v1.id }, data: { status: 'needs_human', round: 2 } })
+    await prisma.executionEvent.create({
+      data: { workspaceId: f.workspaceId, type: 'workspace_goal_retried', actor: 'human', payload: { version: 1, round: 2 } },
+    })
+
+    expect(await retryGoal(f.workspaceId, 1)).toEqual({ ok: true, value: { round: 2 } })
+    expect(await eventsOf(f.workspaceId, 'workspace_goal_retried')).toHaveLength(1)
+  })
+})
+
+describe('abandonGoal (Conductor Plan 4b)', () => {
+  it('is refused while a verification run holds the version', async (): Promise<void> => {
+    const f = await seedWorkspace()
+    const v1 = await seedDelivery(f, 1)
+    await seedPackageTask(f, 1, 'a', { status: 'done', integratedAt: new Date() })
+    const run = await prisma.slaveRun.create({ data: { slaveId: f.slaveId, kind: 'verification', goalDeliveryId: v1.id, status: 'working' } })
+    await prisma.goalDelivery.update({ where: { id: v1.id }, data: { status: 'verifying', round: 1, activeRunId: run.id } })
+
+    expect(await abandonGoal(f.workspaceId, 1)).toEqual({
+      ok: false,
+      error: { kind: 'goal_version_busy', goalVersion: 1, holder: `verification run ${run.id}` },
+    })
+    expect((await prisma.goalDelivery.findUniqueOrThrow({ where: { id: v1.id } })).status).toBe('verifying')
+  })
+
+  it('abandons a version that needs a person', async (): Promise<void> => {
+    const f = await seedWorkspace()
+    const v1 = await seedDelivery(f, 1)
+    const rework = await seedPackageTask(f, 1, 'a', { status: 'rework' })
+    await prisma.goalDelivery.update({ where: { id: v1.id }, data: { status: 'needs_human', round: 3 } })
+
+    expect(await abandonGoal(f.workspaceId, 1)).toEqual({ ok: true, value: { cancelled: [rework.taskId] } })
+    expect((await prisma.goalDelivery.findUniqueOrThrow({ where: { id: v1.id } })).status).toBe('abandoned')
   })
 })

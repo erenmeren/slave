@@ -645,6 +645,21 @@ describe('the orchestrator CLI', () => {
     expect(`${bad.stdout}${bad.stderr}`).toMatch(/--version must be a positive integer/)
   })
 
+  it('retry-goal sends a needs_human version back to integrating, and exits non-zero on any other', async (): Promise<void> => {
+    await seedGoalDelivery(1, 'integrating', 'done')
+    await prisma.goalDelivery.updateMany({ where: { workspaceId: fixture.workspaceId }, data: { status: 'needs_human', round: 2 } })
+
+    const result = await runCli(['retry-goal', '--workspace', fixture.workspaceId, '--version', '1'])
+
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.stdout)).toEqual({ round: 2 })
+    expect(await prisma.goalDelivery.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })).toMatchObject({ status: 'integrating', roundBase: 2 })
+
+    const again = await runCli(['retry-goal', '--workspace', fixture.workspaceId, '--version', '1'])
+    expect(again.code).not.toBe(0)
+    expect(`${again.stdout}${again.stderr}`).toContain('goal v1 is integrating, not waiting for a person; there is nothing to retry')
+  })
+
   it('request-change writes a new version carrying the words', async (): Promise<void> => {
     await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'Ship the checkout flow.'])
 

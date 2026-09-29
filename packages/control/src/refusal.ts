@@ -210,6 +210,9 @@ export type ControlRefusal =
   | { readonly kind: 'goal_not_merged'; readonly goalVersion: number; readonly branch: string; readonly into: string }
   /** Plan 4a D9: `confirmGoalMerge` on a version that has not been accepted yet. */
   | { readonly kind: 'goal_not_accepted'; readonly goalVersion: number; readonly status: string }
+  /** Conductor Plan 4b D9: `retryGoal` on a version the verification loop has not stopped on
+   *  (`needs_human`) -- nothing to retry. */
+  | { readonly kind: 'goal_not_needs_human'; readonly goalVersion: number; readonly status: string }
   | { readonly kind: 'duplicate_name'; readonly name: string }
   | { readonly kind: 'template_not_found'; readonly templateId: string }
   /** M47 R1: a capability key nothing in the taxonomy table has. Nothing matches on a key that is
@@ -744,6 +747,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return `goal v${String(refusal.goalVersion)} still has work in flight (${refusal.holder}); stop it before abandoning the version`
     case 'goal_not_accepted':
       return `goal v${String(refusal.goalVersion)} is ${refusal.status}, not accepted; there is nothing to confirm yet`
+    case 'goal_not_needs_human':
+      return `goal v${String(refusal.goalVersion)} is ${refusal.status}, not waiting for a person; there is nothing to retry`
     case 'goal_not_merged':
       return `${refusal.branch} is not merged into ${refusal.into}; merge it by hand first`
     case 'duplicate_name':

@@ -63,6 +63,75 @@ export async function goalEventSaid(
   return row !== null
 }
 
+/**
+ * Conductor Plan 4b: whether the workspace's log already has `type` with every one of `fields` in
+ * its payload -- {@link goalEventSaid} for the events a version can see more than once (one
+ * `workspace.verified` per run, one `workspace.goal_retried` per round, one `task.rework` per task
+ * and round). `since` narrows it to events after a sequence number. Read in the lock's
+ * transaction, for the same reason.
+ */
+export async function goalEventWith(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  type: 'workspace_verified' | 'workspace_goal_retried' | 'workspace_goal_needs_human' | 'task_rework',
+  fields: Readonly<Record<string, string | number>>,
+  options: { readonly taskId?: string; readonly since?: bigint } = {},
+): Promise<boolean> {
+  const row = await tx.executionEvent.findFirst({
+    where: {
+      workspaceId,
+      type,
+      ...(options.taskId === undefined ? {} : { taskId: options.taskId }),
+      ...(options.since === undefined ? {} : { seq: { gt: options.since } }),
+      AND: Object.entries(fields).map(([key, value]) => ({ payload: { path: [key], equals: value } })),
+    },
+    select: { seq: true },
+  })
+  return row !== null
+}
+
+/**
+ * Conductor Plan 4b: one verification round's verdict as a person (`goal-status`) and the
+ * Supervisor's world (Task 7) read it -- the counts, and the keys that failed.
+ */
+export interface LatestVerification {
+  readonly round: number
+  readonly pass: number
+  readonly fail: number
+  readonly unverifiable: number
+  readonly failedKeys: readonly string[]
+}
+
+/**
+ * The latest verification of each delivery that has one: its highest round's rows, from the run
+ * that wrote them last (an unusable run writes none, so a round has one writer in practice; the
+ * latest wins if it ever had two). The one loader both readers use, so they cannot disagree.
+ */
+export async function latestVerifications(deliveryIds: readonly string[]): Promise<ReadonlyMap<string, LatestVerification>> {
+  if (deliveryIds.length === 0) return new Map()
+  const rows = await prisma.verificationResult.findMany({
+    where: { goalDeliveryId: { in: [...deliveryIds] } },
+    orderBy: [{ round: 'desc' }, { createdAt: 'desc' }, { key: 'asc' }],
+    select: { goalDeliveryId: true, round: true, runId: true, key: true, status: true },
+  })
+  const chosen = new Map<string, { readonly round: number; readonly runId: string }>()
+  for (const row of rows) {
+    if (!chosen.has(row.goalDeliveryId)) chosen.set(row.goalDeliveryId, { round: row.round, runId: row.runId })
+  }
+  const out = new Map<string, LatestVerification>()
+  for (const [deliveryId, { round, runId }] of chosen) {
+    const mine = rows.filter((row) => row.goalDeliveryId === deliveryId && row.runId === runId).toSorted((a, b) => a.key.localeCompare(b.key))
+    out.set(deliveryId, {
+      round,
+      pass: mine.filter((row) => row.status === 'pass').length,
+      fail: mine.filter((row) => row.status === 'fail').length,
+      unverifiable: mine.filter((row) => row.status === 'unverifiable').length,
+      failedKeys: mine.filter((row) => row.status === 'fail').map((row) => row.key),
+    })
+  }
+  return out
+}
+
 export interface GoalDeliveryView {
   readonly goalVersion: number
   // Conductor Plan 4b: widened with the verification loop's two states -- `verifying` while a
@@ -74,6 +143,12 @@ export interface GoalDeliveryView {
   readonly acceptedAt: string | null
   readonly mergedAt: string | null
   readonly mergeError: string | null
+  /** Plan 4b: the verification round the version is on (0 before the first). */
+  readonly round: number
+  /** Plan 4b (D6/D7): why the loop stopped, while the version is `needs_human`. */
+  readonly needsHumanReason: string | null
+  /** Plan 4b: the latest concluded round's verdict, or null before any. */
+  readonly latestVerification: LatestVerification | null
   readonly packages: readonly { readonly taskId: string; readonly key: string; readonly status: string; readonly integrated: boolean }[]
 }
 
@@ -96,6 +171,7 @@ export async function goalDeliveries(
     where: { workspaceId, workPackage: { goalVersion: { in: rows.map((row) => row.goalVersion) } } },
     select: { id: true, status: true, integratedAt: true, workPackage: { select: { key: true, goalVersion: true } } },
   })
+  const latest = await latestVerifications(rows.map((row) => row.id))
   return ok(
     rows.map((row) => ({
       goalVersion: row.goalVersion,
@@ -105,6 +181,9 @@ export async function goalDeliveries(
       acceptedAt: row.acceptedAt?.toISOString() ?? null,
       mergedAt: row.mergedAt?.toISOString() ?? null,
       mergeError: row.mergeError,
+      round: row.round,
+      needsHumanReason: row.needsHumanReason,
+      latestVerification: latest.get(row.id) ?? null,
       packages: tasks
         .filter((task) => task.workPackage?.goalVersion === row.goalVersion)
         .map((task) => ({ taskId: task.id, key: task.workPackage?.key ?? '', status: task.status, integrated: task.integratedAt !== null }))
@@ -159,6 +238,11 @@ export async function abandonGoal(
       if (delivery.status === 'abandoned' || delivery.mergedAt !== null) {
         throw new Refused({ kind: 'goal_version_closed', goalVersion, status: delivery.mergedAt !== null ? 'merged' : delivery.status })
       }
+      // Plan 4b: a verification run in flight would conclude into a version nobody wants -- and its
+      // conclusion may rework a package this call just cancelled. Stop it first, like a task's run.
+      if (delivery.activeRunId !== null) {
+        throw new Refused({ kind: 'goal_version_busy', goalVersion, holder: `verification run ${delivery.activeRunId}` })
+      }
       const ids = (await tx.task.findMany({ where: { workspaceId, workPackage: { goalVersion } }, select: { id: true } })).map((task) => task.id)
       if (ids.length > 0) await tx.$queryRaw`SELECT id FROM "Task" WHERE id = ANY(${ids}::text[]) FOR UPDATE`
       const tasks = await tx.task.findMany({
@@ -208,6 +292,48 @@ export async function abandonGoal(
     userId,
   })
   return ok({ cancelled: ids })
+}
+
+/**
+ * The person sends a goal version the verification loop stopped on (`needs_human`) round again
+ * (Plan 4b D9): back to `integrating`, with a fresh round window -- `roundBase = round`, so the
+ * round cap counts from here, and the rounds already spent stay in the report -- the round's
+ * unusable-run count reset and the reason cleared. Its failing packages, if any, are already in
+ * `rework`; an all-integrated version is verified again on the goal pass's next tick.
+ *
+ * Under the delivery's lock, in the 4a order: `workspace.goal_retried` written if missing (one per
+ * round: a version cannot need a person twice in one round, because every later stop is in a
+ * later round), THEN the guarded move. A crash between the two is finished by the next retry,
+ * which finds the event.
+ */
+export async function retryGoal(
+  workspaceId: string,
+  goalVersion: number,
+  principal?: Principal,
+): Promise<Result<{ readonly round: number }, ControlRefusal>> {
+  const found = await prisma.goalDelivery.findUnique({ where: { workspaceId_goalVersion: { workspaceId, goalVersion } }, select: { id: true } })
+  if (found === null) return err({ kind: 'goal_version_not_found', workspaceId, goalVersion })
+
+  // The refusal below is reached before anything is written, so returning it commits nothing.
+  return withDeliveryLock(found.id, async (tx): Promise<Result<{ readonly round: number }, ControlRefusal>> => {
+    const delivery = await tx.goalDelivery.findUniqueOrThrow({ where: { id: found.id } })
+    if (delivery.status !== 'needs_human') return err({ kind: 'goal_not_needs_human', goalVersion, status: delivery.status })
+    const round = delivery.round
+    if (!(await goalEventWith(tx, workspaceId, 'workspace_goal_retried', { version: goalVersion, round }))) {
+      await appendEvent({
+        type: 'workspace.goal_retried',
+        workspaceId,
+        actor: 'human',
+        payload: { version: goalVersion, round },
+        userId: principal?.userId ?? null,
+      })
+    }
+    await tx.goalDelivery.updateMany({
+      where: { id: delivery.id, status: 'needs_human' },
+      data: { status: 'integrating', roundBase: round, roundRunFailures: 0, needsHumanReason: null },
+    })
+    return ok({ round })
+  })
 }
 
 /**

@@ -102,6 +102,7 @@ import {
   renameCompanyTeam,
   renameTeam,
   requestChange,
+  retryGoal,
   requestPause,
   requestStop,
   restoreWorkspace,
@@ -361,6 +362,12 @@ const USAGE = `usage: orchestrator <command> [options]
                                        package tasks is running, in review or merging -- stop it
                                        first. The integration branch is kept. Prints the cancelled
                                        task ids as JSON.
+  retry-goal --workspace <id> --version <n>
+                                       send a goal version the verification loop stopped on
+                                       (needs_human) round again: back to integrating with a fresh
+                                       round window, verified again once every package is on its
+                                       integration branch. Refused (non-zero) for a version in any
+                                       other state. Prints the round it was retried at as JSON.
   confirm-goal-merge --workspace <id> --version <n>
                                        say you merged an accepted goal version's integration branch
                                        into the base branch by hand (after a merge git refused, the
@@ -2311,6 +2318,14 @@ export async function main(argv: readonly string[]): Promise<number> {
     case 'abandon-goal': {
       const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
       const result = await abandonGoal(workspaceId, goalVersionFlag(requireFlag(flags, 'version')))
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`${JSON.stringify(result.value)}\n`)
+      return 0
+    }
+
+    case 'retry-goal': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const result = await retryGoal(workspaceId, goalVersionFlag(requireFlag(flags, 'version')))
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`${JSON.stringify(result.value)}\n`)
       return 0

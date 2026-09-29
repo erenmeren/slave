@@ -168,5 +168,9 @@ describe('refusalText for the goal-version verbs (Conductor Plan 4a)', () => {
     expect(refusalText({ kind: 'goal_not_merged', goalVersion: 1, branch: 'slaveofai/goal-v1-abcd1234', into: 'main' })).toBe(
       'slaveofai/goal-v1-abcd1234 is not merged into main; merge it by hand first',
     )
+    // Conductor Plan 4b (D9): only a version the loop stopped on can be retried.
+    expect(refusalText({ kind: 'goal_not_needs_human', goalVersion: 1, status: 'integrating' })).toBe(
+      'goal v1 is integrating, not waiting for a person; there is nothing to retry',
+    )
   })
 })
