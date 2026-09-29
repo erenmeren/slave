@@ -1,0 +1,122 @@
+import { describe, expect, it } from 'vitest'
+import { reportCaveats } from '../../src/goalReport/caveats.js'
+import type { GoalReport, GoalReportPackage, GoalReportRequirement } from '../../src/goalReport/types.js'
+
+// (builders repeated from markdown.test.ts -- a test file must not import another test file)
+
+function requirement(over: Partial<GoalReportRequirement> = {}): GoalReportRequirement {
+  return {
+    key: 'R1',
+    text: 'hsql --format csv prints CSV',
+    source: 'Add a CSV output mode.',
+    packageKey: 'report',
+    verdict: { round: 1, runId: 'run-v1', status: 'pass', check: 'hsql --format csv q.sql', output: 'a,b\n1,2', reason: '' },
+    history: [{ round: 1, status: 'pass' }],
+    ...over,
+  }
+}
+
+function pkg(over: Partial<GoalReportPackage> = {}): GoalReportPackage {
+  return {
+    key: 'report',
+    title: 'CSV report mode',
+    isIntegration: false,
+    requirementKeys: ['R1'],
+    ownedPaths: ['src/report/**'],
+    dependsOn: [],
+    persona: 'Backend Engineer',
+    seat: 'Alex',
+    taskId: 't1',
+    taskStatus: 'done',
+    integrated: true,
+    mergedFiles: ['src/report/csv.py'],
+    mergedFilesTruncated: false,
+    reportedFiles: ['src/report/csv.py'],
+    report: { runId: 'run-i1', requirements: [{ key: 'R1', status: 'done', evidence: 'pytest -k csv' }], workflowDone: 3, workflowTotal: 4 },
+    implementationRuns: 1,
+    ...over,
+  }
+}
+
+function report(over: Partial<GoalReport> = {}): GoalReport {
+  return {
+    workspaceId: 'ws-1',
+    workspaceName: 'Harlequin',
+    goalVersion: 2,
+    versions: [1, 2],
+    goal: 'Add a CSV output mode.',
+    state: 'merged',
+    delivery: {
+      integrationBranch: 'slaveofai/goal-v2-ws-1',
+      baseBranch: 'main',
+      baseCommit: 'b'.repeat(40),
+      verifiedCommit: 'c'.repeat(40),
+      round: 1,
+      roundBase: 0,
+      roundCap: 3,
+      acceptedAt: '2026-09-29T10:05:00.000Z',
+      mergedAt: '2026-09-29T10:06:00.000Z',
+      merge: { by: 'system', commit: 'c'.repeat(40), into: 'main' },
+      mergeError: null,
+      needsHumanReason: null,
+      abandonedAt: null,
+    },
+    decision: { mode: 'single', reason: 'fits one session', decidedBy: 'model', fallback: false, at: '2026-09-29T10:00:00.000Z' },
+    requirements: [requirement()],
+    rounds: [{ round: 1, runId: 'run-v1', verifier: 'Sam', commit: 'c'.repeat(40), at: '2026-09-29T10:04:00.000Z', pass: 1, fail: 0, unverifiable: 0 }],
+    packages: [pkg()],
+    verifier: 'Sam',
+    questions: [],
+    spend: {
+      runsMeasuredUsd: 3.9,
+      runsUnmeasured: 0,
+      runsLive: 0,
+      conductorMeasuredUsd: 0.2,
+      conductorUnmeasuredCalls: 0,
+      supervisorMeasuredUsd: 0.02,
+      supervisorUnmeasuredCalls: 0,
+      versionUsd: 4.12,
+      projectSpentUsd: 12.4,
+      projectBudgetUsd: 20,
+    },
+    trail: [{ at: '2026-09-29T10:00:00.000Z', text: 'Size decision: one package does the whole goal.', detail: 'fits one session', detailBy: 'model', packageKey: null }],
+    trailOmitted: 0,
+    asOf: '2026-09-29T10:06:00.000Z',
+    ...over,
+  }
+}
+
+describe('reportCaveats', () => {
+  it('is empty for a clean merged version', () => {
+    expect(reportCaveats(report())).toEqual([])
+  })
+
+  it.each([
+    ['requirements not extracted', report({ requirements: null, state: 'not_conducted', delivery: null, rounds: [] }), /have not been extracted yet/],
+    ['not conducted', report({ state: 'not_conducted', delivery: null, rounds: [] }), /has not been conducted yet/],
+    ['a fallback decision', report({ decision: { ...report().decision!, fallback: true } }), /delivered as one package by default/],
+    ['no round yet', report({ state: 'integrating', rounds: [] }), /No verification round has run yet/],
+    ['rework after a round', report({ state: 'integrating', packages: [pkg({ taskStatus: 'rework', integrated: false })] }), /from round 1; package report is being worked on again/],
+    ['unverifiable', report({ requirements: [requirement({ verdict: { ...requirement().verdict!, status: 'unverifiable', reason: 'no network' } })] }), /could not check R1; the version cannot be accepted until it is/],
+    ['trimmed evidence', report({ requirements: [requirement({ verdict: { ...requirement().verdict!, output: 'a\n… [120 characters cut] …\nb' } })] }), /evidence for R1 was trimmed/],
+    ['abandoned', report({ state: 'abandoned' }), /abandoned; nothing of it reached main/],
+    ['unmeasured runs', report({ spend: { ...report().spend, runsUnmeasured: 2 } }), /2 runs did not report their cost/],
+    ['live runs', report({ spend: { ...report().spend, runsLive: 1 } }), /1 run is still going/],
+    ['files not recorded', report({ packages: [pkg({ mergedFiles: null })] }), /files report merged were not recorded/],
+    ['files cut', report({ packages: [pkg({ mergedFilesTruncated: true })] }), /cut at 500 files per merge/],
+    ['trail cut', report({ trailOmitted: 7 }), /newest 1000 entries; 7 older entries are left out/],
+  ])('says so when %s', (_name, value, expected) => {
+    expect(reportCaveats(value).join('\n')).toMatch(expected)
+  })
+
+  it('says a hand merge onto a moved base landed a tree nobody verified', () => {
+    const d = report().delivery!
+    const caveats = reportCaveats(report({ delivery: { ...d, merge: { by: 'human', commit: 'd'.repeat(40), into: 'main' } } }))
+    expect(caveats.join('\n')).toContain(`A person merged this version into main by hand (commit ${'d'.repeat(12)}). That tree combines the verified commit ${'c'.repeat(12)} with what main gained since the cut, and was not itself verified.`)
+  })
+
+  it('says nothing about a person who fast-forwarded to the verified commit', () => {
+    const d = report().delivery!
+    expect(reportCaveats(report({ delivery: { ...d, merge: { by: 'human', commit: 'c'.repeat(40), into: 'main' } } }))).toEqual([])
+  })
+})
