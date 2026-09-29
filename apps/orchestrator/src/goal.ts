@@ -172,7 +172,8 @@ export async function acceptInLock(tx: Prisma.TransactionClient, deliveryId: str
 export function needsHumanRemedy(workspaceId: string, version: number): string {
   const v = String(version)
   return (
-    `Fix what it needs, then run retry-goal --workspace ${workspaceId} --version ${v} to verify it again, ` +
+    `Read goal-status --workspace ${workspaceId} --version ${v} for the verdict, then run ` +
+    `retry-goal --workspace ${workspaceId} --version ${v} to give it a fresh window of verification rounds, ` +
     `or abandon-goal --workspace ${workspaceId} --version ${v} to move on.`
   )
 }

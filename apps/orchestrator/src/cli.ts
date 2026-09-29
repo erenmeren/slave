@@ -351,10 +351,12 @@ const USAGE = `usage: orchestrator <command> [options]
   goal-status --workspace <id> [--version <n>]
                                        each conducted goal version's delivery, oldest first (or one,
                                        with --version): its integration branch and the commit it was
-                                       cut at, integrating/accepted/abandoned, when it was accepted
-                                       and merged, a merge git refused, and each package task with
-                                       its status and whether it is on the integration branch. As
-                                       JSON.
+                                       cut at, integrating/verifying/accepted/needs_human/abandoned,
+                                       when it was accepted and merged, a merge git refused, the
+                                       verification round it is on, why it needs a person, the latest
+                                       round's verdict (pass/fail/unverifiable counts and the failed
+                                       requirement keys), and each package task with its status and
+                                       whether it is on the integration branch. As JSON.
   abandon-goal --workspace <id> --version <n>
                                        move on from a goal version: every unfinished package task of
                                        it is cancelled and the version is abandoned, which lets the
