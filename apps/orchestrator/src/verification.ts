@@ -97,11 +97,16 @@ export const VERIFICATION_ARTIFACT_PATTERNS = {
     '.gradle',
     '.venv',
     'venv',
+    // Final wave M8: browser-test reports, property-test examples, and `out/` build output.
+    'test-results',
+    'playwright-report',
+    '.hypothesis',
+    'out',
   ],
   directorySuffixes: ['.egg-info'],
-  fileNames: ['.coverage', '.DS_Store'],
+  fileNames: ['.coverage', '.DS_Store', '.eslintcache'],
   filePrefixes: ['.coverage.'],
-  fileSuffixes: ['.pyc', '.pyo'],
+  fileSuffixes: ['.pyc', '.pyo', '.tsbuildinfo', '.log'],
 } as const
 
 const ARTIFACT_DIRECTORIES: ReadonlySet<string> = new Set(VERIFICATION_ARTIFACT_PATTERNS.directories)

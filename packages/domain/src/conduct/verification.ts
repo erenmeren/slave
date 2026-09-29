@@ -264,7 +264,7 @@ export function renderVerificationProtocol(requirementKeys: readonly string[], v
   return [
     'You verify; you do not fix. For EACH requirement above:',
     `1. Write a check -- a command, a script or a test -- in the scratch directory $SLAVEOFAI_VERIFY_DIR (${verifyDir}). Never in the repository: writes there are denied, and a verification that changed the repository is thrown away.`,
-    '2. Run it against this checkout.',
+    '2. Run it against this checkout. Send any output files your checks produce to $SLAVEOFAI_VERIFY_DIR, not into the checkout.',
     '3. Decide: pass (the check shows the requirement holds), fail (it shows it does not), or unverifiable (no check you can run here can show it either way -- say why).',
     'End your final message with this block, exactly once, one item per requirement key:',
     `<${SLAVE_VERIFICATION_TAG}>${JSON.stringify(example)}</${SLAVE_VERIFICATION_TAG}>`,

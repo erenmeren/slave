@@ -424,7 +424,23 @@ describe('dispatchVerification', () => {
     for (const artifact of ['__pycache__/a.pyc', 'a/b/node_modules/x.js', '.coverage', '.coverage.x', 'm.pyo', 'x.egg-info/PKG-INFO', 'a/.DS_Store', 'target/debug/app', '.venv/bin/python']) {
       expect(isVerificationArtifact(artifact), artifact).toBe(true)
     }
-    for (const source of ['src/new_module.py', 'build.gradle', 'coverage.ts', 'docs/dist.md', 'src/targets.rs', 'egg-info.txt']) {
+    // Final wave M8: browser-test reports, property-test caches, lint caches, incremental type
+    // builds, logs and `out/` build output.
+    for (const artifact of [
+      'test-results/run/trace.zip',
+      'playwright-report/index.html',
+      '.hypothesis/examples/x',
+      '.eslintcache',
+      'web/.eslintcache',
+      'tsconfig.tsbuildinfo',
+      'packages/a/tsconfig.test.tsbuildinfo',
+      'npm-debug.log',
+      'logs/server.log',
+      'out/index.html',
+    ]) {
+      expect(isVerificationArtifact(artifact), artifact).toBe(true)
+    }
+    for (const source of ['src/new_module.py', 'build.gradle', 'coverage.ts', 'docs/dist.md', 'src/targets.rs', 'egg-info.txt', 'src/out.ts', 'src/logger.ts', 'log.md']) {
       expect(isVerificationArtifact(source), source).toBe(false)
     }
   })

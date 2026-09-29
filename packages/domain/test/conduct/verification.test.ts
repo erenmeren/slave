@@ -195,6 +195,8 @@ describe('rendering', () => {
     const protocol = renderVerificationProtocol(['R1', 'R2'], '/state/runs/r1/verify')
     expect(protocol).toContain('$SLAVEOFAI_VERIFY_DIR (/state/runs/r1/verify)')
     expect(protocol).toContain('<slave-verification>')
+    // Final wave M8: a check's output files belong in the scratch directory, not the checkout.
+    expect(protocol).toContain('2. Run it against this checkout. Send any output files your checks produce to $SLAVEOFAI_VERIFY_DIR, not into the checkout.')
   })
 
   it('bounds the rework reason and names each failing requirement', () => {
