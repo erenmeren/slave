@@ -83,6 +83,15 @@ describe('buildTeamLive', () => {
     expect(withGoal.stats.goalVersion).toBe(3)
   })
 
+  // Conductor Plan 5 (D9): `stat-goal`'s Report link goes to the newest version that has a
+  // report -- none for a plain project, the version once its requirements are recorded.
+  it('carries the newest goal version with a report, and null when there is none', async () => {
+    expect((await buildTeamLive(fx.workspaceId))!.stats.reportVersion).toBe(null)
+
+    await prisma.requirementSet.create({ data: { workspaceId: fx.workspaceId, goalVersion: 1, items: [{ key: 'R1', text: 't', source: 's' }] } })
+    expect((await buildTeamLive(fx.workspaceId))!.stats.reportVersion).toBe(1)
+  })
+
   it('404s through the route for an unknown workspace', async () => {
     const res = await GET(new Request('http://x'), { params: Promise.resolve({ workspaceId: 'nope' }) })
     expect(res.status).toBe(404)

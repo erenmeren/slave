@@ -215,6 +215,16 @@ export function TeamLive({
                   {' · '}
                 </>
               )}
+              {/* Conductor Plan 5 (D9): the newest goal version's report, between the version and
+                * the edit affordance. Absent when no version has a report yet (a planned project). */}
+              {view.stats.reportVersion !== null && (
+                <>
+                  <Link data-testid="goal-report-link" href={`/w/${workspaceId}/goals/${String(view.stats.reportVersion)}`} className="text-accent">
+                    Report
+                  </Link>
+                  {' · '}
+                </>
+              )}
               <Link data-testid="goal-edit" href={`/w/${workspaceId}/settings#goal`} className="text-accent">
                 Edit goal
               </Link>

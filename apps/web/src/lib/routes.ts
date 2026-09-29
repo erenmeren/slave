@@ -189,9 +189,11 @@ export function breadcrumbOf(pathname: string, projectName: string | null): read
     return [{ text: hit?.text ?? 'Projects', last: true }]
   }
   const section = sectionOf(pathname)
+  // Conductor Plan 5 (D9): a goal version's report is a page of the project, not a tab, so it
+  // lights no tab (`sectionOf` answers null) but still names itself in the last crumb.
   const leaf =
     TABS.find((tab) => tab.id === section && tab.id !== 'team')?.label ??
-    (section === 'settings' ? 'Settings' : null)
+    (section === 'settings' ? 'Settings' : segmentOf(pathname) === 'goals' ? 'Goal report' : null)
   const project: Crumb = { text: projectName ?? workspaceId, last: leaf === null }
   const crumbs: Crumb[] = [{ text: 'Projects', last: false }, project]
   if (leaf !== null) crumbs.push({ text: leaf, last: true })

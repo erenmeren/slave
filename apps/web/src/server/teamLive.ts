@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import type { ProviderKind } from '@slave-of-ai/control'
+import { latestReportVersion, type ProviderKind } from '@slave-of-ai/control'
 import { USER_CARD_LABEL, type SlaveLifecycle, type SlaveStatus } from '@slave-of-ai/domain'
 import { cardStateFor, toneForStatus, type CardState } from '../lib/tones'
 import { progressOf } from '../lib/progress'
@@ -63,6 +63,11 @@ export interface TeamLiveSnapshot {
     readonly done: number
     readonly goal: string | null
     readonly goalVersion: number | null
+    /**
+     * Conductor Plan 5 (D9): the newest goal version that has a report, which `stat-goal`'s note
+     * links to. Null for a planned project, and for a conducted one before its first requirements.
+     */
+    readonly reportVersion: number | null
     /**
      * THE TWO HOLES BESIDE THE SPEND TOTAL (M61 Task 11). `stat-spend` shows
      * `shellFacts.status.spentUsd`, and M32's upper-bound policy -- restated in `server/brief.ts`'s
@@ -134,16 +139,18 @@ export interface TeamLiveSnapshot {
  * composed reads Overview and Organization already make -- `buildOverviewSnapshot` for the live
  * run/task facts, `buildOrganization` for why each seat exists -- plus `buildShellFacts` for the
  * header figures `TeamLiveSnapshot.shellFacts` carries, and ONE small query for the next queued
- * task per role (an idle seat's "Idle · next: …", the one fact neither composed read carries).
+ * task per role (an idle seat's "Idle · next: …", the one fact neither composed read carries),
+ * and `latestReportVersion` for `stat-goal`'s Report link (Conductor Plan 5, D9).
  *
  * `null` exactly when the workspace does not exist -- any one of the three reads returning `null`
  * says so, since all three share that same one rule.
  */
 export async function buildTeamLive(workspaceId: string, now: Date = new Date()): Promise<TeamLiveSnapshot | null> {
-  const [overview, organization, shellFacts] = await Promise.all([
+  const [overview, organization, shellFacts, reportVersion] = await Promise.all([
     buildOverviewSnapshot(workspaceId),
     buildOrganization(workspaceId, now),
     buildShellFacts(workspaceId),
+    latestReportVersion(workspaceId),
   ])
   if (overview === null || organization === null || shellFacts === null) return null
 
@@ -219,6 +226,7 @@ export async function buildTeamLive(workspaceId: string, now: Date = new Date())
       // is the reader that already answers "which version is this goal", and two readers of one
       // column are two numbers that can disagree.
       goalVersion: overview.workspace.goal === null ? null : overview.brief.objective.version,
+      reportVersion,
       unmeasuredCalls: overview.brief.cost.unmeasuredCalls,
       unmeasuredRuns: overview.brief.cost.unmeasuredRuns,
       knowledge: overview.brief.knowledge,

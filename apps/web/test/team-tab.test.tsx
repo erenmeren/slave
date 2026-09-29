@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TeamLive } from '../src/components/project/TeamLive.js'
 import { ModeProvider, useMode } from '../src/components/mode/ModeProvider.js'
@@ -116,7 +116,7 @@ function snapshot(rows: readonly TeamLiveRow[], over: Partial<TeamLiveSnapshot> 
   return {
     workspaceId: 'w1',
     rows,
-    stats: { inProgress: 1, done: 3, goal: 'Ship the checkout flow', goalVersion: 2, unmeasuredCalls: 0, unmeasuredRuns: 0, knowledge: { verified: 2, candidates: 1 } },
+    stats: { inProgress: 1, done: 3, goal: 'Ship the checkout flow', goalVersion: 2, reportVersion: 2, unmeasuredCalls: 0, unmeasuredRuns: 0, knowledge: { verified: 2, candidates: 1 } },
     shellFacts: {
       workspace: { id: 'w1', name: 'W' },
       counts: { slavesWorking: 1, tasksActive: 1, slavesPaused: 0 },
@@ -203,7 +203,7 @@ describe('TeamLive', () => {
   })
 
   it('reads stat-work as N in progress and M done', () => {
-    renderTeam(snapshot([row({})], { stats: { inProgress: 1, done: 3, goal: null, goalVersion: null, unmeasuredCalls: 0, unmeasuredRuns: 0, knowledge: { verified: 2, candidates: 1 } } }))
+    renderTeam(snapshot([row({})], { stats: { inProgress: 1, done: 3, goal: null, goalVersion: null, reportVersion: null, unmeasuredCalls: 0, unmeasuredRuns: 0, knowledge: { verified: 2, candidates: 1 } } }))
     const stat = screen.getByTestId('stat-work')
     expect(stat.textContent).toContain('1 in progress')
     expect(stat.textContent).toContain('3 done')
@@ -306,7 +306,7 @@ describe('TeamLive', () => {
   })
 
   it('prints no version at all when there is no goal', () => {
-    renderTeam(snapshot([row({})], { stats: { inProgress: 0, done: 0, goal: null, goalVersion: null, unmeasuredCalls: 0, unmeasuredRuns: 0, knowledge: { verified: 2, candidates: 1 } } }))
+    renderTeam(snapshot([row({})], { stats: { inProgress: 0, done: 0, goal: null, goalVersion: null, reportVersion: null, unmeasuredCalls: 0, unmeasuredRuns: 0, knowledge: { verified: 2, candidates: 1 } } }))
     const stat = screen.getByTestId('stat-goal')
     expect(stat.querySelector('[data-goal-version]')).toBe(null)
     expect(stat.textContent).toContain('No goal yet')
@@ -323,7 +323,7 @@ describe('TeamLive', () => {
 
     renderTeam(
       snapshot([row({})], {
-        stats: { inProgress: 1, done: 3, goal: 'g', goalVersion: 1, unmeasuredCalls: 2, unmeasuredRuns: 3, knowledge: { verified: 2, candidates: 1 } },
+        stats: { inProgress: 1, done: 3, goal: 'g', goalVersion: 1, reportVersion: null, unmeasuredCalls: 2, unmeasuredRuns: 3, knowledge: { verified: 2, candidates: 1 } },
       }),
     )
     const stat = screen.getAllByTestId('stat-spend').at(-1) as HTMLElement
@@ -344,10 +344,24 @@ describe('TeamLive', () => {
     expect(link.getAttribute('href')).toContain('/knowledge')
   })
 
+  // Conductor Plan 5 (D9): `stat-goal`'s note reads `vN · Report · Edit goal`, the Report link
+  // going to the newest version that has a report -- and no link at all when none has one.
+  it("links the latest goal report from stat-goal's note, and nothing when there is none", () => {
+    renderTeam(snapshot([row({})]))
+    const link = screen.getByTestId('goal-report-link')
+    expect(link.getAttribute('href')).toBe('/w/w1/goals/2')
+    expect(link.textContent).toBe('Report')
+    cleanup()
+
+    renderTeam(snapshot([row({})], { stats: { inProgress: 0, done: 0, goal: 'g', goalVersion: 1, reportVersion: null, unmeasuredCalls: 0, unmeasuredRuns: 0, knowledge: { verified: 2, candidates: 1 } } }))
+    expect(screen.getByTestId('stat-goal')).toBeTruthy()
+    expect(screen.queryByTestId('goal-report-link')).toBeNull()
+  })
+
   // Review fix round 1, Important 8: clamped to two lines, with the whole of it one hover away.
   it('clamps the goal line to two lines, with the full text one hover away', () => {
     const goal = 'Ship the checkout flow end to end, including refunds and partial captures.'
-    renderTeam(snapshot([row({})], { stats: { inProgress: 0, done: 0, goal, goalVersion: 4, unmeasuredCalls: 0, unmeasuredRuns: 0, knowledge: { verified: 2, candidates: 1 } } }))
+    renderTeam(snapshot([row({})], { stats: { inProgress: 0, done: 0, goal, goalVersion: 4, reportVersion: null, unmeasuredCalls: 0, unmeasuredRuns: 0, knowledge: { verified: 2, candidates: 1 } } }))
     const line = screen.getByTestId('project-goal-line')
     expect(line.textContent).toBe(goal)
     expect(line.getAttribute('title')).toBe(goal)
