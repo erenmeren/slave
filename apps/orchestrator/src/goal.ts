@@ -6,7 +6,7 @@ import { appendEvent } from '@slave-of-ai/events'
 import { mergeOrAbort, primaryCheckoutReady } from './gitMerge.js'
 import { integrationWorktreePath } from './goalBranch.js'
 import type { TickDeps } from './tick.js'
-import { dispatchVerification, settleStrandedClaim } from './verification.js'
+import { dispatchVerification, lastVerificationFailure, settleStrandedClaim } from './verification.js'
 import { gitIn } from './worktree.js'
 
 /** What the tick lets the goal pass do. */
@@ -69,48 +69,69 @@ export async function runGoalPass(deps: TickDeps, options: GoalPassOptions): Pro
     select: { id: true },
   })
   for (const { id } of open) {
-    let delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { id } })
-    if (delivery.status === 'verifying' && delivery.activeRunId !== null) {
-      // D3/D7 and ruling Q2: a claim whose run is over with nobody concluding it (a daemon that
-      // died, a conclusion that crashed). Settled -- concluded or released -- and read again, so a
-      // released round is dispatched again on this same pass.
-      await settleStrandedClaim(delivery.activeRunId)
-      delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { id } })
+    // Fix round 1, M4: one version whose step throws must not stop the pass for the others.
+    try {
+      await advanceDelivery(deps, options, workspace, id)
+    } catch (error) {
+      console.error(`[goal] goal delivery ${id} could not be moved on this pass:`, error)
     }
-    if (delivery.status === 'verifying') {
-      if (delivery.activeRunId !== null) continue
-      if (delivery.roundRunFailures >= VERIFICATION_RUN_RETRY_CAP) {
-        await endInNeedsHuman(
-          delivery.id,
-          null,
-          `the verifier could not produce a usable verification ${String(VERIFICATION_RUN_RETRY_CAP)} times in round ${String(delivery.round)}`,
-        )
-        continue
-      }
-      // Task 5's rule: a round -- a new one or the same one again -- verifies the whole version,
-      // so it waits for every package to be back on the branch.
-      if (!(await everyPackageIntegrated(workspaceId, delivery.goalVersion))) continue
-      if (options.mayStartRuns) await dispatchVerification(deps, delivery.id)
-      continue
-    }
-    if (delivery.status === 'integrating') {
-      if (!(await everyPackageIntegrated(workspaceId, delivery.goalVersion))) continue
-      // Plan 4b (spec R8/R9): integration is not acceptance. A round of verification is.
-      if (options.mayStartRuns) await dispatchVerification(deps, delivery.id)
-      continue
-    }
-    if (delivery.status !== 'accepted' || delivery.mergedAt !== null || delivery.mergeError !== null) continue
-    if (workspace.autoMerge) {
-      await mergeGoalIntoBase(delivery.id)
-    } else {
-      // Final wave I2: the version waits for the person, and so does every later version (D6) --
-      // said once, the same trip as the other waits (ruling P7), or the wait is silent.
-      await tripOnce(
-        workspaceId,
-        `goal v${String(delivery.goalVersion)} is accepted and autoMerge is off: ` +
-          handMergeInstruction(delivery.integrationBranch, workspace.baseBranch, workspaceId, delivery.goalVersion),
+  }
+}
+
+/** One open delivery's step of {@link runGoalPass}. */
+async function advanceDelivery(
+  deps: TickDeps,
+  options: GoalPassOptions,
+  workspace: { readonly autoMerge: boolean; readonly repoPath: string; readonly baseBranch: string },
+  id: string,
+): Promise<void> {
+  const workspaceId = deps.workspaceId
+  let delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { id } })
+  if (delivery.status === 'verifying' && delivery.activeRunId !== null) {
+    // D3/D7 and ruling Q2: a claim whose run is over with nobody concluding it (a daemon that
+    // died, a conclusion that crashed). Settled -- concluded or released -- and read again, so a
+    // released round is dispatched again on this same pass.
+    await settleStrandedClaim(delivery.activeRunId)
+    delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { id } })
+  }
+  if (delivery.status === 'verifying') {
+    if (delivery.activeRunId !== null) return
+    if (delivery.roundRunFailures >= VERIFICATION_RUN_RETRY_CAP) {
+      const last = await lastVerificationFailure(delivery.id)
+      await endInNeedsHuman(
+        delivery.id,
+        null,
+        `the verifier could not produce a usable verification ${String(VERIFICATION_RUN_RETRY_CAP)} times in round ${String(delivery.round)}` +
+          (last === null ? '' : `; the last: ${last.slice(0, 1000)}`),
       )
+      return
     }
+    // Task 5's rule: a round -- a new one or the same one again -- verifies the whole version,
+    // so it waits for every package to be back on the branch.
+    if (!(await everyPackageIntegrated(workspaceId, delivery.goalVersion))) return
+    if (options.mayStartRuns) await dispatchVerification(deps, delivery.id)
+    return
+  }
+  if (delivery.status === 'integrating') {
+    if (!(await everyPackageIntegrated(workspaceId, delivery.goalVersion))) return
+    // Plan 4b (spec R8/R9): integration is not acceptance. A round of verification is.
+    if (options.mayStartRuns) await dispatchVerification(deps, delivery.id)
+    return
+  }
+  if (delivery.status !== 'accepted' || delivery.mergedAt !== null || delivery.mergeError !== null) return
+  // Fix round 1, M2 (ruling V5): an accepted version whose branch moved since its verification is
+  // verified again, whether or not this pass would merge it -- never handed to a person to merge.
+  if (await withDeliveryLock(delivery.id, async (tx) => reopenIfMovedInLock(tx, delivery.id))) return
+  if (workspace.autoMerge) {
+    await mergeGoalIntoBase(delivery.id)
+  } else {
+    // Final wave I2: the version waits for the person, and so does every later version (D6) --
+    // said once, the same trip as the other waits (ruling P7), or the wait is silent.
+    await tripOnce(
+      workspaceId,
+      `goal v${String(delivery.goalVersion)} is accepted and autoMerge is off: ` +
+        handMergeInstruction(delivery.integrationBranch, workspace.baseBranch, workspaceId, delivery.goalVersion),
+    )
   }
 }
 
@@ -268,18 +289,14 @@ export async function mergeGoalIntoBase(deliveryId: string): Promise<'merged' | 
     if (contained) {
       return landed(tx, delivery, baseTip, baseTip === integrationTip ? 'system' : 'human')
     }
-    // Ruling Q6: the fast-forward lands the integration tip, so it must be the tip the version's
-    // passing verification checked. A branch that moved since (or a row accepted before
-    // verification existed) would land a tree nobody verified: the version waits for the person.
+    // Ruling Q6 and fix round 1 M2 (ruling V5): only the tip the version's passing verification
+    // checked is ever landed. A branch that moved since (or a row accepted before verification
+    // existed) goes back to `integrating` and is verified again -- a wait, never a hand merge.
     if (delivery.verifiedCommit === null || integrationTip !== delivery.verifiedCommit) {
-      await tripOnce(
-        delivery.workspaceId,
-        `goal v${String(version)} is accepted, but ${delivery.integrationBranch} is at ${integrationTip.slice(0, 12)}, not the ` +
-          `commit its verification passed on (${delivery.verifiedCommit === null ? 'none recorded' : delivery.verifiedCommit.slice(0, 12)}), ` +
-          `so merging it now would land a tree nobody verified. ${handMerge}`,
-      )
+      await reopenIfMovedInLock(tx, deliveryId)
       return 'waiting'
     }
+    const verifiedCommit = delivery.verifiedCommit
     if (baseTip !== delivery.baseCommit) {
       await tripOnce(
         delivery.workspaceId,
@@ -296,7 +313,9 @@ export async function mergeGoalIntoBase(deliveryId: string): Promise<'merged' | 
       return 'waiting'
     }
 
-    const merge = await mergeOrAbort(repoPath, ['--ff-only', delivery.integrationBranch])
+    // Fix round 1, M1: to the verified SHA, not the branch name -- a branch that moves between the
+    // check above and this line must not carry an unverified commit into the base branch.
+    const merge = await mergeOrAbort(repoPath, ['--ff-only', verifiedCommit])
     if (!merge.ok) {
       await tx.goalDelivery.updateMany({ where: { id: deliveryId, mergedAt: null }, data: { mergeError: merge.error } })
       await tripOnce(
@@ -307,6 +326,30 @@ export async function mergeGoalIntoBase(deliveryId: string): Promise<'merged' | 
     }
     return landed(tx, delivery, await gitIn(repoPath, 'rev-parse', 'HEAD'), 'system')
   })
+}
+
+/**
+ * Fix round 1, M2 (ruling V5): `accepted` -> `integrating` for a version whose integration branch
+ * is no longer at the commit its verification passed on, so the next pass verifies the new tip,
+ * with a fresh round window (the acceptance's rounds were spent on a tree that is gone). In the
+ * delivery's lock, in the 4a order: `workspace.goal_retried { version, round }` if missing (a
+ * system retry; its `(version, round)` is unique, because a version is accepted in a later round
+ * than any retry before it), then the guarded move. Returns whether it moved.
+ */
+async function reopenIfMovedInLock(tx: Prisma.TransactionClient, deliveryId: string): Promise<boolean> {
+  const delivery = await tx.goalDelivery.findUniqueOrThrow({ where: { id: deliveryId }, include: { workspace: { select: { repoPath: true } } } })
+  if (delivery.status !== 'accepted' || delivery.mergedAt !== null || delivery.mergeError !== null) return false
+  const tip = await gitIn(delivery.workspace.repoPath, 'rev-parse', delivery.integrationBranch)
+  if (delivery.verifiedCommit !== null && tip === delivery.verifiedCommit) return false
+  const version = delivery.goalVersion
+  if (!(await goalEventWith(tx, delivery.workspaceId, 'workspace_goal_retried', { version, round: delivery.round }))) {
+    await appendEvent({ type: 'workspace.goal_retried', workspaceId: delivery.workspaceId, actor: 'system', payload: { version, round: delivery.round } })
+  }
+  const moved = await tx.goalDelivery.updateMany({
+    where: { id: deliveryId, status: 'accepted', mergedAt: null, mergeError: null },
+    data: { status: 'integrating', acceptedAt: null, verifiedCommit: null, roundBase: delivery.round, roundRunFailures: 0, needsHumanReason: null },
+  })
+  return moved.count > 0
 }
 
 /** Who put a goal version into the base branch: this pass's fast-forward, or a person's hand merge. */

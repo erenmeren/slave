@@ -15,10 +15,25 @@ import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
 import { integrationBranchName, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { acceptGoal, runGoalPass } from '../../src/goal.js'
 import { ensureIntegrationBranch, ensureIntegrationWorktree, integrationWorktreePath } from '../../src/goalBranch.js'
 import { worktreeRootFor } from '../../src/worktree.js'
+
+/** Fix round 1, M1: runs inside the merge, after its checks and before git moves anything -- a
+ *  test moves the integration branch here to race the fast-forward. */
+const beforeMerge = vi.hoisted(() => ({ hook: null as (() => void) | null }))
+vi.mock('../../src/gitMerge.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../src/gitMerge.js')>()
+  return {
+    ...original,
+    primaryCheckoutReady: async (repoPath: string, baseBranch: string): Promise<boolean> => {
+      const ready = await original.primaryCheckoutReady(repoPath, baseBranch)
+      beforeMerge.hook?.()
+      return ready
+    },
+  }
+})
 
 const repos: string[] = []
 
@@ -541,23 +556,56 @@ describe('runGoalPass', () => {
     expect(git(['rev-parse', 'main'], f.repoPath)).not.toBe(git(['rev-parse', f.branch], f.repoPath))
   })
 
-  it('does not merge a tip nothing verified: an integration branch that moved since its verification waits, base untouched', async (): Promise<void> => {
+  it('does not merge a tip nothing verified: an integration branch that moved after acceptance is verified again', async (): Promise<void> => {
     const f = await seed()
     await integrateAll(f)
     await acceptVerified(f)
-    const verified = git(['rev-parse', f.branch], f.repoPath)
     const mainBefore = git(['rev-parse', 'main'], f.repoPath)
     commitIn(f.integrationPath, 'late.txt', 'late\n', 'a change after the verification')
 
     await pass(f)
+
+    // Fix round 1, M2 (ruling V5): back to integrating with a fresh round window, said once as a
+    // retry -- never a hand merge of a tree nobody verified.
+    expect(await delivery(f)).toMatchObject({ status: 'integrating', acceptedAt: null, mergedAt: null, verifiedCommit: null, roundBase: 1, roundRunFailures: 0 })
+    expect(git(['rev-parse', 'main'], f.repoPath)).toBe(mainBefore)
+    const retried = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_goal_retried' } })
+    expect(retried.map((event) => [event.actor, event.payload])).toEqual([['system', { version: 1, round: 1 }]])
+    expect((await mergeTrips(f.workspaceId)).join('\n')).not.toContain('by hand')
+
+    await pass(f)
+    expect(await prisma.executionEvent.count({ where: { workspaceId: f.workspaceId, type: 'workspace_goal_retried' } })).toBe(1)
+  })
+
+  it('verifies again an accepted version whose branch moved even with autoMerge off', async (): Promise<void> => {
+    const f = await seed({ autoMerge: false })
+    await integrateAll(f)
+    await acceptVerified(f)
+    commitIn(f.integrationPath, 'late.txt', 'late\n', 'a change after the verification')
+
     await pass(f)
 
-    expect(await delivery(f)).toMatchObject({ status: 'accepted', mergedAt: null, mergeError: null, verifiedCommit: verified })
-    expect(git(['rev-parse', 'main'], f.repoPath)).toBe(mainBefore)
-    const trips = await mergeTrips(f.workspaceId)
-    expect(trips).toHaveLength(1)
-    expect(trips[0]).toContain('not the commit its verification passed on')
-    expect(trips[0]).toContain(verified.slice(0, 12))
+    expect((await delivery(f)).status).toBe('integrating')
+    expect(await mergeTrips(f.workspaceId)).toEqual([])
+  })
+
+  it('fast-forwards to the verified commit, never to a tip the branch moved to during the merge', async (): Promise<void> => {
+    const f = await seed()
+    await integrateAll(f)
+    await acceptVerified(f)
+    const verified = git(['rev-parse', f.branch], f.repoPath)
+    beforeMerge.hook = (): void => {
+      beforeMerge.hook = null
+      commitIn(f.integrationPath, 'raced.txt', 'raced\n', 'a change racing the merge')
+    }
+    try {
+      await pass(f)
+    } finally {
+      beforeMerge.hook = null
+    }
+
+    expect(git(['rev-parse', 'main'], f.repoPath)).toBe(verified)
+    expect(git(['rev-parse', f.branch], f.repoPath)).not.toBe(verified)
   })
 
   it('removes the integration worktree a confirmed hand merge left behind, and keeps the branch', async (): Promise<void> => {

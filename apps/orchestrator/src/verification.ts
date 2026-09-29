@@ -600,10 +600,52 @@ export async function settleStrandedClaim(runId: string): Promise<void> {
   if (activePumpRunIds.has(run.id)) return
   if (run.terminalAt !== null && Date.now() - run.terminalAt.getTime() < STRANDED_CLAIM_GRACE_MS) return
   if (run.status === 'succeeded') {
-    await concludeVerification(brandRunId(run.id))
+    try {
+      await concludeVerification(brandRunId(run.id))
+    } catch (error) {
+      await abandonConclusion(run.id, error)
+    }
     return
   }
   await releaseVerification(run.id)
+}
+
+/**
+ * Fix round 1, M4: a conclusion that throws (the integration branch was deleted, so its tip cannot
+ * be read; a requirement set that no longer parses) would throw the same way on every tick, holding
+ * the claim -- and the version -- forever. It is an unusable run instead (D7): the claim released
+ * first, one run failure counted toward `VERIFICATION_RUN_RETRY_CAP`, the run failed with the error
+ * as its reason (which the cap's `needs_human` reason quotes) by the call that won the release
+ * (ruling Q2), and the checkout removed.
+ */
+export async function abandonConclusion(runId: string, error: unknown): Promise<void> {
+  const run = await prisma.slaveRun.findUnique({
+    where: { id: runId },
+    include: { goalDelivery: { select: { id: true, workspaceId: true, workspace: { select: { repoPath: true } } } } },
+  })
+  if (run === null || run.goalDelivery === null) return
+  const message = (error instanceof Error ? error.message : String(error)).slice(0, 1000)
+  console.error(`[verification] run ${runId} could not be concluded:`, error)
+  if (await releaseClaim(run.goalDelivery.id, run.id)) {
+    await failConcludedRun(run, run.goalDelivery.workspaceId, `verification: the run could not be concluded: ${message}`)
+  }
+  await removeVerificationWorktree(run.goalDelivery.workspace.repoPath, run.worktreePath)
+}
+
+/**
+ * The reason the latest failed verification run of a delivery was failed with -- what the
+ * run-failure cap's `needs_human` reason quotes, so the person reads what kept going wrong.
+ */
+export async function lastVerificationFailure(deliveryId: string): Promise<string | null> {
+  const runs = await prisma.slaveRun.findMany({ where: { goalDeliveryId: deliveryId, kind: 'verification' }, select: { id: true } })
+  if (runs.length === 0) return null
+  const event = await prisma.executionEvent.findFirst({
+    where: { runId: { in: runs.map((r) => r.id) }, type: 'run_failed' },
+    orderBy: { seq: 'desc' },
+    select: { payload: true },
+  })
+  const reason = (event?.payload as { readonly reason?: unknown } | undefined)?.reason
+  return typeof reason === 'string' ? reason : null
 }
 
 /** How many changed or new paths a tamper reason names. */
@@ -740,7 +782,16 @@ export async function concludeVerification(runId: RunId): Promise<void> {
         failed.length === 0 && unverifiable.length === 0
           ? run.verificationTip !== null && run.verificationTip === tip
             ? { kind: 'accept' }
-            : { kind: 'stale' }
+            : // Fix round 1, M3: a stale round spends the window like a failing one, so a branch
+              // that keeps moving under the verifier ends the loop at the cap.
+              roundsUsed >= workspace.verificationRoundCap
+              ? {
+                  kind: 'needs_human',
+                  reason:
+                    `the verification round cap (${String(workspace.verificationRoundCap)}) was reached with no verdict on the ` +
+                    `current tip: ${delivery.integrationBranch} moved while round ${String(now.round)} was being verified`,
+                }
+              : { kind: 'stale' }
           : failed.length === 0
             ? {
                 kind: 'needs_human',

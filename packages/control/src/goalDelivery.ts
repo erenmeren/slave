@@ -298,8 +298,10 @@ export async function abandonGoal(
  * The person sends a goal version the verification loop stopped on (`needs_human`) round again
  * (Plan 4b D9): back to `integrating`, with a fresh round window -- `roundBase = round`, so the
  * round cap counts from here, and the rounds already spent stay in the report -- the round's
- * unusable-run count reset and the reason cleared. Its failing packages, if any, are already in
- * `rework`; an all-integrated version is verified again on the goal pass's next tick.
+ * unusable-run count reset and the reason cleared. A stop leaves its packages as they were (a
+ * stopped loop spends nothing while the person decides), so the goal pass first verifies the
+ * unchanged tree again in a new round; what still fails there is reworked as in any round, now
+ * inside the fresh window.
  *
  * Under the delivery's lock, in the 4a order: `workspace.goal_retried` written if missing (one per
  * round: a version cannot need a person twice in one round, because every later stop is in a

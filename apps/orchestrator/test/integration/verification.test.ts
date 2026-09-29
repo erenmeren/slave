@@ -814,6 +814,27 @@ describe('the gate (concludeVerification)', () => {
     expect(existsSync(claimed.worktreePath)).toBe(false)
   }, 60_000)
 
+  // Fix round 1, M3: a round whose verdict is stale still spends the window, so a branch that
+  // keeps moving under the verifier cannot loop forever.
+  it('ends in needs_human at the round cap when every round\'s tip moved before its verdict', async (): Promise<void> => {
+    const f = await seed({ verificationRoundCap: 2 })
+    const integrationPath = integrationWorktreePath(f.repoPath, 1, f.workspaceId)
+    for (const n of [1, 2]) {
+      const claimed = await claimRound(f)
+      writeFileSync(join(integrationPath, `late-${String(n)}.txt`), 'late\n')
+      git(['add', '-A'], integrationPath)
+      git(['commit', '-q', '-m', `late change ${String(n)}`], integrationPath)
+      await say(f, claimed.runId, verdictText([passes('R1'), passes('R2')]))
+      await concludeVerification(brandRunId(claimed.runId))
+      expect((await deliveryOf(f)).status).toBe(n === 1 ? 'integrating' : 'needs_human')
+    }
+
+    const delivery = await deliveryOf(f)
+    expect(delivery.needsHumanReason).toContain('round cap (2)')
+    expect(delivery.needsHumanReason).toContain('moved')
+    expect(await eventsOfType(f, ['workspace_goal_accepted'])).toEqual([])
+  }, 60_000)
+
   it('goes through verify.ts: a succeeded verification run is concluded, a failed one releases its claim', async (): Promise<void> => {
     const f = await seed()
     const first = await claimRound(f)
@@ -893,6 +914,54 @@ describe('stranded verification claims', () => {
 
     expect(await deliveryOf(f)).toMatchObject({ status: 'accepted', activeRunId: null })
     expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(1)
+  }, 60_000)
+
+  // Fix round 1, M4: a conclusion that throws every time (here: the integration branch is gone, so
+  // its tip cannot be read) must not hold the claim forever nor stop the pass for other versions.
+  it('releases a claim whose conclusion throws, goes on to the other versions, and ends in needs_human naming the error', async (): Promise<void> => {
+    const f = await seed()
+    const claimed = await claimRound(f)
+    await say(f, claimed.runId, verdictText([passes('R1'), passes('R2')]))
+    await prisma.slaveRun.update({ where: { id: claimed.runId }, data: { terminalAt: longAgo() } })
+    git(['worktree', 'remove', '--force', integrationWorktreePath(f.repoPath, 1, f.workspaceId)], f.repoPath)
+    git(['branch', '-D', f.branch], f.repoPath)
+    // Another version, accepted and waiting for a hand merge (autoMerge off): the pass must reach it.
+    const other = `slaveofai/goal-v2-${f.workspaceId.slice(0, 8)}`
+    git(['branch', other, 'main'], f.repoPath)
+    await prisma.goalDelivery.create({
+      data: {
+        workspaceId: f.workspaceId,
+        goalVersion: 2,
+        integrationBranch: other,
+        baseCommit: git(['rev-parse', 'main'], f.repoPath),
+        status: 'accepted',
+        acceptedAt: new Date(),
+        verifiedCommit: git(['rev-parse', other], f.repoPath),
+      },
+    })
+    const deps = depsFor(f.workspaceId, verifier())
+
+    await runGoalPass(deps, { mayStartRuns: true })
+
+    expect(existsSync(claimed.worktreePath)).toBe(false)
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: claimed.runId } })).status).toBe('failed')
+    const failed = await prisma.executionEvent.findFirstOrThrow({ where: { runId: claimed.runId, type: 'run_failed' } })
+    expect((failed.payload as { reason: string }).reason).toContain('could not be concluded')
+    const trips = (await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'guardrail_tripped' } })).map(
+      (event) => (event.payload as { detail: string }).detail,
+    )
+    expect(trips.some((detail) => detail.includes('goal v2 is accepted and autoMerge is off'))).toBe(true)
+    expect((await deliveryOf(f)).activeRunId).toBeNull()
+
+    for (let i = 0; i < 4 && (await deliveryOf(f)).status === 'verifying'; i += 1) {
+      await runGoalPass(deps, { mayStartRuns: true })
+      await drainPumps()
+    }
+
+    const delivery = await deliveryOf(f)
+    expect(delivery).toMatchObject({ status: 'needs_human', activeRunId: null })
+    expect(delivery.needsHumanReason).toContain('could not produce a usable verification 3 times')
+    expect(delivery.needsHumanReason).toContain(f.branch)
   }, 60_000)
 
   it('releases a claim naming a run that does not exist', async (): Promise<void> => {
