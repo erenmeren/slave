@@ -852,10 +852,17 @@ function WorkspaceGoalNeedsHumanCard(props: ActivityCardProps): ReactElement {
 /** Conductor Plan 4b (plan D9): a person's `retry-goal` moved a `needs_human` version back to
  *  `integrating`. `idle`, the same tone `workspace.goal_waiting`'s card carries. */
 function WorkspaceGoalRetriedCard(props: ActivityCardProps): ReactElement {
-  const payload = props.event.payload as { version: number; round: number }
+  const payload = props.event.payload as { version: number; round: number; cause?: 'branch_moved' }
+  const v = String(payload.version)
+  // Final wave M5: `cause: 'branch_moved'` is the goal pass's own retry of an ACCEPTED version, not
+  // a person's retry-goal -- it has no "round it was stuck after" to report.
+  const label =
+    payload.cause === 'branch_moved'
+      ? `goal v${v} went back to verification: its integration branch moved after acceptance`
+      : `goal v${v} retried after round ${String(payload.round)}`
   return (
     <ActivityCard {...props}>
-      <Transition tone="idle" label={`goal v${String(payload.version)} retried after round ${String(payload.round)}`} />
+      <Transition tone="idle" label={label} />
     </ActivityCard>
   )
 }

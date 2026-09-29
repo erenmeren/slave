@@ -138,12 +138,15 @@ export async function buildSupervisorTimeline(
     const type = (DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? row.type) as DomainEventType
     const payload = row.payload as Record<string, unknown>
     const memoryStatus = memoryStatusOf(type, payload)
+    const retryCause = retryCauseOf(type, payload)
     const subject: TimelineSubject = {
       source: 'event',
       type,
       actor: row.actor as 'human' | 'slave' | 'system',
       // M49 R4 (plan erratum E5): the lane of a `memory.recorded` is its payload's status.
       ...(memoryStatus === null ? {} : { memoryStatus }),
+      // Final wave M5: a branch-moved retry is the goal pass's, not a person's request.
+      ...(retryCause === null ? {} : { retryCause }),
     }
     const lane = laneFor(subject)
     if (lane === null) continue
@@ -208,6 +211,15 @@ export async function buildSupervisorTimeline(
   }
 
   return entries.sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+}
+
+/**
+ * Final wave M5: `workspace.goal_retried`'s `cause`, or `null` for every other row and for a retry
+ * that carries none (a person's). Narrowed to the one type and the one value, like
+ * {@link memoryStatusOf} below. Exported because it is PURE.
+ */
+export function retryCauseOf(type: DomainEventType, payload: Record<string, unknown>): 'branch_moved' | null {
+  return type === 'workspace.goal_retried' && payload['cause'] === 'branch_moved' ? 'branch_moved' : null
 }
 
 /**
@@ -337,7 +349,9 @@ function titleFor(
     // Conductor Plan 4b (plan D9): a person's retry-goal, with a fresh round window.
     case 'workspace.goal_retried': {
       const version = payload['version']
-      return `retried goal v${typeof version === 'number' ? String(version) : '?'}`
+      const v = typeof version === 'number' ? String(version) : '?'
+      // Final wave M5: the goal pass's own retry, after the integration branch moved.
+      return payload['cause'] === 'branch_moved' ? `goal v${v} went back to verification` : `retried goal v${v}`
     }
     // M48 R5/R7: a runbook adopted, or stopped. The payload's `title` is not a field this event
     // carries, so without a case of its own it would read as its own type name on the PLAN CHANGE

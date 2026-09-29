@@ -99,6 +99,10 @@ describe('laneFor', () => {
     expect(laneFor({ source: 'event', type: 'task.created', actor: 'human' })).toBe('user_request')
     expect(laneFor({ source: 'event', type: 'task.cancelled', actor: 'system' })).toBe('plan_change')
     expect(laneFor({ source: 'event', type: 'task.cancelled', actor: 'human' })).toBe('user_request')
+    // Final wave M5: a person's retry-goal is their request; the goal pass sending an accepted
+    // version back to verification because its branch moved is work, not a request.
+    expect(laneFor({ source: 'event', type: 'workspace.goal_retried', actor: 'human' })).toBe('user_request')
+    expect(laneFor({ source: 'event', type: 'workspace.goal_retried', actor: 'system', retryCause: 'branch_moved' })).toBe('work')
   })
 
   it('keeps finished work apart from work in flight', () => {

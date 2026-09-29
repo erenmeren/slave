@@ -204,6 +204,9 @@ export type TimelineSubject =
        *  is not a verified result. Optional, so every existing caller compiles unchanged, and read
        *  only by the `memory.recorded` branch of {@link laneFor}. */
       readonly memoryStatus?: MemoryStatus | undefined
+      /** Final wave M5: `workspace.goal_retried`'s payload `cause`. `branch_moved` is the goal
+       *  pass's own retry, not a person's request. Read only by that type's branch of {@link laneFor}. */
+      readonly retryCause?: 'branch_moved' | undefined
     }
   | { readonly source: 'decision' }
   | { readonly source: 'question' }
@@ -223,6 +226,9 @@ export function laneFor(subject: TimelineSubject): TimelineLane | null {
   if (subject.type === 'memory.changed') {
     return subject.actor === 'human' ? 'decision' : null
   }
+  // Final wave M5: the goal pass sending an accepted version back to verification (its branch
+  // moved) is work in progress -- the lane `workspace.verification_started` is on -- not a request.
+  if (subject.type === 'workspace.goal_retried' && subject.retryCause === 'branch_moved') return 'work'
   return LANE_BY_TYPE[subject.type]
 }
 

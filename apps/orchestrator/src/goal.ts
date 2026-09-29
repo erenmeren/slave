@@ -375,7 +375,14 @@ async function reopenIfMovedInLock(tx: Prisma.TransactionClient, deliveryId: str
   if (delivery.verifiedCommit !== null && tip === delivery.verifiedCommit) return false
   const version = delivery.goalVersion
   if (!(await goalEventWith(tx, delivery.workspaceId, 'workspace_goal_retried', { version, round: delivery.round }))) {
-    await appendEvent({ type: 'workspace.goal_retried', workspaceId: delivery.workspaceId, actor: 'system', payload: { version, round: delivery.round } })
+    await appendEvent({
+      type: 'workspace.goal_retried',
+      workspaceId: delivery.workspaceId,
+      actor: 'system',
+      // Final wave M5: said as the pass's own retry, so neither the card nor the timeline reads it
+      // as a person's.
+      payload: { version, round: delivery.round, cause: 'branch_moved' },
+    })
   }
   const moved = await tx.goalDelivery.updateMany({
     where: { id: deliveryId, status: 'accepted', mergedAt: null, mergeError: null },

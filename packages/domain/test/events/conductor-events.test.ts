@@ -97,6 +97,13 @@ describe('conductor events', () => {
     expect(parsed.success).toBe(true)
   })
 
+  // Final wave M5: the goal pass's own retry of an accepted version whose branch moved says why.
+  it('accepts workspace.goal_retried with cause branch_moved, and no other cause', () => {
+    const base = { ...BASE, type: 'workspace.goal_retried' }
+    expect(executionEventSchema.safeParse({ ...base, payload: { version: 1, round: 2, cause: 'branch_moved' } }).success).toBe(true)
+    expect(executionEventSchema.safeParse({ ...base, payload: { version: 1, round: 2, cause: 'the person' } }).success).toBe(false)
+  })
+
   // Conductor Plan 4b (plan D5): a verification rework charges no attempt.
   it('widens task.rework to carry an optional verificationRound and a zero attempt', () => {
     const base = { ...BASE, type: 'task.rework' }

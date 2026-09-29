@@ -590,7 +590,7 @@ describe('runGoalPass', () => {
     expect(await delivery(f)).toMatchObject({ status: 'integrating', acceptedAt: null, mergedAt: null, verifiedCommit: null, roundBase: 1, roundRunFailures: 0 })
     expect(git(['rev-parse', 'main'], f.repoPath)).toBe(mainBefore)
     const retried = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_goal_retried' } })
-    expect(retried.map((event) => [event.actor, event.payload])).toEqual([['system', { version: 1, round: 1 }]])
+    expect(retried.map((event) => [event.actor, event.payload])).toEqual([['system', { version: 1, round: 1, cause: 'branch_moved' }]])
     expect((await mergeTrips(f.workspaceId)).join('\n')).not.toContain('by hand')
 
     await pass(f)

@@ -523,11 +523,17 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     }),
   }),
   // Conductor Plan 4b (plan D9): a person's `retry-goal` moved a `needs_human` version back to
-  // `integrating`, with a fresh round window.
+  // `integrating`, with a fresh round window. `cause` (final wave M5) is set only when the goal
+  // pass itself sent an ACCEPTED version back to verification because its integration branch moved
+  // after acceptance (ruling V5); absent, the retry is a person's.
   z.object({
     ...envelope,
     type: z.literal('workspace.goal_retried'),
-    payload: z.object({ version: z.number().int().positive(), round: z.number().int().nonnegative() }),
+    payload: z.object({
+      version: z.number().int().positive(),
+      round: z.number().int().nonnegative(),
+      cause: z.literal('branch_moved').optional(),
+    }),
   }),
   // M40 §4: `cancelTask` took a task off the board -- an operator's own call, or an approved
   // `stale_task` proposal. `goalVersion` is the task's own stamp (null for a hand-made task), so

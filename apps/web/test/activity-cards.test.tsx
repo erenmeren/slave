@@ -517,6 +517,17 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('rework-verification-round').textContent).toContain('verification round 2')
   })
 
+  // Final wave M5: a retry is the person's unless it says the branch moved.
+  it('workspace.goal_retried says a person retried it, or that its branch moved after acceptance', () => {
+    const Card = ACTIVITY_CARDS['workspace.goal_retried']
+    const { unmount } = render(<Card event={baseEvent('workspace.goal_retried', { version: 1, round: 3 })} {...CARD_PROPS} />)
+    expect(screen.getByText('goal v1 retried after round 3')).toBeTruthy()
+    unmount()
+    render(<Card event={baseEvent('workspace.goal_retried', { version: 2, round: 1, cause: 'branch_moved' })} {...CARD_PROPS} />)
+    expect(screen.getByText('goal v2 went back to verification: its integration branch moved after acceptance')).toBeTruthy()
+    expect(screen.queryByText(/retried after round/)).toBeNull()
+  })
+
   it('task.review_rejected shows the reason and the attempt number', () => {
     const Card = ACTIVITY_CARDS['task.review_rejected']
     render(<Card event={fixtureFor('task.review_rejected')} {...CARD_PROPS} />)
