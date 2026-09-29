@@ -1209,7 +1209,7 @@ export function buildDeciderRegistry(): DeciderRegistry {
           model: input.model,
           prompt: input.prompt,
           maxBudgetUsd: input.maxBudgetUsd,
-          timeoutMs: modelTimeoutMs(),
+          timeoutMs: input.timeoutMs ?? modelTimeoutMs(),
         })
       }
       // THE ONE CAST `requireReadOnlyInputs` EXISTS FOR, and it is deliberate. `ModelDecider`'s
@@ -1224,7 +1224,7 @@ export function buildDeciderRegistry(): DeciderRegistry {
         model: input.model,
         prompt: input.prompt,
         maxBudgetUsd: input.maxBudgetUsd,
-        timeoutMs: modelTimeoutMs(),
+        timeoutMs: input.timeoutMs ?? modelTimeoutMs(),
         tools: 'read-only',
         cwd: input.cwd,
         permissionsFilePath: input.permissionsFilePath,
@@ -1238,7 +1238,7 @@ export function buildDeciderRegistry(): DeciderRegistry {
         gatePath: cursorGatePath(),
         model: input.model,
         prompt: input.prompt,
-        timeoutMs: modelTimeoutMs(),
+        timeoutMs: input.timeoutMs ?? modelTimeoutMs(),
       })
     },
   }

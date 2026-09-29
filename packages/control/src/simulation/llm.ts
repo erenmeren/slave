@@ -75,6 +75,9 @@ export type ModelDecider = (input: {
   readonly permissionsFilePath?: string
   /** The plaintext of the token whose sha256 that file carries as `tokenHash` (M52 R4). */
   readonly runToken?: string
+  /** How long this call may take; absent is the process default (`SLAVEOFAI_MODEL_TIMEOUT_MS`,
+   *  else two minutes). A caller with a bigger prompt than a Supervisor decision passes more. */
+  readonly timeoutMs?: number
 }) => Promise<ModelOutcome>
 
 /**

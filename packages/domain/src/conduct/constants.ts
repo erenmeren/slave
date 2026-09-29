@@ -22,6 +22,15 @@ export const CONDUCT_RETRY_CAP = 3
 /** One conductor call's budget: the Supervisor's per-call cap, for the same kind of call. */
 export const CONDUCT_PER_CALL_CAP_USD = SUPERVISOR_PER_CALL_CAP_USD
 
+/**
+ * How long one conductor call may take (2026-09-29, first real project). The process default is
+ * two minutes, sized for the Supervisor's short decisions; the size decision carries the goal, the
+ * whole requirement set, a repository map and the catalogue, and an opus answer to it timed out at
+ * two minutes on a ten-requirement goal. A conducted version has nothing else to do in its tick
+ * until this answer arrives, so a longer wait costs nothing but the wait.
+ */
+export const CONDUCT_CALL_TIMEOUT_MS = 6 * 60_000
+
 /** Spec R1: "1–60 items". */
 export const REQUIREMENTS_MAX_ITEMS = 60
 
