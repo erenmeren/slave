@@ -1,3 +1,4 @@
+import { basename, resolve } from 'node:path'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import { type Result, err, ok } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
@@ -5,6 +6,7 @@ import { settleTaskEvidence } from './evidence.js'
 import { gitIn } from './git.js'
 import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
+import { requestStop } from './stop.js'
 import { resolveSettledDecisions } from './supervisor.js'
 
 /**
@@ -243,27 +245,42 @@ class Refused extends Error {
  *
  * The events follow the commit (`cancelTask`'s own order): one `task.cancelled` per task, then
  * `workspace.goal_abandoned`.
+ *
+ * Final wave I1: a VERIFICATION run holding the version is not a refusal. Stopping it by hand does
+ * not free the version -- a stopped verification is an unusable one (plan D7), and the next pass
+ * dispatches the same round again -- so the person would cancel three times before abandoning. The
+ * locked write that abandons the version also clears its claim; after the commit the run is
+ * stopped (`requestStop`) and its checkout removed. Its conclusion, if it gets that far, finds no
+ * claim and changes nothing (`concludeVerification` and every release are guarded on the claim).
+ * Package work in flight still refuses, as before.
  */
 export async function abandonGoal(
   workspaceId: string,
   goalVersion: number,
   principal?: Principal,
-): Promise<Result<{ readonly cancelled: readonly string[] }, ControlRefusal>> {
+): Promise<Result<{ readonly cancelled: readonly string[]; readonly stoppedRun?: string }, ControlRefusal>> {
   const found = await prisma.goalDelivery.findUnique({ where: { workspaceId_goalVersion: { workspaceId, goalVersion } }, select: { id: true } })
   if (found === null) return err({ kind: 'goal_version_not_found', workspaceId, goalVersion })
   const reason = `goal v${String(goalVersion)} abandoned`
 
-  let outcome: { readonly cancelled: readonly { readonly id: string; readonly goalVersion: number | null }[] }
+  let outcome: {
+    readonly cancelled: readonly { readonly id: string; readonly goalVersion: number | null }[]
+    readonly verification: { readonly runId: string; readonly worktreePath: string | null } | null
+  }
   try {
     outcome = await withDeliveryLock(found.id, async (tx) => {
       const delivery = await tx.goalDelivery.findUniqueOrThrow({ where: { id: found.id } })
       if (delivery.status === 'abandoned' || delivery.mergedAt !== null) {
         throw new Refused({ kind: 'goal_version_closed', goalVersion, status: delivery.mergedAt !== null ? 'merged' : delivery.status })
       }
-      // Plan 4b: a verification run in flight would conclude into a version nobody wants -- and its
-      // conclusion may rework a package this call just cancelled. Stop it first, like a task's run.
-      if (delivery.activeRunId !== null) {
-        throw new Refused({ kind: 'goal_version_busy', goalVersion, holder: `verification run ${delivery.activeRunId}` })
+      // Plan 4b, final wave I1: the claim is a verification run's by construction (D3); anything
+      // else holding it is not ours to stop.
+      const claim =
+        delivery.activeRunId === null
+          ? null
+          : await tx.slaveRun.findUnique({ where: { id: delivery.activeRunId }, select: { id: true, kind: true, worktreePath: true } })
+      if (delivery.activeRunId !== null && claim?.kind !== 'verification') {
+        throw new Refused({ kind: 'goal_version_busy', goalVersion, holder: `run ${delivery.activeRunId}` })
       }
       const ids = (await tx.task.findMany({ where: { workspaceId, workPackage: { goalVersion } }, select: { id: true } })).map((task) => task.id)
       if (ids.length > 0) await tx.$queryRaw`SELECT id FROM "Task" WHERE id = ANY(${ids}::text[]) FOR UPDATE`
@@ -285,12 +302,23 @@ export async function abandonGoal(
         where: { id: { in: cancelled.map((task) => task.id) } },
         data: { status: 'cancelled', lastRejectionReason: reason },
       })
-      await tx.goalDelivery.update({ where: { id: found.id }, data: { status: 'abandoned' } })
-      return { cancelled: cancelled.map((task) => ({ id: task.id, goalVersion: task.goalVersion })) }
+      // The claim goes in the same write: from here no conclusion of that run can move the version.
+      await tx.goalDelivery.update({ where: { id: found.id }, data: { status: 'abandoned', activeRunId: null } })
+      return {
+        cancelled: cancelled.map((task) => ({ id: task.id, goalVersion: task.goalVersion })),
+        verification: claim === null ? null : { runId: claim.id, worktreePath: claim.worktreePath },
+      }
     })
   } catch (error) {
     if (error instanceof Refused) return err(error.refusal)
     throw error
+  }
+
+  if (outcome.verification !== null) {
+    await requestStop(outcome.verification.runId, `the person abandoning goal v${String(goalVersion)}`, principal)
+    // After the stop, which waits for the process to exit: nothing writes in the checkout any more.
+    const repo = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId }, select: { repoPath: true } })
+    await removeAbandonedVerificationWorktree(repo.repoPath, outcome.verification.worktreePath)
   }
 
   const userId = principal?.userId ?? null
@@ -314,7 +342,30 @@ export async function abandonGoal(
     userId,
   })
   await resolveGoalEscalations(workspaceId, goalVersion, `goal v${String(goalVersion)} was abandoned`, principal)
-  return ok({ cancelled: ids })
+  return ok({ cancelled: ids, ...(outcome.verification === null ? {} : { stoppedRun: outcome.verification.runId }) })
+}
+
+/**
+ * Final wave I1: the checkout of a verification run stopped by `abandonGoal`. Nothing else would
+ * remove it: the goal pass settles only `verifying` versions, and the run's own conclusion is
+ * absent when no daemon pumps it. The orchestrator's `removeVerificationWorktree` is out of reach
+ * (`packages/control` cannot import `apps/orchestrator`, where the worktree root is decided), so
+ * the guard here is git's own list: only a path git has registered as a worktree of this
+ * repository, named `verify-*`, is `--force`-removed. Errors are logged, not thrown -- the version
+ * is already abandoned, and a checkout left behind is an operator's tidy-up.
+ */
+async function removeAbandonedVerificationWorktree(repoPath: string, worktreePath: string | null): Promise<void> {
+  if (worktreePath === null || !basename(worktreePath).startsWith('verify-')) return
+  try {
+    const listed = (await gitIn(repoPath, 'worktree', 'list', '--porcelain'))
+      .split('\n')
+      .filter((line) => line.startsWith('worktree '))
+      .map((line) => resolve(line.slice('worktree '.length)))
+    if (listed.includes(resolve(worktreePath))) await gitIn(repoPath, 'worktree', 'remove', '--force', worktreePath)
+    await gitIn(repoPath, 'worktree', 'prune')
+  } catch (error) {
+    console.error(`[goal] could not remove the verification worktree ${worktreePath}:`, error)
+  }
 }
 
 /**

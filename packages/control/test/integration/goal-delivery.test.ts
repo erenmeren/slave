@@ -504,18 +504,18 @@ describe('retryGoal', () => {
 })
 
 describe('abandonGoal (Conductor Plan 4b)', () => {
-  it('is refused while a verification run holds the version', async (): Promise<void> => {
+  // Final wave I1: a running verification is stopped by the abandonment, not a refusal of it.
+  it('abandons a version a verification run holds, clearing the claim and stopping the run', async (): Promise<void> => {
     const f = await seedWorkspace()
     const v1 = await seedDelivery(f, 1)
     await seedPackageTask(f, 1, 'a', { status: 'done', integratedAt: new Date() })
     const run = await prisma.slaveRun.create({ data: { slaveId: f.slaveId, kind: 'verification', goalDeliveryId: v1.id, status: 'working' } })
     await prisma.goalDelivery.update({ where: { id: v1.id }, data: { status: 'verifying', round: 1, activeRunId: run.id } })
 
-    expect(await abandonGoal(f.workspaceId, 1)).toEqual({
-      ok: false,
-      error: { kind: 'goal_version_busy', goalVersion: 1, holder: `verification run ${run.id}` },
-    })
-    expect((await prisma.goalDelivery.findUniqueOrThrow({ where: { id: v1.id } })).status).toBe('verifying')
+    expect(await abandonGoal(f.workspaceId, 1)).toEqual({ ok: true, value: { cancelled: [], stoppedRun: run.id } })
+    expect(await prisma.goalDelivery.findUniqueOrThrow({ where: { id: v1.id } })).toMatchObject({ status: 'abandoned', activeRunId: null })
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('stopped')
+    expect(await eventsOf(f.workspaceId, 'run_stopped')).toHaveLength(1)
   })
 
   it('abandons a version that needs a person', async (): Promise<void> => {

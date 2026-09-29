@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { runDirPathFor } from '@slave-of-ai/control'
+import { abandonGoal, runDirPathFor } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
@@ -691,6 +691,44 @@ describe('the gate (concludeVerification)', () => {
     expect(delivery.status).toBe('needs_human')
     expect(delivery.needsHumanReason).toContain('cannot be reworked: R2')
     expect((await prisma.task.findUniqueOrThrow({ where: { id: f.taskIds[1] ?? '' } })).status).toBe('cancelled')
+  }, 60_000)
+
+  // Final wave I1: abandoning a version mid-verification stops the verifier in the same act, rather
+  // than refusing until the person has cancelled the run (three times: a cancelled run is an
+  // unusable one, and the next pass dispatches the round again).
+  it('abandons a version while its verification runs: the run is stopped, its verdict lands nowhere, the checkout is removed', async (): Promise<void> => {
+    const f = await seed()
+    const claimed = await claimRound(f)
+    await prisma.slaveRun.update({ where: { id: claimed.runId }, data: { status: 'working', terminalAt: null } })
+    await say(f, claimed.runId, verdictText([passes('R1'), fails('R2')]))
+
+    expect(await abandonGoal(f.workspaceId, 1)).toEqual({ ok: true, value: { cancelled: [], stoppedRun: claimed.runId } })
+
+    expect(await deliveryOf(f)).toMatchObject({ status: 'abandoned', activeRunId: null })
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: claimed.runId } })).status).toBe('stopped')
+    expect(existsSync(claimed.worktreePath)).toBe(false)
+
+    // The run's own chain (or a late conclusion of a verdict it printed first) finds no claim.
+    await verifyConcludedRun(brandRunId(claimed.runId))
+    await prisma.slaveRun.update({ where: { id: claimed.runId }, data: { status: 'succeeded' } })
+    await concludeVerification(brandRunId(claimed.runId))
+    expect(await deliveryOf(f)).toMatchObject({ status: 'abandoned', activeRunId: null })
+    expect((await prisma.task.findMany({ where: { id: { in: [...f.taskIds] } } })).map((task) => task.status)).toEqual(f.taskIds.map(() => 'done'))
+    expect(await eventsOfType(f, ['workspace_verified', 'task_rework', 'workspace_goal_accepted', 'workspace_goal_needs_human'])).toEqual([])
+    expect(await prisma.verificationResult.count()).toBe(0)
+  }, 60_000)
+
+  it('still refuses to abandon a version whose package work is in flight, with the unchanged text', async (): Promise<void> => {
+    const f = await seed()
+    const claimed = await claimRound(f)
+    await prisma.slaveRun.update({ where: { id: claimed.runId }, data: { status: 'working', terminalAt: null } })
+    const busy = f.taskIds[0] ?? ''
+    await prisma.task.update({ where: { id: busy }, data: { status: 'merging' } })
+
+    expect(await abandonGoal(f.workspaceId, 1)).toEqual({ ok: false, error: { kind: 'goal_version_busy', goalVersion: 1, holder: `task ${busy}` } })
+    expect(await deliveryOf(f)).toMatchObject({ status: 'verifying', activeRunId: claimed.runId })
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: claimed.runId } })).status).toBe('working')
+    expect(existsSync(claimed.worktreePath)).toBe(true)
   }, 60_000)
 
   for (const variant of [
