@@ -159,6 +159,29 @@ describe('renderGoalReportMarkdown', () => {
     expect(md).toContain('  Not answered.')
   })
 
+  it('puts a blank line between the quoted question and its attribution line, so a lazy blockquote continuation cannot swallow it', () => {
+    const md = renderGoalReportMarkdown(
+      report({
+        questions: [
+          { id: 'q1', at: '2026-09-29T10:02:00.000Z', packageKey: 'report', askedBy: 'Alex', question: 'CSV header row?', answer: { at: '2026-09-29T10:03:00.000Z', by: 'supervisor', text: 'Yes, one header row.' } },
+          { id: 'q2', at: '2026-09-29T10:02:30.000Z', packageKey: 'report', askedBy: null, question: 'Quote all?', answer: null },
+        ],
+      }),
+    )
+    const lines = md.split('\n')
+    const askedIdx = lines.indexOf('- 2026-09-29T10:02:00.000Z · report (Alex) asked:')
+    expect(askedIdx).toBeGreaterThan(-1)
+    expect(lines.slice(askedIdx, askedIdx + 4)).toEqual([
+      '- 2026-09-29T10:02:00.000Z · report (Alex) asked:',
+      '  > CSV header row?',
+      '',
+      '  Answered by the Supervisor at 2026-09-29T10:03:00.000Z:',
+    ])
+    const notAskedIdx = lines.indexOf('- 2026-09-29T10:02:30.000Z · report asked:')
+    expect(notAskedIdx).toBeGreaterThan(-1)
+    expect(lines.slice(notAskedIdx, notAskedIdx + 4)).toEqual(['- 2026-09-29T10:02:30.000Z · report asked:', '  > Quote all?', '', '  Not answered.'])
+  })
+
   it('writes the stop reason and the merge git refused where they exist', () => {
     const d = report().delivery!
     const md = renderGoalReportMarkdown(

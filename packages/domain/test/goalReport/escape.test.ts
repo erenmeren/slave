@@ -18,6 +18,20 @@ describe('the report\'s escapes', () => {
     expect(mdQuote('one\n\ntwo')).toEqual(['> one', '>', '> two'])
   })
 
+  it('mdInline breaks a bare URL\'s GFM autolink by escaping its ://', () => {
+    expect(mdInline('see http://evil.example/x')).toBe('see http\\://evil.example/x')
+    expect(mdInline('javascript://alert(1)')).toBe('javascript\\://alert\\(1\\)')
+  })
+
+  it('mdQuote escapes a line that would open a new block once it follows "> "', () => {
+    expect(mdQuote('first\n===')).toEqual(['> first', '> \\==='])
+    expect(mdQuote('a\n---')).toEqual(['> a', '> \\---'])
+    expect(mdQuote('- x')).toEqual(['> \\- x'])
+    expect(mdQuote('+ x')).toEqual(['> \\+ x'])
+    expect(mdQuote('1. y')).toEqual(['> 1\\. y'])
+    expect(mdQuote('plain text')).toEqual(['> plain text'])
+  })
+
   it('reads the cut marker trimEvidence writes, and formats money and commits', () => {
     expect(evidenceCut('head\n… [42 characters cut] …\ntail')).toBe(42)
     expect(evidenceCut('whole')).toBe(0)

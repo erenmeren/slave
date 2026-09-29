@@ -8,6 +8,14 @@ const HTML_ENTITY: Readonly<Record<string, string>> = { '&': '&amp;', '<': '&lt;
  * into prompts). Whitespace collapses, so a newline cannot end a table row. HTML is escaped, so
  * no renderer runs a tag. Markdown punctuation is backslash-escaped, so no link, emphasis, code
  * span or cell border can be forged. CommonMark allows a backslash before any ASCII punctuation.
+ *
+ * A bare URL is a separate hazard escaping brackets does not close: GFM autolinks `http://…`,
+ * `https://…`, `ftp://…` and `www.…` even with no `[]()` around them at all -- the link TEXT is
+ * always the URL itself (never attacker-chosen text), but a live `javascript:`-lookalike or
+ * otherwise misleading link is still worth not rendering (fix round 1, m3). Rather than track
+ * every scheme GFM recognises, this escapes the `:` of every `://` as `\://`: a valid CommonMark
+ * escape (renders as a plain `:`), and one GFM's autolink scanner does not match, so the text
+ * reads the same to a person and stays inert to every renderer.
  */
 export function mdInline(text: string): string {
   return sanitisePersonText(text)
@@ -15,6 +23,27 @@ export function mdInline(text: string): string {
     .trim()
     .replace(/[&<>]/gu, (char) => HTML_ENTITY[char] ?? char)
     .replace(/[\\`*_[\]|~#!()]/gu, (char) => `\\${char}`)
+    .replace(/:\/\//gu, '\\://')
+}
+
+/**
+ * A line that would open a NEW block once `mdQuote` puts it after "> " (fix round 1, I2): a
+ * bullet/thematic/setext marker (`-`, `+`, `=`, `*`, `#`) or an ordered-list marker (digits then
+ * `.` or `)`) at the very start. `mdInline` (run on the line before this) already backslash-
+ * escapes `*`, `#` and `)` wherever they sit, so this only has to catch what it leaves alone: a
+ * leading `-`/`+`/`=`, and the `.` an ordered marker's digits end in. Escaping the DELIMITER
+ * rather than a leading digit keeps a numbered line readable -- CommonMark cannot backslash-
+ * escape a digit (escapes are ASCII-punctuation only), so `\1` would print its backslash, while
+ * `1\.` prints as plain `1.`. Both breaks work the same way: block-structure scanning reads raw
+ * characters before any backslash escape is resolved, so a backslash anywhere before the marker's
+ * last required character stops the line from being read as one.
+ */
+const BLOCK_MARKER = /^(?:([-+=*#])|(\d+)([.)]))/u
+
+function escapeBlockMarker(line: string): string {
+  return line.replace(BLOCK_MARKER, (_whole, symbol: string | undefined, digits: string | undefined, delim: string | undefined) =>
+    symbol !== undefined ? `\\${symbol}` : `${digits ?? ''}\\${delim ?? ''}`,
+  )
 }
 
 /**
@@ -30,13 +59,15 @@ export function mdFence(text: string): string {
   return `${fence}text\n${body}\n${fence}`
 }
 
-/** A quote, line by line: prose keeps its lines, and each line is {@link mdInline}d. */
+/** A quote, line by line: prose keeps its lines, and each line is {@link mdInline}d, then
+ *  {@link escapeBlockMarker}d so a line that starts with a block marker cannot reopen one once it
+ *  sits after "> " (fix round 1, I2). */
 export function mdQuote(text: string): readonly string[] {
   return sanitisePersonText(text)
     .replace(/\r\n?/gu, '\n')
     .replace(/\n+$/u, '')
     .split('\n')
-    .map((line) => (line.trim() === '' ? '>' : `> ${mdInline(line)}`))
+    .map((line) => (line.trim() === '' ? '>' : `> ${escapeBlockMarker(mdInline(line))}`))
 }
 
 const CUT = /\n… \[(\d+) characters cut\] …\n/u
