@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { goalEventSaid, goalEventWith, settleGoalEvidence, withDeliveryLock } from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
-import { VERIFICATION_REASON_MAX_CHARS, VERIFICATION_RUN_RETRY_CAP, type GuardrailKind } from '@slave-of-ai/domain'
+import { VERIFICATION_REASON_MAX_CHARS, VERIFICATION_RUN_RETRY_CAP, handMergeInstruction, type GuardrailKind } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { mergeOrAbort, primaryCheckoutReady } from './gitMerge.js'
 import { integrationWorktreePath } from './goalBranch.js'
@@ -354,17 +354,6 @@ async function reopenIfMovedInLock(tx: Prisma.TransactionClient, deliveryId: str
 
 /** Who put a goal version into the base branch: this pass's fast-forward, or a person's hand merge. */
 type MergedBy = 'system' | 'human'
-
-/**
- * What a person does when a goal version waits for them (base moved, a merge git refused,
- * `autoMerge` off): one wording, so the three waits cannot drift apart.
- */
-function handMergeInstruction(integrationBranch: string, baseBranch: string, workspaceId: string, version: number): string {
-  return (
-    `Merge ${integrationBranch} into ${baseBranch} by hand, then run ` +
-    `confirm-goal-merge --workspace ${workspaceId} --version ${String(version)}`
-  )
-}
 
 interface LandingDelivery {
   readonly id: string

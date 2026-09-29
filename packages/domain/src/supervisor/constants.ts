@@ -23,6 +23,9 @@ export const INTEGRATED_STALE_MS = 6 * 3_600_000
  */
 export const COOLDOWN_MS = 15 * 60_000
 
+/** How long a `pending` proposal waits for a human before `expirePendingDecisions` retires it. */
+export const PENDING_TTL_MS = 24 * 3_600_000
+
 /**
  * Situations whose cooldown is NOT {@link COOLDOWN_MS} (M51 R3).
  *
@@ -33,10 +36,18 @@ export const COOLDOWN_MS = 15 * 60_000
  */
 export const COOLDOWN_BY_KIND: Partial<Record<SituationKind, number>> = {
   run_looping: BREAKER_COOLDOWN_MS,
+  // Conductor Plan 4b (fix round 1, I2): a failed verification round is news, and its rework can
+  // last hours. The whole decision window, so it is said once per round (the subject carries the
+  // round) rather than every fifteen minutes while the packages rework.
+  verification_failed: PENDING_TTL_MS,
 }
 
-/** How long a `pending` proposal waits for a human before `expirePendingDecisions` retires it. */
-export const PENDING_TTL_MS = 24 * 3_600_000
+/**
+ * Situations the Supervisor decides by the rules alone, never asking the model (Conductor Plan 4b,
+ * fix round 1, I2). `verification_failed` is news the loop is already acting on: the rules record
+ * `no_action`, and a model call could only spend money -- or escalate what needs nobody.
+ */
+export const RULES_ONLY_SITUATION_KINDS: readonly SituationKind[] = ['verification_failed']
 
 /**
  * The most model-decided situations one tick may pay for. The rest are not dropped -- they simply

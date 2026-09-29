@@ -5,6 +5,7 @@ import { settleTaskEvidence } from './evidence.js'
 import { gitIn } from './git.js'
 import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
+import { resolveSettledDecisions } from './supervisor.js'
 
 /**
  * Plan 4a D4: the integration verdict of every package task of a goal version, settled when the
@@ -197,6 +198,22 @@ export async function goalDeliveries(
   )
 }
 
+/**
+ * Conductor Plan 4b (fix round 1, I1): the person acted on this goal version, which answers the
+ * Supervisor's `goal_needs_human` escalation about it -- every stop's and the failed merge's
+ * (`<workspaceId>:v<n>:...`), and no other version's. After the verb's commit, like
+ * `adoptRunbook`'s own call: an act that was refused resolves nothing.
+ */
+async function resolveGoalEscalations(workspaceId: string, goalVersion: number, reason: string, principal?: Principal): Promise<void> {
+  await resolveSettledDecisions({
+    workspaceId,
+    situationKind: 'goal_needs_human',
+    subjectIdPrefix: `${workspaceId}:v${String(goalVersion)}:`,
+    reason,
+    ...(principal === undefined ? {} : { principal }),
+  })
+}
+
 /** The statuses a package task can be cancelled from when its version is abandoned: never
  *  started, parked for a person, or sent back and not yet picked up again. */
 const ABANDONABLE_TASK_STATUSES: readonly string[] = ['backlog', 'ready', 'blocked', 'rework']
@@ -296,6 +313,7 @@ export async function abandonGoal(
     payload: { version: goalVersion, cancelled: ids.slice(0, 50) },
     userId,
   })
+  await resolveGoalEscalations(workspaceId, goalVersion, `goal v${String(goalVersion)} was abandoned`, principal)
   return ok({ cancelled: ids })
 }
 
@@ -322,7 +340,7 @@ export async function retryGoal(
   if (found === null) return err({ kind: 'goal_version_not_found', workspaceId, goalVersion })
 
   // The refusal below is reached before anything is written, so returning it commits nothing.
-  return withDeliveryLock(found.id, async (tx): Promise<Result<{ readonly round: number }, ControlRefusal>> => {
+  const retried = await withDeliveryLock(found.id, async (tx): Promise<Result<{ readonly round: number }, ControlRefusal>> => {
     const delivery = await tx.goalDelivery.findUniqueOrThrow({ where: { id: found.id } })
     if (delivery.status !== 'needs_human') return err({ kind: 'goal_not_needs_human', goalVersion, status: delivery.status })
     const round = delivery.round
@@ -341,6 +359,8 @@ export async function retryGoal(
     })
     return ok({ round })
   })
+  if (retried.ok) await resolveGoalEscalations(workspaceId, goalVersion, `goal v${String(goalVersion)} was sent round again`, principal)
+  return retried
 }
 
 /**
@@ -370,7 +390,7 @@ export async function confirmGoalMerge(
   if (found === null) return err({ kind: 'goal_version_not_found', workspaceId, goalVersion })
 
   // Every refusal below is reached before anything is written, so returning it commits nothing.
-  return withDeliveryLock(found.id, async (tx): Promise<Result<{ readonly commit: string }, ControlRefusal>> => {
+  const confirmed = await withDeliveryLock(found.id, async (tx): Promise<Result<{ readonly commit: string }, ControlRefusal>> => {
     const delivery = await tx.goalDelivery.findUniqueOrThrow({
       where: { id: found.id },
       include: { workspace: { select: { repoPath: true, baseBranch: true } } },
@@ -410,6 +430,8 @@ export async function confirmGoalMerge(
     await tx.goalDelivery.updateMany({ where: { id: delivery.id, mergedAt: null }, data: { mergedAt: new Date(), mergeError: null } })
     return ok({ commit })
   })
+  if (confirmed.ok) await resolveGoalEscalations(workspaceId, goalVersion, `goal v${String(goalVersion)} was merged by hand`, principal)
+  return confirmed
 }
 
 /** The commit a version's `goal_merged` recorded, if the log has one. */

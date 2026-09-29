@@ -12,3 +12,16 @@ export function integrationWorktreeKey(version: number, workspaceId: string): st
   if (!Number.isInteger(version) || version <= 0) throw new Error(`goal version must be a positive integer, got ${String(version)}`)
   return `goal-v${String(version)}-${workspaceId.slice(0, 8)}`
 }
+
+/**
+ * What a person does when an accepted goal version waits for them to merge it (base moved, a merge
+ * git refused, `autoMerge` off): one wording, so the goal pass's waits and the Supervisor's
+ * `goal_needs_human` escalation (ruling V6) cannot drift apart. The version is verified; the person
+ * resolving the base-branch side is a recorded human decision (`goal_merged { by: 'human' }`).
+ */
+export function handMergeInstruction(integrationBranch: string, baseBranch: string, workspaceId: string, version: number): string {
+  return (
+    `Merge ${integrationBranch} into ${baseBranch} by hand, then run ` +
+    `confirm-goal-merge --workspace ${workspaceId} --version ${String(version)}`
+  )
+}

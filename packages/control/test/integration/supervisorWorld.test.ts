@@ -2283,6 +2283,8 @@ describe('loadSupervisorWorld -- goal versions and their verification (Conductor
         goalVersion: 1,
         status: 'needs_human',
         round: 2,
+        integrationBranch: 'slave/goal-v1',
+        baseBranch: 'main',
         needsHumanReason: 'the round cap ended it',
         mergeError: null,
         latestVerification: { round: 2, pass: 1, fail: 2, unverifiable: 0, failedKeys: ['R2', 'R3'] },
@@ -2291,14 +2293,16 @@ describe('loadSupervisorWorld -- goal versions and their verification (Conductor
         goalVersion: 3,
         status: 'accepted',
         round: 0,
+        integrationBranch: 'slave/goal-v3',
+        baseBranch: 'main',
         needsHumanReason: null,
         mergeError: 'CONFLICT (content): src/a.ts',
         latestVerification: null,
       },
     ])
     expect(observe(world).filter((s) => s.kind === 'goal_needs_human').map((s) => s.subjectId)).toEqual([
-      `${fixture.workspaceId}:v1`,
-      `${fixture.workspaceId}:v3`,
+      `${fixture.workspaceId}:v1:r2`,
+      `${fixture.workspaceId}:v3:merge`,
     ])
   })
 

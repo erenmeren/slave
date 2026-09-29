@@ -486,3 +486,74 @@ describe('abandonGoal (Conductor Plan 4b)', () => {
     expect((await prisma.goalDelivery.findUniqueOrThrow({ where: { id: v1.id } })).status).toBe('abandoned')
   })
 })
+
+/**
+ * Conductor Plan 4b, fix round 1 (I1): a person who acts on a goal version answers the Supervisor's
+ * `goal_needs_human` escalation for it by doing so -- the pending decision is resolved, and only
+ * that version's (a sibling version's escalation stays in front of the person).
+ */
+describe('the goal_needs_human escalation is resolved by the person\'s act', () => {
+  async function pendingEscalation(f: Fixture, subjectId: string): Promise<string> {
+    const row = await prisma.supervisorDecision.create({
+      data: {
+        workspaceId: f.workspaceId,
+        situationKind: 'goal_needs_human',
+        subjectId,
+        situation: {},
+        candidates: [],
+        chosenIndex: 0,
+        action: { kind: 'escalate_to_human', summary: 'Goal needs a person' },
+        rationale: 'the loop stopped',
+        tier: 'escalated',
+        status: 'pending',
+        decidedBy: 'rules',
+        expiresAt: new Date(Date.now() + 24 * 3_600_000),
+      },
+    })
+    return row.id
+  }
+  const statusOf = async (id: string): Promise<string> => (await prisma.supervisorDecision.findUniqueOrThrow({ where: { id } })).status
+
+  it('retry-goal resolves this version\'s escalation and leaves another version\'s', async (): Promise<void> => {
+    const f = await seedWorkspace()
+    const v1 = await seedDelivery(f, 1)
+    await prisma.goalDelivery.update({ where: { id: v1.id }, data: { status: 'needs_human', round: 2, needsHumanReason: 'the cap' } })
+    const mine = await pendingEscalation(f, `${f.workspaceId}:v1:r2`)
+    const sibling = await pendingEscalation(f, `${f.workspaceId}:v10:r1`)
+
+    expect((await retryGoal(f.workspaceId, 1)).ok).toBe(true)
+
+    expect(await statusOf(mine)).toBe('rejected')
+    expect(await statusOf(sibling)).toBe('pending')
+    expect(await eventsOf(f.workspaceId, 'supervisor_resolved')).toHaveLength(1)
+  })
+
+  it('abandon-goal resolves it', async (): Promise<void> => {
+    const f = await seedWorkspace()
+    const v1 = await seedDelivery(f, 1)
+    await prisma.goalDelivery.update({ where: { id: v1.id }, data: { status: 'needs_human', round: 3 } })
+    const mine = await pendingEscalation(f, `${f.workspaceId}:v1:r3`)
+
+    expect((await abandonGoal(f.workspaceId, 1)).ok).toBe(true)
+    expect(await statusOf(mine)).toBe('rejected')
+  })
+
+  it('confirm-goal-merge resolves the failed-merge escalation', async (): Promise<void> => {
+    const f = await seedWorkspace()
+    const v1 = await seedDelivery(f, 1, { status: 'accepted', mergeError: 'CONFLICT (content): a.txt' })
+    const mine = await pendingEscalation(f, `${f.workspaceId}:v1:merge`)
+    git(['merge', '-q', '--no-ff', '--no-edit', v1.branch], f.repoPath)
+
+    expect((await confirmGoalMerge(f.workspaceId, 1)).ok).toBe(true)
+    expect(await statusOf(mine)).toBe('rejected')
+  })
+
+  it('a refused act resolves nothing', async (): Promise<void> => {
+    const f = await seedWorkspace()
+    await seedDelivery(f, 1)
+    const mine = await pendingEscalation(f, `${f.workspaceId}:v1:r1`)
+
+    expect((await retryGoal(f.workspaceId, 1)).ok).toBe(false)
+    expect(await statusOf(mine)).toBe('pending')
+  })
+})

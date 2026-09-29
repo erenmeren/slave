@@ -830,7 +830,16 @@ async function loadGoalDeliveries(tx: Prisma.TransactionClient, workspaceId: str
       ],
     },
     orderBy: { goalVersion: 'asc' },
-    select: { id: true, goalVersion: true, status: true, round: true, needsHumanReason: true, mergeError: true },
+    select: {
+      id: true,
+      goalVersion: true,
+      status: true,
+      round: true,
+      integrationBranch: true,
+      needsHumanReason: true,
+      mergeError: true,
+      workspace: { select: { baseBranch: true } },
+    },
   })
   const latest = await latestVerifications(
     rows.map((row) => row.id),
@@ -845,6 +854,8 @@ async function loadGoalDeliveries(tx: Prisma.TransactionClient, workspaceId: str
             goalVersion: row.goalVersion,
             status: row.status,
             round: row.round,
+            integrationBranch: row.integrationBranch,
+            baseBranch: row.workspace.baseBranch,
             needsHumanReason: row.needsHumanReason,
             mergeError: row.mergeError,
             latestVerification: latest.get(row.id) ?? null,

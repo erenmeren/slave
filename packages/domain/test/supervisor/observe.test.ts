@@ -6,6 +6,7 @@ import {
   INTEGRATED_STALE_MS,
   WAITING_STALE_MS,
 } from '../../src/supervisor/constants.js'
+import { handMergeInstruction } from '../../src/conduct/goalBranch.js'
 import { filterFresh, observe, staffableSlaves } from '../../src/supervisor/observe.js'
 import { SITUATION_KINDS, situationSchema, type SituationKind } from '../../src/supervisor/situations.js'
 import type { SupervisorDecisionRecord } from '../../src/supervisor/world.js'
@@ -695,10 +696,10 @@ describe('observe -- goal_needs_human and verification_failed (Conductor Plan 4b
     failedKeys,
   })
 
-  it('escalates a needs_human version by version, with the reason the loop stopped on', () => {
+  it('escalates a needs_human version by version and stop, with the reason the loop stopped on', () => {
     const reason = 'R2 is unverifiable. Read goal-status --workspace ws-1 --version 1 for the verdict'
-    const situations = observe(world({ goalDeliveries: [goalDelivery({ status: 'needs_human', needsHumanReason: reason })] }))
-    expect(keys(situations)).toEqual([['goal_needs_human', 'ws-1:v1']])
+    const situations = observe(world({ goalDeliveries: [goalDelivery({ status: 'needs_human', round: 2, needsHumanReason: reason })] }))
+    expect(keys(situations)).toEqual([['goal_needs_human', 'ws-1:v1:r2']])
     expect(situations[0]?.summary).toContain(reason)
     expect(situations[0]?.facts).toEqual({ goalVersion: 1, reason })
     expect(situationSchema.safeParse(situations[0]).success).toBe(true)
@@ -706,33 +707,66 @@ describe('observe -- goal_needs_human and verification_failed (Conductor Plan 4b
 
   it('names retry-goal and abandon-goal when a needs_human row carries no reason, and never a hand merge', () => {
     const situations = observe(world({ goalDeliveries: [goalDelivery({ status: 'needs_human', needsHumanReason: null })] }))
-    expect(keys(situations)).toEqual([['goal_needs_human', 'ws-1:v1']])
+    expect(keys(situations)).toEqual([['goal_needs_human', 'ws-1:v1:r1']])
     expect(situations[0]?.summary).toContain('retry-goal --workspace ws-1 --version 1')
     expect(situations[0]?.summary).toContain('abandon-goal --workspace ws-1 --version 1')
     expect(situations[0]?.summary).not.toMatch(/merge|accept/i)
   })
 
-  // Plan D10 (deferred here by Task 6): an accepted version whose final merge git refused.
-  it('escalates an accepted version whose merge into the base branch failed', () => {
+  // Fix round 1, I1: a retried version that stops again is a NEW stop, so it is escalated again
+  // rather than held behind the first stop's (resolved or still cooling) decision.
+  it('escalates a second stop of the same version after a retry, whatever the first stop\'s decision', () => {
+    const w = world({
+      goalDeliveries: [goalDelivery({ status: 'needs_human', round: 4, needsHumanReason: 'the round cap ended it' })],
+      decisions: [decision({ situationKind: 'goal_needs_human', subjectId: 'ws-1:v1:r2', status: 'pending', tier: 'escalated', actionKind: 'escalate_to_human' })],
+    })
+    expect(keys(filterFresh(observe(w), w))).toEqual([['goal_needs_human', 'ws-1:v1:r4']])
+  })
+
+  // Plan D10 (deferred here by Task 6) and ruling V6: an accepted, VERIFIED version whose final
+  // merge git refused. The tree is verified, so the remedy is 4a's hand merge and confirm.
+  it('escalates an accepted version whose merge failed, with the hand-merge instruction and the first line of the error', () => {
     const situations = observe(
-      world({ goalDeliveries: [goalDelivery({ status: 'accepted', mergeError: 'CONFLICT (content): src/a.ts', latestVerification: verdict(2, []) })] }),
+      world({
+        goalDeliveries: [
+          goalDelivery({
+            status: 'accepted',
+            mergeError: 'CONFLICT (content): src/a.ts\nAutomatic merge failed; fix conflicts',
+            latestVerification: verdict(2, []),
+          }),
+        ],
+      }),
     )
-    expect(keys(situations)).toEqual([['goal_needs_human', 'ws-1:v1']])
-    expect(situations[0]?.summary).toContain('merge into the base branch failed')
-    expect(situations[0]?.summary).toContain('CONFLICT (content): src/a.ts')
-    expect(situations[0]?.summary).not.toMatch(/accept anyway|confirm-goal-merge|by hand/i)
+    expect(keys(situations)).toEqual([['goal_needs_human', 'ws-1:v1:merge']])
+    const instruction = handMergeInstruction('slaveofai/goal-v1-ws-1', 'main', 'ws-1', 1)
+    expect(situations[0]?.summary).toContain('merge into the base branch failed: CONFLICT (content): src/a.ts')
+    expect(situations[0]?.summary).toContain(instruction)
+    expect(situations[0]?.summary).toContain('confirm-goal-merge --workspace ws-1 --version 1')
+    expect(situations[0]?.summary).not.toContain('Automatic merge failed')
+    expect(String(situations[0]?.facts['reason'])).not.toContain('Automatic merge failed')
+    expect(situations[0]?.summary).not.toMatch(/retry-goal|abandon-goal/)
   })
 
   it('stays silent for an accepted version whose merge has not failed', () => {
     expect(observe(world({ goalDeliveries: [goalDelivery({ status: 'accepted', latestVerification: verdict(1, []) })] }))).toEqual([])
   })
 
-  it('reports a failed round once, by round, with the keys it failed', () => {
+  it('reports a failed round by round, with the keys it failed', () => {
     const situations = observe(world({ goalDeliveries: [goalDelivery({ round: 1, latestVerification: verdict(1, ['R1', 'R3']) })] }))
     expect(keys(situations)).toEqual([['verification_failed', 'ws-1:v1:r1']])
     expect(situations[0]?.facts).toEqual({ goalVersion: 1, round: 1, failedKeys: 'R1,R3' })
     expect(situations[0]?.summary).toContain('R1, R3')
     expect(situationSchema.safeParse(situations[0]).success).toBe(true)
+  })
+
+  // Fix round 1, I2: the round's rework can last hours; the news is said once, not every 15 minutes.
+  it('records a failed round once: 20 minutes later, in the same round, it is still cooling', () => {
+    const w = world({
+      goalDeliveries: [goalDelivery({ round: 1, latestVerification: verdict(1, ['R1']) })],
+      decisions: [decision({ situationKind: 'verification_failed', subjectId: 'ws-1:v1:r1', tier: 'noop', createdAt: NOW - 20 * 60_000 })],
+    })
+    expect(observe(w)).toHaveLength(1)
+    expect(filterFresh(observe(w), w)).toEqual([])
   })
 
   it('stays silent once a new round is under way, while verifying, and for a round that failed nothing', () => {

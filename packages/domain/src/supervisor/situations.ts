@@ -181,7 +181,9 @@ export const SITUATION_KINDS = [
   /**
    * Conductor Plan 4b (spec R11, R9): a goal version's loop ended without acceptance -- a cap, an
    * unverifiable requirement, a failing requirement nobody can rework -- or its final merge into the
-   * base branch failed. `subjectId` is `<workspaceId>:v<n>`.
+   * base branch failed. `subjectId` is `<workspaceId>:v<n>:r<round>` for a stopped loop -- one per
+   * stop, so a retried version that stops again is escalated again -- and `<workspaceId>:v<n>:merge`
+   * for a failed merge.
    */
   'goal_needs_human',
 ] as const

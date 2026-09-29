@@ -1001,8 +1001,9 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
 
     case 'goal_needs_human':
       // Conductor Plan 4b (D10): the loop has stopped, or the verified version could not be merged.
-      // The remedy is a person's `retry-goal` or `abandon-goal` -- nothing the Supervisor may do for
-      // them (ruling 5: nothing is accepted unverified), so it escalates.
+      // The remedy is a person's: `retry-goal` or `abandon-goal` for a stopped loop (never accepted
+      // unverified, ruling 5), a hand merge and `confirm-goal-merge` for a verified version whose
+      // merge failed (ruling V6). Nothing the Supervisor may do for them, so it escalates.
       break
 
     case 'workspace_halted': {

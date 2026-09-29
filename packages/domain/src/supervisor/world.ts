@@ -484,6 +484,10 @@ export interface SupervisorGoalDelivery {
   readonly status: 'integrating' | 'verifying' | 'accepted' | 'needs_human'
   /** The verification round the version is on (0 before the first). */
   readonly round: number
+  /** The version's integration branch, and the workspace's base branch -- what a person merges by
+   *  hand when the final merge failed (ruling V6). */
+  readonly integrationBranch: string
+  readonly baseBranch: string
   /** Why the loop stopped, while `needs_human` -- it already names the remedy. */
   readonly needsHumanReason: string | null
   /** Why the final merge into the base branch failed (Plan 4a D9), or null. */

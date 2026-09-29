@@ -278,6 +278,8 @@ export function goalDelivery(overrides: Partial<SupervisorGoalDelivery> = {}): S
     goalVersion: 1,
     status: 'integrating',
     round: 1,
+    integrationBranch: 'slaveofai/goal-v1-ws-1',
+    baseBranch: 'main',
     needsHumanReason: null,
     mergeError: null,
     latestVerification: null,

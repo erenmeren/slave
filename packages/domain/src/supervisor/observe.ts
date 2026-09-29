@@ -1,5 +1,6 @@
 import { STEERS_PER_RUN_MAX } from '../breaker/constants.js'
 import { CONDUCTOR_ROLE } from '../conduct/constants.js'
+import { handMergeInstruction } from '../conduct/goalBranch.js'
 import { BREAKER_TRIP_LABEL } from '../breaker/detect.js'
 import { PERMISSION_TRIP_COUNT } from '../broker/operations.js'
 import { capabilityIndex, projectRoles } from '../capability/taxonomy.js'
@@ -658,25 +659,41 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
 
   // goal_needs_human / verification_failed (Conductor Plan 4b, R11). The first is a person's to
   // decide -- the loop has stopped, or the verified version could not be merged. The second is news,
-  // not a request: its packages are already in rework, so the rules record `no_action` (plan D10).
-  // One per round, by subject. Both read the delivery ROW's status: a reopened version accepted a
-  // second time writes no second `goal_accepted`, so the event log cannot say which tip is accepted.
+  // not a request: its packages are already in rework, so the rules record `no_action` (plan D10),
+  // once per round (its subject carries the round; `COOLDOWN_BY_KIND` holds it for the decision
+  // window). Both read the delivery ROW's status: a reopened version accepted a second time writes
+  // no second `goal_accepted`, so the event log cannot say which tip is accepted.
   for (const delivery of world.goalDeliveries) {
     const v = String(delivery.goalVersion)
     const flags = `--workspace ${world.workspaceId} --version ${v}`
-    if (delivery.status === 'needs_human' || (delivery.status === 'accepted' && delivery.mergeError !== null)) {
+    if (delivery.status === 'needs_human') {
       // A stopped loop's stored reason already ends in the remedy (`needsHumanRemedy`, orchestrator);
-      // the fallback names the same two verbs. A failed merge has no remedy among them -- retry-goal
-      // is for a stopped loop, abandon-goal would drop verified work -- so it points at the verdict.
+      // the fallback names the same verbs. Never a hand merge (ruling Q9): the tree is unverified.
+      // One situation per STOP (fix round 1, I1): a retried version that stops again is in a later
+      // round, so it is escalated again rather than held behind the first stop's decision.
       const reason =
-        delivery.status === 'needs_human'
-          ? (delivery.needsHumanReason ??
-            `the verification loop stopped. Read goal-status ${flags} for the verdict, then run retry-goal ${flags} ` +
-              `for a fresh window of verification rounds, or abandon-goal ${flags} to move on.`)
-          : `its merge into the base branch failed: ${delivery.mergeError ?? ''}. Read goal-status ${flags} for the error.`
+        delivery.needsHumanReason ??
+        `the verification loop stopped. Read goal-status ${flags} for the verdict, then run retry-goal ${flags} ` +
+          `for a fresh window of verification rounds, or abandon-goal ${flags} to move on.`
       add({
         kind: 'goal_needs_human',
-        subjectId: `${world.workspaceId}:v${v}`,
+        subjectId: `${world.workspaceId}:v${v}:r${String(delivery.round)}`,
+        summary: `Goal v${v} needs a person: ${reason}`,
+        facts: { goalVersion: delivery.goalVersion, reason },
+      })
+      continue
+    }
+    if (delivery.status === 'accepted' && delivery.mergeError !== null) {
+      // Ruling V6: an accepted version is VERIFIED, so its failed final merge is 4a's hand merge and
+      // confirm -- the same instruction the goal pass's own wait gives. Only the error's first line:
+      // git's advice below it is about a checkout, not about this decision.
+      const firstLine = delivery.mergeError.split('\n', 1)[0] ?? ''
+      const reason =
+        `its merge into the base branch failed: ${firstLine}. ` +
+        `${handMergeInstruction(delivery.integrationBranch, delivery.baseBranch, world.workspaceId, delivery.goalVersion)}.`
+      add({
+        kind: 'goal_needs_human',
+        subjectId: `${world.workspaceId}:v${v}:merge`,
         summary: `Goal v${v} needs a person: ${reason}`,
         facts: { goalVersion: delivery.goalVersion, reason },
       })
@@ -796,7 +813,7 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
  * The situations that are actually free to be decided now (M38 section 3, "idempotent and quiet"):
  * drops a key that already has an OPEN (`pending`) decision -- a human is looking at it -- and one
  * whose last decision stopped being open less than its cooldown ago: `COOLDOWN_MS`, unless
- * {@link COOLDOWN_BY_KIND} names a shorter one for that kind (M51 R3).
+ * {@link COOLDOWN_BY_KIND} names another for that kind (M51 R3: shorter; Plan 4b: longer).
  *
  * The cooldown anchor is `resolvedAt ?? createdAt`: an auto-`applied` (or `failed`) decision is
  * terminal from birth and never gets a `resolvedAt`, so without the `createdAt` fallback the
