@@ -81,6 +81,7 @@ import {
   listTemplateDuplicates,
   listUsers,
   listWorkforceCatalog,
+  latestReportVersion,
   loadGoalReport,
   loadSimulation,
   loadSupervisorWorld,
@@ -360,8 +361,8 @@ const USAGE = `usage: orchestrator <command> [options]
                                        requirement keys), and each package task with its status and
                                        whether it is on the integration branch. As JSON.
   goal-report --workspace <id> [--version <n>] [--json]
-                                       one goal version's report (the current version by default),
-                                       as Markdown: its state, what the report cannot vouch for, the
+                                       one goal version's report (by default the newest one that has
+                                       a report), as Markdown: its state, what the report cannot vouch for, the
                                        requirement table with each verdict's check and output, the
                                        verification rounds, each package with its seat and the files
                                        it merged, the version's spend against the project's budget,
@@ -2342,7 +2343,10 @@ export async function main(argv: readonly string[]): Promise<number> {
         // here goes through.
         const found = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { goalVersion: true } })
         if (found === null) throw new Error(refusalText({ kind: 'workspace_not_found', workspaceId }))
-        version = found.goalVersion
+        // Final wave M7: the newest version that HAS a report, the Team page's link -- the current
+        // goal version may have none yet (its requirements not extracted). With none at all, the
+        // refusal names the current version.
+        version = (await latestReportVersion(workspaceId)) ?? found.goalVersion
       } else {
         version = goalVersionFlag(versionText)
       }

@@ -622,6 +622,20 @@ describe('the orchestrator CLI', () => {
     expect(bad.code).not.toBe(0)
   })
 
+  // Final wave M7: without --version the CLI prints the newest version that HAS a report -- the
+  // Team page's link -- not the workspace's current goal version, which may have none yet.
+  it('goal-report without --version prints the newest version that has a report', async (): Promise<void> => {
+    const empty = await runCli(['goal-report', '--workspace', fixture.workspaceId])
+    expect(empty.code).not.toBe(0)
+    expect(`${empty.stdout}${empty.stderr}`).toContain(`workspace ${fixture.workspaceId} has no conducted goal`)
+
+    await seedGoalDelivery(1, 'integrating', 'ready')
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { goalVersion: 2 } })
+    const md = await runCli(['goal-report', '--workspace', fixture.workspaceId])
+    expect(md.code).toBe(0)
+    expect(md.stdout).toMatch(/^# Goal v1 report: /u)
+  })
+
   it('abandon-goal cancels the unfinished packages and prints them', async (): Promise<void> => {
     const { taskId } = await seedGoalDelivery(1, 'integrating', 'ready')
 

@@ -358,6 +358,15 @@ describe('TeamLive', () => {
     expect(screen.queryByTestId('goal-report-link')).toBeNull()
   })
 
+  // Final wave M7: a newer goal version with no report yet (requirements not extracted) must not
+  // read as its report: the link names the version it goes to.
+  it('names the version the report link goes to when it is not the current goal version', () => {
+    renderTeam(snapshot([row({})], { stats: { inProgress: 0, done: 0, goal: 'g', goalVersion: 3, reportVersion: 2, unmeasuredCalls: 0, unmeasuredRuns: 0, knowledge: { verified: 2, candidates: 1 } } }))
+    const link = screen.getByTestId('goal-report-link')
+    expect(link.getAttribute('href')).toBe('/w/w1/goals/2')
+    expect(link.textContent).toBe('v2 report')
+  })
+
   // Review fix round 1, Important 8: clamped to two lines, with the whole of it one hover away.
   it('clamps the goal line to two lines, with the full text one hover away', () => {
     const goal = 'Ship the checkout flow end to end, including refunds and partial captures.'
