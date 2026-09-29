@@ -119,6 +119,29 @@ describe('postGoalReportNotes', () => {
     expect(await prisma.supervisorMessage.findFirst({ where: { workspaceId: ws }, select: { modelCostUsd: true, unmeasured: true } })).toEqual({ modelCostUsd: null, unmeasured: false })
   })
 
+  // Final wave M8: with autoMerge on, a dirty checkout is all the merge waits for; the person has
+  // to clean it, not merge by hand. A base that moved does need a hand merge.
+  it('asks for a clean checkout, not a hand merge, when that is what an auto-merged version waits for', async (): Promise<void> => {
+    const ws = await workspaceWith(true)
+    await delivery(ws, 1, { status: 'accepted', round: 1, verifiedCommit: 'c'.repeat(40), acceptedAt: new Date(Date.now() - 60_000) })
+    await appendEvent({ type: 'guardrail.tripped', workspaceId: ws, actor: 'system', payload: { guardrail: 'merge_failure', detail: 'goal v1 is accepted and waits for a clean checkout of main to be merged into it' } })
+    expect(await postGoalReportNotes(ws)).toBe(1)
+    const [note] = await notes(ws)
+    expect(note?.text).toContain('it waits for a clean checkout of main')
+    expect(note?.text).not.toContain('confirm-goal-merge')
+  })
+
+  it('still tells the person how to merge by hand when the base moved', async (): Promise<void> => {
+    const ws = await workspaceWith(true)
+    await delivery(ws, 1, { status: 'accepted', round: 1, verifiedCommit: 'c'.repeat(40), acceptedAt: new Date(Date.now() - 60_000) })
+    await appendEvent({ type: 'guardrail.tripped', workspaceId: ws, actor: 'system', payload: { guardrail: 'merge_failure', detail: 'goal v1 is accepted and waits for a clean checkout of main to be merged into it' } })
+    await appendEvent({ type: 'guardrail.tripped', workspaceId: ws, actor: 'system', payload: { guardrail: 'merge_failure', detail: 'goal v1 is accepted, but main has moved since the goal was cut from it' } })
+    expect(await postGoalReportNotes(ws)).toBe(1)
+    const [note] = await notes(ws)
+    expect(note?.text).toContain('confirm-goal-merge --workspace')
+    expect(note?.text).not.toContain('clean checkout')
+  })
+
   it('posts nothing for an archived project', async (): Promise<void> => {
     const ws = await workspaceWith(true)
     await delivery(ws, 1, { status: 'abandoned' })

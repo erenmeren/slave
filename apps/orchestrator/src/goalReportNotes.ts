@@ -37,7 +37,13 @@ export async function restingKey(delivery: RestingDelivery, autoMerge: boolean):
   if (delivery.status === 'needs_human') return `needs_human:r${String(delivery.round)}`
   if (delivery.status !== 'accepted') return null
   if (!autoMerge || delivery.mergeError !== null) return `awaiting_merge:r${String(delivery.round)}`
-  // `goal v<n> is accepted` with the space after the number: v1's prefix never matches v10's trips.
+  return (await acceptedWait(delivery)) === null ? null : `awaiting_merge:r${String(delivery.round)}`
+}
+
+/** The newest goal-pass trip about an accepted version since it was accepted (what it waits for),
+ *  or null. `goal v<n> is accepted` with the space after the number: v1's prefix never matches
+ *  v10's trips. */
+async function acceptedWait(delivery: RestingDelivery): Promise<string | null> {
   const trip = await prisma.executionEvent.findFirst({
     where: {
       workspaceId: delivery.workspaceId,
@@ -45,9 +51,21 @@ export async function restingKey(delivery: RestingDelivery, autoMerge: boolean):
       ...(delivery.acceptedAt === null ? {} : { ts: { gte: delivery.acceptedAt } }),
       payload: { path: ['detail'], string_starts_with: `goal v${String(delivery.goalVersion)} is accepted` },
     },
-    select: { seq: true },
+    orderBy: { seq: 'desc' },
+    select: { payload: true },
   })
-  return trip === null ? null : `awaiting_merge:r${String(delivery.round)}`
+  if (trip === null) return null
+  const detail = (trip.payload as { readonly detail?: unknown } | null)?.detail
+  return typeof detail === 'string' ? detail : ''
+}
+
+/** Final wave M8: with `autoMerge` on and no refused merge, an accepted version whose newest trip
+ *  is the goal pass's "waits for a clean checkout" needs the checkout cleaned, not a hand merge.
+ *  The prefix is `goal.ts`'s own trip text. */
+async function waitsForCleanCheckout(delivery: RestingDelivery, autoMerge: boolean): Promise<boolean> {
+  if (!autoMerge || delivery.mergeError !== null || delivery.mergedAt !== null || delivery.status !== 'accepted') return false
+  const detail = await acceptedWait(delivery)
+  return detail?.startsWith(`goal v${String(delivery.goalVersion)} is accepted and waits for a clean checkout`) === true
 }
 
 /**
@@ -80,7 +98,7 @@ export async function postGoalReportNotes(workspaceId: string): Promise<number> 
       continue
     }
     const note = await postSupervisorNote(workspaceId, {
-      text: goalReportSummary(report.value),
+      text: goalReportSummary(report.value, { waitsForCleanCheckout: await waitsForCleanCheckout(delivery, workspace.autoMerge) }),
       noteKey: `${GOAL_REPORT_NOTE_KEY_PREFIX}v${String(delivery.goalVersion)}:${key}`,
       goalReportVersion: delivery.goalVersion,
     })
