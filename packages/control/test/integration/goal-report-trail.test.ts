@@ -186,6 +186,32 @@ describe('versionTrail', () => {
     expect(spend.supervisorMeasuredUsd).toBe(0.25)
   })
 
+  // Round 2 X2: with no delivery, a package merges into the base branch, but with autoMerge off
+  // merge.ts writes `task.done` without any git merge; a person may confirm the merge later.
+  it("does not say Slave merged a pre-delivery package it marked done with autoMerge off, and shows a person's confirmation", async (): Promise<void> => {
+    const s = await seed()
+    await prisma.workspace.update({ where: { id: s.workspaceId }, data: { baseBranch: 'trunk' } })
+    await prisma.goalDelivery.delete({ where: { id: s.deliveryOf[1] } })
+    await appendEvent({ type: 'task.done', workspaceId: s.workspaceId, taskId: s.taskOf[1], actor: 'system', payload: { branch: 'b1' } })
+    const texts = async (): Promise<readonly string[]> => (await versionTrail(await loadVersionScope(s.workspaceId, 1), [])).entries.map((e) => e.text)
+    expect(await texts()).toEqual(['pkg1: done; auto-merge was off, so Slave did not merge it into trunk.'])
+
+    // confirmIntegration's own writes: the stamp, then `task.integrated` by a person.
+    await prisma.task.update({ where: { id: s.taskOf[1] }, data: { integratedAt: new Date() } })
+    await appendEvent({ type: 'task.integrated', workspaceId: s.workspaceId, taskId: s.taskOf[1], actor: 'human', payload: {} })
+    expect(await texts()).toEqual(['pkg1: done; auto-merge was off, so Slave did not merge it into trunk.', 'pkg1: confirmed merged into trunk by a person.'])
+  })
+
+  it('says a pre-delivery package Slave merged merged into the base branch', async (): Promise<void> => {
+    const s = await seed()
+    await prisma.workspace.update({ where: { id: s.workspaceId }, data: { baseBranch: 'trunk' } })
+    await prisma.goalDelivery.delete({ where: { id: s.deliveryOf[1] } })
+    await prisma.task.update({ where: { id: s.taskOf[1] }, data: { integratedAt: new Date() } })
+    await appendEvent({ type: 'task.done', workspaceId: s.workspaceId, taskId: s.taskOf[1], actor: 'system', payload: { branch: 'b1' } })
+    const { entries } = await versionTrail(await loadVersionScope(s.workspaceId, 1), [])
+    expect(entries.map((e) => e.text)).toEqual(['pkg1: merged into trunk.'])
+  })
+
   it('keeps the newest entries and counts the rest', async (): Promise<void> => {
     const s = await seed()
     for (let round = 1; round <= 4; round += 1) {

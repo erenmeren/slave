@@ -55,19 +55,24 @@ function headline(report: GoalReport, options: GoalReportSummaryOptions): string
     }
     case 'conducted_without_delivery':
       return `conducted before Slave built goal versions on an integration branch; ${packagesWithoutDelivery(report.packages, base)}.`
-    case 'accepted':
-      if (d === null) return 'every requirement is verified.'
+    case 'accepted': {
+      // Round 2 X3: a legacy row accepted with no recorded round is not "verified" (caveat M3).
+      const verdict = report.rounds.length === 0 ? 'accepted without a recorded verification round' : 'every requirement is verified'
+      if (d === null) return `${verdict}.`
       // Final wave M8: with autoMerge on, a dirty or switched checkout is all the merge waits for.
       // The person has to act, but by cleaning the checkout, never by merging by hand. Wording fix
       // W2: the note promises the retry, not the merge -- the base can move meanwhile, and then the
       // version waits for a hand merge (which gets its own note: the resting key names the wait).
       if (options.waitsForCleanCheckout === true) {
         return (
-          `every requirement is verified, and it waits for a clean checkout of ${d.baseBranch}: the project checkout has uncommitted changes ` +
+          `${verdict}, and it waits for a clean checkout of ${d.baseBranch}: the project checkout has uncommitted changes ` +
           `or is not on ${d.baseBranch}. Once the checkout is clean and on ${d.baseBranch}, Slave tries the merge again.`
         )
       }
-      return `every requirement is verified, and it waits for you: ${handMergeInstruction(d.integrationBranch, d.baseBranch, report.workspaceId, report.goalVersion, d.verifiedCommit)}.`
+      // With no recorded round, the recorded commit is not called "the verified tip" either.
+      const tip = report.rounds.length === 0 ? null : d.verifiedCommit
+      return `${verdict}, and it waits for you: ${handMergeInstruction(d.integrationBranch, d.baseBranch, report.workspaceId, report.goalVersion, tip)}.`
+    }
     case 'needs_human': {
       const reason = d?.needsHumanReason ?? 'the verification loop stopped'
       return `stopped, and needs you: ${reason.length > 700 ? `${reason.slice(0, 700)}…` : reason}`

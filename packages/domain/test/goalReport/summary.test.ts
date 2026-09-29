@@ -176,6 +176,20 @@ describe('goalReportSummary', () => {
     expect(text).toContain('Requirements: 1 of 3 pass (round 1); failing: R2; could not be checked: R3.')
   })
 
+  // Round 2 X3: an accepted version with no recorded round (a legacy row) is not "verified".
+  it('does not call an accepted version with no recorded round verified', () => {
+    const d = report().delivery!
+    const none = [requirement({ verdict: null, history: [] })]
+    const hand = goalReportSummary(report({ state: 'accepted', delivery: { ...d, mergedAt: null, merge: null }, rounds: [], requirements: none }))
+    expect(hand).toContain('Goal v2 report: accepted without a recorded verification round, and it waits for you: Merge')
+    expect(hand).not.toContain('every requirement is verified')
+    expect(hand).not.toContain('the verified tip')
+    expect(hand).toContain('Requirements: 0 of 1 pass, none verified.')
+    const checkout = goalReportSummary(report({ state: 'accepted', delivery: { ...d, mergedAt: null, merge: null }, rounds: [], requirements: none }), { waitsForCleanCheckout: true })
+    expect(checkout).toContain('Goal v2 report: accepted without a recorded verification round, and it waits for a clean checkout of main:')
+    expect(checkout).not.toContain('every requirement is verified')
+  })
+
   it('tells the person how to merge an accepted version by hand', () => {
     const d = report().delivery!
     const text = goalReportSummary(report({ state: 'accepted', delivery: { ...d, mergedAt: null, merge: null } }))

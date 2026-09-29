@@ -20,7 +20,9 @@ export interface VersionScope {
   readonly deliveryId: string | null
   /** `Workspace.baseBranch`: where a package of a version with no delivery merged (final wave I1). */
   readonly baseBranch: string
-  readonly tasks: readonly { readonly taskId: string; readonly packageKey: string; readonly seat: string | null }[]
+  /** `integrated`: `Task.integratedAt` is set (round 2 X2: a pre-delivery task done without it was
+   *  marked done with `autoMerge` off, with no git merge). */
+  readonly tasks: readonly { readonly taskId: string; readonly packageKey: string; readonly seat: string | null; readonly integrated: boolean }[]
   readonly verifier: string | null
 }
 
@@ -45,12 +47,12 @@ export async function loadVersionScope(workspaceId: string, goalVersion: number)
     prisma.workspace.findUnique({ where: { id: workspaceId }, select: { baseBranch: true } }),
     prisma.workPackage.findMany({
       where: { workspaceId, goalVersion },
-      select: { key: true, tasks: { select: { id: true, assigneeId: true }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] } },
+      select: { key: true, tasks: { select: { id: true, assigneeId: true, integratedAt: true }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] } },
     }),
     prisma.goalDelivery.findUnique({ where: { workspaceId_goalVersion: { workspaceId, goalVersion } }, select: { id: true, verifierSlaveId: true } }),
   ])
   const tasks = packages
-    .flatMap((pkg) => pkg.tasks.map((task) => ({ taskId: task.id, packageKey: pkg.key, assigneeId: task.assigneeId })))
+    .flatMap((pkg) => pkg.tasks.map((task) => ({ taskId: task.id, packageKey: pkg.key, assigneeId: task.assigneeId, integrated: task.integratedAt !== null })))
     .sort((a, b) => (a.packageKey < b.packageKey ? -1 : a.packageKey > b.packageKey ? 1 : a.taskId < b.taskId ? -1 : 1))
   const names = await seatNames([...tasks.map((task) => task.assigneeId), delivery?.verifierSlaveId ?? null])
   return {
@@ -58,7 +60,12 @@ export async function loadVersionScope(workspaceId: string, goalVersion: number)
     goalVersion,
     deliveryId: delivery?.id ?? null,
     baseBranch: workspace?.baseBranch ?? 'the base branch',
-    tasks: tasks.map((task) => ({ taskId: task.taskId, packageKey: task.packageKey, seat: task.assigneeId === null ? null : (names.get(task.assigneeId) ?? null) })),
+    tasks: tasks.map((task) => ({
+      taskId: task.taskId,
+      packageKey: task.packageKey,
+      seat: task.assigneeId === null ? null : (names.get(task.assigneeId) ?? null),
+      integrated: task.integrated,
+    })),
     verifier: delivery?.verifierSlaveId == null ? null : (names.get(delivery.verifierSlaveId) ?? null),
   }
 }
@@ -72,6 +79,7 @@ const TASK_TRAIL_TYPES = [
   'task_merge_failed',
   'task_rework',
   'task_done',
+  'task_integrated',
   'task_failed',
   'task_cancelled',
 ] as const
@@ -104,7 +112,7 @@ interface Draft {
 
 /** One event as a trail sentence (plan D6), or null for a payload this build cannot read. The
  *  sentences name ids, keys and counts only; free text goes in `detail`, labelled. */
-function eventDraft(type: DomainEventType, p: Payload, pkg: string | null, mergesInto: string): Draft | null {
+function eventDraft(type: DomainEventType, p: Payload, pkg: string | null, mergesInto: string, mergedBySlave: boolean): Draft | null {
   const on = pkg === null ? '' : `${pkg}: `
   switch (type) {
     case 'workspace.goal_set': {
@@ -172,9 +180,15 @@ function eventDraft(type: DomainEventType, p: Payload, pkg: string | null, merge
         : { text: `${on}sent back for rework (attempt ${String(num(p, 'attempt'))}).`, detail: str(p, 'reason'), detailBy: 'system' }
     }
     case 'task.done': {
+      // Round 2 X2: merge.ts's `autoMerge`-off path (a version with no delivery) writes this event
+      // with no git merge.
+      if (!mergedBySlave) return { text: `${on}done; auto-merge was off, so Slave did not merge it into ${mergesInto}.` }
       const files = typeof p['filesTotal'] === 'number' ? ` (${times(num(p, 'filesTotal'), 'file', 'files')})` : ''
       return { text: `${on}merged into ${mergesInto}${files}.` }
     }
+    case 'task.integrated':
+      // `confirmIntegration`: a person merged the branch by hand and said so.
+      return { text: `${on}confirmed merged into ${mergesInto} by a person.` }
     case 'task.failed':
       return { text: `${on}failed.`, detail: str(p, 'reason'), detailBy: 'system' }
     case 'task.cancelled':
@@ -258,11 +272,19 @@ export async function versionTrail(
     }),
   ])
 
+  // Round 2 X2: with no delivery, a package task Slave merged has `integratedAt` and no
+  // `task.integrated` event; one marked done with `autoMerge` off has neither, or (once a person
+  // confirmed a hand merge) the event. Either way its `task.done` was not a merge by Slave. With a
+  // delivery, every `task.done` is merge.ts's merge into the integration branch.
+  const confirmed = new Set(events.filter((row) => row.type === 'task_integrated' && row.taskId !== null).map((row) => row.taskId as string))
+  const handMerged = new Set(
+    scope.deliveryId !== null ? [] : scope.tasks.filter((task) => !task.integrated || confirmed.has(task.taskId)).map((task) => task.taskId),
+  )
   const byEvent: Timed[] = []
   for (const row of events) {
     const type = DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? (row.type as DomainEventType)
     const pkg = row.taskId === null ? null : (keyOf.get(row.taskId) ?? null)
-    const draft = eventDraft(type, (row.payload ?? {}) as Payload, pkg, mergesInto)
+    const draft = eventDraft(type, (row.payload ?? {}) as Payload, pkg, mergesInto, row.taskId === null || !handMerged.has(row.taskId))
     if (draft === null) continue
     if (type === 'workspace.conducted') {
       const fallback = (row.payload as Payload)['fallback'] === true

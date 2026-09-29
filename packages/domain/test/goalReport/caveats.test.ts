@@ -157,13 +157,22 @@ describe('reportCaveats', () => {
     expect(without([])).toBe(`${head}it has no packages.${tail}`)
     expect(without([pkg({ key: 'a' }), pkg({ key: 'b' })])).toBe(`${head}its packages merged straight into trunk.${tail}`)
     expect(without([pkg({ key: 'a' }), pkg({ key: 'b', taskStatus: 'ready', integrated: false })])).toBe(
-      `${head}its packages merge straight into trunk, and 1 of 2 has merged.${tail}`,
+      `${head}its packages merge straight into trunk, and 1 of 2 is recorded as merged.${tail}`,
     )
     expect(without([pkg({ key: 'a', taskStatus: 'ready', integrated: false }), pkg({ key: 'b', taskStatus: 'running', integrated: false })])).toBe(
       `${head}its packages merge straight into trunk, and none has merged yet.${tail}`,
     )
+    // Round 2 X1: a package done with autoMerge off has no recorded merge, but a person may have
+    // merged it by hand without confirming: say only what is recorded.
+    expect(without([pkg({ taskStatus: 'done', integrated: false })])).toBe(`${head}its package merges straight into trunk, and its merge is not recorded.${tail}`)
+    expect(without([pkg({ key: 'a' }), pkg({ key: 'b' }), pkg({ key: 'c', taskStatus: 'done', integrated: false })])).toBe(
+      `${head}its packages merge straight into trunk, and 2 of 3 are recorded as merged.${tail}`,
+    )
+    expect(without([pkg({ key: 'a', taskStatus: 'done', integrated: false }), pkg({ key: 'b', taskStatus: 'running', integrated: false })])).toBe(
+      `${head}its packages merge straight into trunk, and none is recorded as merged.${tail}`,
+    )
     expect(without([pkg({ key: 'a', taskStatus: 'cancelled', integrated: false }), pkg({ key: 'b', taskStatus: 'failed', integrated: false })])).toBe(
-      `${head}its packages merge straight into trunk, and none of them merged.${tail}`,
+      `${head}its packages merge straight into trunk, and none is recorded as merged.${tail}`,
     )
   })
 

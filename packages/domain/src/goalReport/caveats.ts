@@ -46,8 +46,11 @@ const isFinishedTaskStatus = (status: string): boolean => (TERMINAL as readonly 
  * Where the packages of a version conducted before integration branches stand
  * (`conducted_without_delivery`, wording fix W1). They merge straight into the base branch, but a
  * Plans 2/3 package can still be in flight after the upgrade, and a version can have no packages,
- * so "merged" is said only of what `integrated` (`Task.integratedAt`, set by the base-branch merge)
- * records. The caveat and the chat note share it.
+ * so "merged" is said only of what `integrated` (`Task.integratedAt`: set by the base-branch merge,
+ * or by a person's `confirmIntegration`) records. A package finished without it is not "not
+ * merged": with `autoMerge` off, merge.ts marks it done with no git merge, and a person may have
+ * merged it by hand without confirming (round 2 X1), so it is only "not recorded". "Yet" only while
+ * every package without a merge is still moving. The caveat and the chat note share it.
  */
 export function packagesWithoutDelivery(packages: GoalReport['packages'], base: string): string {
   const n = packages.length
@@ -55,13 +58,13 @@ export function packagesWithoutDelivery(packages: GoalReport['packages'], base: 
   const merged = packages.filter((pkg) => pkg.integrated).length
   const noun = n === 1 ? 'its package' : 'its packages'
   if (merged === n) return `${noun} merged straight into ${base}`
-  const moving = packages.some((pkg) => !pkg.integrated && pkg.taskStatus !== null && !isFinishedTaskStatus(pkg.taskStatus))
+  const allMoving = packages.every((pkg) => pkg.integrated || (pkg.taskStatus !== null && !isFinishedTaskStatus(pkg.taskStatus)))
   const where =
     merged > 0
-      ? `${String(merged)} of ${String(n)} ${merged === 1 ? 'has' : 'have'} merged`
+      ? `${String(merged)} of ${String(n)} ${merged === 1 ? 'is' : 'are'} recorded as merged`
       : n === 1
-        ? moving ? 'it has not merged yet' : 'it did not merge'
-        : moving ? 'none has merged yet' : 'none of them merged'
+        ? allMoving ? 'it has not merged yet' : 'its merge is not recorded'
+        : allMoving ? 'none has merged yet' : 'none is recorded as merged'
   return `${noun} ${n === 1 ? 'merges' : 'merge'} straight into ${base}, and ${where}`
 }
 
