@@ -711,12 +711,51 @@ describe('fake-claude', () => {
       expect(readdirSync(repoDir).filter((name) => name !== '.git')).toEqual([])
     })
 
-    it('writes no check anywhere when $SLAVEOFAI_VERIFY_DIR is unset', async (): Promise<void> => {
-      const env = { ...process.env }
-      delete env.SLAVEOFAI_VERIFY_DIR
-      await run('node', [FAKE, '--fixture', 'm8-flow', '-p', promptFor(1)], { cwd: repoDir, env })
+    it('writes checks only where $SLAVEOFAI_VERIFY_DIR points, and none anywhere when it is unset', async (): Promise<void> => {
+      // One sandbox holds everything the child could plausibly write to: its cwd (a fresh repo
+      // inside the sandbox), the repo's parent, and its HOME. A check written relative to the cwd,
+      // beside the repo or under ~ is found by the recursive search below.
+      const sandbox = mkdtempSync(path.join(tmpdir(), 'fake-claude-verify-sandbox-'))
+      try {
+        const repo = path.join(sandbox, 'repo')
+        execFileSync('git', ['init', '-q', repo])
+        execFileSync(
+          'git',
+          ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'initial commit'],
+          { cwd: repo },
+        )
+        const checksUnder = (dir: string): string[] =>
+          (readdirSync(dir, { recursive: true }) as string[]).filter((name) => /(^|\/)check-[^/]*\.sh$/.test(name)).sort()
+        const base = { ...process.env, HOME: sandbox }
+        delete base.SLAVEOFAI_VERIFY_DIR
+        const argv = [FAKE, '--fixture', 'm8-flow', '-p', promptFor(1)]
+
+        // Unset: the run still answers, and no check exists anywhere in the sandbox.
+        const unset = await run('node', argv, { cwd: repo, env: base })
+        expect(statuses(verdictOf(unset.stdout))).toEqual(['R1:pass', 'R2:pass'])
+        expect(checksUnder(sandbox)).toEqual([])
+
+        // The positive twin, same setup with the variable set: the checks appear there, and only there.
+        const scratch = path.join(sandbox, 'scratch')
+        await run('node', argv, { cwd: repo, env: { ...base, SLAVEOFAI_VERIFY_DIR: scratch } })
+        expect(checksUnder(sandbox)).toEqual(['scratch/check-R1.sh', 'scratch/check-R2.sh'])
+      } finally {
+        rmSync(sandbox, { recursive: true, force: true })
+      }
+    })
+
+    it('still writes its checks when the scripted verdict is malformed', async (): Promise<void> => {
+      const malformed = Buffer.from('{"items": [{"key": "R1", "status": "pass"').toString('base64')
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm8-flow', '--verification-json-base64', malformed, '-p', promptFor(1)], {
+        cwd: repoDir,
+        env: { ...process.env, SLAVEOFAI_VERIFY_DIR: verifyDir },
+      })
+      const result = (parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined)?.result ?? ''
+      expect(result).toContain('<slave-verification>{"items": [{"key": "R1", "status": "pass"</slave-verification>')
+      expect(readdirSync(verifyDir).sort()).toEqual(['check-R1.sh', 'check-R2.sh'])
+      // No item parsed, so each check falls back to `true`.
+      expect(readFileSync(path.join(verifyDir, 'check-R1.sh'), 'utf8')).toBe('#!/bin/sh\n# fake check for R1\ntrue\n')
       expect(readdirSync(repoDir).filter((name) => name !== '.git')).toEqual([])
-      expect(readdirSync(verifyDir)).toEqual([])
     })
 
     it('passes every key on the prompt\'s key line when given no flag', async (): Promise<void> => {
