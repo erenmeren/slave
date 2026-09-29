@@ -46,8 +46,11 @@ export const COOLDOWN_BY_KIND: Partial<Record<SituationKind, number>> = {
  * Situations the Supervisor decides by the rules alone, never asking the model (Conductor Plan 4b,
  * fix round 1, I2). `verification_failed` is news the loop is already acting on: the rules record
  * `no_action`, and a model call could only spend money -- or escalate what needs nobody.
+ * `goal_needs_human` (final wave I3) is the opposite case: only a person can act on it, so the
+ * rules escalate it every time -- a model that picked `no_action` would be asked again, and paid
+ * again, every fifteen minutes while the version waits.
  */
-export const RULES_ONLY_SITUATION_KINDS: readonly SituationKind[] = ['verification_failed']
+export const RULES_ONLY_SITUATION_KINDS: readonly SituationKind[] = ['verification_failed', 'goal_needs_human']
 
 /**
  * The most model-decided situations one tick may pay for. The rest are not dropped -- they simply

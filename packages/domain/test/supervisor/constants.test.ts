@@ -94,6 +94,6 @@ describe('supervisor constants', () => {
 describe('verification_failed is decided once per round, by the rules', () => {
   it('cools for the whole decision window and never goes to the model', () => {
     expect(COOLDOWN_BY_KIND.verification_failed).toBe(PENDING_TTL_MS)
-    expect(RULES_ONLY_SITUATION_KINDS).toEqual(['verification_failed'])
+    expect(RULES_ONLY_SITUATION_KINDS).toEqual(['verification_failed', 'goal_needs_human'])
   })
 })
