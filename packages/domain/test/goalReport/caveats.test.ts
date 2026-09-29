@@ -176,6 +176,14 @@ describe('reportCaveats', () => {
     )
   })
 
+  // Round 3: a commit with no recorded round is not "the verified commit".
+  it('says no verified commit is recorded for a hand merge of a version with no recorded round', () => {
+    const d = report().delivery!
+    const caveats = reportCaveats(report({ rounds: [], requirements: [requirement({ verdict: null, history: [] })], delivery: { ...d, merge: { by: 'human', commit: 'c'.repeat(40), into: 'main' } } }))
+    expect(caveats).toContain(`A person merged this version into main by hand (commit ${'c'.repeat(12)}), and no verified commit is recorded for it.`)
+    expect(caveats.join('\n')).not.toContain('is not the verified commit')
+  })
+
   it('says nothing about a person who fast-forwarded to the verified commit', () => {
     const d = report().delivery!
     expect(reportCaveats(report({ delivery: { ...d, merge: { by: 'human', commit: 'c'.repeat(40), into: 'main' } } }))).toEqual([])

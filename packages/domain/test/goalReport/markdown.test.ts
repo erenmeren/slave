@@ -128,6 +128,15 @@ describe('renderGoalReportMarkdown', () => {
     expect(lines('not_conducted')).toContain('No packages yet.')
   })
 
+  // Round 3: an accepted version with no recorded round (a legacy row) has no "verified commit".
+  it('calls the commit of an accepted version verified only when a round is recorded', () => {
+    const d = { ...report().delivery!, mergedAt: null, merge: null }
+    const state = (over: Partial<GoalReport>): string => renderGoalReportMarkdown(report({ state: 'accepted', delivery: d, ...over })).split('\n').find((line) => line.startsWith('State:')) ?? ''
+    expect(state({})).toBe(`State: **verified, waiting to be merged** (verified commit ${'c'.repeat(12)} on slaveofai/goal-v2-ws-1)`)
+    expect(state({ rounds: [] })).toBe(`State: **verified, waiting to be merged** (commit ${'c'.repeat(12)} on slaveofai/goal-v2-ws-1; no verification round is recorded)`)
+    expect(state({ rounds: [], delivery: { ...d, verifiedCommit: null } })).toBe('State: **verified, waiting to be merged** (no verified commit is recorded on slaveofai/goal-v2-ws-1)')
+  })
+
   it('keeps hostile text inert: no raw tag, no forged marker, no broken row, no closed fence', () => {
     const md = renderGoalReportMarkdown(
       report({

@@ -190,6 +190,16 @@ describe('goalReportSummary', () => {
     expect(checkout).not.toContain('every requirement is verified')
   })
 
+  // Round 3: with no recorded round, the landed commit is not "the verified commit".
+  it('does not call the merged commit verified when no round is recorded', () => {
+    const d = report().delivery!
+    const system = goalReportSummary(report({ rounds: [] }))
+    expect(system).toContain(`Goal v2 report: merged into main (commit ${'c'.repeat(12)}).`)
+    expect(system).not.toContain('the verified commit')
+    const byHand = goalReportSummary(report({ rounds: [], delivery: { ...d, merge: { by: 'human', commit: 'c'.repeat(40), into: 'main' } } }))
+    expect(byHand).toContain(`merged into main by a person (commit ${'c'.repeat(12)}); no verified commit is recorded for it.`)
+  })
+
   it('tells the person how to merge an accepted version by hand', () => {
     const d = report().delivery!
     const text = goalReportSummary(report({ state: 'accepted', delivery: { ...d, mergedAt: null, merge: null } }))

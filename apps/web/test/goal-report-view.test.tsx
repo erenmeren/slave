@@ -159,6 +159,18 @@ describe('GoalReportView', () => {
     expect(screen.getByText('No packages yet.')).toBeTruthy()
   })
 
+  // Round 3: the same phrase as the Markdown -- "verified commit" only with a recorded round.
+  it('calls the commit of an accepted version verified only when a round is recorded', () => {
+    const d = { ...report().delivery!, mergedAt: null, merge: null }
+    const { unmount } = render(<GoalReportView report={report({ state: 'accepted', delivery: d })} />)
+    expect(screen.getByTestId('goal-report-facts').textContent).toContain(`· verified commit ${'c'.repeat(12)} on slaveofai/goal-v2-w1`)
+    unmount()
+    render(<GoalReportView report={report({ state: 'accepted', delivery: d, rounds: [] })} />)
+    const facts = screen.getByTestId('goal-report-facts').textContent ?? ''
+    expect(facts).toContain(`· commit ${'c'.repeat(12)} on slaveofai/goal-v2-w1; no verification round is recorded`)
+    expect(facts).not.toContain('verified commit')
+  })
+
   it('labels a quoted trail detail and an answer with the shared words', () => {
     render(
       <GoalReportView

@@ -4,6 +4,7 @@ import {
   GOAL_REPORT_ANSWERED_BY,
   GOAL_REPORT_AUTHOR_WORDS,
   GOAL_REPORT_STATE_LABEL,
+  acceptedCommitText,
   evidenceAnchor,
   evidenceCut,
   formatReportUsd,
@@ -88,7 +89,7 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
         {report.workspaceName} · as of {report.asOf ?? 'no recorded fact yet'}
         {/* Final wave M6: only a merged version says who merged it -- the Markdown's own rule. */}
         {report.state === 'merged' && d?.merge != null && ` · merged into ${d.merge.into} ${d.merge.by === 'human' ? 'by a person' : 'by Slave'} (commit ${shortCommit(d.merge.commit)})`}
-        {report.state === 'accepted' && d !== null && ` · verified commit ${shortCommit(d.verifiedCommit)} on ${d.integrationBranch}`}
+        {report.state === 'accepted' && d !== null && ` · ${acceptedCommitText(report, d.integrationBranch)}`}
         {(report.state === 'integrating' || report.state === 'verifying' || report.state === 'needs_human') &&
           d !== null &&
           d.round > 0 &&

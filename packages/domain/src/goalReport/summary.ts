@@ -1,6 +1,6 @@
 import { handMergeInstruction } from '../conduct/goalBranch.js'
 import { sanitisePersonText } from '../handoff/contract.js'
-import { packagesWithoutDelivery, roundCanStillCome } from './caveats.js'
+import { packagesWithoutDelivery, roundCanStillCome, verifiedCommitOnRecord } from './caveats.js'
 import { GOAL_REPORT_SUMMARY_MAX_CHARS } from './constants.js'
 import { formatReportUsd, shortCommit } from './escape.js'
 import type { GoalReport } from './types.js'
@@ -39,18 +39,20 @@ function headline(report: GoalReport, options: GoalReportSummaryOptions): string
   switch (report.state) {
     case 'merged': {
       const merge = d?.merge ?? null
+      // Round 3: a commit with no recorded round is not "the verified commit".
+      const verifiedCommit = verifiedCommitOnRecord(report)
       if (merge === null) return `merged into ${base}.`
       // Plan D2: a hand merge whose commit is not the verified one landed a tree nobody verified.
       // With no verified commit on record there is nothing to compare with (final wave T4), so the
       // note says that rather than a verdict either way.
-      if (merge.by === 'human' && d?.verifiedCommit == null) {
+      if (merge.by === 'human' && verifiedCommit === null) {
         return `merged into ${merge.into} by a person (commit ${shortCommit(merge.commit)}); no verified commit is recorded for it.`
       }
-      if (merge.by === 'human' && merge.commit !== d?.verifiedCommit) {
+      if (merge.by === 'human' && merge.commit !== verifiedCommit) {
         return `merged into ${merge.into} by a person (commit ${shortCommit(merge.commit)}); that tree was not itself verified.`
       }
       // Final wave M1: "the verified commit" only when the records say it is.
-      const verified = d?.verifiedCommit != null && merge.commit === d.verifiedCommit ? ', the verified commit' : ''
+      const verified = verifiedCommit !== null && merge.commit === verifiedCommit ? ', the verified commit' : ''
       return `merged into ${merge.into}${merge.by === 'human' ? ' by a person' : ''} (commit ${shortCommit(merge.commit)}${verified}).`
     }
     case 'conducted_without_delivery':
@@ -70,8 +72,7 @@ function headline(report: GoalReport, options: GoalReportSummaryOptions): string
         )
       }
       // With no recorded round, the recorded commit is not called "the verified tip" either.
-      const tip = report.rounds.length === 0 ? null : d.verifiedCommit
-      return `${verdict}, and it waits for you: ${handMergeInstruction(d.integrationBranch, d.baseBranch, report.workspaceId, report.goalVersion, tip)}.`
+      return `${verdict}, and it waits for you: ${handMergeInstruction(d.integrationBranch, d.baseBranch, report.workspaceId, report.goalVersion, verifiedCommitOnRecord(report))}.`
     }
     case 'needs_human': {
       const reason = d?.needsHumanReason ?? 'the verification loop stopped'

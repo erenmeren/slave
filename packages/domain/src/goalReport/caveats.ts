@@ -26,6 +26,23 @@ export function unverifiedRequirementLabel(state: GoalReportState): string {
   return ROUND_CAN_COME.has(state) ? 'not verified yet' : 'not verified'
 }
 
+/** The delivery's `verifiedCommit` when the report can call it verified: a verification round is
+ *  recorded (round 3). A legacy row accepted before verification existed carries a commit but no
+ *  round, and that commit was never verified. The caveat, the note, the page and the export all
+ *  read it from here. */
+export function verifiedCommitOnRecord(report: GoalReport): string | null {
+  return report.rounds.length === 0 ? null : (report.delivery?.verifiedCommit ?? null)
+}
+
+/** The accepted version's commit, for the page's facts line and the export's state line (round 3):
+ *  one phrase for both. `branch` comes in already escaped for the medium. */
+export function acceptedCommitText(report: GoalReport, branch: string): string {
+  const verified = verifiedCommitOnRecord(report)
+  if (verified !== null) return `verified commit ${shortCommit(verified)} on ${branch}`
+  const recorded = report.delivery?.verifiedCommit ?? null
+  return recorded === null ? `no verified commit is recorded on ${branch}` : `commit ${shortCommit(recorded)} on ${branch}; no verification round is recorded`
+}
+
 /** What the page and the export print for a version with no packages: "yet" only before conduct,
  *  since a conducted version that has none will not get any. */
 export const noPackagesLabel = (state: GoalReportState): string => (state === 'not_conducted' ? 'No packages yet.' : 'No packages.')
@@ -117,13 +134,14 @@ export function reportCaveats(report: GoalReport): readonly string[] {
     out.push(`The evidence for ${keysOf(trimmed)} was trimmed to fit; the verifier's full output stays in its run's scratch directory.`)
   }
   const merge = delivery?.merge ?? null
-  if (merge !== null && merge.by === 'human' && merge.commit !== delivery?.verifiedCommit) {
+  const verified = verifiedCommitOnRecord(report)
+  if (merge !== null && merge.by === 'human' && merge.commit !== verified) {
     out.push(
-      delivery?.verifiedCommit == null
+      verified === null
         ? `A person merged this version into ${merge.into} by hand (commit ${shortCommit(merge.commit)}), and no verified commit is recorded for it.`
         : // Final wave M2: the commits differ, and that is all the records say -- not why they differ.
           `A person merged this version into ${merge.into} by hand: commit ${shortCommit(merge.commit)} is not the verified commit ` +
-            `${shortCommit(delivery.verifiedCommit)}; the tree that landed was not itself verified.`,
+            `${shortCommit(verified)}; the tree that landed was not itself verified.`,
     )
   }
   if (report.state === 'abandoned') out.push(`This goal version was abandoned; nothing of it reached ${base}.`)

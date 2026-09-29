@@ -1,5 +1,5 @@
 import { CONDUCT_PER_CALL_CAP_USD } from '../conduct/constants.js'
-import { GOAL_REPORT_STATE_LABEL, noPackagesLabel, reportCaveats, unverifiedRequirementLabel } from './caveats.js'
+import { GOAL_REPORT_STATE_LABEL, acceptedCommitText, noPackagesLabel, reportCaveats, unverifiedRequirementLabel } from './caveats.js'
 import { evidenceAnchor, evidenceCut, formatReportUsd, mdFence, mdInline, mdQuote, shortCommit } from './escape.js'
 import type { GoalReport, GoalReportAuthor } from './types.js'
 
@@ -167,7 +167,7 @@ function stateDetail(report: GoalReport): string {
   if (report.state === 'merged' && d.merge !== null) {
     return ` into ${mdInline(d.merge.into)} ${d.merge.by === 'human' ? 'by a person' : 'by Slave'} (commit ${shortCommit(d.merge.commit)})`
   }
-  if (report.state === 'accepted') return ` (verified commit ${shortCommit(d.verifiedCommit)} on ${mdInline(d.integrationBranch)})`
+  if (report.state === 'accepted') return ` (${acceptedCommitText(report, mdInline(d.integrationBranch))})`
   if (report.state === 'integrating' || report.state === 'verifying' || report.state === 'needs_human') {
     return d.round === 0 ? '' : ` (verification round ${String(d.round)}; at most ${String(d.roundBase + d.roundCap)} before it stops for a person)`
   }
