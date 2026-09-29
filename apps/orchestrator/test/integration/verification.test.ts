@@ -383,6 +383,34 @@ describe('dispatchVerification', () => {
     expect(sameBaseline(stored, await worktreeBaseline(path))).toBe(false)
   }, 60_000)
 
+  // Final wave M9: the untracked half of the baseline trusts git's exclude rules, so the rules that
+  // live OUTSIDE the tree -- the repository's info/exclude and core.excludesFile -- are part of the
+  // baseline too: a verifier that adds a pattern there to hide a file it wrote is seen.
+  it('sees a pattern added to info/exclude or a changed core.excludesFile, even when it hides a new file', async (): Promise<void> => {
+    const f = await seed()
+    const { path, stored } = await detachedCheckout(f, [])
+    const commonDir = join(f.repoPath, '.git')
+    mkdirSync(join(commonDir, 'info'), { recursive: true })
+
+    mkdirSync(join(path, 'src'), { recursive: true })
+    writeFileSync(join(path, 'src', 'hidden.ts'), 'export const csv = true\n')
+    writeFileSync(join(commonDir, 'info', 'exclude'), `${existsSync(join(commonDir, 'info', 'exclude')) ? readFileSync(join(commonDir, 'info', 'exclude'), 'utf8') : ''}src/hidden.ts\n`)
+    expect((await worktreeBaseline(path)).untrackedCount).toBe(stored.untrackedCount)
+    expect(sameBaseline(stored, await worktreeBaseline(path))).toBe(false)
+    rmSync(join(path, 'src'), { recursive: true, force: true })
+
+    const { path: second, stored: before } = await detachedCheckout(f, [])
+    const excludes = join(mkdtempSync(join(tmpdir(), 'slaveofai-excludes-')), 'ignore')
+    writeFileSync(excludes, '*.ts\n')
+    git(['config', 'core.excludesFile', excludes], f.repoPath)
+    try {
+      expect(sameBaseline(before, await worktreeBaseline(second))).toBe(false)
+    } finally {
+      git(['config', '--unset', 'core.excludesFile'], f.repoPath)
+    }
+    expect(sameBaseline(before, await worktreeBaseline(second))).toBe(true)
+  }, 60_000)
+
   // Fix round 2, ruling V4b: running a project's tests leaves well-known artifacts behind in a
   // repository that does not ignore them; those must not discard the verification. Any other new
   // untracked file still does, and is named for the discard reason. A TRACKED file under an

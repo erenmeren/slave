@@ -187,6 +187,13 @@ export async function worktreeBaseline(worktreePath: string): Promise<Verificati
   for (const name of untracked) {
     digest.update('\0untracked\0').update(name).update('\0').update(await untrackedFileDigest(join(worktreePath, name)))
   }
+  // Final wave M9: the untracked half trusts git's exclude rules, and two of them live outside the
+  // tree, where the tracked and untracked halves cannot see a change: the repository's
+  // `info/exclude` and `core.excludesFile`. A verifier adding a pattern there would hide a file it
+  // wrote in, so both files (their path and content; absent is a fixed marker) are in the digest.
+  for (const file of await excludeFilesOf(worktreePath)) {
+    digest.update('\0exclude\0').update(file).update('\0').update(await untrackedFileDigest(file))
+  }
   return {
     head,
     status,
@@ -194,6 +201,20 @@ export async function worktreeBaseline(worktreePath: string): Promise<Verificati
     untrackedCount: untracked.length,
     diff: digest.digest('hex'),
   }
+}
+
+/**
+ * The exclude files outside the tree that decide what `git ls-files --others --exclude-standard`
+ * leaves out (final wave M9): `$GIT_COMMON_DIR/info/exclude`, and `core.excludesFile` -- or, when
+ * that is not set, git's default `$XDG_CONFIG_HOME/git/ignore` (`~/.config/git/ignore`), which a
+ * shell could create as easily. Absolute paths; a file that does not exist digests as `gone`.
+ */
+async function excludeFilesOf(worktreePath: string): Promise<readonly string[]> {
+  const commonDir = resolve(worktreePath, await gitIn(worktreePath, 'rev-parse', '--git-common-dir'))
+  const configured = await gitIn(worktreePath, 'config', '--path', '--get', 'core.excludesFile').catch(() => '')
+  const xdg = process.env['XDG_CONFIG_HOME']
+  const fallback = join(xdg !== undefined && xdg !== '' ? xdg : join(process.env['HOME'] ?? '', '.config'), 'git', 'ignore')
+  return [join(commonDir, 'info', 'exclude'), configured !== '' ? resolve(worktreePath, configured) : fallback]
 }
 
 /** True when two baselines describe the same worktree state. */
@@ -212,7 +233,7 @@ export function newUntrackedPaths(before: VerificationBaseline, after: Verificat
   return after.untracked.filter((path) => !known.has(path))
 }
 
-/** One untracked file's identity: a symlink's target, a small enough file's content hash
+/** One untracked (or exclude) file's identity: a symlink's target, a small enough file's content hash
  *  (streamed, so memory stays bounded), a larger one's size and mtime, or `gone`. */
 async function untrackedFileDigest(path: string): Promise<string> {
   let stat
