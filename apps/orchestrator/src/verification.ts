@@ -48,18 +48,86 @@ const GIT_TIMEOUT_MS = 30_000
 export const verificationWorktreeKey = (runId: string): string => `verify-${runId.slice(0, 8)}`
 
 /**
+ * Paths a verifier's checks routinely leave behind in a checkout -- dependency installs, test and
+ * type-checker caches, coverage, bytecode, build output -- in a repository that does not ignore
+ * them (ruling V4b). Running the project's own tests is what a verifier is FOR, so treating these
+ * as tampering would discard every verification of such a repository and end it in `needs_human`.
+ * They are left out of the UNTRACKED half of the baseline only: a tracked file under one of these
+ * directories that changes is still a tracked change and still discards. Anything not listed that
+ * appears untracked -- a source file the verifier wrote in -- still discards.
+ *
+ * Matched per path segment: `directories` against any directory segment, `fileNames` against the
+ * last segment, `fileSuffixes` against the end of the last segment, `directorySuffixes` against
+ * the end of any directory segment, `filePrefixes` against the start of the last segment.
+ */
+export const VERIFICATION_ARTIFACT_PATTERNS = {
+  directories: [
+    '__pycache__',
+    '.pytest_cache',
+    '.mypy_cache',
+    '.ruff_cache',
+    '.tox',
+    '.nox',
+    'node_modules',
+    '.next',
+    '.turbo',
+    '.cache',
+    'coverage',
+    'htmlcov',
+    '.nyc_output',
+    'dist',
+    'build',
+    'target',
+    '.gradle',
+    '.venv',
+    'venv',
+  ],
+  directorySuffixes: ['.egg-info'],
+  fileNames: ['.coverage', '.DS_Store'],
+  filePrefixes: ['.coverage.'],
+  fileSuffixes: ['.pyc', '.pyo'],
+} as const
+
+const ARTIFACT_DIRECTORIES: ReadonlySet<string> = new Set(VERIFICATION_ARTIFACT_PATTERNS.directories)
+
+/** True for a worktree-relative path (`/`-separated, as git prints it) that is a well-known
+ *  build or test artifact ({@link VERIFICATION_ARTIFACT_PATTERNS}). */
+export function isVerificationArtifact(path: string): boolean {
+  const segments = path.split('/').filter((segment) => segment !== '')
+  const file = segments.at(-1) ?? ''
+  const directories = segments.slice(0, -1)
+  const p = VERIFICATION_ARTIFACT_PATTERNS
+  return (
+    directories.some((d) => ARTIFACT_DIRECTORIES.has(d) || p.directorySuffixes.some((suffix) => d.endsWith(suffix))) ||
+    (p.fileNames as readonly string[]).includes(file) ||
+    p.filePrefixes.some((prefix) => file.startsWith(prefix)) ||
+    p.fileSuffixes.some((suffix) => file.endsWith(suffix))
+  )
+}
+
+/** How many untracked paths a baseline names (the digest covers them all): enough for a discard
+ *  reason to say what appeared, bounded so the row stays small. */
+export const BASELINE_UNTRACKED_LISTED = 200
+
+/**
  * The state of a verification worktree the tamper check compares (controller ruling Q5, narrowed
- * by ruling V4): its `HEAD`, every path git reports as changed or untracked, and a digest of the
- * CONTENT of both -- the tracked changes (`git diff --binary HEAD`) and every untracked,
- * non-ignored file. A file setup left dirty that the verifier edits again keeps the same status
- * line, and only the digest sees it; a missing source file the verifier writes in through its
- * shell is untracked, and without the untracked half a check would pass against a feature the
- * verified tip does not have. Gitignored files stay out (a dependency install, a build, a test
- * cache): writing those is what running checks does.
+ * by rulings V4/V4b): its `HEAD`, the tracked files git reports as changed, the untracked
+ * non-ignored non-artifact files, and a digest of the CONTENT of both halves -- the tracked
+ * changes (`git diff --binary HEAD`) and every such untracked file. A file setup left dirty that
+ * the verifier edits again keeps the same status line, and only the digest sees it; a missing
+ * source file the verifier writes in through its shell is untracked, and without the untracked
+ * half a check would pass against a feature the verified tip does not have. Gitignored files and
+ * {@link VERIFICATION_ARTIFACT_PATTERNS} stay out: writing those is what running checks does.
  */
 export interface VerificationBaseline {
   readonly head: string
+  /** `git status --porcelain=v1 --untracked-files=no`: the tracked half. */
   readonly status: string
+  /** The untracked, non-ignored, non-artifact paths, sorted, the first
+   *  {@link BASELINE_UNTRACKED_LISTED} of them. */
+  readonly untracked: readonly string[]
+  /** How many there were in all. */
+  readonly untrackedCount: number
   readonly diff: string
 }
 
@@ -68,10 +136,10 @@ export interface VerificationBaseline {
 const UNTRACKED_HASH_MAX_BYTES = 64 * 1024 * 1024
 
 /** Reads a worktree's {@link VerificationBaseline}. Task 6 calls it again at the conclusion and
- *  compares the two with `sameBaseline`. */
+ *  compares the two with `sameBaseline` (and names what appeared with `newUntrackedPaths`). */
 export async function worktreeBaseline(worktreePath: string): Promise<VerificationBaseline> {
   const head = await gitIn(worktreePath, 'rev-parse', 'HEAD')
-  const { stdout: status } = await execFileAsync('git', ['status', '--porcelain=v1', '--untracked-files=all'], {
+  const { stdout: status } = await execFileAsync('git', ['status', '--porcelain=v1', '--untracked-files=no'], {
     cwd: worktreePath,
     maxBuffer: DIFF_MAX_BUFFER,
     timeout: GIT_TIMEOUT_MS,
@@ -84,17 +152,43 @@ export async function worktreeBaseline(worktreePath: string): Promise<Verificati
     encoding: 'buffer',
   })
   // `-z`: a path with a newline or a quote in it stays one entry, unquoted.
-  const { stdout: untracked } = await execFileAsync('git', ['ls-files', '--others', '--exclude-standard', '-z'], {
+  const { stdout: listed } = await execFileAsync('git', ['ls-files', '--others', '--exclude-standard', '-z'], {
     cwd: worktreePath,
     maxBuffer: DIFF_MAX_BUFFER,
     timeout: GIT_TIMEOUT_MS,
     encoding: 'utf8',
   })
+  const untracked = listed
+    .split('\0')
+    .filter((entry) => entry !== '' && !isVerificationArtifact(entry))
+    .toSorted()
   const digest = createHash('sha256').update(diff)
-  for (const name of untracked.split('\0').filter((entry) => entry !== '').toSorted()) {
+  for (const name of untracked) {
     digest.update('\0untracked\0').update(name).update('\0').update(await untrackedFileDigest(join(worktreePath, name)))
   }
-  return { head, status, diff: digest.digest('hex') }
+  return {
+    head,
+    status,
+    untracked: untracked.slice(0, BASELINE_UNTRACKED_LISTED),
+    untrackedCount: untracked.length,
+    diff: digest.digest('hex'),
+  }
+}
+
+/** True when two baselines describe the same worktree state. */
+export function sameBaseline(a: VerificationBaseline, b: VerificationBaseline): boolean {
+  return a.head === b.head && a.status === b.status && a.untrackedCount === b.untrackedCount && a.diff === b.diff
+}
+
+/**
+ * The untracked, non-artifact paths `after` names that `before` does not -- what a verifier's
+ * shell wrote into the checkout, for the discard reason. Bounded by what each baseline lists
+ * ({@link BASELINE_UNTRACKED_LISTED}), so a flood of new files is named in part; `sameBaseline`,
+ * not this, is the verdict.
+ */
+export function newUntrackedPaths(before: VerificationBaseline, after: VerificationBaseline): readonly string[] {
+  const known = new Set(before.untracked)
+  return after.untracked.filter((path) => !known.has(path))
 }
 
 /** One untracked file's identity: a symlink's target, a small enough file's content hash
@@ -112,11 +206,6 @@ async function untrackedFileDigest(path: string): Promise<string> {
   const hash = createHash('sha256')
   for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer)
   return `file:${hash.digest('hex')}`
-}
-
-/** True when two baselines describe the same worktree state. */
-export function sameBaseline(a: VerificationBaseline, b: VerificationBaseline): boolean {
-  return a.head === b.head && a.status === b.status && a.diff === b.diff
 }
 
 /**

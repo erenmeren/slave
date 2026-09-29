@@ -18,6 +18,8 @@ import { ensureIntegrationBranch, ensureIntegrationWorktree } from '../../src/go
 import { drainPumps, type TickDeps } from '../../src/tick.js'
 import {
   dispatchVerification,
+  isVerificationArtifact,
+  newUntrackedPaths,
   removeVerificationWorktree,
   sameBaseline,
   verificationWorktreeKey,
@@ -315,6 +317,56 @@ describe('dispatchVerification', () => {
     writeFileSync(join(path, 'src', 'csv.ts'), 'export const csv = true\n')
     expect(sameBaseline(stored, await worktreeBaseline(path))).toBe(false)
   }, 60_000)
+
+  // Fix round 2, ruling V4b: running a project's tests leaves well-known artifacts behind in a
+  // repository that does not ignore them; those must not discard the verification. Any other new
+  // untracked file still does, and is named for the discard reason. A TRACKED file under an
+  // artifact directory is still a tracked change.
+  it('lets test and build artifacts appear, names any other new untracked file, and still sees a tracked build/ file change', async (): Promise<void> => {
+    const f = await seed({ setupCommands: ['mkdir -p build && echo built > build/out.txt && git add -f build/out.txt && git commit -q -m build'] })
+    const runId = await dispatchVerification(depsFor(f.workspaceId, envEcho()), f.deliveryId)
+    await drainPumps()
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId ?? '' } })
+    const path = run.worktreePath ?? ''
+    const stored = run.verificationBaseline as unknown as VerificationBaseline
+
+    for (const [file, content] of [
+      ['__pycache__/x.pyc', 'bytecode'],
+      ['pkg/__pycache__/y.cpython-312.pyc', 'bytecode'],
+      ['.pytest_cache/v', 'cache'],
+      ['coverage/index.html', '<html>'],
+      ['.coverage', 'data'],
+      ['.coverage.host.1234', 'data'],
+      ['stray.pyc', 'bytecode'],
+      ['my_pkg.egg-info/PKG-INFO', 'meta'],
+      ['.DS_Store', 'x'],
+    ] as const) {
+      mkdirSync(dirname(join(path, file)), { recursive: true })
+      writeFileSync(join(path, file), content)
+    }
+    const withArtifacts = await worktreeBaseline(path)
+    expect(sameBaseline(stored, withArtifacts)).toBe(true)
+    expect(newUntrackedPaths(stored, withArtifacts)).toEqual([])
+
+    mkdirSync(join(path, 'src'), { recursive: true })
+    writeFileSync(join(path, 'src', 'new_module.py'), 'FEATURE = True\n')
+    const withSource = await worktreeBaseline(path)
+    expect(sameBaseline(stored, withSource)).toBe(false)
+    expect(newUntrackedPaths(stored, withSource)).toEqual(['src/new_module.py'])
+    rmSync(join(path, 'src'), { recursive: true, force: true })
+
+    writeFileSync(join(path, 'build', 'out.txt'), 'changed by the verifier\n')
+    expect(sameBaseline(stored, await worktreeBaseline(path))).toBe(false)
+  }, 60_000)
+
+  it('recognises artifact paths by segment and suffix, and nothing else', (): void => {
+    for (const artifact of ['__pycache__/a.pyc', 'a/b/node_modules/x.js', '.coverage', '.coverage.x', 'm.pyo', 'x.egg-info/PKG-INFO', 'a/.DS_Store', 'target/debug/app', '.venv/bin/python']) {
+      expect(isVerificationArtifact(artifact), artifact).toBe(true)
+    }
+    for (const source of ['src/new_module.py', 'build.gradle', 'coverage.ts', 'docs/dist.md', 'src/targets.rs', 'egg-info.txt']) {
+      expect(isVerificationArtifact(source), source).toBe(false)
+    }
+  })
 
   it('deletes its row and spawns nothing when it loses the claim', async (): Promise<void> => {
     const f = await seed()

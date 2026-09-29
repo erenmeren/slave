@@ -1374,9 +1374,10 @@ model SlaveRun {
   /// Null on every other run kind, and on a verification run that never got a worktree.
   verificationTip   String?
   /// Conductor Plan 4b (controller ruling Q5): the verification worktree as it stood AFTER the
-  /// setup commands ran and before the verifier was spawned -- `{ head, status, diff }` (`HEAD`,
-  /// `git status --porcelain --untracked-files=all`, and a sha256 of `git diff --binary HEAD` plus
-  /// every untracked, non-ignored file's content -- ruling V4). The
+  /// setup commands ran and before the verifier was spawned -- `{ head, status, untracked,
+  /// untrackedCount, diff }` (`HEAD`, the tracked `git status --porcelain`, the untracked
+  /// non-ignored non-artifact paths (first 200) and their count, and a sha256 of
+  /// `git diff --binary HEAD` plus those files' content -- rulings V4/V4b). The
   /// conclusion's tamper check compares against this, not the bare tip: a setup that dirties a
   /// lockfile must not throw every verification away. On the row, not in the run directory, where
   /// the verifier's own shell could rewrite it.
