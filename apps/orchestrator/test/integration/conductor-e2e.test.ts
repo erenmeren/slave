@@ -716,7 +716,7 @@ describe('conductor end to end', () => {
     // Conductor Plan 5: verified and waiting for a person is a resting point -- one note, telling
     // them how to land it; the report says accepted.
     const waiting = await reportNotes(f)
-    expect(waiting.map((n) => n.noteKey)).toEqual(['goal-report:v1:awaiting_merge:r1'])
+    expect(waiting.map((n) => n.noteKey)).toEqual(['goal-report:v1:awaiting_merge:r1:hand'])
     expect(waiting[0]?.text).toContain('it waits for you')
     expect(waiting[0]?.text).toContain('confirm-goal-merge')
     const accepted = await loadGoalReport(f.workspaceId, 1)
@@ -752,7 +752,7 @@ describe('conductor end to end', () => {
     await tick(f.deps)
     await drainPumps()
     const notes = await reportNotes(f)
-    expect(notes.map((n) => n.noteKey)).toEqual(['goal-report:v1:awaiting_merge:r1', 'goal-report:v1:merged', 'goal-report:v2:awaiting_merge:r1'])
+    expect(notes.map((n) => n.noteKey)).toEqual(['goal-report:v1:awaiting_merge:r1:hand', 'goal-report:v1:merged', 'goal-report:v2:awaiting_merge:r1:hand'])
     expect(notes[1]?.text).toContain('by a person')
     expect(notes[1]?.text).toContain('that tree was not itself verified')
     const v1 = await loadGoalReport(f.workspaceId, 1)

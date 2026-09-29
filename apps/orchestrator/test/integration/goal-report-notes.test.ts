@@ -43,8 +43,8 @@ describe('restingKey', () => {
     expect(await restingKey({ ...base, status: 'accepted', mergedAt: new Date() }, true)).toBe('merged')
     expect(await restingKey({ ...base, status: 'abandoned', mergedAt: null }, true)).toBe('abandoned')
     expect(await restingKey({ ...base, status: 'needs_human', mergedAt: null }, true)).toBe('needs_human:r2')
-    expect(await restingKey({ ...base, status: 'accepted', mergedAt: null }, false)).toBe('awaiting_merge:r2')
-    expect(await restingKey({ ...base, status: 'accepted', mergedAt: null, mergeError: 'conflict' }, true)).toBe('awaiting_merge:r2')
+    expect(await restingKey({ ...base, status: 'accepted', mergedAt: null }, false)).toBe('awaiting_merge:r2:hand')
+    expect(await restingKey({ ...base, status: 'accepted', mergedAt: null, mergeError: 'conflict' }, true)).toBe('awaiting_merge:r2:hand')
     expect(await restingKey({ ...base, status: 'accepted', mergedAt: null }, true)).toBe(null)
     expect(await restingKey({ ...base, status: 'verifying', mergedAt: null }, true)).toBe(null)
   })
@@ -55,8 +55,11 @@ describe('restingKey', () => {
     await appendEvent({ type: 'guardrail.tripped', workspaceId: ws, actor: 'system', payload: { guardrail: 'merge_failure', detail: 'goal v1 is accepted, but main has moved since the goal was cut from it' } })
     await appendEvent({ type: 'guardrail.tripped', workspaceId: ws, actor: 'system', payload: { guardrail: 'merge_failure', detail: 'goal v10 is accepted, but main has moved' } })
     const d = { id: 'x', workspaceId: ws, goalVersion: 1, round: 1, status: 'accepted' as const, mergedAt: null, mergeError: null, acceptedAt }
-    expect(await restingKey(d, true)).toBe('awaiting_merge:r1')
+    expect(await restingKey(d, true)).toBe('awaiting_merge:r1:hand')
     expect(await restingKey({ ...d, acceptedAt: new Date(Date.now() + 60_000) }, true)).toBe(null)
+    // Wording fix W2: the key names what the version waits for.
+    await appendEvent({ type: 'guardrail.tripped', workspaceId: ws, actor: 'system', payload: { guardrail: 'merge_failure', detail: 'goal v1 is accepted and waits for a clean checkout of main to be merged into it' } })
+    expect(await restingKey(d, true)).toBe('awaiting_merge:r1:checkout')
   })
 
   it('does not read goal v10 trips as goal v1', async (): Promise<void> => {
@@ -140,6 +143,60 @@ describe('postGoalReportNotes', () => {
     const [note] = await notes(ws)
     expect(note?.text).toContain('confirm-goal-merge --workspace')
     expect(note?.text).not.toContain('clean checkout')
+  })
+
+  // Wording fix W2: the clean-checkout note does not promise the merge. When the base moves while
+  // the version waits for the checkout, the version waits for a hand merge instead -- a different
+  // wait in the same round, and its own note.
+  const CHECKOUT = 'goal v1 is accepted and waits for a clean checkout of main to be merged into it'
+  const MOVED = 'goal v1 is accepted, but main has moved since the goal was cut from it'
+  const trip = (ws: string, detail: string) => appendEvent({ type: 'guardrail.tripped', workspaceId: ws, actor: 'system', payload: { guardrail: 'merge_failure', detail } })
+
+  it('posts a second note in the same round when the wait changes from a clean checkout to a hand merge', async (): Promise<void> => {
+    const ws = await workspaceWith(true)
+    const id = await delivery(ws, 1, { status: 'accepted', round: 1, verifiedCommit: 'c'.repeat(40), acceptedAt: new Date(Date.now() - 60_000) })
+    await trip(ws, CHECKOUT)
+    expect(await postGoalReportNotes(ws)).toBe(1)
+    await trip(ws, MOVED)
+    expect(await postGoalReportNotes(ws)).toBe(1)
+    const all = await notes(ws)
+    expect(all.map((n) => n.noteKey)).toEqual(['goal-report:v1:awaiting_merge:r1:checkout', 'goal-report:v1:awaiting_merge:r1:hand'])
+    expect(all[0]?.text).toContain('Slave tries the merge again')
+    expect(all[1]?.text).toContain('confirm-goal-merge --workspace')
+    expect((await prisma.goalDelivery.findUniqueOrThrow({ where: { id } })).reportNotedKey).toBe('awaiting_merge:r1:hand')
+  })
+
+  it('posts one note for the same wait, however many passes or identical trips see it', async (): Promise<void> => {
+    const ws = await workspaceWith(true)
+    await delivery(ws, 1, { status: 'accepted', round: 1, verifiedCommit: 'c'.repeat(40), acceptedAt: new Date(Date.now() - 60_000) })
+    await trip(ws, CHECKOUT)
+    expect(await postGoalReportNotes(ws)).toBe(1)
+    await trip(ws, CHECKOUT)
+    expect(await postGoalReportNotes(ws)).toBe(0)
+    expect(await postGoalReportNotes(ws)).toBe(0)
+    expect((await notes(ws)).map((n) => n.noteKey)).toEqual(['goal-report:v1:awaiting_merge:r1:checkout'])
+  })
+
+  it('posts nothing for the wait a pre-upgrade awaiting_merge:r<n> stamp covers, then notes a later different wait', async (): Promise<void> => {
+    const ws = await workspaceWith(true)
+    // The migration's backfill (or a note posted before the key named the wait): no reason on the key.
+    const id = await delivery(ws, 1, { status: 'accepted', round: 1, verifiedCommit: 'c'.repeat(40), acceptedAt: new Date(Date.now() - 60_000), reportNotedKey: 'awaiting_merge:r1' })
+    await trip(ws, CHECKOUT)
+    expect(await postGoalReportNotes(ws)).toBe(0)
+    expect(await notes(ws)).toEqual([])
+    // The stamp now names the wait it covers, so a different wait is news.
+    expect((await prisma.goalDelivery.findUniqueOrThrow({ where: { id } })).reportNotedKey).toBe('awaiting_merge:r1:checkout')
+    expect(await postGoalReportNotes(ws)).toBe(0)
+    await trip(ws, MOVED)
+    expect(await postGoalReportNotes(ws)).toBe(1)
+    expect((await notes(ws)).map((n) => n.noteKey)).toEqual(['goal-report:v1:awaiting_merge:r1:hand'])
+  })
+
+  it('does not let a pre-upgrade stamp from an earlier round cover a wait in a later one', async (): Promise<void> => {
+    const ws = await workspaceWith(false)
+    await delivery(ws, 1, { status: 'accepted', round: 2, verifiedCommit: 'c'.repeat(40), acceptedAt: new Date(), reportNotedKey: 'awaiting_merge:r1' })
+    expect(await postGoalReportNotes(ws)).toBe(1)
+    expect((await notes(ws)).map((n) => n.noteKey)).toEqual(['goal-report:v1:awaiting_merge:r2:hand'])
   })
 
   it('posts nothing for an archived project', async (): Promise<void> => {
