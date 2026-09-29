@@ -656,6 +656,46 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
     })
   }
 
+  // goal_needs_human / verification_failed (Conductor Plan 4b, R11). The first is a person's to
+  // decide -- the loop has stopped, or the verified version could not be merged. The second is news,
+  // not a request: its packages are already in rework, so the rules record `no_action` (plan D10).
+  // One per round, by subject. Both read the delivery ROW's status: a reopened version accepted a
+  // second time writes no second `goal_accepted`, so the event log cannot say which tip is accepted.
+  for (const delivery of world.goalDeliveries) {
+    const v = String(delivery.goalVersion)
+    const flags = `--workspace ${world.workspaceId} --version ${v}`
+    if (delivery.status === 'needs_human' || (delivery.status === 'accepted' && delivery.mergeError !== null)) {
+      // A stopped loop's stored reason already ends in the remedy (`needsHumanRemedy`, orchestrator);
+      // the fallback names the same two verbs. A failed merge has no remedy among them -- retry-goal
+      // is for a stopped loop, abandon-goal would drop verified work -- so it points at the verdict.
+      const reason =
+        delivery.status === 'needs_human'
+          ? (delivery.needsHumanReason ??
+            `the verification loop stopped. Read goal-status ${flags} for the verdict, then run retry-goal ${flags} ` +
+              `for a fresh window of verification rounds, or abandon-goal ${flags} to move on.`)
+          : `its merge into the base branch failed: ${delivery.mergeError ?? ''}. Read goal-status ${flags} for the error.`
+      add({
+        kind: 'goal_needs_human',
+        subjectId: `${world.workspaceId}:v${v}`,
+        summary: `Goal v${v} needs a person: ${reason}`,
+        facts: { goalVersion: delivery.goalVersion, reason },
+      })
+      continue
+    }
+    const latest = delivery.latestVerification
+    // `latest.round === round`: the verdict is the round the version is on. Once the next round is
+    // dispatched `round` moves past it, and the failure it reported is old news.
+    if (delivery.status === 'integrating' && latest !== null && latest.round === delivery.round && latest.fail > 0) {
+      add({
+        kind: 'verification_failed',
+        subjectId: `${world.workspaceId}:v${v}:r${String(latest.round)}`,
+        summary: `Goal v${v}'s verification round ${String(latest.round)} failed ${latest.failedKeys.join(', ')}; their packages are reworking.`,
+        // Facts are flat scalars (see `Situation`), so the keys travel joined, like `deniedKinds`.
+        facts: { goalVersion: delivery.goalVersion, round: latest.round, failedKeys: latest.failedKeys.join(',') },
+      })
+    }
+  }
+
   // ready_unstaffed: keyed by the missing ROLE, so N startable tasks blocked on one absent role
   // are one situation with one decision -- not N proposals a human has to approve N times.
   const unstaffedRoles = new Map<string, SupervisorTask[]>()

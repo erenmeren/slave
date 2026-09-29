@@ -13,6 +13,7 @@ import {
   NOW,
   TAXONOMY,
   decision,
+  goalDelivery,
   keys,
   question,
   runbook,
@@ -682,6 +683,63 @@ describe('observe -- foreign_file (Conductor Plan 3, R11)', () => {
       slaves: [holder],
     })
     expect(observe(w).some((entry) => entry.kind === 'permission_blocked')).toBe(false)
+  })
+})
+
+describe('observe -- goal_needs_human and verification_failed (Conductor Plan 4b, R11)', () => {
+  const verdict = (round: number, failedKeys: readonly string[]): NonNullable<ReturnType<typeof goalDelivery>['latestVerification']> => ({
+    round,
+    pass: 1,
+    fail: failedKeys.length,
+    unverifiable: 0,
+    failedKeys,
+  })
+
+  it('escalates a needs_human version by version, with the reason the loop stopped on', () => {
+    const reason = 'R2 is unverifiable. Read goal-status --workspace ws-1 --version 1 for the verdict'
+    const situations = observe(world({ goalDeliveries: [goalDelivery({ status: 'needs_human', needsHumanReason: reason })] }))
+    expect(keys(situations)).toEqual([['goal_needs_human', 'ws-1:v1']])
+    expect(situations[0]?.summary).toContain(reason)
+    expect(situations[0]?.facts).toEqual({ goalVersion: 1, reason })
+    expect(situationSchema.safeParse(situations[0]).success).toBe(true)
+  })
+
+  it('names retry-goal and abandon-goal when a needs_human row carries no reason, and never a hand merge', () => {
+    const situations = observe(world({ goalDeliveries: [goalDelivery({ status: 'needs_human', needsHumanReason: null })] }))
+    expect(keys(situations)).toEqual([['goal_needs_human', 'ws-1:v1']])
+    expect(situations[0]?.summary).toContain('retry-goal --workspace ws-1 --version 1')
+    expect(situations[0]?.summary).toContain('abandon-goal --workspace ws-1 --version 1')
+    expect(situations[0]?.summary).not.toMatch(/merge|accept/i)
+  })
+
+  // Plan D10 (deferred here by Task 6): an accepted version whose final merge git refused.
+  it('escalates an accepted version whose merge into the base branch failed', () => {
+    const situations = observe(
+      world({ goalDeliveries: [goalDelivery({ status: 'accepted', mergeError: 'CONFLICT (content): src/a.ts', latestVerification: verdict(2, []) })] }),
+    )
+    expect(keys(situations)).toEqual([['goal_needs_human', 'ws-1:v1']])
+    expect(situations[0]?.summary).toContain('merge into the base branch failed')
+    expect(situations[0]?.summary).toContain('CONFLICT (content): src/a.ts')
+    expect(situations[0]?.summary).not.toMatch(/accept anyway|confirm-goal-merge|by hand/i)
+  })
+
+  it('stays silent for an accepted version whose merge has not failed', () => {
+    expect(observe(world({ goalDeliveries: [goalDelivery({ status: 'accepted', latestVerification: verdict(1, []) })] }))).toEqual([])
+  })
+
+  it('reports a failed round once, by round, with the keys it failed', () => {
+    const situations = observe(world({ goalDeliveries: [goalDelivery({ round: 1, latestVerification: verdict(1, ['R1', 'R3']) })] }))
+    expect(keys(situations)).toEqual([['verification_failed', 'ws-1:v1:r1']])
+    expect(situations[0]?.facts).toEqual({ goalVersion: 1, round: 1, failedKeys: 'R1,R3' })
+    expect(situations[0]?.summary).toContain('R1, R3')
+    expect(situationSchema.safeParse(situations[0]).success).toBe(true)
+  })
+
+  it('stays silent once a new round is under way, while verifying, and for a round that failed nothing', () => {
+    expect(observe(world({ goalDeliveries: [goalDelivery({ round: 2, latestVerification: verdict(1, ['R1', 'R3']) })] }))).toEqual([])
+    expect(observe(world({ goalDeliveries: [goalDelivery({ status: 'verifying', latestVerification: verdict(1, ['R1']) })] }))).toEqual([])
+    expect(observe(world({ goalDeliveries: [goalDelivery({ latestVerification: verdict(1, []) })] }))).toEqual([])
+    expect(observe(world({ goalDeliveries: [goalDelivery()] }))).toEqual([])
   })
 })
 

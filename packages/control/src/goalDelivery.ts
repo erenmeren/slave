@@ -106,10 +106,15 @@ export interface LatestVerification {
  * The latest verification of each delivery that has one: its highest round's rows, from the run
  * that wrote them last (an unusable run writes none, so a round has one writer in practice; the
  * latest wins if it ever had two). The one loader both readers use, so they cannot disagree.
+ * `client` is the Supervisor's world snapshot (a `RepeatableRead` transaction), so the verdict is
+ * read from the same instant as the delivery rows it belongs to.
  */
-export async function latestVerifications(deliveryIds: readonly string[]): Promise<ReadonlyMap<string, LatestVerification>> {
+export async function latestVerifications(
+  deliveryIds: readonly string[],
+  client: Prisma.TransactionClient = prisma,
+): Promise<ReadonlyMap<string, LatestVerification>> {
   if (deliveryIds.length === 0) return new Map()
-  const rows = await prisma.verificationResult.findMany({
+  const rows = await client.verificationResult.findMany({
     where: { goalDeliveryId: { in: [...deliveryIds] } },
     orderBy: [{ round: 'desc' }, { createdAt: 'desc' }, { key: 'asc' }],
     select: { goalDeliveryId: true, round: true, runId: true, key: true, status: true },

@@ -10,6 +10,7 @@ import type { CapabilityRecord } from '../../src/capability/taxonomy.js'
 import type { Runbook } from '../../src/runbook/spec.js'
 import type {
   SupervisorDecisionRecord,
+  SupervisorGoalDelivery,
   SupervisorQuestion,
   SupervisorRun,
   SupervisorSlave,
@@ -264,6 +265,22 @@ export function world(overrides: Partial<SupervisorWorld> = {}): SupervisorWorld
     planningFailuresSinceGoal: 0,
     planningResetsThisVersion: 0,
     livePlanning: false,
+    // Conductor Plan 4b: no goal version open, so the two verification situations only ever fire
+    // in a test that hands the world a delivery.
+    goalDeliveries: [],
+    ...overrides,
+  }
+}
+
+/** A conducted goal version mid-loop: v1, integrating, round 1, nothing verified yet. */
+export function goalDelivery(overrides: Partial<SupervisorGoalDelivery> = {}): SupervisorGoalDelivery {
+  return {
+    goalVersion: 1,
+    status: 'integrating',
+    round: 1,
+    needsHumanReason: null,
+    mergeError: null,
+    latestVerification: null,
     ...overrides,
   }
 }
