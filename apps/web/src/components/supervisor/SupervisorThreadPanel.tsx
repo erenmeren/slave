@@ -783,7 +783,18 @@ export function SupervisorThreadPanel({
                     thinking…
                   </span>
                 )}
-                {message.text !== '' && <span className="block">{message.text}</span>}
+                {/* `whitespace-pre-line`: a report note (Conductor Plan 5) is several lines, and a one-line
+                  * turn renders the same either way. */}
+                {message.text !== '' && <span className="block whitespace-pre-line">{message.text}</span>}
+                {message.reportVersion !== undefined && (
+                  <Link
+                    data-testid="supervisor-report-link"
+                    href={`/w/${workspaceId}/goals/${String(message.reportVersion)}`}
+                    className="mt-2 block text-[12.5px] text-accent"
+                  >
+                    Open the goal v{message.reportVersion} report
+                  </Link>
+                )}
                 {message.status === 'failed' && (
                   <span
                     data-testid="supervisor-failed"

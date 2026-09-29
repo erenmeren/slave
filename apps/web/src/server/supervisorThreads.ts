@@ -43,6 +43,8 @@ export interface SupervisorMessage {
    *  the panel owns the wording, and a reason stored months ago must still be readable by
    *  whatever renders it then. */
   readonly failureReason?: string | null
+  /** Conductor Plan 5 (D10): on a report note, the goal version whose report the bubble links to. */
+  readonly reportVersion?: number
 }
 
 /** One conversation. `id` IS the local calendar day (`YYYY-MM-DD`), which is what makes this a
@@ -145,6 +147,7 @@ function chatMessage(view: SupervisorMessageView): SupervisorMessage {
     costUsd: view.modelCostUsd,
     sourced: view.sourced,
     failureReason: view.failureReason,
+    ...(view.goalReportVersion === null ? {} : { reportVersion: view.goalReportVersion }),
   }
 }
 
