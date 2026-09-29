@@ -49,11 +49,14 @@ beforeEach(async (): Promise<void> => {
   w = workspace.id
   await prisma.team.create({ data: { workspaceId: w, name: 'Engineering' } })
   // Role `backend`, not the package role, so every seat has to be GIVEN `PACKAGE_WORKER_ROLE`.
+  // Named with a file tag, not the plain "Backend Developer" / "Technical Writer" several other
+  // integration files also use: `SlaveTemplate.name` is unique and those files reset it only in
+  // their own `beforeEach` TRUNCATE, so their last test's row outlives the file and collides here.
   await prisma.slaveTemplate.create({
-    data: { id: 't-backend', name: 'Backend Developer', role: 'backend', description: 'x', active: true, capabilityKeys: [] },
+    data: { id: 't-backend', name: 'Backend Developer (conduct-staffing)', role: 'backend', description: 'x', active: true, capabilityKeys: [] },
   })
   await prisma.slaveTemplate.create({
-    data: { id: 't-docs', name: 'Technical Writer', role: 'docs', description: 'x', active: true, capabilityKeys: [] },
+    data: { id: 't-docs', name: 'Technical Writer (conduct-staffing)', role: 'docs', description: 'x', active: true, capabilityKeys: [] },
   })
   // The managed pool: three people per active template, which is all `syncPersonPool` ever keeps.
   await syncPersonPool()

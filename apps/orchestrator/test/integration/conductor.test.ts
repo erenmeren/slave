@@ -263,11 +263,14 @@ const PARTITIONED = JSON.stringify({
  */
 async function seedWithRequirements(options: { readonly withReviewer?: boolean } = {}): Promise<Fixture> {
   await syncCapabilityTaxonomy()
+  // Named with a file tag, not the plain "Backend Developer" / "Technical Writer" several other
+  // integration files also use: `SlaveTemplate.name` is unique and those files reset it only in
+  // their own `beforeEach` TRUNCATE, so their last test's row outlives the file and collides here.
   await prisma.slaveTemplate.create({
-    data: { id: 't-backend', name: 'Backend Developer', role: 'backend', description: 'x', active: true, capabilityKeys: [] },
+    data: { id: 't-backend', name: 'Backend Developer (conductor)', role: 'backend', description: 'x', active: true, capabilityKeys: [] },
   })
   await prisma.slaveTemplate.create({
-    data: { id: 't-docs', name: 'Technical Writer', role: 'docs', description: 'x', active: true, capabilityKeys: [] },
+    data: { id: 't-docs', name: 'Technical Writer (conductor)', role: 'docs', description: 'x', active: true, capabilityKeys: [] },
   })
   await syncPersonPool()
   const f = await seed({
