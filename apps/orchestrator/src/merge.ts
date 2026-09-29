@@ -53,6 +53,34 @@ function requireBranch(task: { readonly id: string; readonly branch: string | nu
 }
 
 /**
+ * The task's `task.merge_failed` events that count toward "failed to merge twice" (controller
+ * ruling Q4, Plan 4a note M3): those since the task was last `done` or last sent back by a
+ * verification round (Plan 4b D5 -- a package that merged, was verified and reworked is on a new
+ * try, and its old failures are history), and never the sweep's `merge interrupted` (a process
+ * that died mid-merge, not a branch that will not merge).
+ */
+async function mergeFailuresThisTry(taskId: string): Promise<number> {
+  const [done, reworks] = await Promise.all([
+    prisma.executionEvent.findFirst({ where: { taskId, type: 'task_done' }, orderBy: { seq: 'desc' }, select: { seq: true } }),
+    prisma.executionEvent.findMany({ where: { taskId, type: 'task_rework' }, orderBy: { seq: 'desc' }, select: { seq: true, payload: true } }),
+  ])
+  const verificationRework = reworks.find((row) => typeof (row.payload as { readonly verificationRound?: unknown }).verificationRound === 'number')
+  const since = [done?.seq, verificationRework?.seq].reduce<bigint>((max, seq) => (seq !== undefined && seq > max ? seq : max), 0n)
+  return prisma.executionEvent.count({
+    where: {
+      taskId,
+      type: 'task_merge_failed',
+      seq: { gt: since },
+      NOT: { payload: { path: ['reason'], equals: MERGE_INTERRUPTED_REASON } },
+    },
+  })
+}
+
+/** The reason the sweep's crash recovery writes on `task.merge_failed` (`sweep.ts`): an
+ *  interrupted merge, which {@link mergeFailuresThisTry} does not count. */
+const MERGE_INTERRUPTED_REASON = 'merge interrupted'
+
+/**
  * Emits `task.merge_failed`, escalates a second failure on the same task, and otherwise sends the
  * task back to rework and releases the merge claim.
  *
@@ -104,9 +132,7 @@ async function failMerge(input: {
     payload: { reason: input.reason },
   })
 
-  const failureCount = await prisma.executionEvent.count({
-    where: { taskId: input.taskId, type: 'task_merge_failed' },
-  })
+  const failureCount = await mergeFailuresThisTry(input.taskId)
   if (input.goalVersion !== null) {
     if (failureCount > 1) {
       // Spec §5: a conducted workspace is not halted by one package that will not merge. The

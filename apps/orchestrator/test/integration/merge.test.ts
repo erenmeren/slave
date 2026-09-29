@@ -1229,6 +1229,41 @@ describe('into the integration branch', () => {
     expect(detail).toContain(`abandon-goal --workspace ${workspace.id} --version 1`)
   })
 
+  // Controller ruling Q4 (Plan 4a note M3): "a second failure" is a second failure of THIS try at
+  // merging -- never the sweep's "merge interrupted" (a dead process, not the branch), and never a
+  // failure from before the package was last done and then sent back by a verification round.
+  it('counts only real merge failures since the task was last reworked by verification', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: true })
+    const target = await deliver(workspace)
+    commitOnto(workspace.repoPath, target.branch, 'a.txt', 'the integration branch says this\n')
+    const { taskId } = await seedMergingTask(workspace, { fileName: 'a.txt', content: 'the task says that\n' })
+    await packageTask(workspace, taskId, 'feature')
+    await appendEvent({ type: 'task.merge_failed', workspaceId: workspace.id, taskId, actor: 'system', payload: { reason: 'merge interrupted' } })
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('rework')
+
+    // It got merged after all, was verified, and a failing requirement sent it back.
+    await appendEvent({ type: 'task.done', workspaceId: workspace.id, taskId, actor: 'system', payload: { branch: 'x' } })
+    await appendEvent({
+      type: 'task.rework',
+      workspaceId: workspace.id,
+      taskId,
+      actor: 'system',
+      payload: { reason: 'Verification round 1 found ...', attempt: 1, verificationRound: 1 },
+    })
+    await prisma.task.update({ where: { id: taskId }, data: { status: 'merging' } })
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('rework')
+
+    await prisma.task.update({ where: { id: taskId }, data: { status: 'merging' } })
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('blocked')
+  })
+
   it('still halts the workspace on a second failure of a planned task (no package)', async (): Promise<void> => {
     const workspace = await seedWorkspace({ autoMerge: true })
     await deliver(workspace)
