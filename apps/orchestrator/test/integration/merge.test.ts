@@ -1182,6 +1182,48 @@ describe('into the integration branch', () => {
     expect((done.payload as { files: string[] }).files).toEqual([' lead.txt', 'feature.txt'])
   })
 
+  /** Final wave I2: a merge that makes no commit ("Already up to date") changed nothing, so it
+   *  records an empty list -- never the previous merge's files as this package's. */
+  it('records no files for a package whose merge makes no commit, not the previous package\'s', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    const target = await deliver(workspace)
+    const first = await seedMergingTask(workspace, { title: 'First', fileName: 'a.txt', content: 'a\n' })
+    await packageTask(workspace, first.taskId, 'a')
+    await runMergePass(brandWorkspaceId(workspace.id))
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: first.taskId } })).status).toBe('done')
+
+    const second = await seedMergingTask(workspace, { title: 'Second', fileName: 'b.txt', content: 'b\n' })
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: second.taskId } })
+    // The package's branch holds nothing of its own: it sits on the integration branch's tip.
+    git(['reset', '-q', '--hard', target.branch], run.worktreePath as string)
+    await packageTask(workspace, second.taskId, 'b')
+    const tipBefore = git(['rev-parse', target.branch], workspace.repoPath)
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: second.taskId } })).status).toBe('done')
+    expect(git(['rev-parse', target.branch], workspace.repoPath)).toBe(tipBefore)
+    const done = await prisma.executionEvent.findFirstOrThrow({ where: { taskId: second.taskId, type: 'task_done' }, orderBy: { seq: 'desc' } })
+    expect(done.payload).toEqual({ branch: second.branch, files: [], filesTotal: 0 })
+  })
+
+  /** Final wave I2: `--no-renames`, so a rename lists the path it left as well as the one it took. */
+  it('records both paths of a renamed file', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    await deliver(workspace)
+    const { taskId } = await seedMergingTask(workspace)
+    const implRun = await prisma.slaveRun.findFirstOrThrow({ where: { taskId, kind: 'implementation' } })
+    const tree = implRun.worktreePath as string
+    git(['mv', 'README.md', 'README-renamed.md'], tree)
+    git(['commit', '-q', '-m', 'rename'], tree)
+    await packageTask(workspace, taskId, 'feature')
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const done = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_done' }, orderBy: { seq: 'desc' } })
+    expect([...(done.payload as { files: string[] }).files].sort()).toEqual(['README-renamed.md', 'README.md', 'feature.txt'])
+  })
+
   /** Fix round 1: a name list over execFile's 1 MiB default is recorded (cut), not dropped. */
   it('records a name list larger than 1 MiB, cut to GOAL_REPORT_FILES_MAX', async (): Promise<void> => {
     const workspace = await seedWorkspace({ autoMerge: false })
@@ -1221,7 +1263,7 @@ describe('into the integration branch', () => {
       gitNameList.execFile = original
     }
 
-    expect(seen).toEqual([{ args: ['diff', '--name-only', '-z', 'HEAD^1', 'HEAD'], timeout: 30_000 }])
+    expect(seen).toEqual([{ args: ['diff', '--name-only', '-z', '--no-renames', expect.stringMatching(/^[0-9a-f]{40}$/u), 'HEAD'], timeout: 30_000 }])
     const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
     expect(task.status).toBe('done')
     expect(task.mergeClaimedAt).toBeNull()
