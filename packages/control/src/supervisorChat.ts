@@ -57,6 +57,8 @@ export interface SupervisorMessageView {
    *  nothing, and there is no silence about money to be honest about (I4). */
   readonly unmeasured: boolean
   readonly failureReason: string | null
+  /** Conductor Plan 5: the goal version a report note links to; null on every conversation turn. */
+  readonly goalReportVersion: number | null
   readonly createdAt: string
 }
 
@@ -161,6 +163,7 @@ const viewOf = (row: {
   sourced: boolean
   unmeasured: boolean
   failureReason: string | null
+  goalReportVersion: number | null
   createdAt: Date
 }): SupervisorMessageView => ({
   id: row.id,
@@ -174,6 +177,7 @@ const viewOf = (row: {
   sourced: row.sourced,
   unmeasured: row.unmeasured,
   failureReason: row.failureReason,
+  goalReportVersion: row.goalReportVersion,
   createdAt: row.createdAt.toISOString(),
 })
 
@@ -275,6 +279,55 @@ export async function sendSupervisorMessage(
     return { ok: true as const, messageId: message.id, replyId: reply.id }
   })
   return outcome.ok ? ok({ messageId: outcome.messageId, replyId: outcome.replyId }) : err(outcome.error)
+}
+
+/**
+ * A note in the conversation that no model wrote (Conductor Plan 5, plan D10): a goal version's
+ * report summary, posted by the orchestrator when the version comes to rest. A `supervisor` row,
+ * already `answered`, with no cost and not unmeasured, so neither the spend nor the chat's cost
+ * moves. Under the project's row lock, `sendSupervisorMessage`'s idiom, so it takes the next seq
+ * after anything in flight and never splits a question from its reply placeholder.
+ *
+ * `noteKey` is unique per workspace: a key already posted answers with that row and
+ * `created: false`, so a pass that crashed after posting and before stamping cannot post twice,
+ * and two overlapping passes serialise on the row lock -- the second sees the first's row.
+ * Refused for an archived project, before anything is written (archiving is "stop talking about
+ * this"). A halted project is NOT refused: a halt stops spending, and a note spends nothing.
+ */
+export async function postSupervisorNote(
+  workspaceId: string,
+  input: { readonly text: string; readonly noteKey: string; readonly goalReportVersion?: number },
+): Promise<Result<{ readonly messageId: string; readonly created: boolean }, ControlRefusal>> {
+  const text = input.text.trim().slice(0, CHAT_MESSAGE_MAX_CHARS)
+  if (text === '') return err({ kind: 'invalid_message', reason: 'a note must not be blank' })
+  const outcome = await prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<{ id: string; archivedAt: Date | null }[]>`
+      SELECT id, "archivedAt" FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
+    const workspace = locked[0]
+    // Both refusals are returned before any write in this transaction, so returning them commits
+    // nothing (the rule `sendSupervisorMessage` states above).
+    if (workspace === undefined) return { ok: false as const, error: { kind: 'workspace_not_found', workspaceId } as ControlRefusal }
+    if (workspace.archivedAt !== null) return { ok: false as const, error: { kind: 'workspace_archived', workspaceId } as ControlRefusal }
+    const existing = await tx.supervisorMessage.findUnique({
+      where: { workspaceId_noteKey: { workspaceId, noteKey: input.noteKey } },
+      select: { id: true },
+    })
+    if (existing !== null) return { ok: true as const, messageId: existing.id, created: false }
+    const row = await tx.supervisorMessage.create({
+      data: {
+        workspaceId,
+        seq: await nextSeq(tx, workspaceId),
+        role: 'supervisor',
+        status: 'answered',
+        text,
+        noteKey: input.noteKey,
+        goalReportVersion: input.goalReportVersion ?? null,
+      },
+      select: { id: true },
+    })
+    return { ok: true as const, messageId: row.id, created: true }
+  })
+  return outcome.ok ? ok({ messageId: outcome.messageId, created: outcome.created }) : err(outcome.error)
 }
 
 /**

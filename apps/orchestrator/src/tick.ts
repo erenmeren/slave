@@ -38,6 +38,7 @@ import { conduct, type ConductStep } from './conductor.js'
 import { deliverAnswers } from './deliver.js'
 import { cancelIfVersionAbandoned, integrationTargetFor } from './goalBranch.js'
 import { runGoalPass } from './goal.js'
+import { postGoalReportNotes } from './goalReportNotes.js'
 import { runMergePass } from './merge.js'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { permissionOwnership } from './ownership.js'
@@ -359,6 +360,12 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
     // gate refuses to call anybody while `halted` is set, so this is a rules-only pass, and
     // `tierOf` makes every action a proposal while halted, so the Supervisor cannot move a
     // workspace a guardrail has stopped.
+    // Conductor Plan 5 (D10): a halted workspace still hears that a version stopped (a verification
+    // concluded, or a person abandoned one, under the halt). No model is called. Wrapped like the
+    // ordinary branch's goal pass.
+    await postGoalReportNotes(deps.workspaceId).catch((error: unknown) => {
+      console.error(`[tick] the report notes for workspace ${deps.workspaceId} failed:`, error)
+    })
     const supervisor = await superviseQuietly(deps, statsSnapshot)
     return {
       started: [],
@@ -444,6 +451,13 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   // just said is not there -- it settles and merges but dispatches nothing while waiting.
   await runGoalPass(deps, { mayStartRuns: waitingOn === null }).catch((error: unknown) => {
     console.error(`[tick] the goal pass for workspace ${deps.workspaceId} failed:`, error)
+  })
+
+  // Conductor Plan 5 (D10): after the goal pass, which is what brings a version to rest -- the
+  // chat hears about a version that merged, stopped or was abandoned on the tick it happened.
+  // Spends nothing, so it runs under H9c's wait too. Wrapped like the goal pass.
+  await postGoalReportNotes(deps.workspaceId).catch((error: unknown) => {
+    console.error(`[tick] the report notes for workspace ${deps.workspaceId} failed:`, error)
   })
 
   // Last, after every pass that could have changed what is stuck: the Supervisor decides about the
