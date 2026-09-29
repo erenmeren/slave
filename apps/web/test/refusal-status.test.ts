@@ -69,6 +69,8 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   goal_not_accepted: true,
   // Conductor Plan 4b (D9): `retryGoal` on a version the loop has not stopped on. 409.
   goal_not_needs_human: true,
+  // Final wave I2: `confirmGoalMerge` on a version whose branch moved after verification. 409.
+  goal_tip_not_verified: true,
   duplicate_name: true,
   template_not_found: true,
   company_not_found: true,

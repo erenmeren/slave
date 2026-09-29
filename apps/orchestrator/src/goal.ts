@@ -130,7 +130,7 @@ async function advanceDelivery(
     await tripOnce(
       workspaceId,
       `goal v${String(delivery.goalVersion)} is accepted and autoMerge is off: ` +
-        handMergeInstruction(delivery.integrationBranch, workspace.baseBranch, workspaceId, delivery.goalVersion),
+        handMergeInstruction(delivery.integrationBranch, workspace.baseBranch, workspaceId, delivery.goalVersion, delivery.verifiedCommit),
     )
   }
 }
@@ -268,7 +268,7 @@ export async function mergeGoalIntoBase(deliveryId: string): Promise<'merged' | 
     if (delivery.mergeError !== null) return 'failed'
     const { repoPath, baseBranch } = delivery.workspace
     const version = delivery.goalVersion
-    const handMerge = handMergeInstruction(delivery.integrationBranch, baseBranch, delivery.workspaceId, version)
+    const handMerge = handMergeInstruction(delivery.integrationBranch, baseBranch, delivery.workspaceId, version, delivery.verifiedCommit)
 
     const baseTip = await gitIn(repoPath, 'rev-parse', `refs/heads/${baseBranch}`)
     // Already in the base branch: a pass that crashed after the fast-forward and before the stamp,

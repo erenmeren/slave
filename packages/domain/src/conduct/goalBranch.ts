@@ -19,9 +19,19 @@ export function integrationWorktreeKey(version: number, workspaceId: string): st
  * `goal_needs_human` escalation (ruling V6) cannot drift apart. The version is verified; the person
  * resolving the base-branch side is a recorded human decision (`goal_merged { by: 'human' }`).
  */
-export function handMergeInstruction(integrationBranch: string, baseBranch: string, workspaceId: string, version: number): string {
-  return (
-    `Merge ${integrationBranch} into ${baseBranch} by hand, then run ` +
-    `confirm-goal-merge --workspace ${workspaceId} --version ${String(version)}`
-  )
+/**
+ * `verifiedCommit` (final wave I2): the commit the version's passing verification checked. When it
+ * is known the instruction names it rather than the branch -- a branch that moved after acceptance
+ * carries commits nobody verified, and `confirm-goal-merge` refuses them. Null or absent for a
+ * version accepted before verification existed (4a's wording).
+ */
+export function handMergeInstruction(
+  integrationBranch: string,
+  baseBranch: string,
+  workspaceId: string,
+  version: number,
+  verifiedCommit?: string | null,
+): string {
+  const what = verifiedCommit === undefined || verifiedCommit === null ? integrationBranch : `${verifiedCommit.slice(0, 12)}, the verified tip of ${integrationBranch},`
+  return `Merge ${what} into ${baseBranch} by hand, then run ` + `confirm-goal-merge --workspace ${workspaceId} --version ${String(version)}`
 }

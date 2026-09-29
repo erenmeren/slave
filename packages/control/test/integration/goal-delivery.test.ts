@@ -376,6 +376,48 @@ async function seedVerification(
   return run.id
 }
 
+/**
+ * Final wave I2: an accepted version records the commit its verification passed on
+ * (`verifiedCommit`); a person's hand merge is confirmed only for exactly that commit.
+ */
+describe('confirmGoalMerge (a verified version)', () => {
+  async function verifiedAndFailed(f: Fixture): Promise<{ readonly id: string; readonly branch: string; readonly verified: string }> {
+    const v1 = await seedDelivery(f, 1, { status: 'accepted', mergeError: 'CONFLICT (content): a.txt' })
+    const verified = git(['rev-parse', v1.branch], f.repoPath)
+    await prisma.goalDelivery.update({ where: { id: v1.id }, data: { verifiedCommit: verified } })
+    return { ...v1, verified }
+  }
+
+  it('refuses a hand merge of a branch that moved after verification, naming the verified commit', async (): Promise<void> => {
+    const f = await seedWorkspace()
+    const v1 = await verifiedAndFailed(f)
+    git(['checkout', '-q', v1.branch], f.repoPath)
+    writeFileSync(join(f.repoPath, 'unverified.txt'), 'nobody checked this\n')
+    git(['add', '-A'], f.repoPath)
+    git(['commit', '-q', '-m', 'after acceptance'], f.repoPath)
+    git(['checkout', '-q', 'main'], f.repoPath)
+    const tip = git(['rev-parse', v1.branch], f.repoPath)
+    git(['merge', '-q', '--no-ff', '--no-edit', v1.branch], f.repoPath)
+
+    expect(await confirmGoalMerge(f.workspaceId, 1)).toEqual({
+      ok: false,
+      error: { kind: 'goal_tip_not_verified', goalVersion: 1, branch: v1.branch, verifiedCommit: v1.verified, tip },
+    })
+    expect((await prisma.goalDelivery.findUniqueOrThrow({ where: { id: v1.id } })).mergedAt).toBeNull()
+    expect(await eventsOf(f.workspaceId, 'workspace_goal_merged')).toHaveLength(0)
+  })
+
+  it('confirms a hand merge of exactly the verified commit', async (): Promise<void> => {
+    const f = await seedWorkspace()
+    const v1 = await verifiedAndFailed(f)
+    git(['merge', '-q', '--no-ff', '--no-edit', v1.verified], f.repoPath)
+    const merged = git(['rev-parse', 'main'], f.repoPath)
+
+    expect(await confirmGoalMerge(f.workspaceId, 1)).toEqual({ ok: true, value: { commit: merged } })
+    expect((await prisma.goalDelivery.findUniqueOrThrow({ where: { id: v1.id } })).mergedAt).not.toBeNull()
+  })
+})
+
 describe('goalDeliveries (Conductor Plan 4b)', () => {
   it('shows the round, why a person is needed, and the latest verification', async (): Promise<void> => {
     const f = await seedWorkspace()

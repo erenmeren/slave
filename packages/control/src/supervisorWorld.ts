@@ -838,6 +838,7 @@ async function loadGoalDeliveries(tx: Prisma.TransactionClient, workspaceId: str
       integrationBranch: true,
       needsHumanReason: true,
       mergeError: true,
+      verifiedCommit: true,
       workspace: { select: { baseBranch: true } },
     },
   })
@@ -858,6 +859,7 @@ async function loadGoalDeliveries(tx: Prisma.TransactionClient, workspaceId: str
             baseBranch: row.workspace.baseBranch,
             needsHumanReason: row.needsHumanReason,
             mergeError: row.mergeError,
+            verifiedCommit: row.verifiedCommit,
             latestVerification: latest.get(row.id) ?? null,
           },
         ],

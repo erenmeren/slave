@@ -492,6 +492,9 @@ export interface SupervisorGoalDelivery {
   readonly needsHumanReason: string | null
   /** Why the final merge into the base branch failed (Plan 4a D9), or null. */
   readonly mergeError: string | null
+  /** The integration commit the passing verification checked (ruling Q6), once accepted -- what
+   *  the hand-merge instruction names (final wave I2); null before, or on a pre-4b row. */
+  readonly verifiedCommit: string | null
   /** The latest concluded round's verdict (`latestVerifications`, the one loader `goal-status`
    *  reads too), or null before any. */
   readonly latestVerification: {

@@ -376,6 +376,10 @@ export async function retryGoal(
  * stamped rows) never announces this merge as its own. `commit` is the base branch's tip: the
  * commit the person's merge made, which contains the integration branch.
  *
+ * Final wave I2: for a version accepted on a verification (`verifiedCommit` set), only exactly the
+ * verified commit is confirmed -- refused while the integration branch points anywhere else
+ * (`goal_tip_not_verified`), and "merged" means the verified commit is in the base branch.
+ *
  * The integration worktree is left for the goal pass, which removes it once the row is stamped.
  *
  * Idempotent on a version already stamped whose branch is in the base branch (final wave I1): the
@@ -400,7 +404,11 @@ export async function confirmGoalMerge(
       return err({ kind: 'goal_not_accepted', goalVersion, status: delivery.status })
     }
     const { repoPath, baseBranch } = delivery.workspace
-    const merged = await gitIn(repoPath, 'merge-base', '--is-ancestor', delivery.integrationBranch, `refs/heads/${baseBranch}`).then(
+    // Final wave I2: a verified version is landed when its VERIFIED commit is in the base branch --
+    // the branch name may point past it. A row accepted before verification existed
+    // (`verifiedCommit` null) keeps 4a's check on the branch.
+    const landedRef = delivery.verifiedCommit ?? delivery.integrationBranch
+    const merged = await gitIn(repoPath, 'merge-base', '--is-ancestor', landedRef, `refs/heads/${baseBranch}`).then(
       () => true,
       () => false,
     )
@@ -413,6 +421,15 @@ export async function confirmGoalMerge(
       if (!merged) return err({ kind: 'goal_version_closed', goalVersion, status: 'merged' })
       const recorded = await recordedMergeCommit(tx, workspaceId, goalVersion)
       return ok({ commit: recorded ?? (await gitIn(repoPath, 'rev-parse', `refs/heads/${baseBranch}`)) })
+    }
+    if (delivery.verifiedCommit !== null) {
+      // Final wave I2 (spec ruling 5): the landed tree must be the verified tree. A branch that
+      // moved after acceptance carries commits nobody verified; a hand merge of it is not this
+      // version's merge, whatever else it contains.
+      const tip = await gitIn(repoPath, 'rev-parse', delivery.integrationBranch)
+      if (tip !== delivery.verifiedCommit) {
+        return err({ kind: 'goal_tip_not_verified', goalVersion, branch: delivery.integrationBranch, verifiedCommit: delivery.verifiedCommit, tip })
+      }
     }
     if (!merged) return err({ kind: 'goal_not_merged', goalVersion, branch: delivery.integrationBranch, into: baseBranch })
     const commit = await gitIn(repoPath, 'rev-parse', `refs/heads/${baseBranch}`)

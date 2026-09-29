@@ -747,6 +747,16 @@ describe('observe -- goal_needs_human and verification_failed (Conductor Plan 4b
     expect(situations[0]?.summary).not.toMatch(/retry-goal|abandon-goal/)
   })
 
+  // Final wave I2: the verified commit is what the person merges -- the branch may have moved.
+  it('names the verified commit in the hand-merge instruction when the version has one', () => {
+    const verified = '0123456789abcdef0123456789abcdef01234567'
+    const situations = observe(
+      world({ goalDeliveries: [goalDelivery({ status: 'accepted', mergeError: 'CONFLICT', verifiedCommit: verified, latestVerification: verdict(2, []) })] }),
+    )
+    expect(situations[0]?.summary).toContain(handMergeInstruction('slaveofai/goal-v1-ws-1', 'main', 'ws-1', 1, verified))
+    expect(situations[0]?.summary).toContain('Merge 0123456789ab, the verified tip of slaveofai/goal-v1-ws-1, into main')
+  })
+
   it('stays silent for an accepted version whose merge has not failed', () => {
     expect(observe(world({ goalDeliveries: [goalDelivery({ status: 'accepted', latestVerification: verdict(1, []) })] }))).toEqual([])
   })

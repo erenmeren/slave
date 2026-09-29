@@ -213,6 +213,9 @@ export type ControlRefusal =
   /** Conductor Plan 4b D9: `retryGoal` on a version the verification loop has not stopped on
    *  (`needs_human`) -- nothing to retry. */
   | { readonly kind: 'goal_not_needs_human'; readonly goalVersion: number; readonly status: string }
+  // Final wave I2: a hand merge is confirmed only for the commit the version's verification passed
+  // on; the integration branch has moved past it since.
+  | { readonly kind: 'goal_tip_not_verified'; readonly goalVersion: number; readonly branch: string; readonly verifiedCommit: string; readonly tip: string }
   | { readonly kind: 'duplicate_name'; readonly name: string }
   | { readonly kind: 'template_not_found'; readonly templateId: string }
   /** M47 R1: a capability key nothing in the taxonomy table has. Nothing matches on a key that is
@@ -751,6 +754,14 @@ export function refusalText(refusal: ControlRefusal): string {
       return `goal v${String(refusal.goalVersion)} is ${refusal.status}, not waiting for a person; there is nothing to retry`
     case 'goal_not_merged':
       return `${refusal.branch} is not merged into ${refusal.into}; merge it by hand first`
+    case 'goal_tip_not_verified': {
+      const verified = refusal.verifiedCommit.slice(0, 12)
+      return (
+        `${refusal.branch} has moved since goal v${String(refusal.goalVersion)} was verified at ${verified} (it is now at ${refusal.tip.slice(0, 12)}): ` +
+        `only the verified commit can be confirmed. Point ${refusal.branch} back at ${verified} and merge exactly that commit by hand, ` +
+        'or abandon the version'
+      )
+    }
     case 'duplicate_name':
       return `the name "${refusal.name}" is already taken`
     case 'template_not_found':

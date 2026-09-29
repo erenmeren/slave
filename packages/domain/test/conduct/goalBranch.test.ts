@@ -20,4 +20,15 @@ describe('handMergeInstruction', () => {
       'Merge slaveofai/goal-v2-0c1d2e3f into main by hand, then run confirm-goal-merge --workspace ws-9 --version 2',
     )
   })
+
+  // Final wave I2: a verified version names the commit that was verified, not the branch, which
+  // may have moved since.
+  it('names the verified commit when there is one', () => {
+    expect(handMergeInstruction('slaveofai/goal-v2-0c1d2e3f', 'main', 'ws-9', 2, '0123456789abcdef0123456789abcdef01234567')).toBe(
+      'Merge 0123456789ab, the verified tip of slaveofai/goal-v2-0c1d2e3f, into main by hand, then run confirm-goal-merge --workspace ws-9 --version 2',
+    )
+    expect(handMergeInstruction('slaveofai/goal-v2-0c1d2e3f', 'main', 'ws-9', 2, null)).toBe(
+      'Merge slaveofai/goal-v2-0c1d2e3f into main by hand, then run confirm-goal-merge --workspace ws-9 --version 2',
+    )
+  })
 })

@@ -172,5 +172,19 @@ describe('refusalText for the goal-version verbs (Conductor Plan 4a)', () => {
     expect(refusalText({ kind: 'goal_not_needs_human', goalVersion: 1, status: 'integrating' })).toBe(
       'goal v1 is integrating, not waiting for a person; there is nothing to retry',
     )
+    // Final wave I2: a hand merge is confirmed only for the commit the verification passed on.
+    expect(
+      refusalText({
+        kind: 'goal_tip_not_verified',
+        goalVersion: 1,
+        branch: 'slaveofai/goal-v1-abcd1234',
+        verifiedCommit: '0123456789abcdef0123456789abcdef01234567',
+        tip: 'fedcba9876543210fedcba9876543210fedcba98',
+      }),
+    ).toBe(
+      'slaveofai/goal-v1-abcd1234 has moved since goal v1 was verified at 0123456789ab (it is now at fedcba987654): ' +
+        'only the verified commit can be confirmed. Point slaveofai/goal-v1-abcd1234 back at 0123456789ab and merge exactly ' +
+        'that commit by hand, or abandon the version',
+    )
   })
 })

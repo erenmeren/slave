@@ -282,6 +282,7 @@ export function goalDelivery(overrides: Partial<SupervisorGoalDelivery> = {}): S
     baseBranch: 'main',
     needsHumanReason: null,
     mergeError: null,
+    verifiedCommit: null,
     latestVerification: null,
     ...overrides,
   }

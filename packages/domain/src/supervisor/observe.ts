@@ -690,7 +690,7 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
       const firstLine = delivery.mergeError.split('\n', 1)[0] ?? ''
       const reason =
         `its merge into the base branch failed: ${firstLine}. ` +
-        `${handMergeInstruction(delivery.integrationBranch, delivery.baseBranch, world.workspaceId, delivery.goalVersion)}.`
+        `${handMergeInstruction(delivery.integrationBranch, delivery.baseBranch, world.workspaceId, delivery.goalVersion, delivery.verifiedCommit)}.`
       add({
         kind: 'goal_needs_human',
         subjectId: `${world.workspaceId}:v${v}:merge`,

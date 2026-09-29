@@ -2248,7 +2248,7 @@ describe('loadSupervisorWorld -- goal versions and their verification (Conductor
     const verifier = await seat(fixture, 'Vera', ['reviewer', 'verifier'])
     const stopped = await delivery(fixture, 1, { status: 'needs_human', round: 2, needsHumanReason: 'the round cap ended it' })
     await delivery(fixture, 2, { status: 'accepted', acceptedAt: NOW, mergedAt: NOW })
-    await delivery(fixture, 3, { status: 'accepted', acceptedAt: NOW, mergeError: 'CONFLICT (content): src/a.ts' })
+    await delivery(fixture, 3, { status: 'accepted', acceptedAt: NOW, mergeError: 'CONFLICT (content): src/a.ts', verifiedCommit: 'c0ffee' })
     await delivery(fixture, 4, { status: 'abandoned' })
     const run = async (): Promise<string> =>
       (await prisma.slaveRun.create({ data: { slaveId: verifier, status: 'succeeded', kind: 'verification', goalDeliveryId: stopped } })).id
@@ -2287,6 +2287,7 @@ describe('loadSupervisorWorld -- goal versions and their verification (Conductor
         baseBranch: 'main',
         needsHumanReason: 'the round cap ended it',
         mergeError: null,
+        verifiedCommit: null,
         latestVerification: { round: 2, pass: 1, fail: 2, unverifiable: 0, failedKeys: ['R2', 'R3'] },
       },
       {
@@ -2297,6 +2298,7 @@ describe('loadSupervisorWorld -- goal versions and their verification (Conductor
         baseBranch: 'main',
         needsHumanReason: null,
         mergeError: 'CONFLICT (content): src/a.ts',
+        verifiedCommit: 'c0ffee',
         latestVerification: null,
       },
     ])
