@@ -663,6 +663,11 @@ describe('the gate (concludeVerification)', () => {
     const delivery = await deliveryOf(f)
     expect(delivery).toMatchObject({ status: 'needs_human', round: 1 })
     expect(delivery.needsHumanReason).toContain('R2 (needs a real browser)')
+    // Final wave T6-M7: the remedy says what to fix before a retry would help.
+    expect(delivery.needsHumanReason).toContain(
+      `Fix what made the requirement unverifiable (the environment or the tooling the verifier lacked), then run retry-goal --workspace ${f.workspaceId} --version 1`,
+    )
+    expect(delivery.needsHumanReason).toContain(`or abandon-goal --workspace ${f.workspaceId} --version 1 to move on`)
     expect(await prisma.verificationResult.count({ where: { goalDeliveryId: f.deliveryId, status: 'unverifiable' } })).toBe(1)
     expect((await prisma.task.findUniqueOrThrow({ where: { id: f.taskIds[1] ?? '' } })).status).toBe('done')
   }, 60_000)
@@ -690,6 +695,11 @@ describe('the gate (concludeVerification)', () => {
     const delivery = await deliveryOf(f)
     expect(delivery.status).toBe('needs_human')
     expect(delivery.needsHumanReason).toContain('cannot be reworked: R2')
+    // Final wave T6-M7: the remedy names the task to restore before a retry would help.
+    expect(delivery.needsHumanReason).toContain(
+      `Restore or unblock the package task that owns the failing requirement (task ${f.taskIds[1] ?? ''}, cancelled), then run retry-goal --workspace ${f.workspaceId} --version 1`,
+    )
+    expect(delivery.needsHumanReason).toContain(`or abandon-goal --workspace ${f.workspaceId} --version 1 to move on`)
     expect((await prisma.task.findUniqueOrThrow({ where: { id: f.taskIds[1] ?? '' } })).status).toBe('cancelled')
   }, 60_000)
 

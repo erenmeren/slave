@@ -189,16 +189,37 @@ export async function acceptInLock(tx: Prisma.TransactionClient, deliveryId: str
 }
 
 /**
+ * Why the loop stopped, where that changes what a person must do first (final wave T6-M7): a
+ * retry alone would ask the same question again.
+ * - `unverifiable`: only unverifiable items -- the verifier lacked an environment or a tool.
+ * - `blocked_package`: a failing requirement's package task is cancelled or failed, so it cannot
+ *   be reworked until someone restores or unblocks it.
+ */
+export type NeedsHumanCause =
+  | { readonly kind: 'unverifiable'; readonly count: number }
+  | { readonly kind: 'blocked_package'; readonly tasks: readonly { readonly taskId: string; readonly status: string }[] }
+
+/**
  * What a person can do about a goal version the loop stopped on (controller ruling Q9, user
  * ruling: no accept-anyway, and no "merge it by hand" -- nothing unverified is suggested).
+ * `cause` (final wave T6-M7) names what to fix before `retry-goal`; without one (a cap), a retry
+ * is the remedy by itself.
  */
-export function needsHumanRemedy(workspaceId: string, version: number): string {
+export function needsHumanRemedy(workspaceId: string, version: number, cause?: NeedsHumanCause): string {
   const v = String(version)
-  return (
-    `Read goal-status --workspace ${workspaceId} --version ${v} for the verdict, then run ` +
-    `retry-goal --workspace ${workspaceId} --version ${v} to give it a fresh window of verification rounds, ` +
-    `or abandon-goal --workspace ${workspaceId} --version ${v} to move on.`
-  )
+  const read = `Read goal-status --workspace ${workspaceId} --version ${v} for the verdict`
+  const retry = `retry-goal --workspace ${workspaceId} --version ${v}`
+  const abandon = `or abandon-goal --workspace ${workspaceId} --version ${v} to move on.`
+  if (cause?.kind === 'unverifiable') {
+    const what = cause.count === 1 ? 'the requirement' : 'the requirements'
+    return `${read}. Fix what made ${what} unverifiable (the environment or the tooling the verifier lacked), then run ${retry} to verify again; ${abandon}`
+  }
+  if (cause?.kind === 'blocked_package') {
+    const what = cause.tasks.length === 1 ? 'the package task that owns the failing requirement' : 'the package tasks that own the failing requirements'
+    const named = cause.tasks.map((task) => `task ${task.taskId}, ${task.status}`).join('; ')
+    return `${read}. Restore or unblock ${what} (${named}), then run ${retry} to verify again; ${abandon}`
+  }
+  return `${read}, then run ${retry} to give it a fresh window of verification rounds, ${abandon}`
 }
 
 /**
@@ -207,15 +228,21 @@ export function needsHumanRemedy(workspaceId: string, version: number): string {
  * or null for a version with no run in flight (the goal pass's run-failure cap). `reason` gains
  * the remedy ({@link needsHumanRemedy}) and is bounded for the row and the event.
  */
-export async function endInNeedsHuman(deliveryId: string, runId: string | null, reason: string): Promise<boolean> {
-  return withDeliveryLock(deliveryId, async (tx) => needsHumanInLock(tx, deliveryId, runId, reason))
+export async function endInNeedsHuman(deliveryId: string, runId: string | null, reason: string, cause?: NeedsHumanCause): Promise<boolean> {
+  return withDeliveryLock(deliveryId, async (tx) => needsHumanInLock(tx, deliveryId, runId, reason, cause))
 }
 
 /** {@link endInNeedsHuman}'s body, for a caller already holding the delivery's lock. */
-export async function needsHumanInLock(tx: Prisma.TransactionClient, deliveryId: string, runId: string | null, reason: string): Promise<boolean> {
+export async function needsHumanInLock(
+  tx: Prisma.TransactionClient,
+  deliveryId: string,
+  runId: string | null,
+  reason: string,
+  cause?: NeedsHumanCause,
+): Promise<boolean> {
   const delivery = await tx.goalDelivery.findUniqueOrThrow({ where: { id: deliveryId } })
   if (delivery.status !== 'verifying' || delivery.activeRunId !== runId) return false
-  const remedy = needsHumanRemedy(delivery.workspaceId, delivery.goalVersion)
+  const remedy = needsHumanRemedy(delivery.workspaceId, delivery.goalVersion, cause)
   const full = `${reason.slice(0, VERIFICATION_REASON_MAX_CHARS - remedy.length - 2)}. ${remedy}`
   // Once per stop: a version stops at most once between two `retry-goal`s (every later stop is in
   // a later round), so "said since the last retry" is "said for this stop".

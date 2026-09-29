@@ -40,7 +40,7 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import { checkpointRunFiles, runTokenHash, verifyDirPathFor, type RunHandle, type SlaveRuntimeAdapter } from '@slave-of-ai/providers'
 import { tripConductor } from './conductor.js'
-import { acceptInLock, needsHumanInLock } from './goal.js'
+import { acceptInLock, needsHumanInLock, type NeedsHumanCause } from './goal.js'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { verificationOwnership } from './ownership.js'
 import { resolveAdapter } from './provider.js'
@@ -688,7 +688,7 @@ type Outcome =
   | { readonly kind: 'accept' }
   | { readonly kind: 'rework' }
   | { readonly kind: 'stale' }
-  | { readonly kind: 'needs_human'; readonly reason: string }
+  | { readonly kind: 'needs_human'; readonly reason: string; readonly cause?: NeedsHumanCause }
 
 /** The first line of a verifier's reason, for a sentence a person reads in one go. */
 const firstLine = (text: string): string => text.split('\n')[0] ?? ''
@@ -777,6 +777,7 @@ export async function concludeVerification(runId: RunId): Promise<void> {
 
       const owners = await ownersOf(tx, workspace.id, delivery.goalVersion, failed.map((item) => item.key))
       const orphaned = failed.filter((item) => owners.get(item.key)?.status !== 'done')
+      const blocked = blockedOwners(owners, orphaned.map((item) => item.key))
       const roundsUsed = now.round - now.roundBase
       const outcome: Outcome =
         failed.length === 0 && unverifiable.length === 0
@@ -796,9 +797,14 @@ export async function concludeVerification(runId: RunId): Promise<void> {
             ? {
                 kind: 'needs_human',
                 reason: `requirement(s) could not be verified: ${unverifiable.map((item) => `${item.key} (${firstLine(item.reason)})`).join('; ')}`,
+                cause: { kind: 'unverifiable', count: unverifiable.length },
               }
             : orphaned.length > 0
-              ? { kind: 'needs_human', reason: `requirement(s) failed whose package cannot be reworked: ${orphaned.map((item) => item.key).join(', ')}` }
+              ? {
+                  kind: 'needs_human',
+                  reason: `requirement(s) failed whose package cannot be reworked: ${orphaned.map((item) => item.key).join(', ')}`,
+                  ...(blocked.length > 0 ? { cause: { kind: 'blocked_package' as const, tasks: blocked } } : {}),
+                }
               : roundsUsed >= workspace.verificationRoundCap
                 ? {
                     kind: 'needs_human',
@@ -832,7 +838,7 @@ export async function concludeVerification(runId: RunId): Promise<void> {
         return
       }
       if (outcome.kind === 'needs_human') {
-        if (!(await needsHumanInLock(tx, delivery.id, run.id, outcome.reason))) throw new NotTheClaim()
+        if (!(await needsHumanInLock(tx, delivery.id, run.id, outcome.reason, outcome.cause))) throw new NotTheClaim()
         return
       }
       if (outcome.kind === 'rework') {
@@ -873,6 +879,20 @@ export async function concludeVerification(runId: RunId): Promise<void> {
     if (!(error instanceof NotTheClaim)) throw error
   }
   await removeVerificationWorktree(workspace.repoPath, run.worktreePath)
+}
+
+/** The distinct owning tasks of `keys` that cannot be reworked (not `done`), in key order, for the
+ *  remedy to name (final wave T6-M7). A key with no owning task at all names none. */
+function blockedOwners(
+  owners: ReadonlyMap<string, { readonly taskId: string; readonly status: string }>,
+  keys: readonly string[],
+): readonly { readonly taskId: string; readonly status: string }[] {
+  const seen = new Map<string, { readonly taskId: string; readonly status: string }>()
+  for (const key of keys) {
+    const owner = owners.get(key)
+    if (owner !== undefined && !seen.has(owner.taskId)) seen.set(owner.taskId, owner)
+  }
+  return [...seen.values()]
 }
 
 /** Which package task owns each of `keys` in the goal version (its package lists the key), and
