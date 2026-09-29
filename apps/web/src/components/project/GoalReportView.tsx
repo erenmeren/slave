@@ -7,6 +7,7 @@ import {
   evidenceAnchor,
   evidenceCut,
   formatReportUsd,
+  integratedWhere,
   reportCaveats,
   shortCommit,
   type GoalReport,
@@ -23,6 +24,7 @@ import { StatusPill, type StatusTone } from '../ui/StatusPill'
  *  `GOAL_REPORT_STATE_LABEL` (plan R6), so the page, the export and the chat note say the same. */
 const STATE_TONE: Readonly<Record<GoalReportState, StatusTone>> = {
   not_conducted: 'planning',
+  conducted_without_delivery: 'idle',
   integrating: 'working',
   verifying: 'review',
   accepted: 'waiting',
@@ -80,9 +82,10 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
           Download as Markdown
         </a>
       </header>
-      <p className="text-[12.5px] text-t3">
+      <p data-testid="goal-report-facts" className="text-[12.5px] text-t3">
         {report.workspaceName} · as of {report.asOf ?? 'no recorded fact yet'}
-        {d?.merge != null && ` · merged into ${d.merge.into} ${d.merge.by === 'human' ? 'by a person' : 'by Slave'} (commit ${shortCommit(d.merge.commit)})`}
+        {/* Final wave M6: only a merged version says who merged it -- the Markdown's own rule. */}
+        {report.state === 'merged' && d?.merge != null && ` · merged into ${d.merge.into} ${d.merge.by === 'human' ? 'by a person' : 'by Slave'} (commit ${shortCommit(d.merge.commit)})`}
         {report.state === 'accepted' && d !== null && ` · verified commit ${shortCommit(d.verifiedCommit)} on ${d.integrationBranch}`}
         {(report.state === 'integrating' || report.state === 'verifying' || report.state === 'needs_human') &&
           d !== null &&
@@ -244,7 +247,7 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
             {pkg.dependsOn.length > 0 && <p>Depends on: {pkg.dependsOn.join(', ')}</p>}
             <p>
               Task: {pkg.taskStatus ?? 'none'}
-              {pkg.integrated && ', on the integration branch'} · {pkg.implementationRuns} implementation{' '}
+              {pkg.integrated && integratedWhere(report)} · {pkg.implementationRuns} implementation{' '}
               {pkg.implementationRuns === 1 ? 'run' : 'runs'}
             </p>
             <p>

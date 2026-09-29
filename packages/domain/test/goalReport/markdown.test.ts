@@ -40,6 +40,7 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
   return {
     workspaceId: 'ws-1',
     workspaceName: 'Harlequin',
+    baseBranch: 'main',
     goalVersion: 2,
     versions: [1, 2],
     goal: 'Add a CSV output mode.',
@@ -136,6 +137,21 @@ describe('renderGoalReportMarkdown', () => {
     expect(md).toContain('| **This version** | **$4.12** |')
     expect(md).toContain('| Project so far | $12.40 of a $20.00 budget |')
     expect(renderGoalReportMarkdown(report({ spend: { ...report().spend, projectBudgetUsd: null } }))).toContain('| Project so far | $12.40, no budget set |')
+  })
+
+  it('adds the unmeasured and still-running run counts to the runs row, as the page does (final wave M5)', () => {
+    const md = renderGoalReportMarkdown(report({ spend: { ...report().spend, runsUnmeasured: 2, runsLive: 1 } }))
+    expect(md).toContain('| Runs of this version | $3.90 + 2 unmeasured (not in the total) + 1 still running |')
+    expect(renderGoalReportMarkdown(report())).toContain('| Runs of this version | $3.90 |')
+  })
+
+  it('says a version conducted before integration branches merged into the base branch, never onto an integration branch (final wave I1)', () => {
+    const md = renderGoalReportMarkdown(report({ state: 'conducted_without_delivery', delivery: null, rounds: [], baseBranch: 'trunk' }))
+    expect(md).toContain('State: **conducted without an integration branch**')
+    expect(md).toContain('- Task: done, merged into trunk; 1 implementation run')
+    expect(md).not.toContain('on the integration branch')
+    expect(md).not.toContain('not conducted')
+    expect(renderGoalReportMarkdown(report())).toContain('- Task: done, on the integration branch; 1 implementation run')
   })
 
   it('quotes a trail entry\'s detail under it, saying who wrote it', () => {

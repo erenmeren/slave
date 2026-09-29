@@ -6,6 +6,7 @@ import type { GoalReport, GoalReportState } from './types.js'
 /** How a person says each state. One wording for the page, the export and the chat note. */
 export const GOAL_REPORT_STATE_LABEL: Readonly<Record<GoalReportState, string>> = {
   not_conducted: 'not conducted yet',
+  conducted_without_delivery: 'conducted without an integration branch',
   integrating: 'being built',
   verifying: 'being verified',
   accepted: 'verified, waiting to be merged',
@@ -31,18 +32,30 @@ const isFinishedTaskStatus = (status: string): boolean => (TERMINAL as readonly 
 export function reportCaveats(report: GoalReport): readonly string[] {
   const out: string[] = []
   const delivery = report.delivery
-  const base = delivery?.baseBranch ?? 'the base branch'
+  const base = delivery?.baseBranch ?? report.baseBranch
   const requirements = report.requirements ?? []
   if (report.requirements === null) {
     out.push('The requirements of this goal version have not been extracted yet, so nothing can be checked against them.')
   }
   if (report.state === 'not_conducted') out.push('This goal version has not been conducted yet: it has no packages and no verification.')
+  if (report.state === 'conducted_without_delivery') {
+    out.push(
+      `This version was conducted before Slave built goal versions on an integration branch; its packages merged straight into ${base}, ` +
+        'and no integration, verification or merge of the version is recorded.',
+    )
+  }
   if (report.decision?.fallback === true) {
     out.push("The conductor's answers were unusable, so this version was delivered as one package by default.")
   }
   const last = report.rounds.at(-1)
   if (delivery !== null && last === undefined && report.state !== 'abandoned') {
-    out.push('No verification round has run yet: no requirement is verified.')
+    // Final wave M3: a version already past verification did not "not run yet" -- it was accepted
+    // without a round on record (a row accepted before verification existed).
+    out.push(
+      report.state === 'merged' || report.state === 'accepted'
+        ? 'This version was accepted without a recorded verification round: no requirement is verified.'
+        : 'No verification round has run yet: no requirement is verified.',
+    )
   }
   const moving = report.packages.filter((pkg) => pkg.taskStatus !== null && !isFinishedTaskStatus(pkg.taskStatus))
   if (last !== undefined && (report.state === 'integrating' || report.state === 'verifying') && moving.length > 0) {
@@ -64,8 +77,9 @@ export function reportCaveats(report: GoalReport): readonly string[] {
     out.push(
       delivery?.verifiedCommit == null
         ? `A person merged this version into ${merge.into} by hand (commit ${shortCommit(merge.commit)}), and no verified commit is recorded for it.`
-        : `A person merged this version into ${merge.into} by hand (commit ${shortCommit(merge.commit)}). That tree combines the verified commit ` +
-            `${shortCommit(delivery.verifiedCommit)} with what ${merge.into} gained since the cut, and was not itself verified.`,
+        : // Final wave M2: the commits differ, and that is all the records say -- not why they differ.
+          `A person merged this version into ${merge.into} by hand: commit ${shortCommit(merge.commit)} is not the verified commit ` +
+            `${shortCommit(delivery.verifiedCommit)}; the tree that landed was not itself verified.`,
     )
   }
   if (report.state === 'abandoned') out.push(`This goal version was abandoned; nothing of it reached ${base}.`)
@@ -78,7 +92,13 @@ export function reportCaveats(report: GoalReport): readonly string[] {
   }
   const unrecorded = report.packages.filter((pkg) => pkg.integrated && pkg.mergedFiles === null)
   if (unrecorded.length > 0) {
-    out.push(`The files ${keysOf(unrecorded)} merged were not recorded (merged before Slave recorded them); the worker's own list is shown.`)
+    // Final wave I1/M4: a base-branch merge (a version with no delivery) records no list at all;
+    // an integration merge records none when it predates Plan 5 or git's listing failed.
+    out.push(
+      delivery === null
+        ? `The files ${keysOf(unrecorded)} merged into ${base} were not recorded (Slave records them only for a merge into an integration branch); the worker's own list is shown.`
+        : `The files ${keysOf(unrecorded)} merged were not recorded (merged before Slave recorded them, or git could not list them); the worker's own list is shown.`,
+    )
   }
   const cut = report.packages.filter((pkg) => pkg.mergedFilesTruncated)
   if (cut.length > 0) out.push(`The file lists of ${keysOf(cut)} are cut at ${String(GOAL_REPORT_FILES_MAX)} files per merge.`)

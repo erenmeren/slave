@@ -8,6 +8,7 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
   return {
     workspaceId: 'w1',
     workspaceName: 'Harlequin',
+    baseBranch: 'main',
     goalVersion: 2,
     versions: [1, 2],
     goal: 'Add a CSV output mode.',
@@ -101,12 +102,36 @@ describe('GoalReportView', () => {
 
   it('renders every state with its label, and the raw state on the title', () => {
     for (const state of GOAL_REPORT_STATES) {
-      const { unmount } = render(<GoalReportView report={report({ state, ...(state === 'not_conducted' ? { delivery: null, decision: null, packages: [], rounds: [] } : {}) })} />)
+      const { unmount } = render(
+        <GoalReportView
+          report={report({
+            state,
+            ...(state === 'not_conducted' ? { delivery: null, decision: null, packages: [], rounds: [] } : {}),
+            ...(state === 'conducted_without_delivery' ? { delivery: null, rounds: [] } : {}),
+          })}
+        />,
+      )
       const node = screen.getByTestId('goal-report-state')
       expect(node.getAttribute('title')).toBe(state)
       expect(node.textContent).toBe(GOAL_REPORT_STATE_LABEL[state])
       unmount()
     }
+  })
+
+  it('says who merged only for a merged version, as the Markdown does (final wave M6)', () => {
+    const d = report().delivery!
+    render(<GoalReportView report={report({ state: 'needs_human', delivery: { ...d, mergedAt: null, needsHumanReason: 'stopped' } })} />)
+    expect(screen.getByTestId('goal-report-facts').textContent).not.toContain('merged into')
+  })
+
+  it('says the packages of a version conducted before integration branches merged into the base branch (final wave I1)', () => {
+    render(<GoalReportView report={report({ state: 'conducted_without_delivery', delivery: null, rounds: [], baseBranch: 'trunk' })} />)
+    const pkg = screen.getByTestId('goal-report-package')
+    expect(pkg.textContent).toContain('Task: done, merged into trunk')
+    expect(pkg.textContent).not.toContain('integration branch')
+    expect(screen.getAllByTestId('goal-report-caveat').map((node) => node.textContent)).toContain(
+      'This version was conducted before Slave built goal versions on an integration branch; its packages merged straight into trunk, and no integration, verification or merge of the version is recorded.',
+    )
   })
 
   it('labels a quoted trail detail and an answer with the shared words', () => {

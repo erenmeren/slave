@@ -42,6 +42,7 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
   return {
     workspaceId: 'ws-1',
     workspaceName: 'Harlequin',
+    baseBranch: 'main',
     goalVersion: 2,
     versions: [1, 2],
     goal: 'Add a CSV output mode.',
@@ -109,10 +110,38 @@ describe('reportCaveats', () => {
     expect(reportCaveats(value).join('\n')).toMatch(expected)
   })
 
-  it('says a hand merge onto a moved base landed a tree nobody verified', () => {
+  it('says a hand merge of another commit landed a tree nobody verified, and guesses nothing about why (final wave M2)', () => {
     const d = report().delivery!
     const caveats = reportCaveats(report({ delivery: { ...d, merge: { by: 'human', commit: 'd'.repeat(40), into: 'main' } } }))
-    expect(caveats.join('\n')).toContain(`A person merged this version into main by hand (commit ${'d'.repeat(12)}). That tree combines the verified commit ${'c'.repeat(12)} with what main gained since the cut, and was not itself verified.`)
+    expect(caveats).toContain(
+      `A person merged this version into main by hand: commit ${'d'.repeat(12)} is not the verified commit ${'c'.repeat(12)}; the tree that landed was not itself verified.`,
+    )
+    expect(caveats.join('\n')).not.toContain('gained since the cut')
+  })
+
+  it('says a version accepted or merged without a recorded round has nothing verified, not that no round has run yet (final wave M3)', () => {
+    for (const state of ['merged', 'accepted'] as const) {
+      const caveats = reportCaveats(report({ state, rounds: [], requirements: [requirement({ verdict: null, history: [] })] }))
+      expect(caveats).toContain('This version was accepted without a recorded verification round: no requirement is verified.')
+      expect(caveats.join('\n')).not.toContain('No verification round has run yet')
+    }
+  })
+
+  it('says an unrecorded file list may also be one git could not list (final wave M4)', () => {
+    expect(reportCaveats(report({ packages: [pkg({ mergedFiles: null })] }))).toContain(
+      "The files report merged were not recorded (merged before Slave recorded them, or git could not list them); the worker's own list is shown.",
+    )
+  })
+
+  it('says a version conducted before integration branches merged its packages straight into the base branch, once (final wave I1)', () => {
+    const caveats = reportCaveats(
+      report({ state: 'conducted_without_delivery', delivery: null, rounds: [], baseBranch: 'trunk', requirements: [requirement({ verdict: null, history: [] })], packages: [pkg({ mergedFiles: null })] }),
+    )
+    expect(caveats).toContain(
+      'This version was conducted before Slave built goal versions on an integration branch; its packages merged straight into trunk, and no integration, verification or merge of the version is recorded.',
+    )
+    expect(caveats.join('\n')).not.toMatch(/has not been conducted yet|No verification round|merged before Slave recorded them/u)
+    expect(caveats).toContain("The files report merged into trunk were not recorded (Slave records them only for a merge into an integration branch); the worker's own list is shown.")
   })
 
   it('says nothing about a person who fast-forwarded to the verified commit', () => {

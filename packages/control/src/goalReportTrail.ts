@@ -18,6 +18,8 @@ export interface VersionScope {
   readonly workspaceId: string
   readonly goalVersion: number
   readonly deliveryId: string | null
+  /** `Workspace.baseBranch`: where a package of a version with no delivery merged (final wave I1). */
+  readonly baseBranch: string
   readonly tasks: readonly { readonly taskId: string; readonly packageKey: string; readonly seat: string | null }[]
   readonly verifier: string | null
 }
@@ -39,7 +41,8 @@ export async function seatNames(slaveIds: readonly (string | null)[]): Promise<R
 }
 
 export async function loadVersionScope(workspaceId: string, goalVersion: number): Promise<VersionScope> {
-  const [packages, delivery] = await Promise.all([
+  const [workspace, packages, delivery] = await Promise.all([
+    prisma.workspace.findUnique({ where: { id: workspaceId }, select: { baseBranch: true } }),
     prisma.workPackage.findMany({
       where: { workspaceId, goalVersion },
       select: { key: true, tasks: { select: { id: true, assigneeId: true }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] } },
@@ -54,6 +57,7 @@ export async function loadVersionScope(workspaceId: string, goalVersion: number)
     workspaceId,
     goalVersion,
     deliveryId: delivery?.id ?? null,
+    baseBranch: workspace?.baseBranch ?? 'the base branch',
     tasks: tasks.map((task) => ({ taskId: task.taskId, packageKey: task.packageKey, seat: task.assigneeId === null ? null : (names.get(task.assigneeId) ?? null) })),
     verifier: delivery?.verifierSlaveId == null ? null : (names.get(delivery.verifierSlaveId) ?? null),
   }
@@ -100,7 +104,7 @@ interface Draft {
 
 /** One event as a trail sentence (plan D6), or null for a payload this build cannot read. The
  *  sentences name ids, keys and counts only; free text goes in `detail`, labelled. */
-function eventDraft(type: DomainEventType, p: Payload, pkg: string | null): Draft | null {
+function eventDraft(type: DomainEventType, p: Payload, pkg: string | null, mergesInto: string): Draft | null {
   const on = pkg === null ? '' : `${pkg}: `
   switch (type) {
     case 'workspace.goal_set': {
@@ -169,7 +173,7 @@ function eventDraft(type: DomainEventType, p: Payload, pkg: string | null): Draf
     }
     case 'task.done': {
       const files = typeof p['filesTotal'] === 'number' ? ` (${times(num(p, 'filesTotal'), 'file', 'files')})` : ''
-      return { text: `${on}merged into the integration branch${files}.` }
+      return { text: `${on}merged into ${mergesInto}${files}.` }
     }
     case 'task.failed':
       return { text: `${on}failed.`, detail: str(p, 'reason'), detailBy: 'system' }
@@ -212,6 +216,9 @@ export async function versionTrail(
   max: number = GOAL_REPORT_TRAIL_MAX,
 ): Promise<{ readonly entries: readonly GoalReportTrailEntry[]; readonly omitted: number }> {
   const { workspaceId, goalVersion } = scope
+  // Final wave I1: a version with no delivery was conducted before integration branches, and its
+  // packages merged straight into the base branch.
+  const mergesInto = scope.deliveryId === null ? scope.baseBranch : 'the integration branch'
   const keyOf = new Map(scope.tasks.map((task) => [task.taskId, task.packageKey] as const))
   const taskIds = [...keyOf.keys()]
   const subject = versionSubject(workspaceId, goalVersion)
@@ -255,7 +262,7 @@ export async function versionTrail(
   for (const row of events) {
     const type = DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? (row.type as DomainEventType)
     const pkg = row.taskId === null ? null : (keyOf.get(row.taskId) ?? null)
-    const draft = eventDraft(type, (row.payload ?? {}) as Payload, pkg)
+    const draft = eventDraft(type, (row.payload ?? {}) as Payload, pkg, mergesInto)
     if (draft === null) continue
     if (type === 'workspace.conducted') {
       const fallback = (row.payload as Payload)['fallback'] === true

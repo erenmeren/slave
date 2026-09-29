@@ -4,6 +4,13 @@ import { GOAL_REPORT_SUMMARY_MAX_CHARS } from './constants.js'
 import { formatReportUsd, shortCommit } from './escape.js'
 import type { GoalReport } from './types.js'
 
+/** What the note says that the report's own rows do not carry. */
+export interface GoalReportSummaryOptions {
+  /** An accepted version with `autoMerge` on whose newest goal-pass trip is "waits for a clean
+   *  checkout" (final wave M8): the note asks for a clean checkout, not a hand merge. */
+  readonly waitsForCleanCheckout?: boolean
+}
+
 /**
  * The Supervisor chat's note when a goal version comes to rest (spec R10, plan D10): what happened
  * to it, how its requirements stand, who held its packages, what it cost. Then a pointer to the
@@ -12,8 +19,8 @@ import type { GoalReport } from './types.js'
  * Slave's own sentence, and all of it is defused (`sanitisePersonText`) because the note sits in
  * the conversation history later chat turns read. Bounded by `GOAL_REPORT_SUMMARY_MAX_CHARS`.
  */
-export function goalReportSummary(report: GoalReport): string {
-  const lines = [`Goal v${String(report.goalVersion)} report: ${headline(report)}`, requirementsLine(report)]
+export function goalReportSummary(report: GoalReport, options: GoalReportSummaryOptions = {}): string {
+  const lines = [`Goal v${String(report.goalVersion)} report: ${headline(report, options)}`, requirementsLine(report)]
   if (report.packages.length > 0) lines.push(`Packages: ${report.packages.map((pkg) => `${pkg.key} (${pkg.seat ?? 'no seat'})`).join(', ')}.`)
   const s = report.spend
   lines.push(
@@ -25,23 +32,39 @@ export function goalReportSummary(report: GoalReport): string {
   return sanitisePersonText(lines.join('\n')).slice(0, GOAL_REPORT_SUMMARY_MAX_CHARS)
 }
 
-function headline(report: GoalReport): string {
+function headline(report: GoalReport, options: GoalReportSummaryOptions): string {
   const d = report.delivery
-  const base = d?.baseBranch ?? 'the base branch'
+  const base = d?.baseBranch ?? report.baseBranch
   switch (report.state) {
     case 'merged': {
       const merge = d?.merge ?? null
       if (merge === null) return `merged into ${base}.`
       // Plan D2: a hand merge whose commit is not the verified one landed a tree nobody verified.
+      // With no verified commit on record there is nothing to compare with (final wave T4), so the
+      // note says that rather than a verdict either way.
+      if (merge.by === 'human' && d?.verifiedCommit == null) {
+        return `merged into ${merge.into} by a person (commit ${shortCommit(merge.commit)}); no verified commit is recorded for it.`
+      }
       if (merge.by === 'human' && merge.commit !== d?.verifiedCommit) {
         return `merged into ${merge.into} by a person (commit ${shortCommit(merge.commit)}); that tree was not itself verified.`
       }
-      return `merged into ${merge.into}${merge.by === 'human' ? ' by a person' : ''} (commit ${shortCommit(merge.commit)}, the verified commit).`
+      // Final wave M1: "the verified commit" only when the records say it is.
+      const verified = d?.verifiedCommit != null && merge.commit === d.verifiedCommit ? ', the verified commit' : ''
+      return `merged into ${merge.into}${merge.by === 'human' ? ' by a person' : ''} (commit ${shortCommit(merge.commit)}${verified}).`
     }
+    case 'conducted_without_delivery':
+      return `conducted before Slave built goal versions on an integration branch; its packages merged straight into ${base}.`
     case 'accepted':
-      return d === null
-        ? 'every requirement is verified.'
-        : `every requirement is verified, and it waits for you: ${handMergeInstruction(d.integrationBranch, d.baseBranch, report.workspaceId, report.goalVersion, d.verifiedCommit)}.`
+      if (d === null) return 'every requirement is verified.'
+      // Final wave M8: with autoMerge on, a dirty or switched checkout is all the merge waits for.
+      // The person has to act, but by cleaning the checkout, never by merging by hand.
+      if (options.waitsForCleanCheckout === true) {
+        return (
+          `every requirement is verified, and it waits for a clean checkout of ${d.baseBranch}: the project checkout has uncommitted changes ` +
+          `or is not on ${d.baseBranch}. Once it is clean and on ${d.baseBranch}, Slave merges it.`
+        )
+      }
+      return `every requirement is verified, and it waits for you: ${handMergeInstruction(d.integrationBranch, d.baseBranch, report.workspaceId, report.goalVersion, d.verifiedCommit)}.`
     case 'needs_human': {
       const reason = d?.needsHumanReason ?? 'the verification loop stopped'
       return `stopped, and needs you: ${reason.length > 700 ? `${reason.slice(0, 700)}…` : reason}`

@@ -44,6 +44,7 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
   return {
     workspaceId: 'ws-1',
     workspaceName: 'Harlequin',
+    baseBranch: 'main',
     goalVersion: 2,
     versions: [1, 2],
     goal: 'Add a CSV output mode.',
@@ -105,6 +106,33 @@ describe('goalReportSummary', () => {
     const d = report().delivery!
     const text = goalReportSummary(report({ delivery: { ...d, merge: { by: 'human', commit: 'd'.repeat(40), into: 'main' } } }))
     expect(text).toContain(`merged into main by a person (commit ${'d'.repeat(12)}); that tree was not itself verified.`)
+  })
+
+  it('calls the landed commit the verified commit only when it is (final wave M1)', () => {
+    const d = report().delivery!
+    const other = goalReportSummary(report({ delivery: { ...d, merge: { by: 'system', commit: 'e'.repeat(40), into: 'main' } } }))
+    expect(other).toContain(`Goal v2 report: merged into main (commit ${'e'.repeat(12)}).`)
+    expect(other).not.toContain('the verified commit')
+    const unrecorded = goalReportSummary(report({ delivery: { ...d, verifiedCommit: null } }))
+    expect(unrecorded).toContain(`Goal v2 report: merged into main (commit ${'c'.repeat(12)}).`)
+    expect(unrecorded).not.toContain('the verified commit')
+    const byHand = goalReportSummary(report({ delivery: { ...d, verifiedCommit: null, merge: { by: 'human', commit: 'd'.repeat(40), into: 'main' } } }))
+    expect(byHand).toContain(`merged into main by a person (commit ${'d'.repeat(12)}); no verified commit is recorded for it.`)
+    expect(byHand).not.toContain('not itself verified')
+  })
+
+  it('says a version conducted before integration branches merged straight into the base branch (final wave I1)', () => {
+    const text = goalReportSummary(report({ state: 'conducted_without_delivery', delivery: null, rounds: [], baseBranch: 'trunk' }))
+    expect(text).toContain('Goal v2 report: conducted before Slave built goal versions on an integration branch; its packages merged straight into trunk.')
+  })
+
+  it('tells the person to clean the checkout, not to merge by hand, when that is all the merge waits for (final wave M8)', () => {
+    const d = report().delivery!
+    const text = goalReportSummary(report({ state: 'accepted', delivery: { ...d, mergedAt: null, merge: null } }), { waitsForCleanCheckout: true })
+    expect(text).toContain(
+      'Goal v2 report: every requirement is verified, and it waits for a clean checkout of main: the project checkout has uncommitted changes or is not on main. Once it is clean and on main, Slave merges it.',
+    )
+    expect(text).not.toContain('confirm-goal-merge')
   })
 
   it('says what a stopped version needs, with the failing and unverifiable keys', () => {

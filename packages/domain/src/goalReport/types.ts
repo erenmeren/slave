@@ -5,7 +5,20 @@
  * re-derives any of it (plan D1). The web page, the Markdown export and the chat note render it.
  * Every timestamp is an ISO string (UTC), so the value crosses a route unchanged.
  */
-export const GOAL_REPORT_STATES = ['not_conducted', 'integrating', 'verifying', 'accepted', 'merged', 'needs_human', 'abandoned'] as const
+/** `conducted_without_delivery` (final wave I1): a version conducted under Plans 2/3 -- a `conduct`
+ *  decision and packages, but no `GoalDelivery` -- whose packages merged straight into the base
+ *  branch. Plan 4a's conductor writes the delivery in the packages' own transaction, so a version
+ *  conducted since then is never in this state. */
+export const GOAL_REPORT_STATES = [
+  'not_conducted',
+  'conducted_without_delivery',
+  'integrating',
+  'verifying',
+  'accepted',
+  'merged',
+  'needs_human',
+  'abandoned',
+] as const
 export type GoalReportState = (typeof GOAL_REPORT_STATES)[number]
 
 export type GoalReportVerdictStatus = 'pass' | 'fail' | 'unverifiable'
@@ -70,7 +83,8 @@ export interface GoalReportPackage {
   readonly seat: string | null
   readonly taskId: string | null
   readonly taskStatus: string | null
-  /** On the version's integration branch (`Task.integratedAt`). */
+  /** `Task.integratedAt` is set: on the version's integration branch, or, for a version with no
+   *  delivery (`conducted_without_delivery`), on the base branch. */
   readonly integrated: boolean
   /** Git's list at each merge into the integration branch, united and sorted (plan D3). Null when
    *  no merge recorded one. */
@@ -156,6 +170,8 @@ export interface GoalReportTrailEntry {
 export interface GoalReport {
   readonly workspaceId: string
   readonly workspaceName: string
+  /** `Workspace.baseBranch`: what the report names when there is no delivery to name it. */
+  readonly baseBranch: string
   readonly goalVersion: number
   /** Every version of the workspace that has a report, ascending (the page's version links). */
   readonly versions: readonly number[]

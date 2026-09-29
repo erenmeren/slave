@@ -255,6 +255,65 @@ describe('loadGoalReport', () => {
     expect(reportCaveats(result.value).some((line) => line.includes(HAND_MERGE_UNVERIFIED))).toBe(false)
   })
 
+  // Final wave T4: a merge with no verified commit on record.
+  it('says no verified commit is recorded for a hand merge without one, and never that the tree was not itself verified', async (): Promise<void> => {
+    const w = await world()
+    await conduct(w, { status: 'accepted', mergedAt: new Date('2026-09-29T10:06:00Z'), round: 1 })
+    await appendEvent({ type: 'workspace.goal_merged', workspaceId: w.workspaceId, actor: 'human', payload: { version: 1, branch: 'slaveofai/goal-v1-x', into: 'main', commit: 'd'.repeat(40), by: 'human' } })
+    const result = await loadGoalReport(w.workspaceId, 1)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.delivery?.verifiedCommit).toBe(null)
+    const caveats = reportCaveats(result.value)
+    expect(caveats).toContain(`A person merged this version into main by hand (commit ${'d'.repeat(12)}), and no verified commit is recorded for it.`)
+    expect(caveats.some((line) => line.includes(HAND_MERGE_UNVERIFIED))).toBe(false)
+  })
+
+  it('does not call a system merge without a verified commit a hand merge', async (): Promise<void> => {
+    const w = await world()
+    await conduct(w, { status: 'accepted', mergedAt: new Date('2026-09-29T10:06:00Z'), round: 1 })
+    await appendEvent({ type: 'workspace.goal_merged', workspaceId: w.workspaceId, actor: 'system', payload: { version: 1, branch: 'slaveofai/goal-v1-x', into: 'main', commit: 'd'.repeat(40), by: 'system' } })
+    const result = await loadGoalReport(w.workspaceId, 1)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(reportCaveats(result.value).some((line) => line.includes('by hand'))).toBe(false)
+  })
+
+  // Final wave I1: a version conducted under Plans 2/3 has a conduct decision and packages, but no
+  // delivery; its packages merged straight into the base branch.
+  it('reports a version conducted before integration branches as such, not as not conducted', async (): Promise<void> => {
+    const w = await world()
+    await prisma.workspace.update({ where: { id: w.workspaceId }, data: { baseBranch: 'trunk' } })
+    const c = await conduct(w)
+    await prisma.goalDelivery.delete({ where: { id: c.deliveryId } })
+    await appendEvent({ type: 'task.done', workspaceId: w.workspaceId, taskId: c.taskId, actor: 'system', payload: { branch: 'b1' } })
+    const result = await loadGoalReport(w.workspaceId, 1)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.state).toBe('conducted_without_delivery')
+    expect(result.value.baseBranch).toBe('trunk')
+    expect(result.value.delivery).toBe(null)
+    expect(result.value.packages.map((pkg) => pkg.key)).toEqual(['report'])
+    const caveats = reportCaveats(result.value)
+    expect(caveats).toContain(
+      'This version was conducted before Slave built goal versions on an integration branch; its packages merged straight into trunk, and no integration, verification or merge of the version is recorded.',
+    )
+    expect(caveats.join('\n')).not.toContain('has not been conducted yet')
+    const texts = result.value.trail.map((e) => e.text)
+    expect(texts).toContain('report: merged into trunk.')
+    expect(texts.join('\n')).not.toContain('integration branch')
+  })
+
+  it('still reports a version with only its conduct decision (no packages, no delivery) as conducted without a delivery', async (): Promise<void> => {
+    const w = await world()
+    const c = await conduct(w)
+    await prisma.task.delete({ where: { id: c.taskId } })
+    await prisma.workPackage.delete({ where: { id: c.packageId } })
+    await prisma.goalDelivery.delete({ where: { id: c.deliveryId } })
+    const result = await loadGoalReport(w.workspaceId, 1)
+    expect(result.ok && result.value.state).toBe('conducted_without_delivery')
+  })
+
   it('counts, per round, only the rows of the run that wrote last (plan D4)', async (): Promise<void> => {
     const w = await world()
     const c = await conduct(w, { status: 'verifying', round: 1 })

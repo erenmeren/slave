@@ -94,7 +94,7 @@ export function renderGoalReportMarkdown(report: GoalReport): string {
     lines.push(`- Owns: ${pkg.ownedPaths.map(mdInline).join(', ')}`)
     if (pkg.dependsOn.length > 0) lines.push(`- Depends on: ${pkg.dependsOn.map(mdInline).join(', ')}`)
     lines.push(
-      `- Task: ${pkg.taskStatus === null ? 'none' : mdInline(pkg.taskStatus)}${pkg.integrated ? ', on the integration branch' : ''}; ` +
+      `- Task: ${pkg.taskStatus === null ? 'none' : mdInline(pkg.taskStatus)}${pkg.integrated ? integratedWhere(report) : ''}; ` +
         `${String(pkg.implementationRuns)} implementation ${pkg.implementationRuns === 1 ? 'run' : 'runs'}`,
     )
     lines.push(`- Files merged (from git): ${pkg.mergedFiles === null ? 'not recorded' : pkg.mergedFiles.length === 0 ? 'none' : pkg.mergedFiles.map(mdInline).join(', ')}${pkg.mergedFilesTruncated ? ' (cut)' : ''}`)
@@ -109,7 +109,11 @@ export function renderGoalReportMarkdown(report: GoalReport): string {
 
   const s = report.spend
   lines.push('## Spend', '', '| Part | Amount |', '| --- | --- |')
-  lines.push(`| Runs of this version | ${formatReportUsd(s.runsMeasuredUsd)} |`)
+  // Final wave M5: the same suffixes as the page's runs row, so the two say the same thing.
+  lines.push(
+    `| Runs of this version | ${formatReportUsd(s.runsMeasuredUsd)}${s.runsUnmeasured === 0 ? '' : ` + ${String(s.runsUnmeasured)} unmeasured (not in the total)`}` +
+      `${s.runsLive === 0 ? '' : ` + ${String(s.runsLive)} still running`} |`,
+  )
   lines.push(
     `| Conductor calls | ${formatReportUsd(s.conductorMeasuredUsd)}${s.conductorUnmeasuredCalls === 0 ? '' : ` + ${String(s.conductorUnmeasuredCalls)} unmeasured, charged at ${formatReportUsd(CONDUCT_PER_CALL_CAP_USD)} each`} |`,
   )
@@ -147,6 +151,13 @@ export function renderGoalReportMarkdown(report: GoalReport): string {
 
   lines.push('---', '', "Built from Slave's records of this goal version. Quoted text is marked with who wrote it.")
   return `${lines.join('\n').trimEnd()}\n`
+}
+
+/** Where an integrated package's task landed (final wave I1): the integration branch when the
+ *  version has a delivery; the base branch for a version conducted before there was one. Shared
+ *  with the web page, so the two say the same. */
+export function integratedWhere(report: GoalReport): string {
+  return report.delivery === null ? `, merged into ${report.baseBranch}` : ', on the integration branch'
 }
 
 /** What follows the state word: who merged and where, what is verified, which round. */

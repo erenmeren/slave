@@ -211,7 +211,16 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
         }
 
   // Plan D2: `merged` is its own state, read from `mergedAt`; every other state is the delivery's.
-  const state: GoalReportState = delivery === null ? 'not_conducted' : delivery.mergedAt !== null ? 'merged' : delivery.status
+  // Final wave I1: no delivery but a conduct decision or packages is a version conducted under
+  // Plans 2/3 (Plan 4a writes the delivery in the packages' own transaction), not one waiting to be.
+  const state: GoalReportState =
+    delivery === null
+      ? decisionRow !== null || packageRows.length > 0
+        ? 'conducted_without_delivery'
+        : 'not_conducted'
+      : delivery.mergedAt !== null
+        ? 'merged'
+        : delivery.status
   const mergedBy = merged?.payload['by']
   // The question ids scope both the trail and the spend (Task 3): a Supervisor decision about one
   // of the version's questions is about the version, so both must see the same set.
@@ -229,6 +238,7 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
   return ok({
     workspaceId,
     workspaceName: workspace.name,
+    baseBranch: workspace.baseBranch,
     goalVersion,
     versions,
     goal: goalRow?.text ?? null,
