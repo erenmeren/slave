@@ -13,6 +13,7 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import { cancelIfVersionAbandoned, ensureIntegrationWorktree, integrationTargetFor } from './goalBranch.js'
 import { mergeOrAbort, primaryCheckoutReady } from './gitMerge.js'
+import { gitNameOnlyZ } from './gitNameList.js'
 import { ownershipRuleForTask } from './ownership.js'
 import { logSetAside, setAsideDirFor, setAsideForeignChanges } from './setAside.js'
 import { rejectTask, runVerify, stageGatesFor } from './verify.js'
@@ -466,11 +467,12 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       return
     }
     // Conductor Plan 5 (D3): the files this package's merge changed, as git lists them against the
-    // integration branch's previous tip (`HEAD^1` of a `--no-ff` merge). `-z` so a name with a
-    // newline, a space or a non-ASCII letter comes back exactly. A failure costs the report one
-    // package's list ("not recorded"), never the merge.
-    const changed = await gitIn(integrationPath, 'diff', '--name-only', '-z', 'HEAD^1', 'HEAD').then(
-      (out) => out.split('\0').filter((name) => name.length > 0),
+    // integration branch's previous tip (`HEAD^1` of a `--no-ff` merge). `gitNameOnlyZ`, not
+    // `gitIn`: no trimming (a first path starting with a space stays whole), a 64 MiB buffer (a
+    // large list is cut to the bound below, never dropped), and a 30 s timeout (the listing cannot
+    // hold this task's merge claim). A failure costs the report one package's list ("not
+    // recorded"), never the merge.
+    const changed = await gitNameOnlyZ(integrationPath, ['diff', '--name-only', '-z', 'HEAD^1', 'HEAD']).catch(
       (error: unknown): null => {
         console.warn(`[merge] could not list the files ${branch} changed in ${target.branch}: ${errorText(error)}`)
         return null

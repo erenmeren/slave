@@ -19,10 +19,15 @@ export async function primaryCheckoutReady(repoPath: string, baseBranch: string)
  * `git merge <args>` in `cwd`; a merge git refuses is aborted before this returns, so the checkout
  * is never left mid-merge (a half-done merge refuses every later one, and in the primary checkout it
  * is the person's tree). The error is git's own message, cut to what an event payload carries.
+ *
+ * `--no-stat` (Conductor Plan 5 fix round 1): the diffstat and its `create mode` lines are printed
+ * after the merge commit is made, one line per file, and nothing reads them. A merge touching
+ * enough files overflowed `gitIn`'s 1 MiB buffer, so a merge git had already committed was
+ * reported as refused.
  */
 export async function mergeOrAbort(cwd: string, args: readonly string[]): Promise<Result<void, string>> {
   try {
-    await gitIn(cwd, 'merge', ...args)
+    await gitIn(cwd, 'merge', '--no-stat', ...args)
     return ok(undefined)
   } catch (error) {
     await gitIn(cwd, 'merge', '--abort').catch(() => {})

@@ -8,6 +8,7 @@ import { GOAL_REPORT_FILES_MAX, integrationBranchName, workspaceId as brandWorks
 import { appendEvent } from '@slave-of-ai/events'
 import { addRunbook, adoptRunbook, confirmIntegration, recordRunEvidence, settleTaskEvidence } from '@slave-of-ai/control'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { gitNameList } from '../../src/gitNameList.js'
 import { ensureIntegrationBranch, ensureIntegrationWorktree, integrationWorktreePath, type IntegrationTarget } from '../../src/goalBranch.js'
 import { runMergePass } from '../../src/merge.js'
 import { loadWorld } from '../../src/world.js'
@@ -1161,6 +1162,72 @@ describe('into the integration branch', () => {
 
     const done = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_done' }, orderBy: { seq: 'desc' } })
     expect((done.payload as { files: string[] }).files).toEqual(['rapor ü.txt'])
+  })
+
+  /** Fix round 1: execFile directly, not `gitIn` -- no trimming, so a leading space stays. */
+  it('records a first path that starts with a space exactly', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    await deliver(workspace)
+    const { taskId } = await seedMergingTask(workspace)
+    const implRun = await prisma.slaveRun.findFirstOrThrow({ where: { taskId, kind: 'implementation' } })
+    const tree = implRun.worktreePath as string
+    writeFileSync(join(tree, ' lead.txt'), 'leading space\n')
+    git(['add', '-A'], tree)
+    git(['commit', '-q', '-m', 'lead'], tree)
+    await packageTask(workspace, taskId, 'feature')
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const done = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_done' }, orderBy: { seq: 'desc' } })
+    expect((done.payload as { files: string[] }).files).toEqual([' lead.txt', 'feature.txt'])
+  })
+
+  /** Fix round 1: a name list over execFile's 1 MiB default is recorded (cut), not dropped. */
+  it('records a name list larger than 1 MiB, cut to GOAL_REPORT_FILES_MAX', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    await deliver(workspace)
+    const { taskId } = await seedMergingTask(workspace)
+    const implRun = await prisma.slaveRun.findFirstOrThrow({ where: { taskId, kind: 'implementation' } })
+    const tree = implRun.worktreePath as string
+    const count = 5000
+    for (let i = 0; i < count; i += 1) writeFileSync(join(tree, `${String(i).padStart(4, '0')}-${'n'.repeat(240)}.txt`), '')
+    git(['add', '-A'], tree)
+    git(['commit', '-q', '-m', 'many long names'], tree)
+    await packageTask(workspace, taskId, 'feature')
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const done = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_done' }, orderBy: { seq: 'desc' } })
+    const payload = done.payload as { files: string[]; filesTotal: number }
+    expect(payload.filesTotal).toBe(count + 1)
+    expect(payload.files).toHaveLength(GOAL_REPORT_FILES_MAX)
+  }, 60_000)
+
+  /** Fix round 1: a listing that fails (or times out) costs the report the list, never the merge. */
+  it('lands the merge and writes task.done without files when the listing fails, with a bounded timeout', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    const target = await deliver(workspace)
+    const { taskId, branch } = await seedMergingTask(workspace)
+    await packageTask(workspace, taskId, 'feature')
+    const original = gitNameList.execFile
+    const seen: { readonly args: readonly string[]; readonly timeout: number | undefined }[] = []
+    gitNameList.execFile = async (file, args, options) => {
+      seen.push({ args, timeout: options.timeout })
+      throw new Error('simulated: git diff timed out')
+    }
+    try {
+      await runMergePass(brandWorkspaceId(workspace.id))
+    } finally {
+      gitNameList.execFile = original
+    }
+
+    expect(seen).toEqual([{ args: ['diff', '--name-only', '-z', 'HEAD^1', 'HEAD'], timeout: 30_000 }])
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+    expect(task.status).toBe('done')
+    expect(task.mergeClaimedAt).toBeNull()
+    expect(isAncestor(workspace.repoPath, branch, target.branch)).toBe(true)
+    const done = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_done' }, orderBy: { seq: 'desc' } })
+    expect(done.payload).toEqual({ branch })
   })
 
   it('caps the recorded list at GOAL_REPORT_FILES_MAX and counts every file in filesTotal', async (): Promise<void> => {

@@ -1,21 +1,14 @@
-import { execFile } from 'node:child_process'
 import { realpathSync } from 'node:fs'
-import { promisify } from 'node:util'
 import { prisma } from '@slave-of-ai/db/client'
 import { isOwned, ownershipPatterns, ownershipRuleFor, type OwnershipRule } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { gitNameOnlyZ } from './gitNameList.js'
 import { rejectRunBack } from './runs.js'
-
-const execFileAsync = promisify(execFile)
 
 /** How many foreign files the rejection reason names: enough to act on, short enough to read. */
 export const FOREIGN_FILES_LISTED = 20
 /** How many the `task.ownership_violated` event records -- its schema's cap; `total` counts all. */
 const FOREIGN_FILES_RECORDED = 50
-/** Room for a branch that touched a very large tree: execFile's 1 MiB default made the audit throw. */
-const DIFF_MAX_BUFFER = 64 * 1024 * 1024
-/** Bounded, like every git call made on a run's behalf: a contended repository must not hang a conclusion. */
-const DIFF_TIMEOUT_MS = 30_000
 
 /**
  * The ownership rule of a package task (conductor spec R4): its package among its goal version's
@@ -84,15 +77,8 @@ function resolvedRoot(worktreeRoot: string): string {
  * newline or a quote in it one entry.
  */
 export async function changedFiles(repoPath: string, base: string, branch: string): Promise<readonly string[]> {
-  // execFile directly, not `gitIn` (final review I2): its output is trimmed, which cut the leading
-  // space off the first path, and its default buffer is 1 MiB.
-  const { stdout } = await execFileAsync('git', ['diff', '--name-only', '--no-renames', '-z', `${base}...${branch}`], {
-    cwd: repoPath,
-    maxBuffer: DIFF_MAX_BUFFER,
-    timeout: DIFF_TIMEOUT_MS,
-    encoding: 'utf8',
-  })
-  return stdout.split('\0').filter((name) => name !== '')
+  // `gitNameOnlyZ`, not `gitIn` (final review I2): no trimming, and a 64 MiB buffer.
+  return gitNameOnlyZ(repoPath, ['diff', '--name-only', '--no-renames', '-z', `${base}...${branch}`])
 }
 
 /**
