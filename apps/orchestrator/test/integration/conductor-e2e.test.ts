@@ -212,6 +212,7 @@ function routingAdapter(
   starts: Start[],
   onImplementationStart: (goalVersion: number) => Promise<void>,
   verificationRounds?: readonly (readonly object[])[],
+  reportExtras?: SeedOptions['reportExtras'],
 ): SlaveRuntimeAdapter {
   const make = (extra: readonly string[]): ClaudeCodeAdapter =>
     new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'm8-flow', ...extra], hookPath: REAL_GATE })
@@ -227,7 +228,7 @@ function routingAdapter(
         where: { id: input.runId },
         select: {
           kind: true,
-          task: { select: { goalVersion: true, workPackage: { select: { key: true, requirementKeys: true } } } },
+          task: { select: { workspaceId: true, goalVersion: true, workPackage: { select: { key: true, requirementKeys: true } } } },
           goalDelivery: { select: { workspaceId: true, goalVersion: true } },
         },
       })
@@ -236,7 +237,11 @@ function routingAdapter(
       let adapter: SlaveRuntimeAdapter = plain
       if (pkg !== null) {
         const workFile = workFileFor(pkg.key, goalVersion ?? 0)
-        const report = Buffer.from(JSON.stringify(reportFor(pkg.requirementKeys, workFile))).toString('base64')
+        const implementationRuns = await prisma.slaveRun.count({
+          where: { task: { workspaceId: run.task?.workspaceId ?? '', workPackage: { key: pkg.key } }, kind: 'implementation', id: { not: input.runId } },
+        })
+        const extra = reportExtras?.(pkg.key, goalVersion ?? 0, implementationRuns) ?? {}
+        const report = Buffer.from(JSON.stringify({ ...reportFor(pkg.requirementKeys, workFile), ...extra })).toString('base64')
         adapter = make(['--work-file', workFile, '--report-json-base64', report])
       }
       if (run.kind === 'verification' && verificationRounds !== undefined) {
@@ -292,6 +297,8 @@ interface SeedOptions {
   readonly verificationRoundCap?: number
   /** How many times the fixture's smoke script fails before it passes (default 0). */
   readonly smokeFailures?: number
+  /** Extra fields merged into a package worker's `<slave-report>`; `attempt` counts the package's earlier implementation runs. */
+  readonly reportExtras?: (packageKey: string, goalVersion: number, attempt: number) => object | undefined
 }
 
 /** A conducted workspace with its goal set, the backend template's managed pool, a reviewer seat,
@@ -333,7 +340,7 @@ async function seed(options: SeedOptions = {}): Promise<Fixture> {
   const hook = options.onImplementationStart
   const adapter = routingAdapter(() => repoPath, starts, async (goalVersion) => {
     if (hook !== undefined) await hook(workspace.id, goalVersion)
-  }, options.verificationRounds)
+  }, options.verificationRounds, options.reportExtras)
   const { decider, others } = scripted(options.conductAnswer ?? SINGLE)
   return {
     workspaceId: workspace.id,
@@ -434,7 +441,7 @@ const status = (f: Fixture, goalVersion: number, wanted: string) => async (): Pr
 describe('conductor end to end', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "SmokeAttempt", "ConductorCall", "RequirementSet", "WorkPackage", "GoalDelivery", "RunReport", "SupervisorDecision", "SlaveMessage", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "ProviderConfiguration", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "SmokeAttempt", "PackageHandOff", "GoalDecision", "ConductorCall", "RequirementSet", "WorkPackage", "GoalDelivery", "RunReport", "SupervisorDecision", "SlaveMessage", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "ProviderConfiguration", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
     await removeTemplates()
   })
@@ -999,5 +1006,36 @@ describe('conductor end to end', () => {
     expect(notes.map((n) => n.noteKey)).toEqual(['goal-report:v1:needs_human:r2'])
     expect(notes[0]?.text).toContain('the verification round cap (2) was reached')
     expect(notes[0]?.text).toContain('failing: R2')
+  })
+
+  it('routes a package\'s hand-offs: the integration package reads its endpoint contract, the finished skeleton is reopened for its gate, and every contract lists the plan\'s decisions (spec C2, C3)', async (): Promise<void> => {
+    const decided = JSON.parse(PARTITIONED) as { conductAnswer: Record<string, unknown> }
+    decided.conductAnswer['decisions'] = [{ title: 'API field naming', decision: 'camelCase JSON fields' }]
+    const f = await seed({
+      conductAnswer: JSON.stringify(decided),
+      reportExtras: (key, _version, attempt) =>
+        key === 'report' && attempt === 0
+          ? { handOffs: [{ package: 'integration', change: 'expose GET /api/v1/reports returning {data,nextCursor}' }, { path: 'scripts/verify.sh', change: 'run pytest -k report' }] }
+          : undefined,
+    })
+    await tickUntil(f, merged(f, 1))
+
+    const handOffs = await prisma.packageHandOff.findMany({ where: { workspaceId: f.workspaceId }, orderBy: { sourceKey: 'asc' } })
+    expect(handOffs.map((h) => [h.toPackageKey, h.status])).toEqual([['integration', 'delivered'], ['skeleton', 'reopened']])
+
+    const integration = await implementationRunsOf(f, 'integration')
+    expect(integration[0]?.prompt).toContain('Asked of your package by other packages')
+    expect(integration[0]?.prompt).toContain('expose GET /api/v1/reports returning {data,nextCursor}')
+    expect(integration[0]?.prompt).toContain('- API field naming: camelCase JSON fields')
+
+    const skeleton = await implementationRunsOf(f, 'skeleton')
+    expect(skeleton).toHaveLength(2)
+    expect(skeleton[1]?.prompt).toContain('- from report (scripts/verify.sh): run pytest -k report')
+    expect((await prisma.workPackage.findFirstOrThrow({ where: { workspaceId: f.workspaceId, key: 'skeleton' } })).handOffReopens).toBe(1)
+
+    const report = await loadGoalReport(f.workspaceId, 1)
+    expect(report.ok && report.value.handOffs.map((h) => h.status)).toEqual(['delivered', 'reopened'])
+    expect(report.ok && report.value.decisions.map((d) => d.title)).toEqual(['API field naming'])
+    expect(f.others).toEqual([])
   })
 })
