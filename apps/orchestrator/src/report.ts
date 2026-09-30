@@ -3,6 +3,7 @@ import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import { CONDUCTOR_ROLE, parseSlaveReport } from '@slave-of-ai/domain'
 import { joinRunOutput } from './runOutput.js'
 import { rejectRunBack } from './runs.js'
+import { handOffSmokeRework } from './smoke.js'
 
 /**
  * Reads a package worker's report (spec R7) before its work is verified. A well-formed report is
@@ -64,5 +65,8 @@ export async function fileRunReport(
       console.error(`[report] run ${run.id}: question ${String(index + 1)} was not sent -- ${refusalText(sent.error)}`)
     }
   }
+  // Plan B D11 (user ruling 2026-09-30): a smoke rework's hand-off, checked against package
+  // ownership inside -- a claim that does not hold changes nothing, and never fails this run.
+  if (parsed.value.handOff !== undefined) await handOffSmokeRework(run, task, parsed.value.handOff)
   return true
 }

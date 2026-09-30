@@ -12,6 +12,9 @@ export interface SlaveReport {
   readonly filesTouched: readonly string[]
   readonly workflow: readonly { readonly step: number | string; readonly done: boolean; readonly note: string }[]
   readonly questions: readonly string[]
+  /** User ruling 2026-09-30 (plan B D11): a smoke rework's claim that its fix is in a file another
+   *  package owns -- a path and what must change there. A claim only: `handOffSmokeRework` checks it. */
+  readonly handOff?: { readonly path: string; readonly change: string } | undefined
 }
 
 const reportSchema = z.object({
@@ -34,6 +37,10 @@ const reportSchema = z.object({
     .max(100)
     .default([]),
   questions: z.array(z.string().trim().min(1).max(4000)).max(10).default([]),
+  // User ruling 2026-09-30 (skeleton-and-smoke plan B D11): a smoke rework's structured hand-off --
+  // the file another package owns that the fix needs, and what must change in it. The bounds are
+  // `workspace.smoke_handed_off`'s, so a filed claim always fits its event.
+  handOff: z.object({ path: z.string().trim().min(1).max(500), change: z.string().trim().max(2000).default('') }).optional(),
 })
 
 /** Skeleton spec S8: what one package's latest report asks a verifier to look into. */

@@ -19,7 +19,9 @@ import {
   SMOKE_SCRIPT_PATH,
   SMOKE_STRANDED_GRACE_MS,
   classifySmoke,
+  renderSmokeHandOff,
   renderSmokeRework,
+  smokeHandOffTarget,
   smokeProjectName,
   smokeReworkTarget,
   smokeScriptFailure,
@@ -413,6 +415,91 @@ export async function settleStrandedSmoke(attemptId: string): Promise<void> {
     Date.now() - attempt.startedAt.getTime(),
   )
   await applySmokeOutcome(attemptId)
+}
+
+/** Thrown inside the lock when the hand-off is no longer this report's to make: rolls back the rows. */
+class NoHandOff extends Error {}
+
+/**
+ * Plan B D11 (user ruling 2026-09-30): the integration package's smoke rework said, in its report's
+ * `handOff`, that the fix is in a file another package owns. When the ownership rule gives that
+ * file to the skeleton, the same smoke failure goes to the skeleton for rework -- once per attempt
+ * (the attempt's `handOffTaskId` is the cap, so the two packages cannot ping-pong), and without a
+ * round: the failed attempt already spent it, and the delivery stays `integrating` at that round.
+ *
+ * The attempt is the newest failed one that sent THIS task back and concluded before this run began
+ * -- the run is that attempt's rework. Under the delivery's lock, in the Plan 4b order: every check
+ * first (the cap, a version that moved on, the reporter being the integration package, the path
+ * being the skeleton's by the ownership rule, the skeleton's task being done), then the events (each
+ * only if missing), then the guarded moves, where a lost guard THROWS so nothing moved is committed.
+ * Anything that does not hold returns false and changes nothing: the version goes on as it would have.
+ */
+export async function handOffSmokeRework(
+  run: { readonly id: string },
+  task: { readonly id: string },
+  handOff: { readonly path: string; readonly change: string },
+): Promise<boolean> {
+  const row = await prisma.slaveRun.findUnique({ where: { id: run.id }, select: { kind: true, taskId: true, startedAt: true } })
+  if (row === null || row.kind !== 'implementation' || row.taskId !== task.id) return false
+  const attempt = await prisma.smokeAttempt.findFirst({
+    where: { reworkedTaskId: task.id, status: { in: ['failed', 'timed_out'] }, endedAt: { lte: row.startedAt } },
+    orderBy: { startedAt: 'desc' },
+  })
+  if (attempt === null || (attempt.status !== 'failed' && attempt.status !== 'timed_out')) return false
+  const outcome = attempt.status
+  const path = handOff.path.trim()
+  const change = handOff.change.trim().slice(0, 2000)
+  try {
+    return await withDeliveryLock(attempt.goalDeliveryId, async (tx) => {
+      const now = await tx.smokeAttempt.findUniqueOrThrow({ where: { id: attempt.id } })
+      const delivery = await tx.goalDelivery.findUniqueOrThrow({ where: { id: attempt.goalDeliveryId } })
+      // The cap, and a version that moved on (a new round started, or it was abandoned or ended).
+      if (now.handOffTaskId !== null || delivery.status !== 'integrating' || delivery.round !== attempt.round) throw new NoHandOff()
+      const packages = await tx.workPackage.findMany({
+        where: { workspaceId: delivery.workspaceId, goalVersion: delivery.goalVersion },
+        orderBy: { key: 'asc' },
+        select: { key: true, ownedPaths: true, isIntegration: true, tasks: { orderBy: { createdAt: 'asc' }, take: 1, select: { id: true, status: true, attempt: true } } },
+      })
+      const from = packages.find((pkg) => pkg.tasks[0]?.id === task.id)
+      const toKey = smokeHandOffTarget(path, packages)
+      const target = packages.find((pkg) => pkg.key === toKey)?.tasks[0]
+      if (from === undefined || !from.isIntegration || toKey === null || target === undefined || target.status !== 'done') throw new NoHandOff()
+      const reason = renderSmokeHandOff({ round: attempt.round, outcome, output: attempt.output, fromPackage: from.key, path, change })
+
+      if (!(await goalEventWith(tx, delivery.workspaceId, 'workspace_smoke_handed_off', { attemptId: attempt.id }))) {
+        await appendEvent({
+          type: 'workspace.smoke_handed_off',
+          workspaceId: delivery.workspaceId,
+          actor: 'system',
+          payload: { version: delivery.goalVersion, round: attempt.round, attemptId: attempt.id, fromPackage: from.key, toPackage: toKey, path, change },
+        })
+      }
+      if (!(await goalEventWith(tx, delivery.workspaceId, 'task_rework', { verificationRound: attempt.round }, { taskId: target.id }))) {
+        await appendEvent({
+          type: 'task.rework',
+          workspaceId: delivery.workspaceId,
+          taskId: target.id,
+          actor: 'system',
+          // Plan 4b D5, as for the smoke's own rework: no attempt is charged -- the round cap bounds this.
+          payload: { reason, attempt: target.attempt, verificationRound: attempt.round },
+        })
+      }
+      const stamped = await tx.smokeAttempt.updateMany({
+        where: { id: attempt.id, handOffTaskId: null },
+        data: { handOffTaskId: target.id, handOffPath: path, handOffChange: change },
+      })
+      if (stamped.count === 0) throw new NoHandOff()
+      const moved = await tx.task.updateMany({
+        where: { id: target.id, status: 'done' },
+        data: { status: 'rework', integratedAt: null, activeRunId: null, lastRejectionReason: reason },
+      })
+      if (moved.count === 0) throw new NoHandOff()
+      return true
+    })
+  } catch (error) {
+    if (error instanceof NoHandOff) return false
+    throw error
+  }
 }
 
 /** Plan B D5: the latest passing attempt on the integration branch's CURRENT tip, or null. */

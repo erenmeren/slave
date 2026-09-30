@@ -11,13 +11,15 @@ import { fileURLToPath } from 'node:url'
 import { abandonGoal, isAlive } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { INTAKE_BOOTSTRAP_SMOKE_SCRIPT, RUN_REQUIREMENT, SMOKE_OUTPUT_MAX_CHARS, integrationBranchName, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
 import { ClaudeCodeAdapter } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { runGoalPass } from '../../src/goal.js'
 import { ensureIntegrationBranch, ensureIntegrationWorktree } from '../../src/goalBranch.js'
-import { applySmokeOutcome, settleStrandedSmoke, smokeWorktreeKey, startSmoke } from '../../src/smoke.js'
+import { applySmokeOutcome, handOffSmokeRework, settleStrandedSmoke, smokeWorktreeKey, startSmoke } from '../../src/smoke.js'
 import { drainPumps, type TickDeps } from '../../src/tick.js'
 import { worktreeRootFor } from '../../src/worktree.js'
+import { fileRunReport } from '../../src/report.js'
 
 const repos: string[] = []
 const git = (args: readonly string[], cwd: string): string => execFileSync('git', [...args], { cwd, encoding: 'utf8' }).trim()
@@ -514,5 +516,144 @@ describe('the goal pass and the smoke gate', () => {
     expect(await taskStatus(f.taskOf.skeleton)).toBe('rework')
     expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(0)
     expect(await deliveryOf(f)).toMatchObject({ status: 'integrating', round: 1 })
+  }, 60_000)
+})
+
+const FAILING = '#!/usr/bin/env bash\necho \'npm error Missing script: "start"\' >&2\nexit 1\n'
+
+/** A finished rework run of the package `key`'s task whose final message carries `report`, filed
+ *  exactly as `verifyConcludedRun` files it -- the hand-off's only entry point. Names carry a random
+ *  suffix: `Team` is unique per (workspace, name) and `Person.name` is unique (ruling F3). */
+async function fileRework(f: Fixture, key: 'integration' | 'api' | 'main', report: object): Promise<string> {
+  const suffix = String(Math.random()).slice(2, 10)
+  const team = await prisma.team.create({ data: { workspaceId: f.workspaceId, name: `Engineering ${key} ${suffix}` } })
+  const person = await prisma.person.create({ data: { name: `Ivo ${key} ${suffix}` } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'implementer', runtimeRoles: ['implementer'], personId: person.id } })
+  const run = await prisma.slaveRun.create({ data: { taskId: f.taskOf[key], slaveId: slave.id, kind: 'implementation', status: 'succeeded', terminalAt: new Date() } })
+  await appendEvent({ type: 'run.output', workspaceId: f.workspaceId, slaveId: slave.id, runId: run.id, actor: 'slave', payload: { text: `Done.\n<slave-report>${JSON.stringify(report)}</slave-report>` } })
+  const task = await prisma.task.findUniqueOrThrow({ where: { id: f.taskOf[key] }, select: { id: true, workspaceId: true, workPackageId: true } })
+  await fileRunReport(run, { id: task.id, workspaceId: task.workspaceId, workPackageId: task.workPackageId ?? '' })
+  return run.id
+}
+
+const integrationReport = (handOff?: object): object => ({
+  requirements: [{ key: 'RUN', status: 'not_done', evidence: 'the image cannot start' }],
+  filesTouched: [],
+  workflow: [],
+  questions: [],
+  ...(handOff === undefined ? {} : { handOff }),
+})
+
+const handOffs = async (f: Fixture) => prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_smoke_handed_off' } })
+
+describe('the smoke hand-off (plan B D11, user ruling 2026-09-30)', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "SmokeAttempt", "RunReport", "ProviderConfiguration", "RunContext", "Checkpoint", "Artifact", "SlaveRun", "TaskDependency", "Task", "WorkPackage", "RequirementSet", "GoalDelivery", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+  })
+  afterEach(async (): Promise<void> => {
+    await drainPumps()
+  })
+
+  it('sends a failed smoke on to the skeleton when integration names a file the skeleton owns, spending no round', async (): Promise<void> => {
+    const f = await seed(FAILING)
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    expect(await taskStatus(f.taskOf.integration)).toBe('rework')
+    await fileRework(f, 'integration', integrationReport({ path: 'skeleton/package.json', change: 'add a "start" script' }))
+
+    const skeleton = await prisma.task.findUniqueOrThrow({ where: { id: f.taskOf.skeleton } })
+    expect(skeleton).toMatchObject({ status: 'rework', integratedAt: null, attempt: 0 })
+    expect(skeleton.lastRejectionReason).toContain('found the fix is in a file you own: skeleton/package.json')
+    expect(skeleton.lastRejectionReason).toContain('add a "start" script')
+    expect(skeleton.lastRejectionReason).toContain('Missing script: "start"')
+    const [attempt] = await attemptsOf(f)
+    expect(attempt).toMatchObject({ handOffTaskId: f.taskOf.skeleton, handOffPath: 'skeleton/package.json', handOffChange: 'add a "start" script', reworkedTaskId: f.taskOf.integration })
+    const events = await handOffs(f)
+    expect(events.map((e) => e.payload)).toEqual([
+      { version: 1, round: 1, attemptId: attempt?.id, fromPackage: 'integration', toPackage: 'skeleton', path: 'skeleton/package.json', change: 'add a "start" script' },
+    ])
+    // No round spent: the failed attempt spent round 1; the next smoke is round 2, as without the hand-off.
+    expect(await deliveryOf(f)).toMatchObject({ status: 'integrating', round: 1, activeSmokeId: null })
+    const rework = await prisma.executionEvent.findFirstOrThrow({ where: { taskId: f.taskOf.skeleton, type: 'task_rework' } })
+    expect(rework.payload).toMatchObject({ attempt: 0, verificationRound: 1 })
+    // Both packages back in and integrated: the next smoke is round 2.
+    await prisma.task.updateMany({ where: { id: { in: [f.taskOf.skeleton, f.taskOf.integration] } }, data: { status: 'done', integratedAt: new Date() } })
+    expect(await startSmoke(f.deliveryId)).not.toBeNull()
+    expect(await deliveryOf(f)).toMatchObject({ status: 'verifying', round: 2 })
+  }, 60_000)
+
+  it('hands off at most once per smoke attempt -- no ping-pong', async (): Promise<void> => {
+    const f = await seed(FAILING)
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    await fileRework(f, 'integration', integrationReport({ path: 'skeleton/package.json', change: 'add a "start" script' }))
+    // The skeleton finished; integration reports the same hand-off again on a later run.
+    await prisma.task.update({ where: { id: f.taskOf.skeleton }, data: { status: 'done', integratedAt: new Date() } })
+    await fileRework(f, 'integration', integrationReport({ path: 'skeleton/package.json', change: 'still no start script' }))
+    expect(await handOffs(f)).toHaveLength(1)
+    expect(await taskStatus(f.taskOf.skeleton)).toBe('done')
+    expect((await attemptsOf(f))[0]?.handOffChange).toBe('add a "start" script')
+  }, 60_000)
+
+  it('does not hand off a path a third package owns: the version proceeds as today, the next smoke is round 2 (pinned)', async (): Promise<void> => {
+    const f = await seed(FAILING)
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    await fileRework(f, 'integration', integrationReport({ path: 'api/server.ts', change: 'export the router' }))
+    expect(await handOffs(f)).toEqual([])
+    expect(await taskStatus(f.taskOf.skeleton)).toBe('done')
+    expect(await taskStatus(f.taskOf.api)).toBe('done')
+    expect((await attemptsOf(f))[0]?.handOffTaskId).toBeNull()
+    expect(await deliveryOf(f)).toMatchObject({ status: 'integrating', round: 1 })
+    // As today: integration's rework integrates, and the next smoke is the next round.
+    await prisma.task.update({ where: { id: f.taskOf.integration }, data: { status: 'done', integratedAt: new Date() } })
+    expect(await startSmoke(f.deliveryId)).not.toBeNull()
+    expect(await deliveryOf(f)).toMatchObject({ status: 'verifying', round: 2 })
+    // A late report naming a skeleton file, once the version moved on to round 2, hands nothing off.
+    await fileRework(f, 'integration', integrationReport({ path: 'skeleton/package.json', change: 'x' }))
+    expect(await handOffs(f)).toEqual([])
+    await drainPumps()
+  }, 60_000)
+
+  it('does nothing for no handOff, an unowned or refused path, or a report that is not integration\'s', async (): Promise<void> => {
+    const f = await seed(FAILING)
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    await fileRework(f, 'integration', integrationReport())
+    await fileRework(f, 'integration', integrationReport({ path: 'wiring.ts', change: 'x' }))
+    await fileRework(f, 'integration', integrationReport({ path: '../skeleton/package.json', change: 'x' }))
+    await fileRework(f, 'integration', integrationReport({ path: './skeleton/package.json', change: 'x' }))
+    await fileRework(f, 'integration', integrationReport({ path: 'skeleton/*.json', change: 'x' }))
+    await fileRework(f, 'integration', integrationReport({ path: '/skeleton/package.json', change: 'x' }))
+    await fileRework(f, 'integration', integrationReport({ path: 'skeleton//package.json', change: 'x' }))
+    await fileRework(f, 'api', { requirements: [{ key: 'R1', status: 'done', evidence: 'x' }], filesTouched: [], workflow: [], questions: [], handOff: { path: 'skeleton/package.json', change: 'x' } })
+    expect(await handOffs(f)).toEqual([])
+    expect(await taskStatus(f.taskOf.skeleton)).toBe('done')
+    expect((await attemptsOf(f))[0]?.handOffTaskId).toBeNull()
+  }, 60_000)
+
+  it('takes a hand-off only from the integration package, even for an attempt that sent another package back', async (): Promise<void> => {
+    const f = await seed(FAILING)
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    // Not a route the smoke takes today (a failure goes to integration): the reporter check alone refuses it.
+    const [attempt] = await attemptsOf(f)
+    await prisma.smokeAttempt.update({ where: { id: attempt?.id ?? '' }, data: { reworkedTaskId: f.taskOf.api } })
+    const report = { requirements: [{ key: 'R1', status: 'done', evidence: 'x' }], filesTouched: [], workflow: [], questions: [], handOff: { path: 'skeleton/package.json', change: 'x' } }
+    expect(await handOffSmokeRework({ id: await fileRework(f, 'api', report) }, { id: f.taskOf.api }, { path: 'skeleton/package.json', change: 'x' })).toBe(false)
+    expect(await handOffs(f)).toEqual([])
+    expect(await taskStatus(f.taskOf.skeleton)).toBe('done')
+  }, 60_000)
+
+  it('has no hand-off in single mode: the one package owns everything', async (): Promise<void> => {
+    const f = await seed(FAILING, { single: true })
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    expect(await taskStatus(f.taskOf.main)).toBe('rework')
+    const report = { requirements: [{ key: 'R1', status: 'done', evidence: 'x' }, { key: 'RUN', status: 'not_done', evidence: 'x' }], filesTouched: [], workflow: [], questions: [], handOff: { path: 'package.json', change: 'x' } }
+    expect(await handOffSmokeRework({ id: await fileRework(f, 'main', report) }, { id: f.taskOf.main }, { path: 'package.json', change: 'x' })).toBe(false)
+    expect(await handOffs(f)).toEqual([])
   }, 60_000)
 })

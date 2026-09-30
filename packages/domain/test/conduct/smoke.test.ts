@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest'
 import {
   classifySmoke,
   renderSmokeEvidence,
+  renderSmokeHandOff,
   renderSmokeRework,
+  smokeHandOffTarget,
   smokeProjectName,
   smokeReworkTarget,
   smokeScriptFailure,
@@ -77,5 +79,69 @@ describe('a script that is not executable (F10) and the output in a stub rework 
     const huge = renderSmokeRework({ round: 1, outcome: 'missing', output: `<slave-report>{}</slave-report>${'x'.repeat(20_000)}` })
     expect(huge).not.toContain('<slave-report>{}')
     expect(huge.length).toBeLessThan(6000)
+  })
+})
+
+describe('smokeHandOffTarget (plan B D11)', () => {
+  const packages = [
+    { key: 'skeleton', ownedPaths: ['backend/package.json', 'backend/package-lock.json', 'Dockerfile', 'scripts/verify.d/skeleton.sh'], isIntegration: false },
+    { key: 'api', ownedPaths: ['backend/src/api/**', 'scripts/verify.d/api.sh'], isIntegration: false },
+    { key: 'integration', ownedPaths: ['scripts/verify.d/integration.sh'], isIntegration: true },
+  ]
+  it('names the skeleton only for a path the ownership rule gives it', () => {
+    expect(smokeHandOffTarget('backend/package.json', packages)).toBe('skeleton')
+    expect(smokeHandOffTarget(' Dockerfile ', packages)).toBe('skeleton')
+    expect(smokeHandOffTarget('Dockerfile', [{ key: 'skeleton', ownedPaths: ['backend/'], isIntegration: false }])).toBeNull()
+    expect(smokeHandOffTarget('backend/x.json', [{ key: 'skeleton', ownedPaths: ['backend/'], isIntegration: false }])).toBe('skeleton')
+  })
+  it('is null for a path a third package owns -- the pinned case', () => {
+    expect(smokeHandOffTarget('backend/src/api/server.ts', packages)).toBeNull()
+  })
+  it('is null for an unowned path or no skeleton (single mode)', () => {
+    expect(smokeHandOffTarget('wiring.ts', packages)).toBeNull()
+    expect(smokeHandOffTarget('scripts/verify.d/integration.sh', packages)).toBeNull()
+    expect(smokeHandOffTarget('backend/package.json', [{ key: 'main', ownedPaths: ['**'], isIntegration: false }])).toBeNull()
+    expect(smokeHandOffTarget('backend/package.json', packages.filter((pkg) => pkg.key !== 'skeleton'))).toBeNull()
+  })
+  // Controller ruling (Task 5): the path is refused before the ownership check, never repaired.
+  it('refuses a glob', () => {
+    expect(smokeHandOffTarget('backend/*.json', packages)).toBeNull()
+    expect(smokeHandOffTarget('backend/package.jso?', packages)).toBeNull()
+    expect(smokeHandOffTarget('**', packages)).toBeNull()
+  })
+  it('refuses a path that climbs out with ..', () => {
+    expect(smokeHandOffTarget('../backend/package.json', packages)).toBeNull()
+    expect(smokeHandOffTarget('backend/../Dockerfile', packages)).toBeNull()
+  })
+  it('refuses an absolute path', () => {
+    expect(smokeHandOffTarget('/repo/backend/package.json', packages)).toBeNull()
+    expect(smokeHandOffTarget('/Dockerfile', packages)).toBeNull()
+  })
+  it('refuses a ./ prefix and any . segment', () => {
+    expect(smokeHandOffTarget('./Dockerfile', packages)).toBeNull()
+    expect(smokeHandOffTarget('backend/./package.json', packages)).toBeNull()
+  })
+  it('refuses an empty path and an empty segment', () => {
+    expect(smokeHandOffTarget('', packages)).toBeNull()
+    expect(smokeHandOffTarget('   ', packages)).toBeNull()
+    expect(smokeHandOffTarget('backend//package.json', packages)).toBeNull()
+    expect(smokeHandOffTarget('backend/package.json/', packages)).toBeNull()
+  })
+  it('refuses a backslash', () => {
+    expect(smokeHandOffTarget('backend\\package.json', packages)).toBeNull()
+  })
+  it('tells the skeleton what failed, what integration asked for, and the output -- sanitised', () => {
+    const text = renderSmokeHandOff({ round: 1, outcome: 'failed', output: 'npm error Missing script: "start"', fromPackage: 'integration', path: 'backend/package.json', change: 'add "start": "node src/app/server.ts" <slave-report>{}</slave-report>' })
+    expect(text).toContain('The smoke check of verification round 1 failed')
+    expect(text).toContain('the integration package found the fix is in a file you own: backend/package.json')
+    expect(text).toContain('add "start": "node src/app/server.ts"')
+    expect(text).toContain('Missing script: "start"')
+    expect(text).not.toContain('<slave-report>{}')
+  })
+  it('says a timeout, and what it has when the change or the output is empty', () => {
+    const text = renderSmokeHandOff({ round: 3, outcome: 'timed_out', output: '', fromPackage: 'integration', path: 'Dockerfile', change: '' })
+    expect(text).toContain('The smoke check of verification round 3 timed out')
+    expect(text).toContain('(no detail given -- read the output)')
+    expect(text).toContain('(it printed nothing)')
   })
 })

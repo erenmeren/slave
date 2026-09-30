@@ -2,6 +2,8 @@ import { sanitisePersonText } from '../handoff/contract.js'
 import { SMOKE_STUB_EXIT_CODE, SMOKE_STUB_MESSAGE } from '../intake/constants.js'
 import { SKELETON_PACKAGE_KEY, SMOKE_OUTPUT_MAX_CHARS, VERIFICATION_REWORK_MAX_CHARS } from './constants.js'
 import { SMOKE_CONTRACT_LINES } from './contract.js'
+import { isValidOwnedGlob } from './glob.js'
+import { isOwned, ownershipRuleFor } from './ownership.js'
 import { RUN_REQUIREMENT_KEY } from './requirements.js'
 import { SMOKE_SCRIPT_PATH } from './skeleton.js'
 import { trimEvidence } from './verification.js'
@@ -82,6 +84,65 @@ export function renderSmokeRework(input: { readonly round: number; readonly outc
       'If the fix is in a file another package owns, do not edit it: add "handOff": {"path": "<that file>", "change": "<exactly what must change>"} to your <slave-report>. A file the skeleton owns is sent to the skeleton, once.',
       'Its output:',
       printed,
+    ].join('\n'),
+    VERIFICATION_REWORK_MAX_CHARS,
+  )
+}
+
+/**
+ * The repo-relative FILE path a hand-off may name, or null (controller ruling, Task 5). Refused, not
+ * repaired: a glob (`*`, `?`), an absolute path, a backslash, a `..` or `.` segment (so a `./`
+ * prefix too), an empty segment (`a//b`, a trailing `/`). Only surrounding whitespace is trimmed.
+ * What passes is one literal path the ownership rule can be asked about.
+ */
+function handOffPath(path: string): string | null {
+  const trimmed = path.trim()
+  if (trimmed === '' || /[*?]/u.test(trimmed) || !isValidOwnedGlob(trimmed)) return null
+  const segments = trimmed.split('/')
+  return segments.some((segment) => segment === '' || segment === '.' || segment === '..') ? null : trimmed
+}
+
+/**
+ * Plan B D11 (user ruling 2026-09-30): whom a smoke rework's hand-off goes to -- the skeleton, and
+ * only when the ownership rule (the one the gate and the diff audit enforce) says the skeleton owns
+ * the named path. The worker's claim is a path, never a verdict: a path another package owns, a path
+ * nobody owns (integration's own), a path {@link handOffPath} refuses, or a plan with no skeleton
+ * or a skeleton owning `**` (single mode) is null, and the version goes on as it would have.
+ */
+export function smokeHandOffTarget(
+  path: string,
+  packages: readonly { readonly key: string; readonly ownedPaths: readonly string[]; readonly isIntegration: boolean }[],
+): string | null {
+  const literal = handOffPath(path)
+  if (literal === null) return null
+  const skeleton = packages.find((pkg) => pkg.key === SKELETON_PACKAGE_KEY)
+  if (skeleton === undefined) return null
+  const rule = ownershipRuleFor(skeleton, packages)
+  return rule !== null && isOwned(rule, literal) ? skeleton.key : null
+}
+
+/**
+ * The skeleton's rework reason for a handed-off smoke failure (plan B D11). The output is the
+ * script's and the path and change are another worker's words, all landing in the skeleton's
+ * prompt -- so every part is sanitised and bounded like any smoke text.
+ */
+export function renderSmokeHandOff(input: {
+  readonly round: number
+  readonly outcome: 'failed' | 'timed_out'
+  readonly output: string
+  readonly fromPackage: string
+  readonly path: string
+  readonly change: string
+}): string {
+  const output = trimEvidence(sanitisePersonText(input.output), 2500)
+  const change = trimEvidence(sanitisePersonText(input.change), 2000)
+  return trimEvidence(
+    [
+      `The smoke check of verification round ${String(input.round)} ${input.outcome === 'timed_out' ? 'timed out' : 'failed'}, and the ${sanitisePersonText(input.fromPackage)} package found the fix is in a file you own: ${sanitisePersonText(input.path)}.`,
+      `What it asks for: ${change === '' ? '(no detail given -- read the output)' : change}`,
+      'Make that change if it is right; make the smoke check pass either way, then finish as your instructions describe.',
+      "The smoke check's output:",
+      output === '' ? '(it printed nothing)' : output,
     ].join('\n'),
     VERIFICATION_REWORK_MAX_CHARS,
   )

@@ -35,6 +35,19 @@ describe('parseSlaveReport', () => {
     const parsed = parseSlaveReport(wrap({ requirements: good.requirements }), ['R1', 'R2'])
     expect(parsed.ok && parsed.value).toEqual(expect.objectContaining({ filesTouched: [], workflow: [], questions: [] }))
   })
+
+  it('reads an optional handOff, trimmed and bounded, and refuses an empty path', () => {
+    const base = { requirements: [], filesTouched: [], workflow: [], questions: [] }
+    const text = (value: object): string => `<slave-report>${JSON.stringify(value)}</slave-report>`
+    const read = parseSlaveReport(text({ ...base, handOff: { path: ' backend/package.json ', change: 'add a "start" script' } }), [])
+    expect(read.ok && read.value.handOff).toEqual({ path: 'backend/package.json', change: 'add a "start" script' })
+    expect(parseSlaveReport(text(base), []).ok).toBe(true)
+    expect(parseSlaveReport(text({ ...base, handOff: { path: '', change: 'x' } }), []).ok).toBe(false)
+    expect(parseSlaveReport(text({ ...base, handOff: { path: 'a'.repeat(501), change: 'x' } }), []).ok).toBe(false)
+    expect(parseSlaveReport(text({ ...base, handOff: { path: 'a', change: 'x'.repeat(2001) } }), []).ok).toBe(false)
+    const noChange = parseSlaveReport(text({ ...base, handOff: { path: 'Dockerfile' } }), [])
+    expect(noChange.ok && noChange.value.handOff).toEqual({ path: 'Dockerfile', change: '' })
+  })
 })
 
 describe('hasSlaveReportBlock', () => {
