@@ -246,6 +246,11 @@ describe('parseConductAnswer', () => {
     })
   })
 
+  it('reads every string without the NUL bytes and controls Postgres refuses (Task 6, ruling F8)', () => {
+    const parsed = parseConductAnswer(JSON.stringify({ [CONDUCT_ANSWER_KEY]: { mode: 'single', reason: 'fits\u0000 one', decisions: [{ title: 'A\u0007PI', decision: 'x\u0000y' }] } }))
+    expect(parsed).toEqual({ ok: true, value: { mode: 'single', reason: 'fits one', decisions: [{ title: 'API', decision: 'xy' }] } })
+  })
+
   it('reads the raw conductAnswer object on the happy path', () => {
     const inner = { mode: 'single', reason: 'fits one session', templateId: 't-backend' }
     const parsed = parseConductAnswer(`Here you go.\n${JSON.stringify({ [CONDUCT_ANSWER_KEY]: inner })}`)

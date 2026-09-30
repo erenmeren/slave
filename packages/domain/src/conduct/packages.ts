@@ -25,6 +25,7 @@ import {
   verifyCheckPathFor,
   type PackageRegistration,
 } from './skeleton.js'
+import { storableText } from './verification.js'
 
 export const CONDUCT_ANSWER_KEY = 'conductAnswer'
 
@@ -161,12 +162,17 @@ export function ownerOf(
   return packages.find((p) => p.isIntegration)?.key ?? null
 }
 
-/** Reads the raw `conductAnswer` object out of the model's text; `validateConduct` judges it. */
+/**
+ * Reads the raw `conductAnswer` object out of the model's text; `validateConduct` judges it. Every
+ * string is made storable as it is read (Task 6, ruling F8), as `parseSlaveReport` does: the answer
+ * is logged on its `ConductorCall` as jsonb, which refuses a `\u0000` escape, before any of it is
+ * materialised -- one NUL anywhere in the answer made that write throw.
+ */
 export function parseConductAnswer(text: string): Result<unknown, string> {
   const json = firstJsonObject(text)
   if (json === null) return err('the answer carried no JSON object')
   try {
-    const value = JSON.parse(json) as Record<string, unknown>
+    const value = JSON.parse(json, (_key, v: unknown) => (typeof v === 'string' ? storableText(v) : v)) as Record<string, unknown>
     if (typeof value !== 'object' || value === null || !(CONDUCT_ANSWER_KEY in value)) {
       return err(`the answer must be {"${CONDUCT_ANSWER_KEY}": {...}}`)
     }

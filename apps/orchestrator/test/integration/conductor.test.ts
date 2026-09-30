@@ -136,7 +136,7 @@ async function removeTemplates(): Promise<void> {
 
 beforeEach(async (): Promise<void> => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "ConductorCall", "RequirementSet", "WorkPackage", "RunReport", "SupervisorDecision", "SlaveMessage", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "ProviderConfiguration", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "ConductorCall", "RequirementSet", "WorkPackage", "RunReport", "SupervisorDecision", "GoalDecision", "GoalDelivery", "PackageHandOff", "SlaveMessage", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "ProviderConfiguration", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
   )
   await removeTemplates()
 })
@@ -308,6 +308,30 @@ async function seedWithRequirements(options: { readonly withReviewer?: boolean }
 }
 
 describe('conduct: the size decision', () => {
+  it('stores the plan\'s shared decisions with the packages (plan A D10)', async () => {
+    const f = await seedWithRequirements()
+    const decided = JSON.parse(PARTITIONED) as { conductAnswer: Record<string, unknown> }
+    decided.conductAnswer['decisions'] = [{ title: 'API field naming', decision: 'camelCase' }]
+    expect(await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(JSON.stringify(decided)) }).decider))).toBe('conducted')
+    const rows = await prisma.goalDecision.findMany({ where: { workspaceId: f.workspaceId }, select: { goalVersion: true, title: true, titleKey: true, decision: true, source: true } })
+    expect(rows).toEqual([{ goalVersion: 1, title: 'API field naming', titleKey: 'api field naming', decision: 'camelCase', source: 'conductor_plan' }])
+  })
+
+  it('stores a decision without the NUL bytes and controls Postgres refuses, keyed on the cleaned title (ruling F8)', async () => {
+    const f = await seedWithRequirements()
+    const decided = JSON.parse(PARTITIONED) as { conductAnswer: Record<string, unknown> }
+    decided.conductAnswer['decisions'] = [{ title: 'API\u0000 Field\u0007  Naming', decision: 'camel\u0000Case' }]
+    expect(await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(JSON.stringify(decided)) }).decider))).toBe('conducted')
+    const rows = await prisma.goalDecision.findMany({ where: { workspaceId: f.workspaceId }, select: { title: true, titleKey: true, decision: true } })
+    expect(rows).toEqual([{ title: 'API Field  Naming', titleKey: 'api field naming', decision: 'camelCase' }])
+  })
+
+  it('stores no decision for a plan without them (spec §4)', async () => {
+    const f = await seedWithRequirements()
+    expect(await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) }).decider))).toBe('conducted')
+    expect(await prisma.goalDecision.count({ where: { workspaceId: f.workspaceId } })).toBe(0)
+  })
+
   it('materialises a partitioned plan: packages, pinned tasks, dependencies, a recorded decision, one seat each', async () => {
     const f = await seedWithRequirements()
     expect(await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) }).decider))).toBe('conducted')

@@ -207,7 +207,7 @@ const delivery = async (f: Fixture) => prisma.goalDelivery.findUniqueOrThrow({ w
 describe('runGoalPass', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "WorkPackage", "GoalDelivery", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "PackageHandOff", "SlaveRun", "TaskDependency", "Task", "WorkPackage", "GoalDelivery", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -574,6 +574,20 @@ describe('runGoalPass', () => {
     expect(await delivery(f)).toMatchObject({ status: 'integrating', acceptedAt: null, mergedAt: null })
     expect(await goalEvents(f.workspaceId)).toEqual([])
     expect(git(['rev-parse', 'main'], f.repoPath)).not.toBe(git(['rev-parse', f.branch], f.repoPath))
+  })
+
+  it('reopens a finished package for a hand-off it never saw before starting a smoke (plan A D4)', async (): Promise<void> => {
+    const f = await seed()
+    await integrateAll(f)
+    await prisma.packageHandOff.create({
+      data: { workspaceId: f.workspaceId, goalVersion: 1, source: 'report', sourceKey: `report:${f.runIds[1]}:0`, fromRunId: f.runIds[1], fromPackageKey: 'json', toPackageKey: 'csv', packageKey: 'csv', change: 'emit a header row', fingerprint: 'f', status: 'pending' },
+    })
+
+    await pass(f)
+
+    expect(await prisma.task.findUniqueOrThrow({ where: { id: f.taskIds[0] } })).toMatchObject({ status: 'rework', integratedAt: null })
+    expect((await delivery(f)).status).toBe('integrating')
+    expect(await prisma.smokeAttempt.count()).toBe(0)
   })
 
   it('does not merge a tip nothing verified: an integration branch that moved after acceptance is verified again', async (): Promise<void> => {

@@ -13,12 +13,14 @@ import {
   buildRequirementsPrompt,
   candidateSchema,
   conductPlanSchema,
+  decisionTitleKey,
   integrationBranchName,
   parseConductAnswer,
   parseRequirementsAnswer,
   requirementItemsSchema,
   singlePlan,
   situationSchema,
+  storableText,
   validateConduct,
   type ConductPlan,
   type GuardrailKind,
@@ -375,6 +377,25 @@ async function materialise(
         smokeRequired: items.some((item) => item.key === RUN_REQUIREMENT_KEY),
       },
     })
+    // Plan A D10 (spec C3): the plan's shared decisions, in the same transaction as its packages,
+    // so a contract never lists a decision the version does not have, nor misses one it does. The
+    // text is the model's, made storable (ruling F8), and the key is read from the cleaned title so
+    // it matches what the plan's own uniqueness check compared.
+    if (plan.decisions.length > 0) {
+      await tx.goalDecision.createMany({
+        data: plan.decisions.map((d) => {
+          const title = storableText(d.title)
+          return {
+            workspaceId,
+            goalVersion: version,
+            title,
+            titleKey: decisionTitleKey(title),
+            decision: storableText(d.decision),
+            source: 'conductor_plan' as const,
+          }
+        }),
+      })
+    }
 
     const decision = await tx.supervisorDecision.create({
       data: {

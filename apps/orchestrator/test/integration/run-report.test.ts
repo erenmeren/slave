@@ -8,11 +8,28 @@ import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { CONDUCTOR_ROLE, PACKAGE_WORKER_ROLE, observe, runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import { ClaudeCodeAdapter } from '@slave-of-ai/providers'
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { inboxSection } from '../../src/inbox.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 import { verifyConcludedRun } from '../../src/verify.js'
 import { worktreeRootFor } from '../../src/worktree.js'
+
+/** Task 6: how many of the next `routeHandOffs` calls fail as a busy delivery lock does (P2028). */
+const busyLock = vi.hoisted(() => ({ failures: 0, calls: 0 }))
+vi.mock('@slave-of-ai/control', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@slave-of-ai/control')>()
+  return {
+    ...original,
+    routeHandOffs: async (...args: Parameters<typeof original.routeHandOffs>): ReturnType<typeof original.routeHandOffs> => {
+      busyLock.calls += 1
+      if (busyLock.failures > 0) {
+        busyLock.failures -= 1
+        throw Object.assign(new Error('Transaction API error: Unable to start a transaction in the given time.'), { code: 'P2028' })
+      }
+      return original.routeHandOffs(...args)
+    },
+  }
+})
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 const FAKE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
@@ -189,12 +206,14 @@ const taskStatus = async (taskId: string): Promise<string> =>
 describe('a package run files its report before verify', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveMessage", "RunReport", "SlaveRun", "TaskDependency", "Task", "WorkPackage", "RequirementSet", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveMessage", "PackageHandOff", "RunReport", "SlaveRun", "TaskDependency", "Task", "WorkPackage", "RequirementSet", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
   })
 
   afterEach(async (): Promise<void> => {
     await drainPumps()
+    busyLock.failures = 0
+    busyLock.calls = 0
   })
 
   afterAll(async (): Promise<void> => {
@@ -338,6 +357,39 @@ describe('a package run files its report before verify', () => {
     expect(inbox?.text).toContain('Yes, omit them.')
     // Only on that task: the seat's run on another task is not told about it.
     expect(await inboxSection(question.slaveId, null)).toBeNull()
+  })
+
+  it('routes the report\'s hand-offs by ownership and asks the conductor about one with no target (spec C2)', async (): Promise<void> => {
+    const f = await seedPackageTask({
+      report: { ...goodReport, handOffs: [{ package: 'docs', change: 'document the csv flag' }, { package: 'billing', change: 'charge for exports' }] },
+    })
+    // A second package, not started: its task waits in backlog, so the request waits for its prompt.
+    const docs = await prisma.workPackage.create({ data: { workspaceId: f.workspaceId, goalVersion: 1, key: 'docs', title: 'Docs', requirementKeys: [], ownedPaths: ['docs/**'], interface: '', templateId: 'tpl' } })
+    await prisma.task.create({ data: { workspaceId: f.workspaceId, title: 'Docs', description: 'x', status: 'backlog', requiredRole: PACKAGE_WORKER_ROLE, maxAttempts: 3, goalVersion: 1, workPackageId: docs.id } })
+    await tickUntil(f, async () => (await prisma.runReport.count()) === 1)
+    const rows = await prisma.packageHandOff.findMany({ where: { workspaceId: f.workspaceId }, orderBy: { sourceKey: 'asc' } })
+    expect(rows.map((r) => [r.toPackageKey, r.status])).toEqual([['docs', 'pending'], [null, 'to_conductor']])
+    const questions = await prisma.slaveMessage.findMany({ where: { workspaceId: f.workspaceId, kind: 'question' } })
+    expect(questions).toEqual([expect.objectContaining({ recipientRole: CONDUCTOR_ROLE, taskId: f.taskId, body: expect.stringContaining('no package has the key "billing"') })])
+  })
+
+  it('files a report through a busy delivery lock: the routing is tried again and the run goes on to verify (Task 6)', async (): Promise<void> => {
+    busyLock.failures = 1
+    const f = await seedPackageTask({ report: { ...goodReport, handOffs: [{ package: 'billing', change: 'charge for exports' }] } })
+    await tickUntil(f, async () => (await taskStatus(f.taskId)) !== 'running')
+    expect(busyLock.calls).toBe(2)
+    expect(await taskStatus(f.taskId)).toBe('reviewing')
+    expect((await prisma.slaveRun.findFirstOrThrow({ where: { taskId: f.taskId } })).status).toBe('succeeded')
+    const rows = await prisma.packageHandOff.findMany({ where: { workspaceId: f.workspaceId } })
+    expect(rows.map((r) => r.status)).toEqual(['to_conductor'])
+  })
+
+  it('files a report without hand-offs exactly as before: nothing is routed (spec §4)', async (): Promise<void> => {
+    const f = await seedPackageTask({ report: goodReport })
+    await tickUntil(f, async () => (await taskStatus(f.taskId)) !== 'running')
+    expect(busyLock.calls).toBe(0)
+    expect(await prisma.packageHandOff.count()).toBe(0)
+    expect(await taskStatus(f.taskId)).toBe('reviewing')
   })
 
   it('leaves a non-package task exactly as before', async (): Promise<void> => {

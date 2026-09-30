@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { everyPackageIntegrated, expirePendingHandOffs, goalEventSaid, goalEventWith, settleGoalEvidence, withDeliveryLock } from '@slave-of-ai/control'
+import { everyPackageIntegrated, expirePendingHandOffs, goalEventSaid, goalEventWith, reopenForHandOffs, settleGoalEvidence, withDeliveryLock } from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import { VERIFICATION_REASON_MAX_CHARS, VERIFICATION_RUN_RETRY_CAP, handMergeInstruction, type GuardrailKind } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
@@ -103,6 +103,12 @@ async function advanceDelivery(
   id: string,
 ): Promise<void> {
   const workspaceId = deps.workspaceId
+  // Supervisor-as-conductor plan A D4: a hand-off to a finished package reopens it before this pass
+  // can start a smoke on a tip that lacks it; under the delivery's lock, and only while `integrating`
+  // with no claim. An accepted version's undelivered hand-offs expire here. It is also where a
+  // reopen that a filing could not do (the lock was busy) is done. A version with nothing pending
+  // takes no lock (ruling F12).
+  await reopenForHandOffs(id)
   let delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { id } })
   if (delivery.activeSmokeId !== null) {
     // Plan B D8: a smoke claim nothing will conclude is settled here; a live one is waited for.
