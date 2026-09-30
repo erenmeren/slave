@@ -345,6 +345,16 @@ describe('dispatchVerification', () => {
     expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(1)
   }, 60_000)
 
+  it('never starts a verification run while a smoke check holds the version (skeleton spec S7)', async (): Promise<void> => {
+    const f = await seed()
+    const tip = git(['rev-parse', f.branch], f.repoPath)
+    const smoke = await prisma.smokeAttempt.create({ data: { workspaceId: f.workspaceId, goalDeliveryId: f.deliveryId, goalVersion: 1, round: 1, tip } })
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'verifying', round: 1, activeSmokeId: smoke.id } })
+    expect(await dispatchVerification(depsFor(f.workspaceId, verifier()), f.deliveryId)).toBeNull()
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(0)
+    expect(await prisma.goalDelivery.findUniqueOrThrow({ where: { id: f.deliveryId } })).toMatchObject({ activeRunId: null, activeSmokeId: smoke.id, round: 1 })
+  }, 60_000)
+
   it('waits silently, taking no claim, while the verifier is busy with another run', async (): Promise<void> => {
     const f = await seed()
     await prisma.slaveRun.create({ data: { taskId: f.taskIds[1] ?? '', slaveId: f.verifierId, kind: 'review', status: 'working' } })

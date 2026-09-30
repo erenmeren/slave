@@ -5,6 +5,7 @@ import {
   CONDUCT_PER_CALL_CAP_USD,
   CONDUCT_RETRY_CAP,
   PACKAGE_WORKER_ROLE,
+  RUN_REQUIREMENT_KEY,
   SKELETON_INTERFACE,
   SKELETON_PACKAGE_KEY,
   keyRequirementSet,
@@ -369,6 +370,9 @@ async function materialise(
         integrationBranch: delivery.integrationBranch,
         baseCommit: delivery.baseCommit,
         verifierSlaveId: delivery.verifierSlaveId,
+        // Skeleton spec S7: a version whose set carries RUN is smoke-checked; one extracted before
+        // RUN existed is verified as it was.
+        smokeRequired: items.some((item) => item.key === RUN_REQUIREMENT_KEY),
       },
     })
 

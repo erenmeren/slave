@@ -7,13 +7,16 @@ import { execFileSync, spawn } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { isAlive } from '@slave-of-ai/control'
+import { fileURLToPath } from 'node:url'
+import { abandonGoal, isAlive } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import { INTAKE_BOOTSTRAP_SMOKE_SCRIPT, RUN_REQUIREMENT, SMOKE_OUTPUT_MAX_CHARS, integrationBranchName } from '@slave-of-ai/domain'
+import { INTAKE_BOOTSTRAP_SMOKE_SCRIPT, RUN_REQUIREMENT, SMOKE_OUTPUT_MAX_CHARS, integrationBranchName, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { ClaudeCodeAdapter } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { runGoalPass } from '../../src/goal.js'
 import { ensureIntegrationBranch, ensureIntegrationWorktree } from '../../src/goalBranch.js'
 import { applySmokeOutcome, settleStrandedSmoke, smokeWorktreeKey, startSmoke } from '../../src/smoke.js'
-import { drainPumps } from '../../src/tick.js'
+import { drainPumps, type TickDeps } from '../../src/tick.js'
 import { worktreeRootFor } from '../../src/worktree.js'
 
 const repos: string[] = []
@@ -101,6 +104,25 @@ const smokeWorktrees = (f: Fixture): string[] => {
 }
 const taskStatus = async (id: string) => (await prisma.task.findUniqueOrThrow({ where: { id } })).status
 
+const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
+const FAKE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
+const REAL_GATE = join(repoRoot, 'scripts/pause-gate.sh')
+
+/** The fake's verification arm: every requirement passes, RUN with a check of its own. */
+const verifier = (): ClaudeCodeAdapter => new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'm8-flow'], hookPath: REAL_GATE })
+const depsFor = (workspaceId: string, adapter: ClaudeCodeAdapter): TickDeps => ({ workspaceId: brandWorkspaceId(workspaceId), registry: { resolve: () => adapter } })
+
+/** `seed` plus what a verification run needs: a provider, and a verifier seat recorded on the delivery. */
+async function seedWithVerifier(smoke: string | null): Promise<Fixture & { readonly verifierId: string }> {
+  const f = await seed(smoke)
+  await prisma.providerConfiguration.create({ data: { workspaceId: f.workspaceId, kind: 'claude_code', settings: {} } })
+  const team = await prisma.team.create({ data: { workspaceId: f.workspaceId, name: 'Engineering' } })
+  const person = await prisma.person.create({ data: { name: 'Vera' } })
+  const seat = await prisma.slave.create({ data: { teamId: team.id, role: 'Verifier', runtimeRoles: ['reviewer', 'verifier'], profile: 'You check what was built.', personId: person.id } })
+  await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { verifierSlaveId: seat.id } })
+  return { ...f, verifierId: seat.id }
+}
+
 afterAll(async (): Promise<void> => {
   for (const repo of repos) {
     rmSync(worktreeRootFor(repo), { recursive: true, force: true })
@@ -112,7 +134,7 @@ afterAll(async (): Promise<void> => {
 describe('a smoke attempt', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "SmokeAttempt", "SlaveRun", "TaskDependency", "Task", "WorkPackage", "RequirementSet", "GoalDelivery", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "SmokeAttempt", "ProviderConfiguration", "RunContext", "Checkpoint", "Artifact", "SlaveRun", "TaskDependency", "Task", "WorkPackage", "RequirementSet", "GoalDelivery", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
   afterEach(async (): Promise<void> => {
@@ -312,6 +334,141 @@ describe('a smoke attempt', () => {
     expect(events).toHaveLength(1)
     expect(events[0]?.payload).toMatchObject({ attemptId: attempt.id, outcome: 'failed', reworkedPackage: null })
     expect(await taskStatus(f.taskOf.integration)).toBe('done')
+    expect(await deliveryOf(f)).toMatchObject({ status: 'integrating', round: 1 })
+  }, 60_000)
+})
+
+describe('the goal pass and the smoke gate', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "SmokeAttempt", "ProviderConfiguration", "RunContext", "Checkpoint", "Artifact", "SlaveRun", "TaskDependency", "Task", "WorkPackage", "RequirementSet", "GoalDelivery", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+  })
+  afterEach(async (): Promise<void> => {
+    await drainPumps()
+  })
+
+  it('starts a smoke, not a verification run, once every package is integrated; the next pass verifies', async (): Promise<void> => {
+    const f = await seedWithVerifier('#!/usr/bin/env bash\necho "flow ok"\n')
+    await runGoalPass(depsFor(f.workspaceId, verifier()), { mayStartRuns: true })
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(0)
+    await drainPumps()
+    expect((await attemptsOf(f))[0]?.status).toBe('passed')
+    await runGoalPass(depsFor(f.workspaceId, verifier()), { mayStartRuns: true })
+    await drainPumps()
+    const runs = await prisma.slaveRun.findMany({ where: { kind: 'verification' } })
+    expect(runs).toHaveLength(1)
+    expect((await deliveryOf(f)).round).toBe(1)
+  }, 120_000)
+
+  it('starts nothing while the scheduler has no room', async (): Promise<void> => {
+    const f = await seedWithVerifier('#!/usr/bin/env bash\necho ok\n')
+    await runGoalPass(depsFor(f.workspaceId, verifier()), { mayStartRuns: false })
+    expect(await attemptsOf(f)).toEqual([])
+  }, 60_000)
+
+  it('verifies a retried version of an unchanged tree without running the smoke again', async (): Promise<void> => {
+    const f = await seedWithVerifier('#!/usr/bin/env bash\necho ok\n')
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'integrating', roundBase: 1 } })
+    await runGoalPass(depsFor(f.workspaceId, verifier()), { mayStartRuns: true })
+    await drainPumps()
+    expect(await attemptsOf(f)).toHaveLength(1)
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(1)
+    expect((await deliveryOf(f)).round).toBe(2)
+  }, 120_000)
+
+  it('smokes a moved tip again even after an earlier pass', async (): Promise<void> => {
+    const f = await seedWithVerifier('#!/usr/bin/env bash\necho ok\n')
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    writeFileSync(join(f.integrationPath, 'app.txt'), 'the product, reworked\n')
+    git(['commit', '-q', '-am', 'merge(T-pkg): a rework'], f.integrationPath)
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'integrating' } })
+    await runGoalPass(depsFor(f.workspaceId, verifier()), { mayStartRuns: true })
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(0)
+    await drainPumps()
+    expect(await attemptsOf(f)).toHaveLength(2)
+    expect(await deliveryOf(f)).toMatchObject({ status: 'verifying', round: 2, activeSmokeId: null })
+  }, 120_000)
+
+  it('ends in needs_human after three smoke attempts that could not run in one round, saying so', async (): Promise<void> => {
+    const f = await seedWithVerifier('#!/usr/bin/env bash\necho ok\n')
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'verifying', round: 1, roundRunFailures: 3 } })
+    await prisma.smokeAttempt.create({ data: { workspaceId: f.workspaceId, goalDeliveryId: f.deliveryId, goalVersion: 1, round: 1, tip: 'x', status: 'error', output: 'worktree add failed' } })
+    await runGoalPass(depsFor(f.workspaceId, verifier()), { mayStartRuns: true })
+    const delivery = await deliveryOf(f)
+    expect(delivery.status).toBe('needs_human')
+    expect(delivery.needsHumanReason).toContain('1 smoke check(s) could not be run; the last: worktree add failed')
+  }, 60_000)
+
+  it('waits for a smoke another live process is running, and settles one whose owner is gone', async (): Promise<void> => {
+    const f = await seedWithVerifier('#!/usr/bin/env bash\necho ok\n')
+    const tip = git(['rev-parse', f.branch], f.repoPath)
+    const live = await prisma.smokeAttempt.create({ data: { workspaceId: f.workspaceId, goalDeliveryId: f.deliveryId, goalVersion: 1, round: 1, tip, ownerInstance: `${String(process.ppid)}/another-daemon` } })
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'verifying', round: 1, activeSmokeId: live.id } })
+    await runGoalPass(depsFor(f.workspaceId, verifier()), { mayStartRuns: true })
+    expect(await deliveryOf(f)).toMatchObject({ activeSmokeId: live.id, activeRunId: null })
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(0)
+
+    await prisma.smokeAttempt.update({ where: { id: live.id }, data: { ownerInstance: '999999/dead-daemon' } })
+    await runGoalPass(depsFor(f.workspaceId, verifier()), { mayStartRuns: true })
+    await drainPumps()
+    // Settled as an error (one run failure), and the same round's smoke started again on this pass.
+    expect(await attemptsOf(f)).toMatchObject([{ id: live.id, status: 'error' }, { status: 'passed', round: 1 }])
+    expect(await deliveryOf(f)).toMatchObject({ status: 'verifying', round: 1, roundRunFailures: 1, activeSmokeId: null })
+  }, 120_000)
+
+  it('abandons a version mid-smoke: the script is signalled, its outcome moves nothing', async (): Promise<void> => {
+    const f = await seedWithVerifier('#!/usr/bin/env bash\ntrap "echo stopped; exit 143" TERM\nsleep 30 &\nwait\n')
+    await startSmoke(f.deliveryId)
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    expect((await abandonGoal(f.workspaceId, 1)).ok).toBe(true)
+    await drainPumps()
+    expect(await deliveryOf(f)).toMatchObject({ status: 'abandoned', activeSmokeId: null })
+    expect((await attemptsOf(f))[0]?.status).toBe('failed')
+    expect(await prisma.executionEvent.count({ where: { workspaceId: f.workspaceId, type: 'task_rework' } })).toBe(0)
+    // Ruling F2: the abandoned attempt still says how it ended, once, sending nobody back.
+    const events = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_smoke_run' } })
+    expect(events).toHaveLength(1)
+    expect(events[0]?.payload).toMatchObject({ outcome: 'failed', reworkedPackage: null })
+    expect(smokeWorktrees(f)).toEqual([])
+  }, 60_000)
+
+  it('settles an abandoned version\'s attempt whose process died, so it still gets its one event (F2)', async (): Promise<void> => {
+    const f = await seedWithVerifier('#!/usr/bin/env bash\necho ok\n')
+    const attempt = await prisma.smokeAttempt.create({
+      data: { workspaceId: f.workspaceId, goalDeliveryId: f.deliveryId, goalVersion: 1, round: 1, tip: git(['rev-parse', f.branch], f.repoPath), ownerInstance: '999999/dead-daemon' },
+    })
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'verifying', round: 1, activeSmokeId: attempt.id } })
+    expect((await abandonGoal(f.workspaceId, 1)).ok).toBe(true)
+    await runGoalPass(depsFor(f.workspaceId, verifier()), { mayStartRuns: true })
+    await runGoalPass(depsFor(f.workspaceId, verifier()), { mayStartRuns: true })
+    expect(await prisma.smokeAttempt.findUniqueOrThrow({ where: { id: attempt.id } })).toMatchObject({ status: 'error' })
+    const events = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_smoke_run' } })
+    expect(events).toHaveLength(1)
+    expect(events[0]?.payload).toMatchObject({ attemptId: attempt.id, outcome: 'error', reworkedPackage: null })
+    expect(await deliveryOf(f)).toMatchObject({ status: 'abandoned', activeSmokeId: null, roundRunFailures: 0 })
+  }, 60_000)
+
+  it('verifies a legacy version whose set has no RUN as before, with no smoke', async (): Promise<void> => {
+    const f = await seedWithVerifier(null)
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { smokeRequired: false } })
+    await runGoalPass(depsFor(f.workspaceId, verifier()), { mayStartRuns: true })
+    await drainPumps()
+    expect(await attemptsOf(f)).toEqual([])
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(1)
+    expect((await deliveryOf(f)).round).toBe(1)
+  }, 120_000)
+
+  it('sends the skeleton back when a version whose set has RUN has no scripts/smoke.sh', async (): Promise<void> => {
+    const f = await seedWithVerifier(null)
+    await runGoalPass(depsFor(f.workspaceId, verifier()), { mayStartRuns: true })
+    await drainPumps()
+    expect((await attemptsOf(f))[0]).toMatchObject({ status: 'missing', reworkedTaskId: f.taskOf.skeleton })
+    expect(await taskStatus(f.taskOf.skeleton)).toBe('rework')
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(0)
     expect(await deliveryOf(f)).toMatchObject({ status: 'integrating', round: 1 })
   }, 60_000)
 })

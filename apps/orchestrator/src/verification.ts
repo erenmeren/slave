@@ -395,9 +395,10 @@ export async function dispatchVerification(deps: TickDeps, deliveryId: string): 
   // the run is set up, and a lost claim leaves no trace at all.
   const claimed = await withDeliveryLock(delivery.id, async (tx) => {
     const now = await tx.goalDelivery.findUniqueOrThrow({ where: { id: delivery.id } })
-    if (now.status !== delivery.status || now.round !== delivery.round || now.activeRunId !== null) return { count: 0 }
+    // Skeleton spec S7: a smoke check holding the version (`activeSmokeId`) is as much a claim as a run.
+    if (now.status !== delivery.status || now.round !== delivery.round || now.activeRunId !== null || now.activeSmokeId !== null) return { count: 0 }
     return tx.goalDelivery.updateMany({
-      where: { id: delivery.id, status: delivery.status, activeRunId: null },
+      where: { id: delivery.id, status: delivery.status, activeRunId: null, activeSmokeId: null },
       data: newRound ? { status: 'verifying', activeRunId: run.id, round, roundRunFailures: 0 } : { activeRunId: run.id },
     })
   })

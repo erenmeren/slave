@@ -4,6 +4,7 @@ import { type Result, err, ok } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { settleTaskEvidence } from './evidence.js'
 import { gitIn } from './git.js'
+import { isAlive } from './kill.js'
 import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
 import { requestStop } from './stop.js'
@@ -253,6 +254,10 @@ class Refused extends Error {
  * stopped (`requestStop`) and its checkout removed. Its conclusion, if it gets that far, finds no
  * claim and changes nothing (`concludeVerification` and every release are guarded on the claim).
  * Package work in flight still refuses, as before.
+ *
+ * Skeleton-and-smoke plan B D9: so does a smoke check holding the version (`activeSmokeId`): the
+ * same locked write clears that claim, and the script's process group is sent SIGTERM after the
+ * commit. The attempt ends as the process running it records it; its conclusion finds no claim.
  */
 export async function abandonGoal(
   workspaceId: string,
@@ -266,6 +271,7 @@ export async function abandonGoal(
   let outcome: {
     readonly cancelled: readonly { readonly id: string; readonly goalVersion: number | null }[]
     readonly verification: { readonly runId: string; readonly worktreePath: string | null } | null
+    readonly smokePid: number | null
   }
   try {
     outcome = await withDeliveryLock(found.id, async (tx) => {
@@ -282,6 +288,11 @@ export async function abandonGoal(
       if (delivery.activeRunId !== null && claim?.kind !== 'verification') {
         throw new Refused({ kind: 'goal_version_busy', goalVersion, holder: `run ${delivery.activeRunId}` })
       }
+      // Skeleton-and-smoke plan B D9: a smoke check holding the version is not a refusal either --
+      // it is the orchestrator's own check, not a person's work. Its script's group is signalled
+      // below, only while the attempt is still running (a finished attempt's pid may be anyone's).
+      const smoke =
+        delivery.activeSmokeId === null ? null : await tx.smokeAttempt.findUnique({ where: { id: delivery.activeSmokeId }, select: { pid: true, status: true } })
       const ids = (await tx.task.findMany({ where: { workspaceId, workPackage: { goalVersion } }, select: { id: true } })).map((task) => task.id)
       if (ids.length > 0) await tx.$queryRaw`SELECT id FROM "Task" WHERE id = ANY(${ids}::text[]) FOR UPDATE`
       const tasks = await tx.task.findMany({
@@ -303,10 +314,11 @@ export async function abandonGoal(
         data: { status: 'cancelled', lastRejectionReason: reason },
       })
       // The claim goes in the same write: from here no conclusion of that run can move the version.
-      await tx.goalDelivery.update({ where: { id: found.id }, data: { status: 'abandoned', activeRunId: null } })
+      await tx.goalDelivery.update({ where: { id: found.id }, data: { status: 'abandoned', activeRunId: null, activeSmokeId: null } })
       return {
         cancelled: cancelled.map((task) => ({ id: task.id, goalVersion: task.goalVersion })),
         verification: claim === null ? null : { runId: claim.id, worktreePath: claim.worktreePath },
+        smokePid: smoke?.status === 'running' ? smoke.pid : null,
       }
     })
   } catch (error) {
@@ -314,6 +326,16 @@ export async function abandonGoal(
     throw error
   }
 
+  // Skeleton-and-smoke plan B D9: the smoke check's group is signalled; its script's trap cleans up,
+  // and its conclusion finds the version abandoned: it records the attempt's one `workspace.smoke_run`
+  // (ruling F2) and moves nothing. The attempt's owner removes its checkout and containers as on any end.
+  if (outcome.smokePid !== null && isAlive(outcome.smokePid)) {
+    try {
+      process.kill(-outcome.smokePid, 'SIGTERM')
+    } catch {
+      // Already gone.
+    }
+  }
   if (outcome.verification !== null) {
     await requestStop(outcome.verification.runId, `the person abandoning goal v${String(goalVersion)}`, principal)
     // After the stop, which waits for the process to exit: nothing writes in the checkout any more.

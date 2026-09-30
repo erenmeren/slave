@@ -12,7 +12,7 @@
  * `--verification-rounds-base64` answers each round (`Verification round N` in its prompt) in turn.
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -66,6 +66,11 @@ function makeRepo(): string {
     mkdirSync(join(dir, dirname(file)), { recursive: true })
     writeFileSync(join(dir, file), 'def main():\n    pass\n')
   }
+  // Skeleton spec S7: every version conducted now carries RUN, so its goal pass runs this first.
+  // A passing one here; Task 8 of plan B makes it fail on purpose where a test wants that.
+  mkdirSync(join(dir, 'scripts'), { recursive: true })
+  writeFileSync(join(dir, 'scripts/smoke.sh'), '#!/usr/bin/env bash\necho "flow ok"\n')
+  chmodSync(join(dir, 'scripts/smoke.sh'), 0o755)
   git(['add', '-A'], dir)
   git(['commit', '-q', '-m', 'initial'], dir)
   repos.push(dir)
@@ -413,7 +418,7 @@ const status = (f: Fixture, goalVersion: number, wanted: string) => async (): Pr
 describe('conductor end to end', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "ConductorCall", "RequirementSet", "WorkPackage", "GoalDelivery", "RunReport", "SupervisorDecision", "SlaveMessage", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "ProviderConfiguration", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "SmokeAttempt", "ConductorCall", "RequirementSet", "WorkPackage", "GoalDelivery", "RunReport", "SupervisorDecision", "SlaveMessage", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "ProviderConfiguration", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
     await removeTemplates()
   })

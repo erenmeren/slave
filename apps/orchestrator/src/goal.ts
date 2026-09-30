@@ -5,6 +5,7 @@ import { VERIFICATION_REASON_MAX_CHARS, VERIFICATION_RUN_RETRY_CAP, handMergeIns
 import { appendEvent } from '@slave-of-ai/events'
 import { mergeOrAbort, primaryCheckoutReady } from './gitMerge.js'
 import { integrationWorktreePath } from './goalBranch.js'
+import { passedSmokeAtTip, settleStrandedSmoke, smokeErrorsInRound, startSmoke } from './smoke.js'
 import type { TickDeps } from './tick.js'
 import { dispatchVerification, lastVerificationFailure, settleStrandedClaim } from './verification.js'
 import { gitIn } from './worktree.js'
@@ -19,9 +20,10 @@ export interface GoalPassOptions {
 /**
  * The goal pass (Conductor Plans 4a and 4b, spec R9): once per ordinary tick, after the merge pass.
  * Moves each open goal version of the workspace on: once every package is on its integration
- * branch, a verification run checks every requirement (Plan 4b; its conclusion -- accept, rework,
- * `needs_human` -- is `concludeVerification`'s); a claim nothing will conclude is settled here; an
- * accepted version is merged into the base branch once.
+ * branch, a smoke check (skeleton spec S7; its conclusion is `applySmokeOutcome`'s) and then a
+ * verification run check every requirement (Plan 4b; its conclusion -- accept, rework,
+ * `needs_human` -- is `concludeVerification`'s); a claim nothing will conclude, a smoke's or a
+ * verification run's, is settled here; an accepted version is merged into the base branch once.
  */
 export async function runGoalPass(deps: TickDeps, options: GoalPassOptions): Promise<void> {
   const workspaceId = deps.workspaceId
@@ -60,6 +62,21 @@ export async function runGoalPass(deps: TickDeps, options: GoalPassOptions): Pro
     await removeIntegrationWorktree(workspace.repoPath, delivery.goalVersion, workspaceId)
   }
 
+  // Ruling F2 (spec S7, one event per attempt): an attempt whose claim was released while it ran --
+  // an abandoned version, which no pass below visits -- and whose process then died is settled
+  // here, so it still says how it ended. A live one is left to its owner, as a claimed one is.
+  const unclaimed = await prisma.smokeAttempt.findMany({
+    where: { workspaceId, status: 'running', goalDelivery: { activeSmokeId: null } },
+    select: { id: true },
+  })
+  for (const attempt of unclaimed) {
+    try {
+      await settleStrandedSmoke(attempt.id)
+    } catch (error) {
+      console.error(`[goal] smoke attempt ${attempt.id} could not be settled on this pass:`, error)
+    }
+  }
+
   const open = await prisma.goalDelivery.findMany({
     where: {
       workspaceId,
@@ -87,6 +104,12 @@ async function advanceDelivery(
 ): Promise<void> {
   const workspaceId = deps.workspaceId
   let delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { id } })
+  if (delivery.activeSmokeId !== null) {
+    // Plan B D8: a smoke claim nothing will conclude is settled here; a live one is waited for.
+    await settleStrandedSmoke(delivery.activeSmokeId)
+    delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { id } })
+    if (delivery.activeSmokeId !== null) return
+  }
   if (delivery.status === 'verifying' && delivery.activeRunId !== null) {
     // D3/D7 and ruling Q2: a claim whose run is over with nobody concluding it (a daemon that
     // died, a conclusion that crashed). Settled -- concluded or released -- and read again, so a
@@ -97,25 +120,33 @@ async function advanceDelivery(
   if (delivery.status === 'verifying') {
     if (delivery.activeRunId !== null) return
     if (delivery.roundRunFailures >= VERIFICATION_RUN_RETRY_CAP) {
+      // Plan B D3: a smoke the orchestrator could not run counts against the same cap as an
+      // unusable verification, so the reason names whichever it was.
       const last = await lastVerificationFailure(delivery.id)
-      await endInNeedsHuman(
-        delivery.id,
-        null,
-        `the verifier could not produce a usable verification ${String(VERIFICATION_RUN_RETRY_CAP)} times in round ${String(delivery.round)}` +
-          (last === null ? '' : `; the last: ${last.slice(0, 1000)}`),
-      )
+      const smoke = await smokeErrorsInRound(delivery.id, delivery.round)
+      const cap = String(VERIFICATION_RUN_RETRY_CAP)
+      const round = String(delivery.round)
+      const reason =
+        smoke.count === 0
+          ? `the verifier could not produce a usable verification ${cap} times in round ${round}` + (last === null ? '' : `; the last: ${last.slice(0, 1000)}`)
+          : `the round could not be run ${cap} times in round ${round}: ${String(smoke.count)} smoke check(s) could not be run; the last: ${(smoke.last ?? '').slice(0, 800)}` +
+            (last === null ? '' : `; the last unusable verification: ${last.slice(0, 500)}`)
+      await endInNeedsHuman(delivery.id, null, reason)
       return
     }
     // Task 5's rule: a round -- a new one or the same one again -- verifies the whole version,
     // so it waits for every package to be back on the branch.
     if (!(await everyPackageIntegrated(workspaceId, delivery.goalVersion))) return
-    if (options.mayStartRuns) await dispatchVerification(deps, delivery.id)
+    if (!options.mayStartRuns) return
+    await smokeOrVerify(deps, workspace.repoPath, delivery)
     return
   }
   if (delivery.status === 'integrating') {
     if (!(await everyPackageIntegrated(workspaceId, delivery.goalVersion))) return
-    // Plan 4b (spec R8/R9): integration is not acceptance. A round of verification is.
-    if (options.mayStartRuns) await dispatchVerification(deps, delivery.id)
+    if (!options.mayStartRuns) return
+    // Plan 4b (spec R8/R9): integration is not acceptance. A round of verification is -- and
+    // (skeleton spec S7) the round starts with a smoke check.
+    await smokeOrVerify(deps, workspace.repoPath, delivery)
     return
   }
   if (delivery.status !== 'accepted' || delivery.mergedAt !== null || delivery.mergeError !== null) return
@@ -135,6 +166,26 @@ async function advanceDelivery(
         handMergeInstruction(delivery.integrationBranch, workspace.baseBranch, workspaceId, delivery.goalVersion, delivery.verifiedCommit),
     )
   }
+}
+
+/**
+ * Skeleton spec S7 (plan B D5): the verification run follows a passing smoke check on the
+ * integration branch's CURRENT tip. Without one, a smoke attempt starts instead (a new round from
+ * `integrating`, the same round again from `verifying`), and a later pass verifies once it passed.
+ * One that already passed on this tip -- a retry of an unchanged tree, or a verification that was
+ * unusable -- is not run again. A version whose set was extracted before RUN existed
+ * (`smokeRequired` false) is verified as it always was.
+ */
+async function smokeOrVerify(
+  deps: TickDeps,
+  repoPath: string,
+  delivery: { readonly id: string; readonly integrationBranch: string; readonly smokeRequired: boolean },
+): Promise<void> {
+  if (delivery.smokeRequired && (await passedSmokeAtTip(repoPath, delivery)) === null) {
+    await startSmoke(delivery.id)
+    return
+  }
+  await dispatchVerification(deps, delivery.id)
 }
 
 /** Every package task of the version is `done` and on the integration branch -- and there is at

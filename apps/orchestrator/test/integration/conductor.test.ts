@@ -447,9 +447,20 @@ describe('conduct: the size decision', () => {
     const tip = git(['rev-parse', 'main'], repoPath)
     const deliveries = await prisma.goalDelivery.findMany({ where: { workspaceId: f.workspaceId } })
     expect(deliveries).toEqual([
-      expect.objectContaining({ goalVersion: 1, status: 'integrating', integrationBranch: branch, baseCommit: tip, acceptedAt: null, mergedAt: null }),
+      expect.objectContaining({ goalVersion: 1, status: 'integrating', integrationBranch: branch, baseCommit: tip, acceptedAt: null, mergedAt: null, smokeRequired: true }),
     ])
     expect(git(['rev-parse', branch], repoPath)).toBe(tip)
+  })
+
+  it('does not smoke-check a version whose stored set predates RUN (skeleton spec S7, legacy sets)', async () => {
+    const f = await seedWithRequirements()
+    // A set extracted before Plan A: R-keys only.
+    const set = await prisma.requirementSet.findFirstOrThrow({ where: { workspaceId: f.workspaceId, goalVersion: 1 } })
+    const items = (set.items as { key: string }[]).filter((item) => item.key !== 'RUN')
+    await prisma.requirementSet.update({ where: { id: set.id }, data: { items } })
+    expect(await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) }).decider))).toBe('conducted')
+    const delivery = await prisma.goalDelivery.findFirstOrThrow({ where: { workspaceId: f.workspaceId } })
+    expect(delivery.smokeRequired).toBe(false)
   })
 
   it('says once and writes nothing when the integration branch cannot be cut', async () => {
