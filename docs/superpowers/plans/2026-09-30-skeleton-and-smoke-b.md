@@ -15,13 +15,22 @@
 - **D1. The lock is held for milliseconds, never for the smoke run.** `startSmoke` takes the delivery lock to claim and to insert the attempt row, and nothing else. The claim is a guarded `updateMany` on `activeRunId: null, activeSmokeId: null`, and a lost race inside the lock throws, so the inserted row rolls back. The script then runs outside every transaction. `applySmokeOutcome` takes the lock again to write `workspace.smoke_run` and move the delivery, in the Plan 4b order: events first, each only if missing, then the guarded moves. *Cost if wrong:* nothing. `withDeliveryLock`'s own 120 s transaction timeout would fail a lock held for a 15-minute smoke run.
 - **D2. One attempt per claim, and the claim excludes a verification run and a second smoke.** `activeSmokeId` is `@unique`. `startSmoke` refuses a delivery holding either claim. `dispatchVerification`'s claim also requires `activeSmokeId: null`. Each process keeps the attempts it runs in `activeSmokeIds`, the `activePumpRunIds` idiom. Two overlapping ticks, a daemon and a CLI `tick`, therefore start at most one attempt, and the loser writes nothing.
 - **D3. A failed attempt spends a round; an attempt that could not run does not.** A new round's smoke moves the delivery `integrating → verifying` with `round + 1`, exactly as a new verification round did. The verification run that follows a passing smoke is part of the same round: it is dispatched through the existing "same round, no claim" path, which does not increment. `stub`, `missing`, `failed` and `timed_out` release the claim and either rework (`verifying → integrating`) or, at `round - roundBase >= verificationRoundCap`, end `needs_human` with the trimmed output in the reason. `error` is the orchestrator's own failure: no worktree, no spawn, a stranded attempt. It releases the claim and counts one `roundRunFailures`, the same counter and cap (`VERIFICATION_RUN_RETRY_CAP`) that unusable verification runs use (Plan 4b D7), so the next pass tries the same round again.
-- **D4. Rework routing is deterministic and never reads the output.** `missing` and `stub` go to the `skeleton` package's task. `failed` and `timed_out` go to the `integration` package's task. In `single` mode both go to the one package. A plan from before Plan A has no skeleton, so `missing`/`stub` fall back to integration. The task goes `done → rework` with `integratedAt` cleared and the smoke's reason as `lastRejectionReason`, and no attempt is charged (Plan 4b D5). `task.rework` carries `verificationRound`. A target task that is not `done` ends the version `needs_human`, with the `blocked_package` remedy. The rework reason for `failed`/`timed_out` tells the integration worker that a fix in another package's file goes in its report's questions, not in the file (spec §7's shared-file risk; OBS-18 is the Supervisor-as-conductor spec's).
+- **D4. Rework routing is deterministic and never reads the output.** `missing` and `stub` go to the `skeleton` package's task. `failed` and `timed_out` go to the `integration` package's task. In `single` mode both go to the one package. A plan from before Plan A has no skeleton, so `missing`/`stub` fall back to integration. The task goes `done → rework` with `integratedAt` cleared and the smoke's reason as `lastRejectionReason`, and no attempt is charged (Plan 4b D5). `task.rework` carries `verificationRound`. A target task that is not `done` ends the version `needs_human`, with the `blocked_package` remedy. The rework reason for `failed`/`timed_out` tells the integration worker that a fix in another package's file goes in its report's `handOff`, not in the file. D11 routes a skeleton-owned one; any other remains spec §7's shared-file risk (OBS-18, the Supervisor-as-conductor spec's).
 - **D5. A passing smoke is reused while the tip is the one it passed on.** The verification run is dispatched only when a `passed` attempt exists whose `tip` equals the integration branch's current tip. A same-round retry after an unusable verification run therefore does not rerun the smoke. A `retry-goal` of an unchanged tree skips the smoke and starts the new round's verification directly. Any merge onto the branch (a rework) moves the tip and requires a new smoke. *Cost if wrong:* a smoke that is flaky on an unchanged tip is not rerun on a retry. The verifier's own RUN check (Plan A D10) still runs.
 - **D6. The attempt runs in a fresh detached checkout with no setup commands, in the constrained environment.** The worktree is `verify-smoke-<id8>` under `worktreeRootFor(repo)`. The `verify-` prefix means `removeVerificationWorktree` removes it unchanged. The worktree is checked out at the claimed tip SHA and removed after every attempt. `setupCommands` are not run: the smoke's job is to start the product the way a person following the README would, from a clean clone. The environment is `CHILD_ENV_ALLOW` plus `DOCKER_HOST`, `DOCKER_CONFIG`, `DOCKER_CONTEXT` and `XDG_RUNTIME_DIR` when the daemon has them, plus `SLAVEOFAI_SMOKE_PROJECT=slaveofai-smoke-<id12>`. `DATABASE_URL` and operator keys are absent. `bash scripts/smoke.sh` runs through `runShellCommand` (its own process group, SIGTERM then SIGKILL at `Workspace.smokeTimeoutMs`, default 900 000). After every attempt a best-effort `docker compose -p <project> down -v --remove-orphans` plus `docker rm -f` of containers named with the project prefix runs, when `docker` exists, bounded at 2 minutes. That cleans up containers a killed script started outside its process group (OBS-16).
 - **D7. "Missing" means no regular file at `scripts/smoke.sh` in the checkout; the executable bit is not required.** The script is run as `bash scripts/smoke.sh`, so a missing `+x` does not stop it. `stub` is exit code `SMOKE_STUB_EXIT_CODE` (2) with `SMOKE_STUB_MESSAGE` in the output. Every other non-zero exit, and a death by signal, is `failed`.
 - **D8. A stranded attempt is settled by the goal pass.** A claim whose attempt row is gone is released as `error`. So is a `running` attempt that this process does not run and whose owner is this process or a dead process (`ownerGone`), and one older than `smokeTimeoutMs + SMOKE_STRANDED_GRACE_MS` (60 s) whatever its owner. Its process group is killed (`-pid`, SIGKILL) if it is still alive, and its worktree is removed. An attempt that already has an outcome but still holds the claim (a crash between the two writes) is applied again: `applySmokeOutcome` is replay-safe.
 - **D9. `abandon-goal` clears the smoke claim and signals its process group.** The attempt finishes, because its script's `trap` runs on SIGTERM. The attempt records what happened. Its conclusion finds the delivery `abandoned` and moves nothing.
 - **D10. The report lists every attempt and every denied tool call of the version.** `GoalReport.smoke` lists every `SmokeAttempt` of the delivery, oldest first, with round, outcome, exit code, duration, the commit, the trimmed output and the package it reworked. `GoalReport.deniedToolCalls` lists the `guardrail.tripped { guardrail: 'permission_mode' }` and `run.tool_denied` events of the version's runs (its package tasks' runs and its verification runs), oldest first, capped at 200 with the rest counted. The Markdown gains "Smoke checks" after "Verification rounds" and "Denied tool calls" after "Packages". The page gains the same two panels. The trail gains a sentence per `workspace.smoke_run`.
+- **D11. User ruling 2026-09-30: the integration package can hand a skeleton-owned fix to the skeleton, once per smoke attempt, without spending a round.** A `failed`/`timed_out` smoke goes to integration (D4). Integration's rework prompt tells it that a fix in a file another package owns goes in its report as `"handOff": {"path": "<file>", "change": "<what must change>"}` (a new optional `<slave-report>` field). When that run's report is filed (`fileRunReport`), `handOffSmokeRework` checks, under the delivery's lock:
+  - the run is an implementation run of the integration package's task;
+  - it started after the newest `failed`/`timed_out` attempt that reworked that task ended;
+  - that attempt has not handed off yet;
+  - the delivery is still `integrating` in that attempt's round;
+  - the skeleton package exists;
+  - the named path, normalised, is owned by the skeleton under the ownership rule (`ownershipRuleFor` + `isOwned` over the version's packages). The worker's claim alone is never enough.
+
+  If all hold, the skeleton's `done` task goes to `rework` with the smoke's output and the requested change. `SmokeAttempt.handOffTaskId` (+ `handOffPath`, `handOffChange`) is stamped, and `workspace.smoke_handed_off` is written. The round is not incremented: the failed attempt already spent it, and the next smoke, once both packages are integrated again, is the next round as usual. The stamp is the ping-pong cap: one hand-off per attempt, and only from integration to skeleton, never back. Anything else changes nothing and the version proceeds as today: a path owned by a third package, an unowned path (integration's own), a report with no `handOff`, a skeleton task that is not `done`, or `single` mode (no skeleton). *Cost if wrong:* a hand-off whose change the skeleton cannot make costs one skeleton run and no round. The next smoke fails and spends its round as it would have.
 - **Left out on purpose:** a settings surface for `smokeTimeoutMs` (the column and its default only); a Supervisor situation for a failed smoke (a failed smoke reworks automatically, and its cap is `goal_needs_human`, which already exists); running `setupCommands` before the smoke (D6); smoke checks for planned (non-conducted) delivery (spec §4); a version's smoke after its final merge (Plan 4a D9's reasoning).
 
 ## Global Constraints
@@ -35,7 +44,7 @@
 - Inside a Prisma interactive transaction a refusal must THROW to roll back; a returned value commits what was written. This matters in `startSmoke`: the attempt row is inserted before the claim's guarded update.
 - `vi.spyOn` on a Prisma delegate breaks later tests: assign a wrapper and restore it in `finally`.
 - Never `TRUNCATE "SlaveTemplate" CASCADE` in a test; delete your own template rows by id.
-- The hook plane (`scripts/pause-gate.sh`, `scripts/cursor-shell-gate.sh`, `scripts/tool-result-tap.sh`, `scripts/lib/pause-flag.sh`, `scripts/lib/permissions.sh`) does not change; m56a stage 12 pins their digests. This plan adds one event type (`LANE_BY_TYPE` 73 → 74) and no situation kind (24).
+- The hook plane (`scripts/pause-gate.sh`, `scripts/cursor-shell-gate.sh`, `scripts/tool-result-tap.sh`, `scripts/lib/pause-flag.sh`, `scripts/lib/permissions.sh`) does not change; m56a stage 12 pins their digests. This plan adds two event types (`LANE_BY_TYPE` 73 → 75) and no situation kind (24).
 - Every commit message ends with exactly `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - Spec S7 verbatim: "When every package of a goal version is integrated and before the verification run is dispatched, the orchestrator runs `bash scripts/smoke.sh` in a fresh detached worktree of the integration branch tip, without a model: bounded by `Workspace.smokeTimeoutMs` (default 15 minutes); the process group is killed on timeout and the worktree is removed afterwards, pass or fail; the same constrained environment a run gets (allow-listed env, own process group), plus `SLAVEOFAI_SMOKE_PROJECT`; recorded as one event per attempt (`workspace.smoke_run` with exit code, duration and trimmed output), shown on the report page; pass → the verification run is dispatched as today, and the smoke output is handed to the verifier as evidence (S8); the script missing, not executable, or exiting 2 with the stub's message → the `skeleton` package's task goes back to rework (single: the single task) with the output; any other non-zero exit or a timeout → the `integration` package's task (single: the single task) goes back to rework with the trimmed output; each failed smoke attempt counts as a verification round against the same round cap; at the cap the version ends `needs_human` with the smoke output in the reason. A smoke that cannot even start (the orchestrator's own failure: worktree, spawn) is retried like an unusable verification (Plan 4b D7), not charged to a package."
 
@@ -44,7 +53,8 @@
 - A smoke script that backgrounds a server and exits 0 without stopping it, or a script that times out after starting `docker compose up`. The server's process group is killed at the timeout, the compose project is brought down by name, the worktree is gone, and the next attempt's port check finds the port free (Task 3 timeout test; cleanup in D6).
 - The daemon restarts mid-smoke. The next goal pass finds a `running` attempt owned by a dead process, kills its group if it is alive, records `error`, counts one run failure, and starts the same round again. It is never charged as a round (Task 3 stranded test).
 - A person abandons the version during a 10-minute smoke. The process group gets SIGTERM, and the attempt's conclusion lands nowhere: no rework, no `needs_human`, no event after `workspace.goal_abandoned` except the attempt's own `workspace.smoke_run` (Task 4 test).
-- A smoke script that prints megabytes, or prints `<slave-verification>`/`<slave-report>` markers. The stored and event output is bounded (4000 chars, head and tail), and in the verifier's prompt and the rework prompt it is sanitised text that cannot forge a block (Task 2 + Task 5 tests).
+- A smoke script that prints megabytes, or prints `<slave-verification>`/`<slave-report>` markers. The stored and event output is bounded (4000 chars, head and tail), and in the verifier's prompt and the rework prompt it is sanitised text that cannot forge a block (Task 2 + Task 6 tests).
+- The integration worker names a path owned by a THIRD package (not the skeleton) in its `handOff`. No hand-off happens: the skeleton stays `done`, no `workspace.smoke_handed_off` is written, the attempt keeps `handOffTaskId` null, and the version proceeds as today, with integration's own rework and the next smoke spending the next round (Task 5 pinning test). The same holds for `../package.json`, an absolute path, and a report with no `handOff`.
 - A `retry-goal` on a version stopped for an unverifiable item, with an unchanged tree. No new smoke runs, and the verification round starts at once, with the earlier passing smoke's output as evidence (Task 4 test).
 
 ---
@@ -59,13 +69,13 @@
 - Modify: `packages/domain/src/events/schema.ts:540-552` (the variant after `workspace.goal_retried`)
 - Modify: `packages/domain/src/supervisor/timeline.ts:57` (`LANE_BY_TYPE['workspace.smoke_run'] = 'verified'`)
 - Modify: `apps/web/src/components/activity/cards.tsx` (`WorkspaceSmokeRunCard`, registered after `workspace.goal_retried`), `apps/web/src/lib/activityFilters.ts:110-113`, `apps/web/src/server/timeline.ts:345-355` (`titleFor` case)
-- Modify: `scripts/gate-m56a-provider-contract.mjs:1240-1258` (73 → 74, comment)
-- Test: `packages/domain/test/events/conductor-events.test.ts`, `packages/domain/test/supervisor/timeline.test.ts:18-19` (73 → 74), `apps/web/test/activity-cards.test.tsx:100` (`PAYLOAD_BY_TYPE`), `packages/db/test/integration/enum-parity.test.ts`
+- Modify: `scripts/gate-m56a-provider-contract.mjs:1240-1258` (73 → 75, comment)
+- Test: `packages/domain/test/events/conductor-events.test.ts`, `packages/domain/test/supervisor/timeline.test.ts:18-19` (73 → 75), `apps/web/test/activity-cards.test.tsx:100` (`PAYLOAD_BY_TYPE`), `packages/db/test/integration/enum-parity.test.ts`
 
 **Interfaces:**
-- Produces (Prisma): `enum SmokeOutcome { running passed missing stub failed timed_out error }`; `model SmokeAttempt { id, workspaceId, goalDeliveryId, goalVersion Int, round Int, tip String, status SmokeOutcome @default(running), exitCode Int?, signal String?, durationMs Int?, output String @default(""), pid Int?, ownerInstance String?, worktreePath String?, reworkedTaskId String?, startedAt DateTime @default(now()), endedAt DateTime? }`, cascading from `Workspace` and `GoalDelivery`, `@@index([goalDeliveryId, startedAt])`. `GoalDelivery.activeSmokeId String? @unique`, `GoalDelivery.smokeRequired Boolean @default(false)`. `Workspace.smokeTimeoutMs Int @default(900000)`.
+- Produces (Prisma): `enum SmokeOutcome { running passed missing stub failed timed_out error }`; `model SmokeAttempt { id, workspaceId, goalDeliveryId, goalVersion Int, round Int, tip String, status SmokeOutcome @default(running), exitCode Int?, signal String?, durationMs Int?, output String @default(""), pid Int?, ownerInstance String?, worktreePath String?, reworkedTaskId String?, handOffTaskId String?, handOffPath String?, handOffChange String?, startedAt DateTime @default(now()), endedAt DateTime? }`, cascading from `Workspace` and `GoalDelivery`, `@@index([goalDeliveryId, startedAt])`. `GoalDelivery.activeSmokeId String? @unique`, `GoalDelivery.smokeRequired Boolean @default(false)`. `Workspace.smokeTimeoutMs Int @default(900000)`.
 - Produces (domain): `SMOKE_OUTCOMES = ['running', 'passed', 'missing', 'stub', 'failed', 'timed_out', 'error'] as const`, `type SmokeOutcome`, `SMOKE_TIMEOUT_MS_DEFAULT = 900_000`, `SMOKE_OUTPUT_MAX_CHARS = 4000`, `SMOKE_STRANDED_GRACE_MS = 60_000`.
-- Produces (event): `workspace.smoke_run { version: int>0, round: int>0, attemptId: string, outcome: 'passed'|'missing'|'stub'|'failed'|'timed_out'|'error', exitCode: int|null, durationMs: int>=0, output: string<=4000, reworkedPackage: string|null }`.
+- Produces (event): `workspace.smoke_run { version: int>0, round: int>0, attemptId: string, outcome: 'passed'|'missing'|'stub'|'failed'|'timed_out'|'error', exitCode: int|null, durationMs: int>=0, output: string<=4000, reworkedPackage: string|null }`; `workspace.smoke_handed_off { version: int>0, round: int>0, attemptId: string, fromPackage: string, toPackage: string, path: string<=500, change: string<=2000 }` (plan B D11).
 
 - [ ] **Step 1: Migration**
 
@@ -100,6 +110,9 @@ CREATE TABLE "SmokeAttempt" (
     "ownerInstance"  TEXT,
     "worktreePath"   TEXT,
     "reworkedTaskId" TEXT,
+    "handOffTaskId"  TEXT,
+    "handOffPath"    TEXT,
+    "handOffChange"  TEXT,
     "startedAt"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "endedAt"        TIMESTAMP(3),
 
@@ -116,14 +129,17 @@ ALTER TABLE "GoalDelivery" ADD COLUMN "smokeRequired" BOOLEAN NOT NULL DEFAULT f
 ALTER TABLE "Workspace" ADD COLUMN "smokeTimeoutMs" INTEGER NOT NULL DEFAULT 900000;
 
 ALTER TYPE "EventType" ADD VALUE IF NOT EXISTS 'workspace.smoke_run';
+-- User ruling 2026-09-30 (plan B D11): the integration package handed a failed smoke's fix to the
+-- skeleton, once per attempt; `SmokeAttempt.handOff*` records it.
+ALTER TYPE "EventType" ADD VALUE IF NOT EXISTS 'workspace.smoke_handed_off';
 ```
 
-Mirror it in `schema.prisma` with `///` doc comments in the file's style: `SmokeAttempt` after `VerificationResult`; the back relations `smokes SmokeAttempt[]` on `GoalDelivery` and `smokeAttempts SmokeAttempt[]` on `Workspace`; `workspace_smoke_run @map("workspace.smoke_run")` after `workspace_goal_retried`, with a `///` line ("Skeleton spec S7: one smoke attempt concluded -- its outcome, exit code, duration, trimmed output, and the package it sent back"). Then `npm run db:generate && npm run db:migrate:test`.
+Mirror it in `schema.prisma` with `///` doc comments in the file's style: `SmokeAttempt` after `VerificationResult`; the back relations `smokes SmokeAttempt[]` on `GoalDelivery` and `smokeAttempts SmokeAttempt[]` on `Workspace`; `workspace_smoke_run @map("workspace.smoke_run")` after `workspace_goal_retried`, with a `///` line ("Skeleton spec S7: one smoke attempt concluded -- its outcome, exit code, duration, trimmed output, and the package it sent back"), then `workspace_smoke_handed_off @map("workspace.smoke_handed_off")` ("User ruling 2026-09-30: the integration package handed a failed smoke's fix to the skeleton"); the three `handOff*` columns with a `///` line naming plan B D11. Then `npm run db:generate && npm run db:migrate:test`.
 
 - [ ] **Step 2: Failing tests**
-  - `conductor-events.test.ts`: `workspace.smoke_run` parses with `{ version: 1, round: 2, attemptId: 'a1', outcome: 'failed', exitCode: 1, durationMs: 1200, output: 'npm error Missing script: "start"', reworkedPackage: 'integration' }`; it is refused with `outcome: 'running'` and with an `output` of 4001 characters.
-  - `timeline.test.ts`: `toHaveLength(73)` → `74`, and the title → `'lanes every event type -- 74 as of skeleton-and-smoke Plan B Task 1'`.
-  - `activity-cards.test.tsx`: `PAYLOAD_BY_TYPE` gains `'workspace.smoke_run': { version: 1, round: 2, attemptId: 'a1', outcome: 'failed', exitCode: 1, durationMs: 1200, output: 'npm error Missing script: "start"', reworkedPackage: 'integration' },`, plus a case:
+  - `conductor-events.test.ts`: `workspace.smoke_run` parses with `{ version: 1, round: 2, attemptId: 'a1', outcome: 'failed', exitCode: 1, durationMs: 1200, output: 'npm error Missing script: "start"', reworkedPackage: 'integration' }`; it is refused with `outcome: 'running'` and with an `output` of 4001 characters. `workspace.smoke_handed_off` parses with `{ version: 1, round: 1, attemptId: 'a1', fromPackage: 'integration', toPackage: 'skeleton', path: 'backend/package.json', change: 'add a "start" script' }` and is refused with a `change` of 2001 characters.
+  - `timeline.test.ts`: `toHaveLength(73)` → `75`, and the title → `'lanes every event type -- 75 as of skeleton-and-smoke Plan B Task 1'`.
+  - `activity-cards.test.tsx`: `PAYLOAD_BY_TYPE` gains `'workspace.smoke_run': { version: 1, round: 2, attemptId: 'a1', outcome: 'failed', exitCode: 1, durationMs: 1200, output: 'npm error Missing script: "start"', reworkedPackage: 'integration' },` and `'workspace.smoke_handed_off': { version: 1, round: 1, attemptId: 'a1', fromPackage: 'integration', toPackage: 'skeleton', path: 'backend/package.json', change: 'add a "start" script' },`, plus a case:
 
     ```tsx
       it('workspace.smoke_run says how the smoke check ended and who was sent back', () => {
@@ -181,8 +197,23 @@ Mirror it in `schema.prisma` with `///` doc comments in the file's style: `Smoke
           reworkedPackage: z.string().min(1).nullable(),
         }),
       }),
+      // User ruling 2026-09-30 (plan B D11): the integration package's smoke rework named a file the
+      // skeleton owns, and the same failure went to the skeleton -- once per attempt, no round spent.
+      z.object({
+        ...envelope,
+        type: z.literal('workspace.smoke_handed_off'),
+        payload: z.object({
+          version: z.number().int().positive(),
+          round: z.number().int().positive(),
+          attemptId: z.string().min(1),
+          fromPackage: z.string().min(1),
+          toPackage: z.string().min(1),
+          path: z.string().min(1).max(500),
+          change: z.string().max(2000),
+        }),
+      }),
     ```
-  - `LANE_BY_TYPE`: `'workspace.smoke_run': 'verified', // Skeleton spec S7: the smoke check is the first half of a verification round.`
+  - `LANE_BY_TYPE`: `'workspace.smoke_run': 'verified', // Skeleton spec S7: the smoke check is the first half of a verification round.` and `'workspace.smoke_handed_off': 'work', // Plan B D11: a package sent back, like task.rework.`
   - Card:
 
     ```tsx
@@ -217,8 +248,22 @@ Mirror it in `schema.prisma` with `///` doc comments in the file's style: `Smoke
     }
     ```
 
-    Register `'workspace.smoke_run': WorkspaceSmokeRunCard,` after `'workspace.goal_retried'`.
-  - `activityFilters.ts`: `'workspace.smoke_run',` after `'workspace.goal_retried'`, under the Plan 4b comment ("…and its smoke check, skeleton spec S7").
+    ```tsx
+    /** User ruling 2026-09-30 (plan B D11): a failed smoke's fix handed from integration to the skeleton. */
+    function WorkspaceSmokeHandedOffCard(props: ActivityCardProps): ReactElement {
+      const payload = props.event.payload as { version: number; round: number; fromPackage: string; toPackage: string; path: string; change: string }
+      return (
+        <ActivityCard {...props}>
+          <Transition tone="working" label={`goal v${String(payload.version)} round ${String(payload.round)}: ${payload.fromPackage} handed the smoke fix to ${payload.toPackage} (${payload.path})`}>
+            {payload.change !== '' && <span data-testid="smoke-handoff-change">{payload.change}</span>}
+          </Transition>
+        </ActivityCard>
+      )
+    }
+    ```
+
+    Register `'workspace.smoke_run': WorkspaceSmokeRunCard,` and `'workspace.smoke_handed_off': WorkspaceSmokeHandedOffCard,` after `'workspace.goal_retried'`.
+  - `activityFilters.ts`: `'workspace.smoke_run', 'workspace.smoke_handed_off',` after `'workspace.goal_retried'`, under the Plan 4b comment ("…and its smoke check, skeleton spec S7").
   - `server/timeline.ts` `titleFor`:
 
     ```ts
@@ -232,8 +277,14 @@ Mirror it in `schema.prisma` with `///` doc comments in the file's style: `Smoke
           const r = typeof round === 'number' ? String(round) : '?'
           return `smoke goal v${v} round ${r}: ${typeof outcome === 'string' ? outcome.replace('_', ' ') : '?'}`
         }
+        // Plan B D11: the smoke fix handed from integration to the skeleton.
+        case 'workspace.smoke_handed_off': {
+          const version = payload['version']
+          const to = payload['toPackage']
+          return `goal v${typeof version === 'number' ? String(version) : '?'}: smoke fix handed to ${typeof to === 'string' ? to : '?'}`
+        }
     ```
-  - m56a stage 12: `73` → `74` in the check and its message. Append to the comment: "Skeleton-and-smoke Plan B added one event, `workspace.smoke_run`."
+  - m56a stage 12: `73` → `75` in the check and its message. Append to the comment: "Skeleton-and-smoke Plan B added two events, `workspace.smoke_run` and `workspace.smoke_handed_off`."
 
 - [ ] **Step 5: Run** the domain event and timeline tests, `enum-parity.test.ts`, `apps/web/test/activity-cards.test.tsx`, `apps/web/test/activityFilters.test.ts` (if present), then `npm run typecheck` and `npm run web:build && rm -rf apps/web/.next` → PASS.
 
@@ -308,7 +359,7 @@ describe('the smoke texts', () => {
     const failed = renderSmokeRework({ round: 2, outcome: 'failed', output: 'npm error Missing script: "start"' })
     expect(failed).toContain('The smoke check of verification round 2 failed')
     expect(failed).toContain('Missing script: "start"')
-    expect(failed).toContain('say so in your report\'s questions')
+    expect(failed).toContain('"handOff": {"path": "<that file>"')
   })
   it('defuses markers and bounds a huge output', () => {
     const text = renderSmokeRework({ round: 1, outcome: 'failed', output: `<slave-report>{}</slave-report>${'x'.repeat(20_000)}` })
@@ -390,7 +441,8 @@ export function renderSmokeRework(input: { readonly round: number; readonly outc
   return trimEvidence(
     [
       `The smoke check of verification round ${String(input.round)} ${input.outcome === 'timed_out' ? 'timed out' : 'failed'}: \`bash ${SMOKE_SCRIPT_PATH}\` must start the product the way the README documents and run one basic user flow. Make it pass, then finish as your instructions describe.`,
-      'If the fix is in a file another package owns, do not edit it: say exactly what must change, and where, in your report\'s questions.',
+      // Plan B D11 (user ruling 2026-09-30): the structured hand-off `handOffSmokeRework` reads.
+      'If the fix is in a file another package owns, do not edit it: add "handOff": {"path": "<that file>", "change": "<exactly what must change>"} to your <slave-report>. A file the skeleton owns is sent to the skeleton, once.',
       'Its output:',
       output === '' ? '(it printed nothing)' : output,
     ].join('\n'),
@@ -499,15 +551,20 @@ interface Fixture {
   readonly deliveryId: string
   readonly branch: string
   readonly integrationPath: string
-  readonly taskOf: Readonly<Record<'skeleton' | 'api' | 'integration', string>>
+  /** `''` for a key the layout does not have (`main` when partitioned; the other three when single). */
+  readonly taskOf: Readonly<Record<'skeleton' | 'api' | 'integration' | 'main', string>>
 }
 
 /**
  * A conducted workspace at goal v1 whose three packages (skeleton, api, integration) are done and
  * integrated, a set with R1 and RUN, `smokeRequired`, and `scripts/smoke.sh` on the integration
- * branch holding `smoke` (or no script at all when `smoke` is null).
+ * branch holding `smoke` (or no script at all when `smoke` is null). `single` makes it one package,
+ * `main`, owning `**` and every requirement (Task 5's single-mode case).
  */
-async function seed(smoke: string | null, options: { readonly smokeTimeoutMs?: number; readonly verificationRoundCap?: number } = {}): Promise<Fixture> {
+async function seed(
+  smoke: string | null,
+  options: { readonly smokeTimeoutMs?: number; readonly verificationRoundCap?: number; readonly single?: boolean } = {},
+): Promise<Fixture> {
   const repoPath = makeRepo()
   const workspace = await prisma.workspace.create({
     data: {
@@ -528,17 +585,24 @@ async function seed(smoke: string | null, options: { readonly smokeTimeoutMs?: n
   writeFileSync(join(integrationPath, 'app.txt'), 'the product\n')
   git(['add', '-A'], integrationPath)
   git(['commit', '-q', '-m', 'merge(T-pkg): the packages'], integrationPath)
-  const taskOf: Record<string, string> = {}
-  for (const [key, isIntegration, requirementKeys] of [['skeleton', false, []], ['api', false, ['R1']], ['integration', true, ['RUN']]] as const) {
+  const taskOf: Record<'skeleton' | 'api' | 'integration' | 'main', string> = { skeleton: '', api: '', integration: '', main: '' }
+  const layout: readonly (readonly ['skeleton' | 'api' | 'integration' | 'main', boolean, readonly string[]])[] =
+    options.single === true
+      ? [['main', false, ['R1', 'RUN']]]
+      : [['skeleton', false, []], ['api', false, ['R1']], ['integration', true, ['RUN']]]
+  for (const [key, isIntegration, requirementKeys] of layout) {
     const pkg = await prisma.workPackage.create({
-      data: { workspaceId: workspace.id, goalVersion: 1, key, title: key, requirementKeys: [...requirementKeys], ownedPaths: [`${key}/**`], interface: '', templateId: 'tpl', isIntegration },
+      data: {
+        workspaceId: workspace.id, goalVersion: 1, key, title: key, requirementKeys: [...requirementKeys],
+        ownedPaths: key === 'main' ? ['**'] : [`${key}/**`], interface: '', templateId: 'tpl', isIntegration,
+      },
     })
     const task = await prisma.task.create({
       data: { workspaceId: workspace.id, title: key, description: 'x', status: 'done', integratedAt: new Date(), requiredRole: 'implementer', maxAttempts: 5, workPackageId: pkg.id, goalVersion: 1 },
     })
     taskOf[key] = task.id
   }
-  return { workspaceId: workspace.id, repoPath, deliveryId: delivery.id, branch, integrationPath, taskOf: taskOf as Fixture['taskOf'] }
+  return { workspaceId: workspace.id, repoPath, deliveryId: delivery.id, branch, integrationPath, taskOf }
 }
 
 const deliveryOf = async (f: Fixture) => prisma.goalDelivery.findUniqueOrThrow({ where: { id: f.deliveryId } })
@@ -1236,7 +1300,337 @@ In the final update, data `{ status: 'abandoned', activeRunId: null, activeSmoke
 
 ---
 
-### Task 5: The verifier sees the passing smoke
+### Task 5: The integration package hands a skeleton-owned smoke fix to the skeleton (user ruling 2026-09-30)
+
+**Files:**
+- Modify: `packages/domain/src/conduct/report.ts` (`reportSchema` + `SlaveReport` gain the optional `handOff`)
+- Modify: `packages/domain/src/conduct/smoke.ts` (`smokeHandOffTarget`, `renderSmokeHandOff`)
+- Modify: `apps/orchestrator/src/smoke.ts` (`handOffSmokeRework`)
+- Modify: `apps/orchestrator/src/report.ts:53-67` (`fileRunReport` calls it after the questions)
+- Modify: `packages/control/src/goalDelivery.ts:79` (`goalEventWith`'s `type` union gains `'workspace_smoke_handed_off'`)
+- Modify: `docs/superpowers/specs/2026-09-29-skeleton-and-smoke-design.md` (S7: the ruling line, already committed with this plan; check it is there)
+- Test: `packages/domain/test/conduct/report.test.ts`, `packages/domain/test/conduct/smoke.test.ts`, `apps/orchestrator/test/integration/smoke.test.ts` (a `describe('the smoke hand-off')`)
+
+**Interfaces:**
+- Consumes: Task 1's `SmokeAttempt.handOffTaskId`/`handOffPath`/`handOffChange` and `workspace.smoke_handed_off`; Task 3's attempts (`reworkedTaskId`); `ownershipRuleFor`, `isOwned`, `isValidOwnedGlob`, `SKELETON_PACKAGE_KEY` (domain).
+- Produces:
+  - `SlaveReport.handOff?: { readonly path: string; readonly change: string }` (the `<slave-report>` field `"handOff": {"path", "change"}`).
+  - `smokeHandOffTarget(path: string, packages: readonly { readonly key: string; readonly ownedPaths: readonly string[]; readonly isIntegration: boolean }[]): string | null`. This is the skeleton's key when the ownership rule says the skeleton owns `path`, else null.
+  - `renderSmokeHandOff(input: { readonly round: number; readonly outcome: 'failed' | 'timed_out'; readonly output: string; readonly fromPackage: string; readonly path: string; readonly change: string }): string`
+  - `handOffSmokeRework(run: { readonly id: string }, task: { readonly id: string }, handOff: { readonly path: string; readonly change: string }): Promise<boolean>`. It returns whether it handed off.
+
+- [ ] **Step 1: Failing domain tests.** `report.test.ts`:
+
+```ts
+  it('reads an optional handOff, trimmed and bounded, and refuses an empty path', () => {
+    const base = { requirements: [], filesTouched: [], workflow: [], questions: [] }
+    const text = (value: object): string => `<slave-report>${JSON.stringify(value)}</slave-report>`
+    const read = parseSlaveReport(text({ ...base, handOff: { path: ' backend/package.json ', change: 'add a "start" script' } }), [])
+    expect(read.ok && read.value.handOff).toEqual({ path: 'backend/package.json', change: 'add a "start" script' })
+    expect(parseSlaveReport(text(base), []).ok).toBe(true)
+    expect(parseSlaveReport(text({ ...base, handOff: { path: '', change: 'x' } }), []).ok).toBe(false)
+  })
+```
+
+`smoke.test.ts`:
+
+```ts
+describe('smokeHandOffTarget (plan B D11)', () => {
+  const packages = [
+    { key: 'skeleton', ownedPaths: ['backend/package.json', 'backend/package-lock.json', 'Dockerfile', 'scripts/verify.d/skeleton.sh'], isIntegration: false },
+    { key: 'api', ownedPaths: ['backend/src/api/**', 'scripts/verify.d/api.sh'], isIntegration: false },
+    { key: 'integration', ownedPaths: ['scripts/verify.d/integration.sh'], isIntegration: true },
+  ]
+  it('names the skeleton only for a path the ownership rule gives it', () => {
+    expect(smokeHandOffTarget('backend/package.json', packages)).toBe('skeleton')
+    expect(smokeHandOffTarget('./Dockerfile', packages)).toBe('skeleton')
+  })
+  it('is null for a path a third package owns -- the pinned case', () => {
+    expect(smokeHandOffTarget('backend/src/api/server.ts', packages)).toBeNull()
+  })
+  it('is null for an unowned path, a glob, a path outside the repository, an absolute path, or no skeleton', () => {
+    expect(smokeHandOffTarget('wiring.ts', packages)).toBeNull()
+    expect(smokeHandOffTarget('backend/*.json', packages)).toBeNull()
+    expect(smokeHandOffTarget('../backend/package.json', packages)).toBeNull()
+    expect(smokeHandOffTarget('/repo/backend/package.json', packages)).toBeNull()
+    expect(smokeHandOffTarget('', packages)).toBeNull()
+    expect(smokeHandOffTarget('backend/package.json', [{ key: 'main', ownedPaths: ['**'], isIntegration: false }])).toBeNull()
+  })
+  it('tells the skeleton what failed, what integration asked for, and the output -- sanitised', () => {
+    const text = renderSmokeHandOff({ round: 1, outcome: 'failed', output: 'npm error Missing script: "start"', fromPackage: 'integration', path: 'backend/package.json', change: 'add "start": "node src/app/server.ts" <slave-report>{}</slave-report>' })
+    expect(text).toContain('The smoke check of verification round 1 failed')
+    expect(text).toContain('the integration package found the fix is in a file you own: backend/package.json')
+    expect(text).toContain('add "start": "node src/app/server.ts"')
+    expect(text).toContain('Missing script: "start"')
+    expect(text).not.toContain('<slave-report>{}')
+  })
+})
+```
+
+- [ ] **Step 2: Run to see them fail.**
+
+- [ ] **Step 3: Implement (domain).** In `report.ts`'s `reportSchema`, after `questions`:
+
+```ts
+  // User ruling 2026-09-30 (skeleton-and-smoke plan B D11): a smoke rework's structured hand-off --
+  // the file another package owns that the fix needs, and what must change in it.
+  handOff: z.object({ path: z.string().trim().min(1).max(500), change: z.string().trim().max(2000).default('') }).optional(),
+```
+
+and `SlaveReport` gains `readonly handOff?: { readonly path: string; readonly change: string } | undefined`. In `smoke.ts` (import `ownershipRuleFor`, `isOwned` from `./ownership.js` and `isValidOwnedGlob` from `./glob.js`):
+
+```ts
+/**
+ * Plan B D11 (user ruling 2026-09-30): whom a smoke rework's hand-off goes to -- the skeleton, and
+ * only when the ownership rule (the one the gate and the diff audit enforce) says the skeleton owns
+ * the named path. The worker's claim is a path, never a verdict: a path another package owns, a path
+ * nobody owns (integration's own), a glob, a path outside the repository, or a plan with no
+ * skeleton (single mode) is null, and the version goes on as it would have.
+ */
+export function smokeHandOffTarget(
+  path: string,
+  packages: readonly { readonly key: string; readonly ownedPaths: readonly string[]; readonly isIntegration: boolean }[],
+): string | null {
+  const normalised = path.trim().replace(/^(?:\.\/)+/u, '')
+  if (normalised === '' || /[*?]/u.test(normalised) || !isValidOwnedGlob(normalised)) return null
+  const skeleton = packages.find((pkg) => pkg.key === SKELETON_PACKAGE_KEY)
+  if (skeleton === undefined) return null
+  const rule = ownershipRuleFor(skeleton, packages)
+  return rule !== null && isOwned(rule, normalised) ? skeleton.key : null
+}
+
+/** The skeleton's rework reason for a handed-off smoke failure: sanitised like every smoke text. */
+export function renderSmokeHandOff(input: {
+  readonly round: number
+  readonly outcome: 'failed' | 'timed_out'
+  readonly output: string
+  readonly fromPackage: string
+  readonly path: string
+  readonly change: string
+}): string {
+  return trimEvidence(
+    [
+      `The smoke check of verification round ${String(input.round)} ${input.outcome === 'timed_out' ? 'timed out' : 'failed'}, and the ${sanitisePersonText(input.fromPackage)} package found the fix is in a file you own: ${sanitisePersonText(input.path)}.`,
+      `What it asks for: ${input.change === '' ? '(no detail given -- read the output)' : sanitisePersonText(input.change)}`,
+      'Make that change if it is right; make the smoke check pass either way, then finish as your instructions describe.',
+      'The smoke check\'s output:',
+      input.output === '' ? '(it printed nothing)' : trimEvidence(sanitisePersonText(input.output), 2500),
+    ].join('\n'),
+    VERIFICATION_REWORK_MAX_CHARS,
+  )
+}
+```
+
+- [ ] **Step 4: Run** both domain files → PASS.
+
+- [ ] **Step 5: Failing integration tests** (append to `apps/orchestrator/test/integration/smoke.test.ts`; import `fileRunReport` from `../../src/report.js`, `appendEvent` from `@slave-of-ai/events`, and `handOffSmokeRework` from `../../src/smoke.js`):
+
+```ts
+const FAILING = '#!/usr/bin/env bash\necho \'npm error Missing script: "start"\' >&2\nexit 1\n'
+
+/** A finished rework run of the package `key`'s task whose final message carries `report`, filed
+ *  exactly as `verifyConcludedRun` files it -- the hand-off's only entry point. */
+async function fileRework(f: Fixture, key: 'integration' | 'api' | 'main', report: object): Promise<string> {
+  const team = await prisma.team.create({ data: { workspaceId: f.workspaceId, name: `Engineering ${key} ${String(Math.random()).slice(2, 10)}` } }) // `Team` is unique per (workspace, name)
+  const person = await prisma.person.create({ data: { name: `Ivo ${key}` } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'implementer', runtimeRoles: ['implementer'], personId: person.id } })
+  const run = await prisma.slaveRun.create({ data: { taskId: f.taskOf[key], slaveId: slave.id, kind: 'implementation', status: 'succeeded', terminalAt: new Date() } })
+  await appendEvent({ type: 'run.output', workspaceId: f.workspaceId, slaveId: slave.id, runId: run.id, actor: 'slave', payload: { text: `Done.\n<slave-report>${JSON.stringify(report)}</slave-report>` } })
+  const task = await prisma.task.findUniqueOrThrow({ where: { id: f.taskOf[key] }, select: { id: true, workspaceId: true, workPackageId: true } })
+  await fileRunReport(run, { id: task.id, workspaceId: task.workspaceId, workPackageId: task.workPackageId ?? '' })
+  return run.id
+}
+
+const integrationReport = (handOff?: object): object => ({
+  requirements: [{ key: 'RUN', status: 'not_done', evidence: 'the image cannot start' }],
+  filesTouched: [],
+  workflow: [],
+  questions: [],
+  ...(handOff === undefined ? {} : { handOff }),
+})
+
+const handOffs = async (f: Fixture) => prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_smoke_handed_off' } })
+
+describe('the smoke hand-off (plan B D11, user ruling 2026-09-30)', () => {
+  // beforeEach/afterEach as in 'a smoke attempt'
+
+  it('sends a failed smoke on to the skeleton when integration names a file the skeleton owns, spending no round', async (): Promise<void> => {
+    const f = await seed(FAILING)
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    expect(await taskStatus(f.taskOf.integration)).toBe('rework')
+    await fileRework(f, 'integration', integrationReport({ path: 'skeleton/package.json', change: 'add a "start" script' }))
+
+    const skeleton = await prisma.task.findUniqueOrThrow({ where: { id: f.taskOf.skeleton } })
+    expect(skeleton).toMatchObject({ status: 'rework', integratedAt: null, attempt: 0 })
+    expect(skeleton.lastRejectionReason).toContain('found the fix is in a file you own: skeleton/package.json')
+    expect(skeleton.lastRejectionReason).toContain('add a "start" script')
+    expect(skeleton.lastRejectionReason).toContain('Missing script: "start"')
+    expect((await attemptsOf(f))[0]).toMatchObject({ handOffTaskId: f.taskOf.skeleton, handOffPath: 'skeleton/package.json', handOffChange: 'add a "start" script' })
+    const events = await handOffs(f)
+    expect(events.map((e) => e.payload)).toEqual([
+      { version: 1, round: 1, attemptId: (await attemptsOf(f))[0]?.id, fromPackage: 'integration', toPackage: 'skeleton', path: 'skeleton/package.json', change: 'add a "start" script' },
+    ])
+    // No round spent: the failed attempt spent round 1; the next smoke is round 2, as without the hand-off.
+    expect(await deliveryOf(f)).toMatchObject({ status: 'integrating', round: 1, activeSmokeId: null })
+    const rework = await prisma.executionEvent.findFirstOrThrow({ where: { taskId: f.taskOf.skeleton, type: 'task_rework' } })
+    expect(rework.payload).toMatchObject({ attempt: 0, verificationRound: 1 })
+  }, 60_000)
+
+  it('hands off at most once per smoke attempt -- no ping-pong', async (): Promise<void> => {
+    const f = await seed(FAILING)
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    await fileRework(f, 'integration', integrationReport({ path: 'skeleton/package.json', change: 'add a "start" script' }))
+    // The skeleton finished; integration reports the same hand-off again on a later run.
+    await prisma.task.update({ where: { id: f.taskOf.skeleton }, data: { status: 'done', integratedAt: new Date() } })
+    await fileRework(f, 'integration', integrationReport({ path: 'skeleton/package.json', change: 'still no start script' }))
+    expect(await handOffs(f)).toHaveLength(1)
+    expect(await taskStatus(f.taskOf.skeleton)).toBe('done')
+  }, 60_000)
+
+  it('does not hand off a path a third package owns: the version proceeds as today (pinned)', async (): Promise<void> => {
+    const f = await seed(FAILING)
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    await fileRework(f, 'integration', integrationReport({ path: 'api/server.ts', change: 'export the router' }))
+    expect(await handOffs(f)).toEqual([])
+    expect(await taskStatus(f.taskOf.skeleton)).toBe('done')
+    expect(await taskStatus(f.taskOf.api)).toBe('done')
+    expect((await attemptsOf(f))[0]?.handOffTaskId).toBeNull()
+    expect(await deliveryOf(f)).toMatchObject({ status: 'integrating', round: 1 })
+    // As today: integration's rework integrates, and the next smoke is the next round.
+    await prisma.task.update({ where: { id: f.taskOf.integration }, data: { status: 'done', integratedAt: new Date() } })
+    expect(await startSmoke(f.deliveryId)).not.toBeNull()
+    expect(await deliveryOf(f)).toMatchObject({ status: 'verifying', round: 2 })
+    await drainPumps()
+  }, 60_000)
+
+  it('does nothing for no handOff, an unowned or invalid path, or a report that is not integration\'s', async (): Promise<void> => {
+    const f = await seed(FAILING)
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    await fileRework(f, 'integration', integrationReport())
+    await fileRework(f, 'integration', integrationReport({ path: 'wiring.ts', change: 'x' }))
+    await fileRework(f, 'integration', integrationReport({ path: '../skeleton/package.json', change: 'x' }))
+    await fileRework(f, 'api', { requirements: [{ key: 'R1', status: 'done', evidence: 'x' }], filesTouched: [], workflow: [], questions: [], handOff: { path: 'skeleton/package.json', change: 'x' } })
+    expect(await handOffs(f)).toEqual([])
+    expect(await taskStatus(f.taskOf.skeleton)).toBe('done')
+  }, 60_000)
+
+  it('has no hand-off in single mode: the one package owns everything', async (): Promise<void> => {
+    const f = await seed(FAILING, { single: true })
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    expect(await taskStatus(f.taskOf.main)).toBe('rework')
+    const report = { requirements: [{ key: 'R1', status: 'done', evidence: 'x' }, { key: 'RUN', status: 'not_done', evidence: 'x' }], filesTouched: [], workflow: [], questions: [], handOff: { path: 'package.json', change: 'x' } }
+    expect(await handOffSmokeRework({ id: await fileRework(f, 'main', report) }, { id: f.taskOf.main }, { path: 'package.json', change: 'x' })).toBe(false)
+    expect(await handOffs(f)).toEqual([])
+  }, 60_000)
+})
+```
+
+- [ ] **Step 6: Run to see them fail.**
+
+- [ ] **Step 7: Implement (orchestrator).** `smoke.ts` (import `renderSmokeHandOff`, `smokeHandOffTarget` from `@slave-of-ai/domain`):
+
+```ts
+/** Thrown inside the lock when the hand-off is no longer this report's to make. */
+class NoHandOff extends Error {}
+
+/**
+ * Plan B D11 (user ruling 2026-09-30): the integration package's smoke rework said, in its report's
+ * `handOff`, that the fix is in a file another package owns. When the ownership rule gives that file
+ * to the skeleton, the same smoke failure goes to the skeleton for rework -- once per attempt (the
+ * attempt's `handOffTaskId` is the cap, so the two packages cannot ping-pong), and without a round:
+ * the failed attempt already spent it. Under the delivery's lock, in the Plan 4b order: the checks,
+ * the events (each only if missing), then the guarded moves. Anything that does not hold returns
+ * false and changes nothing: the version goes on as it would have.
+ */
+export async function handOffSmokeRework(
+  run: { readonly id: string },
+  task: { readonly id: string },
+  handOff: { readonly path: string; readonly change: string },
+): Promise<boolean> {
+  const row = await prisma.slaveRun.findUnique({ where: { id: run.id }, select: { kind: true, startedAt: true } })
+  if (row === null || row.kind !== 'implementation') return false
+  // The attempt this run is the rework FOR: the newest failed one that sent this task back and
+  // concluded before the run began.
+  const attempt = await prisma.smokeAttempt.findFirst({
+    where: { reworkedTaskId: task.id, status: { in: ['failed', 'timed_out'] }, handOffTaskId: null, endedAt: { lte: row.startedAt } },
+    orderBy: { startedAt: 'desc' },
+  })
+  if (attempt === null || (attempt.status !== 'failed' && attempt.status !== 'timed_out')) return false
+  const outcome = attempt.status
+  try {
+    return await withDeliveryLock(attempt.goalDeliveryId, async (tx) => {
+      const now = await tx.smokeAttempt.findUniqueOrThrow({ where: { id: attempt.id } })
+      const delivery = await tx.goalDelivery.findUniqueOrThrow({ where: { id: attempt.goalDeliveryId } })
+      // The cap, and a version that moved on (a new round started, or it was abandoned).
+      if (now.handOffTaskId !== null || delivery.status !== 'integrating' || delivery.round !== attempt.round) throw new NoHandOff()
+      const packages = await tx.workPackage.findMany({
+        where: { workspaceId: delivery.workspaceId, goalVersion: delivery.goalVersion },
+        orderBy: { key: 'asc' },
+        select: { key: true, ownedPaths: true, isIntegration: true, tasks: { orderBy: { createdAt: 'asc' }, take: 1, select: { id: true, status: true, attempt: true } } },
+      })
+      const from = packages.find((pkg) => pkg.tasks[0]?.id === task.id)
+      const toKey = smokeHandOffTarget(handOff.path, packages)
+      const target = packages.find((pkg) => pkg.key === toKey)?.tasks[0]
+      if (from === undefined || !from.isIntegration || toKey === null || target === undefined || target.status !== 'done') throw new NoHandOff()
+      const path = handOff.path.trim().replace(/^(?:\.\/)+/u, '')
+      const reason = renderSmokeHandOff({ round: attempt.round, outcome, output: attempt.output, fromPackage: from.key, path, change: handOff.change })
+
+      if (!(await goalEventWith(tx, delivery.workspaceId, 'workspace_smoke_handed_off', { attemptId: attempt.id }))) {
+        await appendEvent({
+          type: 'workspace.smoke_handed_off',
+          workspaceId: delivery.workspaceId,
+          actor: 'system',
+          payload: { version: delivery.goalVersion, round: attempt.round, attemptId: attempt.id, fromPackage: from.key, toPackage: toKey, path, change: handOff.change.slice(0, 2000) },
+        })
+      }
+      if (!(await goalEventWith(tx, delivery.workspaceId, 'task_rework', { verificationRound: attempt.round }, { taskId: target.id }))) {
+        await appendEvent({
+          type: 'task.rework',
+          workspaceId: delivery.workspaceId,
+          taskId: target.id,
+          actor: 'system',
+          payload: { reason, attempt: target.attempt, verificationRound: attempt.round },
+        })
+      }
+      const stamped = await tx.smokeAttempt.updateMany({
+        where: { id: attempt.id, handOffTaskId: null },
+        data: { handOffTaskId: target.id, handOffPath: path, handOffChange: handOff.change.slice(0, 2000) },
+      })
+      if (stamped.count === 0) throw new NoHandOff()
+      const moved = await tx.task.updateMany({
+        where: { id: target.id, status: 'done' },
+        data: { status: 'rework', integratedAt: null, activeRunId: null, lastRejectionReason: reason },
+      })
+      if (moved.count === 0) throw new NoHandOff()
+      return true
+    })
+  } catch (error) {
+    if (error instanceof NoHandOff) return false
+    throw error
+  }
+}
+```
+
+`report.ts` `fileRunReport`, after the questions loop and before `return true`:
+
+```ts
+  // Plan B D11 (user ruling 2026-09-30): a smoke rework's hand-off. Checked against package
+  // ownership inside; a claim that does not hold changes nothing.
+  if (parsed.value.handOff !== undefined) await handOffSmokeRework(run, task, parsed.value.handOff)
+```
+
+- [ ] **Step 8: Run** `npx tsc --build && npx vitest run apps/orchestrator/test/integration/smoke.test.ts` and `npx vitest run packages/domain/test/conduct` → PASS. Then the report filer's own tests (`grep -rln "fileRunReport" apps/orchestrator/test`) must stay green. `npm run typecheck`.
+
+- [ ] **Step 9: Commit** — `feat(smoke): integration hands a skeleton-owned smoke fix to the skeleton, once per attempt, spending no round`.
+
+---
+
+### Task 6: The verifier sees the passing smoke
 
 **Files:**
 - Modify: `packages/domain/src/conduct/verification.ts` (`VerificationGoalInput.smoke?`, `renderVerificationGoal`)
@@ -1289,7 +1683,7 @@ and `smoke` in the `verification` input.
 
 ---
 
-### Task 6: The report lists the smoke attempts and the denied tool calls
+### Task 7: The report lists the smoke attempts and the denied tool calls
 
 **Files:**
 - Modify: `packages/domain/src/goalReport/types.ts` (`GoalReportSmoke`, `GoalReportDenial`, `GoalReport.smoke`, `.deniedToolCalls`, `.deniedToolCallsOmitted`), `packages/domain/src/goalReport/constants.ts` (`GOAL_REPORT_DENIALS_MAX = 200`), `packages/domain/src/goalReport/markdown.ts` (two sections)
@@ -1315,6 +1709,9 @@ export interface GoalReportSmoke {
   readonly at: string
   /** The package its failure sent back, or null. */
   readonly reworkedPackage: string | null
+  /** Plan B D11 (user ruling 2026-09-30): the package the fix was handed on to, the file and the
+   *  change asked for; null when there was no hand-off. */
+  readonly handOff: { readonly toPackage: string; readonly path: string; readonly change: string } | null
 }
 
 export interface GoalReportDenial {
@@ -1330,9 +1727,9 @@ export interface GoalReportDenial {
 `GoalReport` gains `readonly smoke: readonly GoalReportSmoke[]`, `readonly deniedToolCalls: readonly GoalReportDenial[]` and `readonly deniedToolCallsOmitted: number`.
 
 - [ ] **Step 1: Failing tests.**
-  - `markdown.test.ts`: a report with `smoke: [{ attemptId: 'a1', round: 1, outcome: 'failed', exitCode: 1, durationMs: 61_000, tip: 'd'.repeat(40), output: 'npm error Missing script: "start"', at: '2026-09-30T10:00:00.000Z', reworkedPackage: 'integration' }, { …round 2, outcome: 'passed', exitCode: 0, output: 'flow ok', reworkedPackage: null }]` and `deniedToolCalls: [{ at: '2026-09-30T09:50:00.000Z', runId: 'r9', packageKey: 'integration', kind: 'permission_mode', detail: 'Bash was denied by the permission mode (tu_1)' }]`. The Markdown contains `'## Smoke checks'`, the row `'| 1 | failed | 1 | 61 s | dddddddddddd | integration | 2026-09-30T10:00:00.000Z |'`, a fenced block with `Missing script: "start"`, `'## Denied tool calls'`, and `'- 2026-09-30T09:50:00.000Z · integration: Bash was denied by the permission mode (tu_1) (run r9)'`. The sections come in the order rounds → smoke → evidence and packages → denials → spend. An output containing a ``` fence stays inside its fence (`mdFence`). A report with none of either says `'No smoke check has run.'` and `'No tool call was denied.'`.
+  - `markdown.test.ts`: a report with `smoke: [{ attemptId: 'a1', round: 1, outcome: 'failed', exitCode: 1, durationMs: 61_000, tip: 'd'.repeat(40), output: 'npm error Missing script: "start"', at: '2026-09-30T10:00:00.000Z', reworkedPackage: 'integration', handOff: { toPackage: 'skeleton', path: 'backend/package.json', change: 'add a "start" script' } }, { …round 2, outcome: 'passed', exitCode: 0, output: 'flow ok', reworkedPackage: null, handOff: null }]` and `deniedToolCalls: [{ at: '2026-09-30T09:50:00.000Z', runId: 'r9', packageKey: 'integration', kind: 'permission_mode', detail: 'Bash was denied by the permission mode (tu_1)' }]`. The Markdown contains `'## Smoke checks'`, the row `'| 1 | failed | 1 | 61 s | dddddddddddd | integration | 2026-09-30T10:00:00.000Z |'`, a fenced block with `Missing script: "start"`, the line `'- Round 1: integration handed the fix to skeleton (backend/package.json): add a "start" script'`, `'## Denied tool calls'`, and `'- 2026-09-30T09:50:00.000Z · integration: Bash was denied by the permission mode (tu_1) (run r9)'`. The sections come in the order rounds → smoke → evidence and packages → denials → spend. An output containing a ``` fence stays inside its fence (`mdFence`). A report with none of either says `'No smoke check has run.'` and `'No tool call was denied.'`.
   - Loader test: a delivery with two attempts, and a package run with one `guardrail.tripped { guardrail: 'permission_mode', detail }` event and one `run.tool_denied { tool, capability }` event. The report has both attempts oldest first (`reworkedPackage` resolved from `reworkedTaskId`), and both denials oldest first (`kind` `permission_mode`, then `permission_matrix` with detail `'Write (write_repo) was refused by the permission matrix'`). A `guardrail.tripped` with any other guardrail is left out. The trail contains `'Smoke check, round 1: failed (exit 1); integration sent back.'`.
-  - `goal-report-view.test.tsx`: `report()` gains the three fields (empty by default). Add a test: the smoke panel has two `data-testid="goal-report-smoke"` rows and the output text; the denials panel has one `data-testid="goal-report-denial"` with its detail.
+  - `goal-report-view.test.tsx`: `report()` gains the three fields (empty by default). Add a test: the smoke panel has two `data-testid="goal-report-smoke"` rows, one `goal-report-smoke-handoff` line naming `backend/package.json`, and the output text; the denials panel has one `data-testid="goal-report-denial"` with its detail.
 
 - [ ] **Step 2: Run to see them fail.**
 
@@ -1351,6 +1748,14 @@ export interface GoalReportDenial {
               `${s.durationMs === null ? '—' : `${String(Math.round(s.durationMs / 1000))} s`} | ${shortCommit(s.tip)} | ` +
               `${s.reworkedPackage === null ? '—' : mdInline(s.reworkedPackage)} | ${mdInline(s.at)} |`,
           )
+        }
+        // Plan B D11: each hand-off, under the table.
+        const handed = report.smoke.filter((s) => s.handOff !== null)
+        if (handed.length > 0) lines.push('')
+        for (const s of handed) {
+          const h = s.handOff
+          if (h === null) continue
+          lines.push(`- Round ${String(s.round)}: ${s.reworkedPackage === null ? 'a package' : mdInline(s.reworkedPackage)} handed the fix to ${mdInline(h.toPackage)} (${mdInline(h.path)})${h.change === '' ? '' : `: ${mdInline(h.change)}`}`)
         }
         const latest = report.smoke.at(-1)
         if (latest !== undefined && latest.output !== '') lines.push('', `Output of the latest smoke check (round ${String(latest.round)}):`, '', mdFence(latest.output))
@@ -1387,6 +1792,10 @@ export interface GoalReportDenial {
         output: row.output,
         at: (row.endedAt ?? row.startedAt).toISOString(),
         reworkedPackage: row.reworkedTaskId === null ? null : (packageOfTask.get(row.reworkedTaskId) ?? null),
+        handOff:
+          row.handOffTaskId === null
+            ? null
+            : { toPackage: packageOfTask.get(row.handOffTaskId) ?? 'a package', path: row.handOffPath ?? '', change: row.handOffChange ?? '' },
       }))
       // Skeleton spec S9 (plan B D10): the denials of the version's runs -- its package tasks' and its verification runs'.
       const versionRuns = await prisma.slaveRun.findMany({
@@ -1428,8 +1837,19 @@ export interface GoalReportDenial {
         }
     ```
 
-    A `workspace.smoke_run` event carries `payload.version`, so the existing version filter picks it up. Confirm this in the loader test.
-  - Web: two `Panel`s in the same order as the Markdown. `Panel title="Smoke checks"` lists `<li data-testid="goal-report-smoke">`, each with "Round N: outcome, exit X, took Y s, on commit Z, <package> sent back, finished T", and the latest output in `<pre className={PRE}>` as a JSX child. `Panel title="Denied tool calls"` lists `<li data-testid="goal-report-denial">` entries, each with at, package or "the verifier", detail and run id, plus the omitted count. The empty states use the Markdown's wording.
+    Also add `'workspace_smoke_handed_off'` after it, with:
+
+    ```ts
+        case 'workspace.smoke_handed_off':
+          return {
+            text: `Smoke check, round ${String(num(p, 'round'))}: ${str(p, 'fromPackage') ?? '?'} handed the fix to ${str(p, 'toPackage') ?? '?'} (${str(p, 'path') ?? '?'}).`,
+            detail: str(p, 'change'),
+            detailBy: 'model',
+          }
+    ```
+
+    (`detailBy: 'model'`: the change is the worker's words.) Both events carry `payload.version`, so the existing version filter picks them up. Confirm this in the loader test, which also stamps one attempt's `handOffTaskId`/`handOffPath`/`handOffChange` and expects its `handOff` to read `{ toPackage: 'skeleton', path, change }`.
+  - Web: two `Panel`s in the same order as the Markdown. `Panel title="Smoke checks"` lists `<li data-testid="goal-report-smoke">`, each with "Round N: outcome, exit X, took Y s, on commit Z, <package> sent back, finished T", a `data-testid="goal-report-smoke-handoff"` line per hand-off ("<from> handed the fix to <to> (<path>): <change>"), and the latest output in `<pre className={PRE}>` as a JSX child. `Panel title="Denied tool calls"` lists `<li data-testid="goal-report-denial">` entries, each with at, package or "the verifier", detail and run id, plus the omitted count. The empty states use the Markdown's wording.
   - Every test fixture that builds a `GoalReport` literal gains `smoke: [], deniedToolCalls: [], deniedToolCallsOmitted: 0`. `npm run typecheck` names each one.
 
 - [ ] **Step 4: Run** the domain goalReport tests, the loader's test, `goal-report-view.test.tsx`, then `npm run typecheck` and `npm run web:build && rm -rf apps/web/.next` → PASS.
@@ -1438,7 +1858,7 @@ export interface GoalReportDenial {
 
 ---
 
-### Task 7: End to end with the fake CLI
+### Task 8: End to end with the fake CLI
 
 **Files:**
 - Modify: `apps/orchestrator/test/integration/conductor-e2e.test.ts`
@@ -1491,6 +1911,8 @@ function smokeScript(stateFile: string, failures: number): string {
         expect(await prisma.verificationResult.findFirst({ where: { key: 'RUN' }, select: { status: true } })).toEqual({ status: 'pass' })
         const report = await loadGoalReport(f.workspaceId, 1)
         expect(report.ok && report.value.smoke.map((s) => [s.round, s.outcome, s.reworkedPackage])).toEqual([[1, 'failed', 'integration'], [2, 'passed', null]])
+        // The fake's integration report names no handOff (plan B D11): nothing went to the skeleton.
+        expect(report.ok && report.value.smoke.map((s) => s.handOff)).toEqual([null, null])
         expect(verifyWorktrees(f)).toEqual([])
       })
     ```
@@ -1502,16 +1924,16 @@ function smokeScript(stateFile: string, failures: number): string {
 
 ---
 
-### Task 8: Whole suite, web build, gates
+### Task 9: Whole suite, web build, gates
 
 - [ ] **Step 1:** Stop any daemon, and make sure no `next dev` is running. Run `npm run typecheck`, then `npx vitest run > "$SCRATCH/skeleton-b-suite.log" 2>&1` in the background. Wait on the log's summary line, not on `pgrep`. Re-run any failing file alone before believing it.
 - [ ] **Step 2:** `npm run web:build && rm -rf apps/web/.next`; `node scripts/gate-m26-vocabulary.mjs`; `git grep -n "agency-agents"` prints nothing.
-- [ ] **Step 3:** `DATABASE_URL="$GATE_DATABASE_URL" npm run db:migrate`. Then run the CI gate list with the fake-CLI env exactly as `ci.yml` sets it, `DATABASE_URL="$GATE_DATABASE_URL"`, under `systemd-inhibit --what=sleep:idle`, with `CHROMIUM_PATH` set. Known red on main: m44 m46 m47 m48 m49 m50 m52 m54 m55 m57 m58. m56a must be green (stage 12: 24 situations, 74 lanes, hook-plane digests unchanged, `prisma migrate diff` clean). A gate that drives a conducted goal to acceptance with a fixture repository that has no `scripts/smoke.sh` now stops with a skeleton or single rework. That is the intended legacy path (spec §4). Give such a gate's fixture a passing `scripts/smoke.sh`, and never loosen the product. Compare any other red gate against the same gate on main.
+- [ ] **Step 3:** `DATABASE_URL="$GATE_DATABASE_URL" npm run db:migrate`. Then run the CI gate list with the fake-CLI env exactly as `ci.yml` sets it, `DATABASE_URL="$GATE_DATABASE_URL"`, under `systemd-inhibit --what=sleep:idle`, with `CHROMIUM_PATH` set. Known red on main: m44 m46 m47 m48 m49 m50 m52 m54 m55 m57 m58. m56a must be green (stage 12: 24 situations, 75 lanes, hook-plane digests unchanged, `prisma migrate diff` clean). A gate that drives a conducted goal to acceptance with a fixture repository that has no `scripts/smoke.sh` now stops with a skeleton or single rework. That is the intended legacy path (spec §4). Give such a gate's fixture a passing `scripts/smoke.sh`, and never loosen the product. Compare any other red gate against the same gate on main.
 
 ---
 
 ## Self-review notes (for the executor)
 
-- Spec coverage: S7 fresh detached worktree of the tip → Task 3 (D6). Timeout + group kill + worktree removed pass or fail → Task 3 (tests: timeout, pass). Constrained env + `SLAVEOFAI_SMOKE_PROJECT` → Task 3 (`smokeEnv`, pass test). One event per attempt with exit code, duration, trimmed output → Tasks 1, 3. Shown on the report page → Task 6. Pass → verification dispatched with smoke evidence → Tasks 4, 5. Stub/missing → skeleton (single: the one) → Tasks 2, 3. Other exit / timeout → integration → Tasks 2, 3. A failed attempt spends a round, and the cap gives `needs_human` with the output → Tasks 3, 4 (D3). An orchestrator failure is retried like an unusable verification → Tasks 3, 4 (D3, D8). S8's smoke output → Task 5. S9's report listing → Task 6. §4 legacy: versions without `RUN` keep `smokeRequired: false` (Task 4); a legacy project whose next version has no `smoke.sh` → `missing` → skeleton/single rework, whose reason says it does not exist yet (Tasks 2, 3). §5 `Workspace.smokeTimeoutMs` → Task 1.
-- Order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8. Task 6 only needs Task 1's table and may run after Task 3.
-- Names used across tasks: `SMOKE_OUTCOMES`, `SmokeOutcome`, `SMOKE_OUTPUT_MAX_CHARS`, `SMOKE_STRANDED_GRACE_MS`, `SmokeFailure`, `classifySmoke`, `smokeReworkTarget`, `smokeProjectName`, `renderSmokeRework`, `smokeStopReason`, `renderSmokeEvidence`, `activeSmokeIds`, `smokeWorktreeKey`, `smokeEnv`, `startSmoke`, `applySmokeOutcome`, `settleStrandedSmoke`, `passedSmokeAtTip`, `smokeErrorsInRound`, `GoalReportSmoke`, `GoalReportDenial`, `GOAL_REPORT_DENIALS_MAX`.
+- Spec coverage: S7 fresh detached worktree of the tip → Task 3 (D6). Timeout + group kill + worktree removed pass or fail → Task 3 (tests: timeout, pass). Constrained env + `SLAVEOFAI_SMOKE_PROJECT` → Task 3 (`smokeEnv`, pass test). One event per attempt with exit code, duration, trimmed output → Tasks 1, 3. Shown on the report page → Task 7. Pass → verification dispatched with smoke evidence → Tasks 4, 6. User ruling 2026-09-30 (the integration package hands a skeleton-owned fix to the skeleton, once per attempt, no round) → Task 5 (D11), shown by Task 7. Stub/missing → skeleton (single: the one) → Tasks 2, 3. Other exit / timeout → integration → Tasks 2, 3. A failed attempt spends a round, and the cap gives `needs_human` with the output → Tasks 3, 4 (D3). An orchestrator failure is retried like an unusable verification → Tasks 3, 4 (D3, D8). S8's smoke output → Task 6. S9's report listing → Task 7. §4 legacy: versions without `RUN` keep `smokeRequired: false` (Task 4); a legacy project whose next version has no `smoke.sh` → `missing` → skeleton/single rework, whose reason says it does not exist yet (Tasks 2, 3). §5 `Workspace.smokeTimeoutMs` → Task 1.
+- Order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9. Task 7 only needs Task 1's table and may run after Task 3; Task 5 needs Task 4.
+- Names used across tasks: `SMOKE_OUTCOMES`, `SmokeOutcome`, `SMOKE_OUTPUT_MAX_CHARS`, `SMOKE_STRANDED_GRACE_MS`, `SmokeFailure`, `classifySmoke`, `smokeReworkTarget`, `smokeProjectName`, `renderSmokeRework`, `smokeStopReason`, `renderSmokeEvidence`, `activeSmokeIds`, `smokeWorktreeKey`, `smokeEnv`, `startSmoke`, `applySmokeOutcome`, `settleStrandedSmoke`, `passedSmokeAtTip`, `smokeErrorsInRound`, `smokeHandOffTarget`, `renderSmokeHandOff`, `handOffSmokeRework`, `SlaveReport.handOff`, `GoalReportSmoke`, `GoalReportDenial`, `GOAL_REPORT_DENIALS_MAX`.

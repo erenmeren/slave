@@ -113,6 +113,13 @@ integration branch tip, without a model:
   version ends `needs_human` with the smoke output in the reason. A smoke that cannot even start (the
   orchestrator's own failure: worktree, spawn) is retried like an unusable verification (Plan 4b D7),
   not charged to a package.
+- user ruling 2026-09-30: when the integration package's smoke rework ends with a report whose
+  `handOff` names a file the ownership rule gives to the `skeleton` package (e.g. `Missing script:
+  "start"` in a skeleton-owned `package.json`), the same smoke failure is routed to the skeleton for
+  rework — checked against the skeleton's owned paths, never taken on the worker's claim; it spends no
+  further verification round; at most one hand-off per smoke attempt (no ping-pong); recorded as
+  `workspace.smoke_handed_off` and shown on the report page and in the Markdown export. No hand-off in
+  single mode; a path owned by another package, an unowned path, or no path behaves as before.
 
 **S8 — The verifier's leads.** The verification prompt gains a section "Reported by the workers" with, per
 package, the trimmed `questions` and notes of its latest `<slave-report>` (sanitised, capped), framed as
