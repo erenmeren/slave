@@ -46,7 +46,10 @@ export function buildConductPrompt(input: ConductPromptInput): string {
     'and, in an ordered shared directory (migrations, routes, jobs), only the files that start with its own prefix --',
     'declare them as "registrations": [{"directory": "backend/migrations", "prefix": "0100_identity_"}]. Never give a',
     'whole shared directory to one package when another package adds files to it.',
-    `Requirement ${RUN_REQUIREMENT_KEY} is added by Slave and always belongs to the integration package: list it in no package.`,
+    // Said only when the set has it (final review): a set written before RUN existed has none to place.
+    ...(input.requirements.some((r) => r.key === RUN_REQUIREMENT_KEY)
+      ? [`Requirement ${RUN_REQUIREMENT_KEY} is added by Slave and always belongs to the integration package: list it in no package.`]
+      : []),
     '"interface" says what the package provides to others and uses from them (functions, types, CLI surface),',
     'so each worker can code against the others without touching their files.',
     'Pick each package\'s worker by "templateId" from the catalogue.',

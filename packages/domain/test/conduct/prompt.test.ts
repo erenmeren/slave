@@ -43,4 +43,9 @@ describe('buildConductPrompt', () => {
     expect(prompt).toContain('RUN is added by Slave and always belongs to the integration package: list it in no package.')
     expect(prompt).toContain('"skeletonTemplateId"')
   })
+
+  it('mentions RUN only when the requirement set has it', () => {
+    expect(buildConductPrompt(input)).not.toContain('RUN')
+    expect(buildConductPrompt({ ...input, requirements: [...input.requirements, RUN_REQUIREMENT] })).toContain('Requirement RUN is added by Slave')
+  })
 })
