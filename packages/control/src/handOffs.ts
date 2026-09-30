@@ -117,8 +117,11 @@ function storableItem(item: ReportedHandOff): ReportedHandOff {
  * Ruling F2: the delivery a row already on record was routed as, for a replay that announces it
  * again (its event may have been lost to a crash between the routing and the announcement).
  */
-function deliveryOf(row: HandOffRow, targetStatus: string | undefined): Delivery {
+function deliveryOf(row: HandOffRow, targetStatus: string | undefined): Delivery | null {
   switch (row.status) {
+    case 'expired':
+      // Final review M5: stored expired, never delivered anywhere -- no event names a routing it never had.
+      return null
     case 'reopened':
       return 'rework'
     case 'to_conductor':
@@ -146,7 +149,13 @@ export async function routeHandOffs(input: RouteHandOffsInput): Promise<readonly
   const routed = await withVersionLock(delivery?.id ?? null, workspaceId, goalVersion, async (tx) => {
     const packages = await packagesOf(tx, workspaceId, goalVersion)
     const taskOf = (key: string | null) => packages.find((pkg) => pkg.key === key)?.tasks[0]
-    const out: { readonly row: HandOffRow; readonly delivery: Delivery }[] = []
+    // Final review M5: read under the delivery's lock, which the acceptance and the abandonment move
+    // it under. A report filed after its version ended (a run that outlived the version) routes
+    // nothing into it: what would be delivered or asked is stored `expired`, as `expirePendingHandOffs`
+    // leaves a pending one, and is neither announced, asked nor reopened for.
+    const ended = delivery === null ? null : (await tx.goalDelivery.findUnique({ where: { id: delivery.id }, select: { status: true } }))?.status
+    const endedAs = ended === 'accepted' || ended === 'abandoned' ? ended : null
+    const out: { readonly row: HandOffRow; readonly delivery: Delivery | null }[] = []
     for (const [index, raw] of input.items.entries()) {
       const sourceKey = `${input.sourceKey}:${String(index)}`
       const seen = await tx.packageHandOff.findUnique({ where: { workspaceId_sourceKey: { workspaceId, sourceKey } } })
@@ -160,9 +169,9 @@ export async function routeHandOffs(input: RouteHandOffsInput): Promise<readonly
       const toKey = target.kind === 'package' ? target.key : target.kind === 'own' ? input.fromPackageKey : null
       const task = taskOf(toKey)
       const fingerprint = handOffFingerprint({ from: input.fromPackageKey, to: toKey ?? '', item })
-      let status: 'pending' | 'duplicate' | 'own' | 'to_conductor' = 'pending'
+      let status: 'pending' | 'duplicate' | 'own' | 'to_conductor' | 'expired' = 'pending'
       let note: string | null = null
-      let routedAs: Delivery = task?.status === 'done' ? 'rework' : 'prompt'
+      let routedAs: Delivery | null = task?.status === 'done' ? 'rework' : 'prompt'
       if (target.kind === 'none') {
         status = 'to_conductor'
         note = `no target found: ${target.reason}`
@@ -181,6 +190,11 @@ export async function routeHandOffs(input: RouteHandOffsInput): Promise<readonly
         status = 'duplicate'
         note = 'the same request is already on record'
         routedAs = 'duplicate'
+      }
+      if (endedAs !== null && (status === 'pending' || status === 'to_conductor')) {
+        status = 'expired'
+        note = `the version was ${endedAs} before it could be delivered`
+        routedAs = null
       }
       const row = await tx.packageHandOff.create({
         data: {
@@ -207,7 +221,7 @@ export async function routeHandOffs(input: RouteHandOffsInput): Promise<readonly
   // concurrent replays of one report cannot both find it missing. After the routing commits: an
   // event must never name a row a rolled-back routing never stored.
   await withVersionLock(null, workspaceId, goalVersion, async (tx) => {
-    for (const { row, delivery: routedAs } of routed) await announceHandOff(tx, row, routedAs)
+    for (const { row, delivery: routedAs } of routed) if (routedAs !== null) await announceHandOff(tx, row, routedAs)
   })
   await sendHandOffQuestions(workspaceId)
   if (delivery !== null) {

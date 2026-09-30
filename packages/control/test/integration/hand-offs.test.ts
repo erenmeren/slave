@@ -161,6 +161,20 @@ describe('routeHandOffs', () => {
     expect(questions.map((q) => q.body)).toEqual([expect.stringContaining('its item could not be read')])
   })
 
+  /** Final review M5: a report filed after its version ended routes nothing into it. */
+  for (const status of ['accepted', 'abandoned'] as const) {
+    it(`stores a hand-off filed into an ${status} version as expired: nothing reopened, asked or announced`, async () => {
+      const f = await seed({ skeleton: 'done', report: 'running', integration: 'ready' })
+      await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status, ...(status === 'accepted' ? { acceptedAt: new Date() } : {}) } })
+      await route(f, [{ path: 'scripts/verify.sh', change: 'run it' }, { package: 'integration', change: 'expose GET /x' }, { package: 'billing', change: 'nobody' }])
+      const stored = await rows(f)
+      expect(stored.map((r) => [r.status, r.note])).toEqual(Array.from({ length: 3 }, () => ['expired', `the version was ${status} before it could be delivered`]))
+      expect((await task(f.taskOf.skeleton)).status).toBe('done')
+      expect(await events(f, 'workspace_package_handed_off')).toEqual([])
+      expect(await prisma.slaveMessage.count({ where: { workspaceId: f.workspaceId } })).toBe(0)
+    })
+  }
+
   it('asks the conductor when the target package failed', async () => {
     const f = await seed({ skeleton: 'failed', report: 'running', integration: 'ready' })
     await route(f, [{ path: 'scripts/verify.sh', change: 'x' }])
