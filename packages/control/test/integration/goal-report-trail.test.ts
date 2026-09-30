@@ -212,7 +212,7 @@ describe('versionTrail', () => {
     expect(entries.map((e) => e.text)).toEqual(['pkg1: merged into trunk.'])
   })
 
-  it("says a hand-off and the reopen it caused, and words a hand-off not yet reopened as one to come (Plan A Task 8)", async (): Promise<void> => {
+  it("says a hand-off and the reopen it caused, and words each rework event from its row's status (Plan A Task 8)", async (): Promise<void> => {
     const s = await seed()
     const handed = (handOffId: string, delivery: 'rework' | 'prompt') =>
       appendEvent({
@@ -221,13 +221,21 @@ describe('versionTrail', () => {
         actor: 'system',
         payload: { version: 1, handOffId, source: 'report', fromPackage: 'report', toPackage: 'skeleton', path: 'scripts/verify.sh', package: null, delivery, change: 'run pytest -k report' },
       })
+    await handed('h-reopened', 'rework')
     await handed('h-unknown', 'rework')
+    await handed('h-conductor', 'rework')
+    await handed('h-delivered', 'rework')
     await handed('h-pending', 'rework')
     await handed('h-expired', 'rework')
     await handed('h-prompt', 'prompt')
     await prisma.packageHandOff.create({
       data: { id: 'h-pending', workspaceId: s.workspaceId, goalVersion: 1, source: 'report', sourceKey: 'a', fromRunId: 'r', toPackageKey: 'skeleton', change: 'c', fingerprint: 'f1', status: 'pending' },
     })
+    for (const [id, status, n] of [['h-reopened', 'reopened', 'c'], ['h-conductor', 'to_conductor', 'd'], ['h-delivered', 'delivered', 'e']] as const) {
+      await prisma.packageHandOff.create({
+        data: { id, workspaceId: s.workspaceId, goalVersion: 1, source: 'report', sourceKey: n, fromRunId: 'r', toPackageKey: 'skeleton', change: 'c', fingerprint: `f-${n}`, status },
+      })
+    }
     await prisma.packageHandOff.create({
       data: { id: 'h-expired', workspaceId: s.workspaceId, goalVersion: 1, source: 'report', sourceKey: 'b', fromRunId: 'r', toPackageKey: 'skeleton', change: 'c', fingerprint: 'f2', status: 'expired' },
     })
@@ -237,7 +245,10 @@ describe('versionTrail', () => {
 
     expect(entries.map((e) => e.text)).toEqual([
       'report handed work to skeleton (scripts/verify.sh); its finished task is reopened for it.',
-      'report handed work to skeleton (scripts/verify.sh); its finished task will be reopened when the round ends.',
+      'report handed work to skeleton (scripts/verify.sh); routed to its finished task.',
+      'report handed work to skeleton (scripts/verify.sh); its finished task was not reopened, so the conductor was asked.',
+      'report handed work to skeleton (scripts/verify.sh); shown in its prompt.',
+      'report handed work to skeleton (scripts/verify.sh); it waits to be reopened.',
       'report handed work to skeleton (scripts/verify.sh); it was not reopened.',
       'report handed work to skeleton (scripts/verify.sh); it waits in its next prompt.',
       "pkg1: sent back for rework by other packages' hand-offs (reopen 1).",

@@ -77,7 +77,7 @@ export const HAND_OFF_STATUS_LABEL: Record<GoalReportHandOff['status'], string> 
   delivered: 'shown in its prompt',
   reopened: 'reopened for it',
   duplicate: 'already asked',
-  own: "the reporter's own package",
+  own: "the reporter's own package; nothing was sent",
   to_conductor: 'asked the conductor',
   expired: 'not delivered',
 }

@@ -99,6 +99,7 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
     trailOmitted: 0,
     smoke: [],
     handOffs: [],
+    handOffsOmitted: 0,
     decisions: [],
     deniedToolCalls: [],
     deniedToolCallsOmitted: 0,
@@ -377,6 +378,11 @@ describe('renderGoalReportMarkdown', () => {
       expect(md).toContain('## Shared decisions')
       expect(md).toContain("- API field naming: camelCase (the conductor's plan)")
     })
+    it('says nothing was sent for the reporter\'s own package, and counts the hand-offs it left out', () => {
+      const md = renderGoalReportMarkdown(report({ handOffs: [{ ...handOff, status: 'own', toPackage: 'report' }], handOffsOmitted: 7 }))
+      expect(md).toContain("the reporter's own package; nothing was sent")
+      expect(md).toContain('- … and 7 more, not listed.')
+    })
     it('says so when there are none', () => {
       const md = renderGoalReportMarkdown(report())
       expect(md).toContain('No package handed work to another.')
@@ -390,6 +396,8 @@ describe('renderGoalReportMarkdown', () => {
           decisions: [{ title: hostile, decision: hostile, source: 'person', at: '2026-10-01T10:00:00.000Z' }],
         }),
       )
+      expect(md).toContain('cell')
+      expect(md).toContain('\\|')
       expect(md).not.toContain('</slave-report>')
       expect(md).not.toContain('<script>')
       expect(md).not.toMatch(/^# Heading/mu)

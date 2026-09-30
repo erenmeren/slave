@@ -166,10 +166,16 @@ function eventDraft(
       }
     case 'workspace.package_handed_off': {
       const what = str(p, 'path') ?? str(p, 'package')
-      // Plan A Task 8: `delivery: 'rework'` is what routing decided, not that the reopen happened: a
-      // version that is verifying reopens at the round's end, and an expired row never does. The
-      // row's own status says which; with no row the event is worded as the routing decided.
-      const reopened = handOffStatus === 'pending' ? 'its finished task will be reopened when the round ends' : handOffStatus === 'expired' ? 'it was not reopened' : 'its finished task is reopened for it'
+      // Plan A Task 8: `delivery: 'rework'` is only what routing decided at filing. The row says what
+      // became of it, so "reopened" is said only for a `reopened` row; any other is worded as recorded.
+      const reworked: Readonly<Record<string, string>> = {
+        reopened: 'its finished task is reopened for it',
+        to_conductor: 'its finished task was not reopened, so the conductor was asked',
+        delivered: 'shown in its prompt',
+        pending: 'it waits to be reopened',
+        expired: 'it was not reopened',
+      }
+      const reopened = reworked[handOffStatus ?? ''] ?? 'routed to its finished task'
       const went: Readonly<Record<string, string>> = {
         prompt: 'it waits in its next prompt',
         rework: reopened,

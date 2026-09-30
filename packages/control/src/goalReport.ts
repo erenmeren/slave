@@ -1,6 +1,7 @@
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   GOAL_REPORT_DENIALS_MAX,
+  GOAL_REPORT_HANDOFFS_MAX,
   actionSchema,
   err,
   ok,
@@ -159,7 +160,7 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
     prisma.packageHandOff.findMany({ where: { workspaceId, goalVersion }, orderBy: [{ createdAt: 'asc' }, { sourceKey: 'asc' }] }),
     prisma.goalDecision.findMany({ where: { workspaceId, goalVersion }, orderBy: [{ createdAt: 'asc' }, { titleKey: 'asc' }] }),
   ])
-  const handOffs = handOffRows.map(
+  const handOffs = handOffRows.slice(0, GOAL_REPORT_HANDOFFS_MAX).map(
     (row): GoalReportHandOff => ({
       id: row.id,
       at: row.createdAt.toISOString(),
@@ -352,6 +353,7 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
     questions,
     smoke,
     handOffs,
+    handOffsOmitted: Math.max(0, handOffRows.length - GOAL_REPORT_HANDOFFS_MAX),
     decisions,
     deniedToolCalls: denials.slice(0, GOAL_REPORT_DENIALS_MAX),
     deniedToolCallsOmitted: Math.max(0, denials.length - GOAL_REPORT_DENIALS_MAX),

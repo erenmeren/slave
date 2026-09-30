@@ -265,6 +265,11 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
             ))}
           </ul>
         )}
+        {report.handOffsOmitted > 0 && (
+          <p data-testid="goal-report-handoffs-omitted" className="text-[12.5px] text-t3">
+            … and {String(report.handOffsOmitted)} more, not listed.
+          </p>
+        )}
       </Panel>
 
       {verified.length > 0 && (

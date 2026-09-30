@@ -12,6 +12,10 @@ export const GOAL_REPORT_TRAIL_MAX = 1000
  *  tool can write hundreds; the report keeps the oldest and says how many more there were. */
 export const GOAL_REPORT_DENIALS_MAX = 200
 
+/** Hand-offs one report lists (plan A Task 8): a package that loops on requests can write many; the
+ *  report keeps the oldest and says how many more there were. */
+export const GOAL_REPORT_HANDOFFS_MAX = 200
+
 /** One trail entry's quoted text. A verification rework reason carries the verifier's evidence
  *  (up to `VERIFICATION_REWORK_MAX_CHARS`), so this is the same order of size. */
 export const GOAL_REPORT_DETAIL_MAX_CHARS = 6000

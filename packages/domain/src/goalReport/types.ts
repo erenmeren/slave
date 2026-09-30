@@ -249,8 +249,10 @@ export interface GoalReport {
   readonly questions: readonly GoalReportQuestion[]
   /** Every smoke attempt of the version, oldest first. */
   readonly smoke: readonly GoalReportSmoke[]
-  /** Every hand-off of the version, oldest first (expired ones too: they have no event). */
+  /** The oldest `GOAL_REPORT_HANDOFFS_MAX` hand-offs of the version, oldest first (expired ones too: they have no event). */
   readonly handOffs: readonly GoalReportHandOff[]
+  /** Hand-offs past `GOAL_REPORT_HANDOFFS_MAX`, left out. */
+  readonly handOffsOmitted: number
   /** The version's shared decisions, oldest first. */
   readonly decisions: readonly GoalReportSharedDecision[]
   /** The oldest `GOAL_REPORT_DENIALS_MAX` denials of the version's runs, oldest first. */

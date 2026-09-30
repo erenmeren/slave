@@ -44,6 +44,7 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
     trailOmitted: 0,
     smoke: [],
     handOffs: [],
+    handOffsOmitted: 0,
     decisions: [],
     deniedToolCalls: [],
     deniedToolCallsOmitted: 0,
@@ -289,6 +290,11 @@ describe('GoalReportView', () => {
       expect(screen.getByTestId('goal-report-handoff').textContent).toContain('report → skeleton')
       expect(screen.getByTestId('goal-report-handoff').textContent).toContain('reopened for it: run pytest')
       expect(screen.getByTestId('goal-report-decision').textContent).toContain('API field naming')
+    })
+    it('counts the hand-offs it left out', () => {
+      render(<GoalReportView report={report({ handOffs: [{ id: 'h1', at, source: 'report', fromPackage: 'a', toPackage: 'b', path: null, packageKey: null, change: 'c', status: 'own', note: null }], handOffsOmitted: 7 })} />)
+      expect(screen.getByTestId('goal-report-handoffs-omitted').textContent).toContain('and 7 more')
+      expect(screen.getByTestId('goal-report-handoff').textContent).toContain("nothing was sent")
     })
     it('says so when there are none', () => {
       render(<GoalReportView report={report()} />)

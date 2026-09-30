@@ -117,6 +117,7 @@ export function renderGoalReportMarkdown(report: GoalReport): string {
           `${mdInline(HAND_OFF_STATUS_LABEL[h.status])}${note === null ? '' : ` (${mdInline(note)})`}: ${mdInline(h.change)}`,
       )
     }
+    if (report.handOffsOmitted > 0) lines.push(`- … and ${String(report.handOffsOmitted)} more, not listed.`)
     lines.push('')
   }
 
