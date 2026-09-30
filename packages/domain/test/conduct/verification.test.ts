@@ -293,4 +293,43 @@ describe('the verifier\'s leads and the RUN rule (skeleton spec S8)', () => {
     expect(runCheckLeansOnSmoke(run('bash scripts/smoke.sh', 'fail'))).toBeNull()
     expect(runCheckLeansOnSmoke([])).toBeNull()
   })
+  it.each([
+    'timeout 600 bash scripts/smoke.sh',
+    'cd /repo && bash scripts/smoke.sh',
+    'bash -e ./scripts/smoke.sh 2>&1 | tee $SLAVEOFAI_VERIFY_DIR/smoke.log',
+    '/tmp/x/scripts/smoke.sh',
+    'sh -c "bash scripts/smoke.sh"',
+    "bash -c 'cd /repo; timeout 60 bash scripts/smoke.sh'",
+    'set -e; env SLAVEOFAI_SMOKE_PROJECT=v1 bash scripts/smoke.sh || true',
+    '(bash scripts/smoke.sh) | cat',
+    'echo starting && bash -eu scripts/smoke.sh > $SLAVEOFAI_VERIFY_DIR/out.txt',
+  ])('counts %j as a check that only runs smoke.sh', (check) => {
+    const items: VerificationItem[] = [{ key: 'RUN', status: 'pass', check, output: '', reason: '' }]
+    expect(runCheckLeansOnSmoke(items)).not.toBeNull()
+  })
+  it.each([
+    'docker compose up -d && curl -fsS localhost:8080/health',
+    'bash scripts/smoke.sh && curl -fsS localhost:8080/api/items',
+    'bash -c "docker compose up -d"',
+    'cd /repo',
+    'bash scripts/smoke.sh | grep ok',
+    'timeout 60 npm start',
+    'bash scripts/not-smoke.sh',
+    'echo $(docker compose up -d) && bash scripts/smoke.sh',
+  ])('does not count %j as a check that only runs smoke.sh', (check) => {
+    const items: VerificationItem[] = [{ key: 'RUN', status: 'pass', check, output: '', reason: '' }]
+    expect(runCheckLeansOnSmoke(items)).toBeNull()
+  })
+  it('tells the verifier how to start the product without changing its checkout', () => {
+    const text = renderVerificationProtocol(['RUN'], '/v')
+    // What the tamper check compares (apps/orchestrator/src/verification.ts tamperedReason).
+    expect(text).toContain('any tracked file changes')
+    expect(text).toContain('a new file appears that git does not ignore')
+    expect(text).toContain('npm ci')
+    expect(text).toContain('uv sync --frozen')
+    expect(text).toContain('put databases, .env files and other data under $SLAVEOFAI_VERIFY_DIR')
+    expect(text).toContain('copy the checkout into $SLAVEOFAI_VERIFY_DIR and start it there')
+    expect(text).toContain('restore every tracked file it changed and remove every file it created')
+    expect(text).toContain('never add ignore rules')
+  })
 })

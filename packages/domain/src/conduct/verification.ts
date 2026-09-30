@@ -277,28 +277,143 @@ export function renderVerificationLeads(leads: readonly WorkerLead[]): string {
   )
 }
 
-/** Skeleton spec S8: the rule for RUN, in the protocol whenever RUN is a key. */
-export const RUN_VERIFICATION_RULE =
+/**
+ * Skeleton spec S8: the rule for RUN, in the protocol whenever RUN is a key.
+ *
+ * Its second half says exactly what the orchestrator's tamper check compares (final review I2;
+ * `tamperedReason` in apps/orchestrator/src/verification.ts): HEAD, every tracked file's status and
+ * content, and every untracked file git does not ignore, less build and test output (dependency
+ * installs, caches, dist/build, `*.log`). Gitignored files are not compared, and the exclude files
+ * outside the tree are. Starting a product through its README commonly rewrites a lockfile or
+ * writes a database or `.env` into the checkout; without this the round is discarded and, at the
+ * retry cap, the version ends needs_human although the product runs.
+ */
+export const RUN_VERIFICATION_RULE = [
   `4. For ${RUN_REQUIREMENT_KEY}: start the product yourself through the path its README documents (Docker if it says Docker) and run a basic user flow against it; ` +
-  `${SMOKE_SCRIPT_PATH} passing is not enough on its own. Your check for ${RUN_REQUIREMENT_KEY} is the commands you ran, not a call to ${SMOKE_SCRIPT_PATH}. Stop what you started.`
+    `${SMOKE_SCRIPT_PATH} passing is not enough on its own. Your check for ${RUN_REQUIREMENT_KEY} is the commands you ran, not a call to ${SMOKE_SCRIPT_PATH}. Stop what you started.`,
+  '   Starting it must leave this checkout as you found it: the verification is thrown away if HEAD moves, any tracked file changes, or a new file appears that git does not ignore ' +
+    '(dependency installs, caches, build output and *.log files are exempt). So: install from the lockfile without rewriting it (npm ci, pnpm install --frozen-lockfile, ' +
+    'yarn install --immutable, uv sync --frozen, poetry install with no lock or update, pip install -r, cargo build --locked); put databases, .env files and other data under ' +
+    '$SLAVEOFAI_VERIFY_DIR (point the product at them through its settings), or copy the checkout into $SLAVEOFAI_VERIFY_DIR and start it there. Before you finish, ' +
+    'restore every tracked file it changed and remove every file it created in the checkout (git status shows both); never commit, and never add ignore rules.',
+].join('\n')
 
-/** One check line that does nothing but run the project's smoke script (`bash`/`sh` prefix, `./`
- *  and arguments allowed). */
-const SMOKE_ONLY_LINE = new RegExp(`^(?:(?:bash|sh)\\s+)?(?:\\./)?${SMOKE_SCRIPT_PATH.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?:\\s.*)?$`, 'u')
+/** One command that runs the project's smoke script: an optional `bash`/`sh` with its flags, any
+ *  path prefix (`./`, an absolute checkout path), and any arguments or redirections. */
+const SMOKE_INVOCATION = new RegExp(
+  `^(?:(?:bash|sh)(?:\\s+-\\w+)*\\s+)?(?:\\S*/)?${SMOKE_SCRIPT_PATH.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?:\\s.*)?$`,
+  'u',
+)
+
+/** `bash -c '<x>'` / `sh -e -c "<x>"`: a shell handed one quoted command string. */
+const SHELL_DASH_C = /^(?:bash|sh)(?:\s+-\w+)*\s+-c\s+(['"])(.*)\1$/u
+
+/** What a command wraps around the one it runs: `(`, `timeout N`, `env K=V…`, `K=V`. */
+const COMMAND_WRAPPERS: readonly RegExp[] = [
+  /^\(\s*/u,
+  /^timeout\s+(?:-\S+\s+)*\d+[smhd]?\s+/u,
+  /^env\s+(?:-\S+\s+)*/u,
+  /^[A-Za-z_][A-Za-z0-9_]*=\S*\s+/u,
+]
+
+/** Commands that do nothing to the product: moving about, shell options, printing. */
+const NO_OP_COMMAND = /^(?:cd(?:\s.*)?|set\s+[-+].*|true|:|echo(?:\s.*)?)$/u
+/** After a pipe, what only copies the output along. */
+const NO_OP_AFTER_PIPE = /^(?:tee(?:\s.*)?|cat(?:\s+-\w+)*)$/u
+
+/**
+ * One command line cut into its commands at an unquoted `&&`, `||`, `;` or `|`, each marked with
+ * whether a pipe feeds it. Quote-aware (single and double), so `bash -c 'a; b'` stays one command.
+ */
+function shellSegments(line: string): readonly { readonly text: string; readonly piped: boolean }[] {
+  const segments: { text: string; piped: boolean }[] = []
+  let current = ''
+  let quote: string | null = null
+  let piped = false
+  const cut = (nextPiped: boolean): void => {
+    segments.push({ text: current, piped })
+    current = ''
+    piped = nextPiped
+  }
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i]!
+    if (quote !== null) {
+      if (ch === quote) quote = null
+      current += ch
+      continue
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch
+      current += ch
+    } else if ((ch === '&' || ch === '|') && line[i + 1] === ch) {
+      cut(false)
+      i += 1
+    } else if (ch === ';') cut(false)
+    else if (ch === '|') cut(true)
+    else current += ch
+  }
+  cut(false)
+  return segments
+}
+
+/** Strips every leading wrapper and a closing `)`, repeatedly: `(timeout 60 env A=1 bash x)` -> `bash x`. */
+function unwrapCommand(text: string): string {
+  let command = text.trim().replace(/\)+$/u, '').trim()
+  for (let changed = true; changed; ) {
+    changed = false
+    for (const wrapper of COMMAND_WRAPPERS) {
+      const next = command.replace(wrapper, '')
+      if (next !== command) {
+        command = next.trim()
+        changed = true
+      }
+    }
+  }
+  return command
+}
+
+/**
+ * What one command line does, for {@link runCheckLeansOnSmoke}: `smoke` when it runs smoke.sh and
+ * nothing but no-ops besides, `noop` when it only moves about or prints, `other` when anything in
+ * it does real work. A `sh|bash -c '<x>'` is unwrapped once (`depth`), and judged by what `<x>` does.
+ */
+function classifyLine(line: string, depth: number): 'smoke' | 'noop' | 'other' {
+  let smoke = false
+  for (const segment of shellSegments(line)) {
+    const command = unwrapCommand(segment.text)
+    // A substitution runs a command of its own inside any of the forms below.
+    if (/\$\(|`/u.test(command)) return 'other'
+    const inner = depth === 0 ? SHELL_DASH_C.exec(command) : null
+    if (inner !== null) {
+      const kind = classifyLine(inner[2] ?? '', depth + 1)
+      if (kind === 'other') return 'other'
+      smoke ||= kind === 'smoke'
+    } else if (SMOKE_INVOCATION.test(command)) smoke = true
+    else if (!(command === '' || NO_OP_COMMAND.test(command) || (segment.piped && NO_OP_AFTER_PIPE.test(command)))) return 'other'
+  }
+  return smoke ? 'smoke' : 'noop'
+}
 
 /**
  * Plan A D10 (spec ruling 3, "the verifier does not take smoke.sh on trust"): a RUN `pass` whose
  * check only runs scripts/smoke.sh took the project's own script on trust. The reason, or null when
  * RUN is absent, not a pass, or checked with commands of the verifier's own.
+ *
+ * Honest wrappers do not hide it (final review T7): each line is cut at `&&`, `||`, `;` and `|`;
+ * `cd`, `set -…`, `true`, `echo` and a piped `tee`/`cat` count for nothing; a leading `(`,
+ * `timeout N`, `env K=V` is stripped; any shell flags and any path prefix are allowed; and a
+ * `sh|bash -c '…'` is judged by what it runs. Smoke-only means some line runs smoke.sh and no
+ * command anywhere does anything else.
  */
 export function runCheckLeansOnSmoke(items: readonly VerificationItem[]): string | null {
   const run = items.find((item) => item.key === RUN_REQUIREMENT_KEY)
   if (run === undefined || run.status !== 'pass') return null
-  const commands = run.check
+  const kinds = run.check
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line !== '' && !line.startsWith('#'))
-  if (commands.length === 0 || !commands.every((line) => SMOKE_ONLY_LINE.test(line))) return null
+    .map((line) => classifyLine(line, 0))
+  if (!kinds.includes('smoke') || kinds.includes('other')) return null
   return `${RUN_REQUIREMENT_KEY} passed on ${SMOKE_SCRIPT_PATH} alone; the verifier must start the product itself through the path the README documents`
 }
 
