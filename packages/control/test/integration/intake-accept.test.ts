@@ -622,10 +622,12 @@ describe('acceptIntake', () => {
     expect(execFileSync('git', ['-C', created, 'ls-files'], { encoding: 'utf8' }).split('\n')).toContain('scripts/verify.sh')
     expect(execFileSync('git', ['-C', created, 'status', '--porcelain'], { encoding: 'utf8' })).toBe('')
     expect(goal.text).toContain('already exists')
+    expect(goal.text).toContain('scripts/verify.d/')
+    expect(existsSync(join(created, 'scripts', 'smoke.sh'))).toBe(true)
     expect(goal.text).not.toContain('Before anything else')
   })
 
-  it('plants no script when the draft named its own gate for a new repository', async (): Promise<void> => {
+  it('plants the runner and the smoke stub, but keeps the draft\'s own gate, for a new repository', async (): Promise<void> => {
     const root = mkdtempSync(join(tmpdir(), 'accept-named-new-'))
     await setInstallationSettings({ reposRoot: root })
     const id = await opened('I have an idea and no repository')
@@ -645,7 +647,13 @@ describe('acceptIntake', () => {
     }
     const accepted = await acceptIntake(id, draft)
     expect(accepted.ok).toBe(true)
-    expect(existsSync(join(root, 'named-new', 'scripts', 'verify.sh'))).toBe(false)
+    // Skeleton spec S4 (ruling F7): both scripts are planted in every new repository; the named
+    // command is still the gate, so the runner is simply not what the workspace runs.
+    expect(existsSync(join(root, 'named-new', 'scripts', 'verify.sh'))).toBe(true)
+    expect(existsSync(join(root, 'named-new', 'scripts', 'smoke.sh'))).toBe(true)
+    if (!accepted.ok) throw new Error('unreachable')
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: accepted.value.workspaceId } })
+    expect(workspace.verifyCommands).toEqual(['npm test'])
   })
 
   it('leaves a named gate exactly as the draft named it, planting nothing over it', async (): Promise<void> => {

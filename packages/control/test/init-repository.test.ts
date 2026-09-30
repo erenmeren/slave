@@ -1,5 +1,5 @@
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -79,5 +79,37 @@ describe('initRepository', () => {
       if (previous === undefined) delete process.env['HOME']
       else process.env['HOME'] = previous
     }
+  })
+})
+
+describe('the planted gate scripts (skeleton spec S4)', () => {
+  it('plants the smoke stub in every new repository, and the verify.d runner only with plantGate', async (): Promise<void> => {
+    const bare = join(temp(), 'bare')
+    expect((await initRepository({ path: bare, name: 'Bare', goal: 'g' })).ok).toBe(true)
+    expect(execFileSync('git', ['-C', bare, 'ls-files'], { encoding: 'utf8' }).split('\n')).toEqual(['README.md', 'scripts/smoke.sh', ''])
+    const stub = spawnSync('bash', ['scripts/smoke.sh'], { cwd: bare, encoding: 'utf8' })
+    expect(stub.status).toBe(2)
+    expect(stub.stdout).toContain('smoke not written yet')
+
+    const gated = join(temp(), 'gated')
+    expect((await initRepository({ path: gated, name: 'Gated', goal: 'g', plantGate: true })).ok).toBe(true)
+    expect(statSync(join(gated, 'scripts/verify.sh')).mode & 0o111).not.toBe(0)
+    expect(execFileSync('git', ['-C', gated, 'status', '--porcelain'], { encoding: 'utf8' })).toBe('')
+  })
+
+  it('runs every verify.d check in name order, says so when there is none, and stops at the first failure', async (): Promise<void> => {
+    const repo = join(temp(), 'runner')
+    await initRepository({ path: repo, name: 'Runner', goal: 'g', plantGate: true })
+    const run = (): ReturnType<typeof spawnSync> => spawnSync('bash', ['scripts/verify.sh'], { cwd: repo, encoding: 'utf8' })
+    expect(run().status).toBe(0)
+    expect(run().stdout).toContain('no checks yet')
+    mkdirSync(join(repo, 'scripts/verify.d'))
+    writeFileSync(join(repo, 'scripts/verify.d/b.sh'), 'echo second\nexit 3\n')
+    writeFileSync(join(repo, 'scripts/verify.d/a.sh'), 'echo first\n')
+    writeFileSync(join(repo, 'scripts/verify.d/c.sh'), 'echo never\n')
+    const result = run()
+    expect(result.status).toBe(3)
+    expect(String(result.stdout).indexOf('first')).toBeLessThan(String(result.stdout).indexOf('second'))
+    expect(result.stdout).not.toContain('never')
   })
 })

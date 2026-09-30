@@ -1,3 +1,4 @@
+import { SMOKE_SCRIPT_PATH, VERIFY_SCRIPT_PATH } from '../conduct/skeleton.js'
 import { SUPERVISOR_PER_CALL_CAP_USD } from '../supervisor/constants.js'
 
 /**
@@ -160,24 +161,55 @@ export const INTAKE_BOOTSTRAP_VERIFY_COMMAND = 'bash scripts/verify.sh'
 
 /** Where the planted gate lives, relative to the repository root -- the path
  *  {@link INTAKE_BOOTSTRAP_VERIFY_COMMAND} runs. */
-export const INTAKE_BOOTSTRAP_VERIFY_SCRIPT_PATH = 'scripts/verify.sh'
+export const INTAKE_BOOTSTRAP_VERIFY_SCRIPT_PATH = VERIFY_SCRIPT_PATH
 
 /**
- * The planted gate's body (M60 §7b, amended 2026-09-20). Checks nothing and exits 0, on purpose:
- * there is no work yet to check. The comment inside is addressed to the worker who opens it -- it
- * is the one place the rule "extend, never loosen" is stated where the script is edited.
- *
- * `cd` to the repository root so a check written as `test -f docs/x.md` means the same thing
- * whichever directory the gate is run from.
+ * The planted gate's body (M60 §7b; skeleton spec S4, 2026-09-30). A RUNNER, not a list of checks:
+ * it runs every `scripts/verify.d/*.sh` in name order and stops at the first that fails, so each
+ * work package owns exactly one file of its own there and no two packages ever edit the same gate
+ * (OBS-10, OBS-22). With no check yet it says so and passes: there is nothing to check.
+ * `LC_ALL=C` makes "name order" byte order, whatever the host's locale.
  */
 export const INTAKE_BOOTSTRAP_VERIFY_SCRIPT = [
   '#!/usr/bin/env bash',
   "# This project's verification gate. A task is accepted only when this script exits 0.",
-  '# It starts by checking nothing, because nothing has been built yet. A task that produces',
-  '# work which can honestly be checked extends this script with that check, in the same task.',
-  '# Checks are added, never removed or weakened. Runs from the repository root.',
+  '# It runs every scripts/verify.d/*.sh in name order and stops at the first that fails.',
+  '# Add your checks as your own file there: a work package adds only scripts/verify.d/<package-key>.sh;',
+  '# a project delivered by one worker adds its checks to scripts/verify.d/. Checks are added, never',
+  '# removed or weakened. Runs from the repository root.',
   'set -euo pipefail',
+  'export LC_ALL=C',
   'cd "$(dirname "${BASH_SOURCE[0]}")/.."',
+  'shopt -s nullglob',
+  'checks=(scripts/verify.d/*.sh)',
+  'if [ "${#checks[@]}" -eq 0 ]; then',
+  '  echo "no checks yet"',
+  '  exit 0',
+  'fi',
+  'for check in "${checks[@]}"; do',
+  '  echo "== ${check}"',
+  '  bash "${check}"',
+  'done',
+  '',
+].join('\n')
+
+/** Skeleton spec S4: what the smoke stub prints, and its exit code -- Plan B reads the pair as "not written yet". */
+export const SMOKE_STUB_MESSAGE = 'smoke not written yet'
+export const SMOKE_STUB_EXIT_CODE = 2
+
+export const INTAKE_BOOTSTRAP_SMOKE_SCRIPT_PATH = SMOKE_SCRIPT_PATH
+
+/** Skeleton spec S4/S5: the smoke stub a new repository starts with, carrying the contract it must grow into. */
+export const INTAKE_BOOTSTRAP_SMOKE_SCRIPT = [
+  '#!/usr/bin/env bash',
+  '# The smoke check. `bash scripts/smoke.sh` from the repository root must start the product through',
+  '# the path the README documents (Docker if the README says Docker), run one basic user flow end to',
+  '# end against it (for example: sign in, add a record, see it in a list), stop everything it started,',
+  '# and exit 0 only if the flow worked. $SLAVEOFAI_SMOKE_PROJECT is a unique name for any compose',
+  '# project or container name prefix; never publish on a fixed host port without checking it is free.',
+  '# Print what it does. Until the product can be started, this stub says so and exits 2.',
+  `echo "${SMOKE_STUB_MESSAGE}"`,
+  `exit ${String(SMOKE_STUB_EXIT_CODE)}`,
   '',
 ].join('\n')
 
@@ -191,13 +223,18 @@ export const INTAKE_BOOTSTRAP_VERIFY_SCRIPT = [
  * obeyed it: every other task depended on the script, research and design waited on a shell
  * stub, and the stub cost an implementation run and a review. The script now exists before the
  * planner is asked anything, so the clause says so and forbids the task it used to create.
+ * Skeleton spec S4 (2026-09-30): the runner replaced "extend this script", so the clause now says
+ * each check is its own file in `scripts/verify.d/`.
  */
 export const INTAKE_BOOTSTRAP_GOAL_CLAUSE = [
   '',
-  '`scripts/verify.sh` is this project\'s verification gate: a task is accepted only when it exits',
-  '0. It already exists and checks nothing yet. Every task that produces work which can honestly',
-  'be checked must extend it with that check, in the same task; checks are added, never removed.',
-  'Do not create a task for the script itself, and never make other work wait on it.',
+  '`scripts/verify.sh` is this project\'s verification gate: a task is accepted only when it exits 0. It',
+  'already exists: it runs every `scripts/verify.d/*.sh` in name order and checks nothing until one is there.',
+  'Every task that produces work which can honestly be checked adds that check as its own file in',
+  '`scripts/verify.d/` (a work package adds only `scripts/verify.d/<package-key>.sh`), in the same task;',
+  'checks are added, never removed. `scripts/smoke.sh` is a stub until the product can be started; it must',
+  'end up starting the product the way the README documents and running one basic user flow.',
+  'Do not create a task for either script by itself, and never make other work wait on them.',
 ].join('\n')
 
 /** How many Agency persona catalogue entries the facts may carry (M59 R6). Three hundred names
