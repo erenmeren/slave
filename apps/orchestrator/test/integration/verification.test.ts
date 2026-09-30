@@ -1057,7 +1057,7 @@ describe('stranded verification claims', () => {
 
   // Fix round 1, M4: a conclusion that throws every time (here: the integration branch is gone, so
   // its tip cannot be read) must not hold the claim forever nor stop the pass for other versions.
-  it('releases a claim whose conclusion throws, goes on to the other versions, and ends in needs_human naming the error', async (): Promise<void> => {
+  it('releases a claim whose conclusion throws, goes on to the other versions, and trips on the gone branch instead of dispatching again', async (): Promise<void> => {
     const f = await seed()
     const claimed = await claimRound(f)
     await say(f, claimed.runId, verdictText([passes('R1'), passes('R2')]))
@@ -1092,15 +1092,21 @@ describe('stranded verification claims', () => {
     expect(trips.some((detail) => detail.includes('goal v2 is accepted and autoMerge is off'))).toBe(true)
     expect((await deliveryOf(f)).activeRunId).toBeNull()
 
-    for (let i = 0; i < 4 && (await deliveryOf(f)).status === 'verifying'; i += 1) {
+    for (let i = 0; i < 4; i += 1) {
       await runGoalPass(deps, { mayStartRuns: true })
       await drainPumps()
     }
 
+    // Skeleton final review I1: the branch is gone, so the round is not dispatched again into a
+    // checkout that cannot be made -- the pass says so, once, as for an accepted version, and the
+    // version waits for the branch to be restored or the version abandoned.
     const delivery = await deliveryOf(f)
-    expect(delivery).toMatchObject({ status: 'needs_human', activeRunId: null })
-    expect(delivery.needsHumanReason).toContain('could not produce a usable verification 3 times')
-    expect(delivery.needsHumanReason).toContain(f.branch)
+    expect(delivery).toMatchObject({ status: 'verifying', activeRunId: null, roundRunFailures: 1 })
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(1)
+    const gone = (await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'guardrail_tripped' } }))
+      .map((event) => (event.payload as { detail: string }).detail)
+      .filter((detail) => detail.startsWith(`the integration branch ${f.branch} of goal v1 is gone`))
+    expect(gone).toHaveLength(1)
   }, 60_000)
 
   it('releases a claim naming a run that does not exist', async (): Promise<void> => {
