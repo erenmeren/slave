@@ -28,6 +28,7 @@ import {
   renderRunContext,
   renderVerificationGoal,
   renderVerificationProtocol,
+  registrationsSchema,
   requirementItemsSchema,
   stageOrder,
   type FittedSkillBodies,
@@ -693,7 +694,7 @@ async function packageSections(workPackageId: string, workflowSteps: number): Pr
     const row = dependencyByKey.get(key)
     return row === undefined ? [] : [row]
   })
-  const text = renderPackageContract({ pkg, requirements, dependencies })
+  const text = renderPackageContract({ pkg: { ...pkg, registrations: registrationsSchema.parse(pkg.registrations) }, requirements, dependencies })
   return [
     {
       kind: 'package',

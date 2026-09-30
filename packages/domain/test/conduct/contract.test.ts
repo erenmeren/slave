@@ -29,6 +29,34 @@ describe('renderPackageContract', () => {
   })
 })
 
+describe('renderPackageContract skeleton, smoke and registrations', () => {
+  it('tells the skeleton its job and the smoke contract', () => {
+    const text = renderPackageContract({ pkg: { key: 'skeleton', title: 'S', ownedPaths: ['src/main.ts'], isIntegration: false, interface: '' }, requirements: [], dependencies: [] })
+    expect(text).toContain('Your package is the skeleton')
+    expect(text).toContain('`bash scripts/smoke.sh` from the repository root starts the product through the path the README documents')
+    expect(text).toContain('$SLAVEOFAI_SMOKE_PROJECT')
+    expect(text).toContain('scripts/verify.d/skeleton.sh')
+  })
+
+  it('gives a single package the smoke contract and a feature package only its own check file', () => {
+    const single = renderPackageContract({ pkg: { key: 'main', title: 'M', ownedPaths: ['**'], isIntegration: false, interface: '' }, requirements: [], dependencies: [] })
+    expect(single).toContain('`bash scripts/smoke.sh`')
+    expect(single).toContain('Add your checks to scripts/verify.d/')
+    const feature = renderPackageContract({ pkg: { key: 'report', title: 'R', ownedPaths: ['src/report/**'], isIntegration: false, interface: '' }, requirements: [], dependencies: [] })
+    expect(feature).not.toContain('`bash scripts/smoke.sh`')
+    expect(feature).toContain('Your checks go in scripts/verify.d/report.sh')
+  })
+
+  it('names each registration and the rule behind it', () => {
+    const text = renderPackageContract({
+      pkg: { key: 'identity', title: 'I', ownedPaths: ['src/auth/**'], isIntegration: false, interface: '', registrations: [{ directory: 'backend/migrations', prefix: '0100_identity_' }] },
+      requirements: [], dependencies: [],
+    })
+    expect(text).toContain('- backend/migrations/0100_identity_* (in backend/migrations, which the skeleton loads)')
+    expect(text).toContain('never put such a file anywhere else')
+  })
+})
+
 describe('renderReportProtocol', () => {
   it('shows the exact tag, every key and the workflow answer', () => {
     const text = renderReportProtocol(['R1', 'R2'], 3)

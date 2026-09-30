@@ -777,6 +777,7 @@ describe('buildRunContext', () => {
           workspaceId: fixture.workspaceId, goalVersion: 1, key: 'report', title: 'Report modes',
           requirementKeys: ['R1', 'R2'], ownedPaths: ['src/report/**'], interface: 'render(rows, mode)',
           dependsOn: ['config'], templateId: 'tpl',
+          registrations: [{ directory: 'db/migrations', prefix: '0100_report_' }],
         },
       })
       await prisma.task.update({ where: { id: fixture.taskId }, data: { workPackageId: pkg.id } })
@@ -794,6 +795,8 @@ describe('buildRunContext', () => {
       // Only the package's own requirements: R3 belongs to `config`.
       expect(prompt).not.toContain('R3: config file')
       expect(prompt).toContain('- src/report/**')
+      expect(prompt).toContain('- db/migrations/0100_report_* (in db/migrations, which the skeleton loads)')
+      expect(prompt).toContain('Your checks go in scripts/verify.d/report.sh')
       expect(prompt).toContain('- config: load(): Config')
       expect(prompt).toContain('<slave-report>')
       expect(prompt).toContain('"workflow": [] (you were given no workflow)')
