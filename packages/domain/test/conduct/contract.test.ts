@@ -50,9 +50,13 @@ describe('renderPackageContract skeleton, smoke and registrations', () => {
     const rendered = renderPackageContract({ pkg: { key: 'skeleton', title: 'S', ownedPaths: ['src/main.ts'], isIntegration: false, interface: '' }, requirements: [], dependencies: [], verifyCommands: GATE })
     // The contract wraps its lines; the rule is read as prose.
     const text = rendered.replace(/\s+/g, ' ')
-    expect(text).toContain('creates at least one record through the product\'s own interface (its API or UI) and reads it back')
+    expect(text).toContain('The flow changes something and reads the change back; a flow that only reads proves nothing.')
+    expect(text).toContain('creates at least one record through the product\'s own interface (its API, UI or CLI) and reads it back')
+    expect(text).toContain('where it stores nothing, it runs the product\'s main operation and checks the result')
     expect(text).toContain('only the steps the README gives an operator')
-    expect(text).toContain('never write to the database directly, and never switch off a licence, sign-in or permission check')
+    expect(text).toContain('answered with the values the README documents, through stdin, flags or the environment')
+    expect(text).toContain('Keep the product\'s data in a temporary directory the smoke removes')
+    expect(text).toContain('Never write to the database directly, and never switch off a licence, sign-in or permission check')
     expect(text).toContain('If a README step cannot be done with what ships in the repository (for example a licence that needs a vendor\'s private key), the smoke fails and says which step')
   })
 
