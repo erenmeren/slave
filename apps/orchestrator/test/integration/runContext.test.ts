@@ -8,6 +8,7 @@ import { Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   ANSWER_BLOCK_OPEN,
   ASK_BLOCK_OPEN,
+  HANDOFF_TRUST_LINE,
   IMPLEMENTATION_WORK_RULES,
   PLANNING_GRAPH_INSTRUCTIONS,
   PROFILE_MAX_CHARS,
@@ -901,7 +902,7 @@ describe('buildRunContext', () => {
 
       expect(prompt).toContain('Shared decisions (every package follows these')
       expect(prompt).toContain('- API field naming: camelCase JSON')
-      expect(prompt).toContain('Asked of your package by other packages')
+      expect(prompt).toContain(`${HANDOFF_TRUST_LINE}\nAsked of your package by other packages`)
       expect(prompt).toContain('- from config: read the page size from Config.pageSize')
       expect(prompt).not.toContain('not for report')
       expect(prompt).toContain('Reported by the packages before yours')
@@ -1051,6 +1052,8 @@ describe('buildRunContext', () => {
       const reopenRun = await buildImplementation(fixture)
       expect(reopenRun.prompt.split('read the page size from Config.pageSize')).toHaveLength(2)
       expect(reopenRun.prompt).not.toContain('Asked of your package')
+      // Final review M6: the rework reason opens with the trusted line, once.
+      expect(reopenRun.prompt.split(HANDOFF_TRUST_LINE)).toHaveLength(2)
       expect((await prisma.packageHandOff.findUniqueOrThrow({ where: { id: row?.id ?? '' } })).shownInRunId).toBe(fixture.runId)
 
       // The reopen run finished; the next goal pass settles its rows.
