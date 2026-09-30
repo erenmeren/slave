@@ -45,6 +45,21 @@ describe('renderPackageContract skeleton, smoke and registrations', () => {
     expect(text).toContain('scripts/verify.d/skeleton.sh')
   })
 
+  it('requires the smoke flow to create a record and read it back, as a fresh operator following only the README', () => {
+    // Observation log "Does it run?": a read-only flow passed on a product that could not store a single record.
+    const rendered = renderPackageContract({ pkg: { key: 'skeleton', title: 'S', ownedPaths: ['src/main.ts'], isIntegration: false, interface: '' }, requirements: [], dependencies: [], verifyCommands: GATE })
+    // The contract wraps its lines; the rule is read as prose.
+    const text = rendered.replace(/\s+/g, ' ')
+    expect(text).toContain('The flow changes something and reads the change back; a flow that only reads proves nothing.')
+    expect(text).toContain('creates at least one record through the product\'s own interface (its API, UI or CLI) and reads it back')
+    expect(text).toContain('where it stores nothing, it runs the product\'s main operation and checks the result')
+    expect(text).toContain('only the steps the README gives an operator')
+    expect(text).toContain('answered with the values the README documents, through stdin, flags or the environment')
+    expect(text).toContain('Keep the product\'s data in a temporary directory the smoke removes')
+    expect(text).toContain('Never write to the database directly, and never switch off a licence, sign-in or permission check')
+    expect(text).toContain('If a README step cannot be done with what ships in the repository (for example a licence that needs a vendor\'s private key), the smoke fails and says which step')
+  })
+
   it('gives a single package the smoke contract and a feature package only its own check file', () => {
     const single = renderPackageContract({ pkg: { key: 'main', title: 'M', ownedPaths: ['**'], isIntegration: false, interface: '' }, requirements: [], dependencies: [], verifyCommands: GATE })
     expect(single).toContain('`bash scripts/smoke.sh`')
