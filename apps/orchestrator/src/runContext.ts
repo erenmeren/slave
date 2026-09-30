@@ -3,7 +3,16 @@ import { createHash } from 'node:crypto'
 import { cpSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { readSkillBody, runbookForWorkspace, skillRoots, skillSourceDir, type SkillRoots } from '@slave-of-ai/control'
+import {
+  handOffView,
+  listHandOffsFor,
+  markHandOffsShown,
+  readSkillBody,
+  runbookForWorkspace,
+  skillRoots,
+  skillSourceDir,
+  type SkillRoots,
+} from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   PROFILE_MAX_CHARS,
@@ -23,10 +32,13 @@ import {
   profileOverridesSchema,
   profileSpecSchema,
   providerRunsSkills,
+  renderAskedOfYou,
+  renderDependencyLeads,
   renderHandoff,
   renderPackageContract,
   renderReportProtocol,
   renderRunContext,
+  renderSharedDecisions,
   renderVerificationGoal,
   renderVerificationProtocol,
   registrationsSchema,
@@ -42,6 +54,7 @@ import {
 } from '@slave-of-ai/domain'
 import type { ProviderKind } from '@slave-of-ai/providers'
 import { askProtocolSection, inboxSection, rosterSection } from './inbox.js'
+import { workerLeads } from './leads.js'
 import { memorySection } from './memory.js'
 import { staffedRolesForWorkspace } from './staffing.js'
 
@@ -692,11 +705,23 @@ async function checkoutHasProduct(worktreePath: string | null): Promise<boolean 
  * workspace and version. A key the set does not hold (a hand-edited row) is still listed -- the
  * report must cover every key the package owns, so the contract names every one. A package row that
  * is gone (the task's `workPackageId` is `SetNull` on delete, so this is a race) renders nothing.
+ *
+ * Supervisor-as-conductor Plan A D9: the version's shared decisions (spec C3), what other packages
+ * asked of this one (C2), and what its dependencies last reported (C2 "dependency leads") are
+ * appended to the `package` section's text, so no section kind is added. Every block comes from a
+ * domain renderer that strips NUL and sanitises, because `renderPackageContract` appends notes as-is.
+ *
+ * `shownHandOffIds` are the hand-offs the asked-of block showed WHOLE; the caller stamps them only
+ * once the prompt is recorded (see {@link stampShownHandOffs}). The rest stay pending for the next run.
  */
-async function packageSections(workPackageId: string, workflowSteps: number, worktreePath: string | null): Promise<readonly Section[]> {
+async function packageSections(
+  workPackageId: string,
+  workflowSteps: number,
+  worktreePath: string | null,
+): Promise<{ readonly sections: readonly Section[]; readonly shownHandOffIds: readonly string[] }> {
   const pkg = await prisma.workPackage.findUnique({ where: { id: workPackageId } })
-  if (pkg === null) return []
-  const [set, dependencyRows, workspace, existingProduct] = await Promise.all([
+  if (pkg === null) return { sections: [], shownHandOffIds: [] }
+  const [set, dependencyRows, workspace, existingProduct, decisions, handOffs, leads] = await Promise.all([
     prisma.requirementSet.findUnique({
       where: { workspaceId_goalVersion: { workspaceId: pkg.workspaceId, goalVersion: pkg.goalVersion } },
       select: { items: true },
@@ -708,6 +733,15 @@ async function packageSections(workPackageId: string, workflowSteps: number, wor
     // Final review I1: the contract names the real gate, and where a check must go for it to run.
     prisma.workspace.findUniqueOrThrow({ where: { id: pkg.workspaceId }, select: { verifyCommands: true } }),
     pkg.key === SKELETON_PACKAGE_KEY ? checkoutHasProduct(worktreePath) : Promise.resolve(undefined),
+    // Spec C3: the version's shared decisions, oldest first -- the plan's, then (Plan B) the answers'.
+    prisma.goalDecision.findMany({
+      where: { workspaceId: pkg.workspaceId, goalVersion: pkg.goalVersion },
+      orderBy: [{ createdAt: 'asc' }, { titleKey: 'asc' }],
+      select: { title: true, decision: true },
+    }),
+    listHandOffsFor(pkg.workspaceId, pkg.goalVersion, pkg.key),
+    // The newest report per dependency, the same digest the verifier reads.
+    workerLeads(pkg.workspaceId, pkg.goalVersion, pkg.dependsOn),
   ])
   // `.parse`, as `conductor.ts` reads the same column: a set the conductor wrote that no longer
   // parses is a broken invariant, not a shape to tolerate.
@@ -721,14 +755,18 @@ async function packageSections(workPackageId: string, workflowSteps: number, wor
     const row = dependencyByKey.get(key)
     return row === undefined ? [] : [row]
   })
+  const asked = renderAskedOfYou(handOffs.map(handOffView))
+  // `workerLeads` reads in key order; the contract lists dependencies in `dependsOn` order, and so do their leads.
+  const dependencyLeads = [...leads].sort((a, b) => pkg.dependsOn.indexOf(a.packageKey) - pkg.dependsOn.indexOf(b.packageKey))
   const text = renderPackageContract({
     pkg: { ...pkg, registrations: registrationsSchema.parse(pkg.registrations) },
     requirements,
     dependencies,
     verifyCommands: workspace.verifyCommands,
     ...(existingProduct === undefined ? {} : { existingProduct }),
+    notes: [renderSharedDecisions(decisions), asked.text, renderDependencyLeads(dependencyLeads)],
   })
-  return [
+  const sections: readonly Section[] = [
     {
       kind: 'package',
       text,
@@ -740,6 +778,22 @@ async function packageSections(workPackageId: string, workflowSteps: number, wor
       source: { kind: 'report_protocol', requirements: requirements.length, workflowSteps },
     },
   ]
+  return { sections, shownHandOffIds: asked.shownIds }
+}
+
+/**
+ * Plan A D3: stamps the hand-offs this run's prompt listed with the run, so a finished package whose
+ * run saw them is not reopened for them. Called only after the prompt is recorded -- a refused
+ * prompt showed nobody anything. Guarded to the task's own run: a context built with some other
+ * run's id (a caller bug) stamps nothing rather than claiming a delivery that never happened. The
+ * ids come from this package's own version (`listHandOffsFor`), and `markHandOffsShown` touches
+ * only pending or reopened rows, so a rebuild for the same run (a redispatch) writes the same stamp.
+ */
+async function stampShownHandOffs(runId: string, taskId: string, ids: readonly string[]): Promise<void> {
+  if (ids.length === 0) return
+  const run = await prisma.slaveRun.findUnique({ where: { id: runId }, select: { taskId: true } })
+  if (run?.taskId !== taskId) return
+  await markHandOffsShown(runId, ids)
 }
 
 /** The shape both planning sections ask for, spelt once. Deliberately NOT inside
@@ -983,6 +1037,8 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
 
   const order = SECTION_ORDER[input.kind]
   const sections: Section[] = []
+  // Plan A D3: the hand-offs the package section showed, stamped once the prompt is recorded.
+  let shownHandOffIds: readonly string[] = []
 
   // A re-plan is a `planning` run and nothing else (M40 §3, erratum E2). Asked for one on a kind
   // whose order has no place for the section, this THROWS rather than dropping it (fix round 1,
@@ -1201,7 +1257,9 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     // Conductor Plan 2: a package task's contract and the report it must end with. Only where the
     // order has a place for them (implementation), and only for a task the conductor made.
     if (task.workPackageId !== null && order.includes('package')) {
-      sections.push(...(await packageSections(task.workPackageId, workflowSteps, input.worktreePath)))
+      const built = await packageSections(task.workPackageId, workflowSteps, input.worktreePath)
+      sections.push(...built.sections)
+      shownHandOffIds = built.shownHandOffIds
     }
     // The whole point of spec §8's loop: a rework is supposed to act on why the last attempt was
     // rejected, and one that arrives without it is just a retry. Never on a review run, whose
@@ -1354,6 +1412,7 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     create: { runId: input.runId, prompt, sections: sectionsJson },
     update: { prompt, sections: sectionsJson },
   })
+  if (task !== null) await stampShownHandOffs(input.runId, task.id, shownHandOffIds)
 
   return { prompt, manifest }
 }

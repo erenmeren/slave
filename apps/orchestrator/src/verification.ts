@@ -30,7 +30,6 @@ import {
   VERIFICATION_DIFF_STAT_MAX_CHARS,
   VERIFIER_ROLE,
   err,
-  leadFromReport,
   parseSlaveVerification,
   renderVerificationRework,
   requirementItemsSchema,
@@ -39,12 +38,12 @@ import {
   slaveId as brandSlaveId,
   type RunId,
   type VerificationItem,
-  type WorkerLead,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { checkpointRunFiles, runTokenHash, verifyDirPathFor, type RunHandle, type SlaveRuntimeAdapter } from '@slave-of-ai/providers'
 import { tripConductor } from './conductor.js'
 import { acceptInLock, needsHumanInLock, type NeedsHumanCause } from './goal.js'
+import { workerLeads } from './leads.js'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { verificationOwnership } from './ownership.js'
 import { resolveAdapter } from './provider.js'
@@ -287,23 +286,6 @@ async function diffStat(cwd: string, base: string, head: string): Promise<{ read
   return stdout.length > VERIFICATION_DIFF_STAT_MAX_CHARS
     ? { text: stdout.slice(0, VERIFICATION_DIFF_STAT_MAX_CHARS), capped: true }
     : { text: stdout, capped: false }
-}
-
-/**
- * Skeleton spec S8: every package's latest report, read as leads (plan A D11), in key order -- the
- * newest `RunReport` per package, the one `loadGoalReport` shows.
- */
-async function workerLeads(workspaceId: string, goalVersion: number): Promise<readonly WorkerLead[]> {
-  const packages = await prisma.workPackage.findMany({
-    where: { workspaceId, goalVersion },
-    orderBy: { key: 'asc' },
-    select: { key: true, reports: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1, select: { report: true } } },
-  })
-  return packages.flatMap((pkg) => {
-    const stored = pkg.reports[0]
-    const lead = stored === undefined ? null : leadFromReport(pkg.key, stored.report)
-    return lead === null ? [] : [lead]
-  })
 }
 
 const seatInclude = { person: { include: { template: true } }, permissions: true } as const
