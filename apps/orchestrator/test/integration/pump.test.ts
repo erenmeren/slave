@@ -488,6 +488,77 @@ describe('pumpRun', () => {
     expect(run.terminalAt).not.toBeNull()
   })
 
+  const REPORT_TEXT = 'Done.\n<slave-report>{"requirements":[],"filesTouched":[],"workflow":[],"questions":[]}</slave-report>'
+
+  async function bindToPackage(): Promise<void> {
+    const pkg = await prisma.workPackage.create({
+      data: { workspaceId: ids.workspaceId, goalVersion: 1, key: 'integration', title: 'I', requirementKeys: [], ownedPaths: [], interface: '', templateId: 'tpl', isIntegration: true },
+    })
+    await prisma.task.update({ where: { id: ids.taskId }, data: { workPackageId: pkg.id } })
+  }
+
+  it('concludes a package run that reported, with one permission-mode denial, as succeeded -- the denial stays on record (OBS-17)', async (): Promise<void> => {
+    await bindToPackage()
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'permission_denied', toolName: 'Bash', toolUseId: 'tu_cleanup' },
+        { kind: 'text', text: REPORT_TEXT },
+        { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['tu_cleanup'] } },
+      ]),
+    })
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })).status).toBe('succeeded')
+    const types = await eventTypesFor(ids.runId)
+    expect(types).toContain('run.succeeded')
+    expect(types).not.toContain('run.failed')
+    const trip = await prisma.executionEvent.findFirstOrThrow({ where: { runId: ids.runId, type: 'guardrail_tripped' } })
+    expect(trip.payload).toEqual(expect.objectContaining({ guardrail: 'permission_mode' }))
+  })
+
+  it('still fails that run when it did not end with a report', async (): Promise<void> => {
+    await bindToPackage()
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'permission_denied', toolName: 'Bash', toolUseId: 'tu_cleanup' },
+        { kind: 'text', text: 'I could not finish.' },
+        { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['tu_cleanup'] } },
+      ]),
+    })
+    expect(await eventTypesFor(ids.runId)).toContain('run.failed')
+  })
+
+  it('still fails a planned-delivery run (no package) that reported, and one whose denial the pump never saw', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'permission_denied', toolName: 'Bash', toolUseId: 'tu_cleanup' },
+        { kind: 'text', text: REPORT_TEXT },
+        { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['tu_cleanup'] } },
+      ]),
+    })
+    expect(await eventTypesFor(ids.runId)).toContain('run.failed')
+
+    const second = await seedSecondRun(ids)
+    const pkg = await prisma.workPackage.create({
+      data: { workspaceId: ids.workspaceId, goalVersion: 1, key: 'report', title: 'R', requirementKeys: [], ownedPaths: ['src/**'], interface: '', templateId: 'tpl' },
+    })
+    await prisma.task.update({ where: { id: second.taskId }, data: { workPackageId: pkg.id } })
+    await pumpRun({
+      ...second,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-2' },
+        { kind: 'text', text: REPORT_TEXT },
+        // An id no permission_denied event named: a hook's deny or an unknown one -- never excused.
+        { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['tu_unknown'] } },
+      ]),
+    })
+    expect(await eventTypesFor(second.runId)).toContain('run.failed')
+  })
+
   it('reports a clean-completion-with-denials run as failed', async (): Promise<void> => {
     await pumpRun({
       ...ids,

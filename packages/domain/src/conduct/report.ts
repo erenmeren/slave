@@ -37,6 +37,16 @@ const reportSchema = z.object({
 })
 
 /**
+ * Whether `text` ends its LAST `<slave-report>` with a closing tag -- the pump's cheap "this worker
+ * finished and reported" test (skeleton spec S9, plan A D9). Whether the report is USABLE is
+ * `parseSlaveReport`'s question, asked afterwards by `fileRunReport`.
+ */
+export function hasSlaveReportBlock(text: string): boolean {
+  const start = text.lastIndexOf(`<${SLAVE_REPORT_TAG}>`)
+  return start !== -1 && text.indexOf(`</${SLAVE_REPORT_TAG}>`, start) !== -1
+}
+
+/**
  * The worker's report (spec R7), from the LAST `<slave-report>` block of its final message -- a
  * worker that quotes its instructions or revises its report mid-message means the last one. Every
  * requirement key of its package must appear exactly once; the error names each gap, because it

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseSlaveReport } from '../../src/conduct/report.js'
+import { hasSlaveReportBlock, parseSlaveReport } from '../../src/conduct/report.js'
 
 const wrap = (value: unknown): string => `Done.\n<slave-report>${JSON.stringify(value)}</slave-report>`
 const good = {
@@ -34,5 +34,14 @@ describe('parseSlaveReport', () => {
   it('defaults missing optional lists to empty', () => {
     const parsed = parseSlaveReport(wrap({ requirements: good.requirements }), ['R1', 'R2'])
     expect(parsed.ok && parsed.value).toEqual(expect.objectContaining({ filesTouched: [], workflow: [], questions: [] }))
+  })
+})
+
+describe('hasSlaveReportBlock', () => {
+  it('is true only for a closed block, the last one counting', () => {
+    expect(hasSlaveReportBlock('done\n<slave-report>{}</slave-report>')).toBe(true)
+    expect(hasSlaveReportBlock('<slave-report>{} and then nothing')).toBe(false)
+    expect(hasSlaveReportBlock('no report')).toBe(false)
+    expect(hasSlaveReportBlock('<slave-report>{}</slave-report> then <slave-report>{')).toBe(false)
   })
 })

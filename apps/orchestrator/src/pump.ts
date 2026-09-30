@@ -8,6 +8,7 @@ import {
   OUTPUT_BEAT_MS,
   SKILL_TOOL,
   estimateCostUsd,
+  hasSlaveReportBlock,
   providerRunsSkills,
   type GuardrailKind,
   type SlaveId,
@@ -399,6 +400,12 @@ async function writeCheckpoint(input: {
  */
 const CURSOR_PAUSE_REASON =
   'paused by cancelling the process (cursor has no mid-run gate; canPauseMidRun: false)'
+
+/** Plan A D9: a run whose denials may be excused -- an implementation run of a package task. */
+async function isPackageImplementationRun(runId: RunId): Promise<boolean> {
+  const row = await prisma.slaveRun.findUnique({ where: { id: runId }, select: { kind: true, task: { select: { workPackageId: true } } } })
+  return row?.kind === 'implementation' && row.task?.workPackageId != null
+}
 
 /**
  * Records the pause of a Cursor run whose stream has just ended, and reports whether it did.
@@ -1367,7 +1374,29 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   const nonMatrixDeniedToolUseIds = outcome.deniedToolUseIds.filter(
     (id) => !matrixDeniedToolUseIds.has(id) && !questionDeniedToolUseIds.has(id),
   )
-  const failed = outcome.isError || nonMatrixDeniedToolUseIds.length > 0
+  // Skeleton spec S9 (OBS-17, plan A D9): a package worker that finished and filed its report is
+  // not failed because one tool call was refused by the permission MODE -- the integration run on
+  // 2026-09-29 lost ten minutes of the hardest package's work to a denied `docker rm` cleanup. Only
+  // denials this pump itself saw as permission-mode refusals (`denied`, each already recorded as
+  // `guardrail.tripped { guardrail: 'permission_mode' }`) are excused, never a hook deny or an id
+  // it cannot name, and only on a package run that ended with a `<slave-report>`: the report is
+  // what says the run finished, and it is still parsed, audited and verified after this. A
+  // planned-delivery run has no report, so ADR 0001's "clean terminal, nothing landed" case still
+  // fails it here.
+  const excused =
+    !outcome.isError &&
+    nonMatrixDeniedToolUseIds.length > 0 &&
+    nonMatrixDeniedToolUseIds.every((id) => denied.includes(id)) &&
+    hasSlaveReportBlock(outputTail) &&
+    (await isPackageImplementationRun(runId))
+  const failingDenials = excused ? [] : nonMatrixDeniedToolUseIds
+  if (excused) {
+    console.warn(
+      `[pump] run ${runId} finished with its report; ${String(nonMatrixDeniedToolUseIds.length)} permission-mode denial(s) ` +
+        `(${nonMatrixDeniedToolUseIds.join(', ')}) are recorded and do not fail it`,
+    )
+  }
+  const failed = outcome.isError || failingDenials.length > 0
 
   // M36 t2: a run that ended by asking another slave a question stops here instead of concluding.
   //
@@ -1443,8 +1472,8 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
     // contributed nothing to `failed` above, and naming it here as if it had would misdescribe why
     // an `isError` run actually failed.
     const denied =
-      nonMatrixDeniedToolUseIds.length > 0
-        ? ` ${nonMatrixDeniedToolUseIds.length} tool call(s) were denied: ${nonMatrixDeniedToolUseIds.join(', ')}`
+      failingDenials.length > 0
+        ? ` ${failingDenials.length} tool call(s) were denied: ${failingDenials.join(', ')}`
         : ''
     await emit('run.failed', 'system', { reason: `${outcome.terminalReason}.${denied}`.trim() })
   } else {
