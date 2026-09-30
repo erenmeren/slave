@@ -16,6 +16,12 @@ export const PACKAGE_WORKER_ROLE = 'implementer'
 /** The reserved key of the package that owns every path no other package matches (spec R3). */
 export const INTEGRATION_PACKAGE_KEY = 'integration'
 
+/**
+ * The reserved key of the package that runs first and builds the runnable empty product every
+ * other package builds on (skeleton spec S1). Every other package depends on it; it depends on nothing.
+ */
+export const SKELETON_PACKAGE_KEY = 'skeleton'
+
 /** Failed conductor calls per goal version and stage before the fallback (plan decision D4). */
 export const CONDUCT_RETRY_CAP = 3
 
@@ -37,7 +43,8 @@ export const REQUIREMENTS_MAX_ITEMS = 60
 /** One requirement's text and source sentence, each; a longer one is a paragraph, not a check. */
 export const REQUIREMENT_TEXT_MAX_CHARS = 600
 
-/** The most packages a partitioned goal may have, integration included. */
+/** The most packages the conductor may name in a partitioned answer. The validator may add the
+ *  skeleton and the integration package on top (skeleton spec S1), so a plan holds up to two more. */
 export const CONDUCT_MAX_PACKAGES = 8
 
 /** The repository map lists at most this many files (the rest are counted, not listed). */

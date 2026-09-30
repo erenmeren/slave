@@ -1,0 +1,109 @@
+import { describe, expect, it } from 'vitest'
+import {
+  MANIFEST_LOCK_PAIRS,
+  isValidRegistration,
+  manifestFamily,
+  manifestProblems,
+  registrationGlob,
+  registrationProblems,
+  skeletonPaths,
+  verifyCheckPathFor,
+} from '../../src/conduct/skeleton.js'
+
+describe('manifestFamily', () => {
+  it('is the manifest and every lockfile of its kind, in the same directory', () => {
+    expect(manifestFamily('backend/package-lock.json')).toEqual([
+      'backend/package.json', 'backend/package-lock.json', 'backend/npm-shrinkwrap.json', 'backend/pnpm-lock.yaml',
+      'backend/yarn.lock', 'backend/bun.lockb', 'backend/bun.lock',
+    ])
+    expect(manifestFamily('Cargo.toml')).toEqual(['Cargo.toml', 'Cargo.lock'])
+    expect(manifestFamily('svc/go.sum')).toEqual(['svc/go.mod', 'svc/go.sum'])
+    expect(manifestFamily('src/app.ts')).toEqual([])
+  })
+
+  it('covers the spec S2 list exactly', () => {
+    expect(MANIFEST_LOCK_PAIRS.map((p) => p.manifest)).toEqual(['package.json', 'pyproject.toml', 'Pipfile', 'Cargo.toml', 'go.mod', 'Gemfile', 'composer.json'])
+  })
+})
+
+describe('manifestProblems', () => {
+  const known = ['backend/package.json', 'README.md']
+  it('refuses a split pair, naming the family and the skeleton', () => {
+    const problems = manifestProblems(
+      [{ key: 'core', ownedPaths: ['backend/package.json'] }, { key: 'api', ownedPaths: ['backend/package-lock.json'] }],
+      known,
+    )
+    expect(problems.join('\n')).toContain('package "core" owns backend/package.json')
+    expect(problems.join('\n')).toContain('package "api" owns backend/package-lock.json')
+    expect(problems.join('\n')).toContain('belong to the skeleton package')
+  })
+  it('refuses a glob that covers a lockfile that does not exist yet', () => {
+    expect(manifestProblems([{ key: 'core', ownedPaths: ['backend/**'] }], known).join('\n')).toContain('backend/yarn.lock')
+  })
+  it('refuses a pair given as literal owned paths to two packages, though neither file exists yet', () => {
+    const problems = manifestProblems(
+      [{ key: 'api', ownedPaths: ['backend/package.json'] }, { key: 'ui', ownedPaths: ['backend/package-lock.json'] }],
+      [],
+    ).join('\n')
+    expect(problems).toContain('package "api" owns backend/package.json, but backend/package.json, backend/package-lock.json')
+    expect(problems).toContain('package "ui" owns backend/package-lock.json')
+    expect(problems).toContain('belong to the skeleton package')
+  })
+  it('accepts the family in the skeleton', () => {
+    expect(manifestProblems([{ key: 'skeleton', ownedPaths: ['backend/package.json', 'backend/package-lock.json'] }, { key: 'api', ownedPaths: ['backend/src/api/**'] }], known)).toEqual([])
+  })
+})
+
+describe('skeletonPaths', () => {
+  it('gives the fallback skeleton the scripts, unclaimed manifest families and unclaimed root build files', () => {
+    const { add, problems } = skeletonPaths(
+      [{ key: 'skeleton', ownedPaths: [] }, { key: 'web', ownedPaths: ['frontend/**', 'Dockerfile'] }],
+      ['frontend/package.json', 'go.mod'],
+      true,
+    )
+    expect(problems).toEqual([])
+    expect(add).toEqual(expect.arrayContaining(['scripts/verify.sh', 'scripts/smoke.sh', 'go.mod', 'go.sum', 'compose.yaml', 'Makefile']))
+    expect(add).not.toContain('frontend/package.json') // web's glob claims it: manifestProblems refuses that separately
+    expect(add).not.toContain('Dockerfile')
+  })
+  it('refuses another package owning a gate script', () => {
+    const { problems } = skeletonPaths([{ key: 'skeleton', ownedPaths: [] }, { key: 'ops', ownedPaths: ['scripts/**'] }], [], false)
+    expect(problems).toEqual([
+      'package "ops" owns scripts/verify.sh, which belongs to the skeleton package',
+      'package "ops" owns scripts/smoke.sh, which belongs to the skeleton package',
+    ])
+  })
+  it('adds no build file to a skeleton the conductor named', () => {
+    expect(skeletonPaths([{ key: 'skeleton', ownedPaths: ['src/main.ts'] }], [], false).add).toEqual(['scripts/verify.sh', 'scripts/smoke.sh'])
+  })
+})
+
+describe('registrations', () => {
+  it('turns a registration into a prefix glob and validates it', () => {
+    expect(registrationGlob({ directory: 'backend/migrations/', prefix: '0100_identity_' })).toBe('backend/migrations/0100_identity_*')
+    expect(isValidRegistration({ directory: 'backend/migrations', prefix: '0100_' })).toBe(true)
+    expect(isValidRegistration({ directory: 'backend/**', prefix: 'x' })).toBe(false)
+    expect(isValidRegistration({ directory: 'backend/migrations', prefix: 'a/b' })).toBe(false)
+    expect(isValidRegistration({ directory: '../up', prefix: 'x' })).toBe(false)
+    expect(isValidRegistration({ directory: 'm', prefix: 'x'.repeat(41) })).toBe(false)
+    expect(isValidRegistration({ directory: 'm/'.repeat(101), prefix: 'x' })).toBe(false)
+  })
+  it('refuses a whole shared directory owned by one package while another registers there', () => {
+    const problems = registrationProblems([
+      { key: 'core', ownedPaths: ['backend/migrations/**'], registrations: [] },
+      { key: 'identity', ownedPaths: ['backend/migrations/0100_identity_*'], registrations: [{ directory: 'backend/migrations', prefix: '0100_identity_' }] },
+    ])
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain('package "core" owns files in backend/migrations that package "identity" registers there')
+    expect(problems[0]).toContain('file-per-package')
+  })
+  it('refuses two prefixes where one is a prefix of the other', () => {
+    expect(registrationProblems([
+      { key: 'a', ownedPaths: ['m/01_*'], registrations: [{ directory: 'm', prefix: '01_' }] },
+      { key: 'b', ownedPaths: ['m/01_b_*'], registrations: [{ directory: 'm', prefix: '01_b_' }] },
+    ])).toHaveLength(1)
+  })
+  it('names each package its own check file', () => {
+    expect(verifyCheckPathFor('identity-access')).toBe('scripts/verify.d/identity-access.sh')
+  })
+})

@@ -1,8 +1,24 @@
 import { z } from 'zod'
 import { err, ok, type Result } from '../result.js'
 import { firstJsonObject } from '../supervisor/prompt.js'
-import { CONDUCT_MAX_PACKAGES, INTEGRATION_PACKAGE_KEY } from './constants.js'
+import { CONDUCT_MAX_PACKAGES, INTEGRATION_PACKAGE_KEY, SKELETON_PACKAGE_KEY } from './constants.js'
 import { globToRegExp, isValidOwnedGlob } from './glob.js'
+import { RUN_REQUIREMENT_KEY } from './requirements.js'
+import {
+  REGISTRATION_DIRECTORY_MAX_CHARS,
+  REGISTRATION_PREFIX_MAX_CHARS,
+  SKELETON_INTERFACE,
+  isLiteralPath,
+  isValidRegistration,
+  manifestProblems,
+  registrationGlob,
+  registrationProblems,
+  registrationSchema,
+  registrationsSchema,
+  skeletonPaths,
+  verifyCheckPathFor,
+  type PackageRegistration,
+} from './skeleton.js'
 
 export const CONDUCT_ANSWER_KEY = 'conductAnswer'
 
@@ -16,6 +32,9 @@ export interface PackageSpec {
   readonly dependsOn: readonly string[]
   readonly isIntegration: boolean
   readonly templateId: string
+  /** Skeleton spec S3 (plan A D5): shared directories this package adds files to, under its own
+   *  prefix. Their globs are already in `ownedPaths`; this is what the contract explains. */
+  readonly registrations: readonly PackageRegistration[]
 }
 
 export interface ConductPlan {
@@ -42,6 +61,8 @@ export const conductPlanSchema: z.ZodType<ConductPlan, z.ZodTypeDef, unknown> = 
     dependsOn: z.array(z.string()),
     isIntegration: z.boolean(),
     templateId: z.string().min(1),
+    // A plan stored before registrations existed reads as registering nothing.
+    registrations: registrationsSchema,
   })).min(1),
 })
 
@@ -61,6 +82,8 @@ const packageSchema = z.object({
   interface: z.string().max(4000).default(''),
   dependsOn: z.array(z.string()).default([]),
   templateId: z.string().min(1),
+  // Lengths and characters are `isValidRegistration`'s, so a refusal names the registration.
+  registrations: z.array(registrationSchema).max(10).default([]),
 })
 const answerSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('single'), reason: z.string().trim().min(1), templateId: z.string().min(1) }),
@@ -69,6 +92,7 @@ const answerSchema = z.discriminatedUnion('mode', [
     reason: z.string().trim().min(1),
     packages: z.array(packageSchema).min(2).max(CONDUCT_MAX_PACKAGES),
     integrationTemplateId: z.string().min(1).optional(),
+    skeletonTemplateId: z.string().min(1).optional(),
   }),
 ])
 
@@ -79,7 +103,7 @@ export function singlePlan(templateId: string, requirementKeys: readonly string[
     reason,
     packages: [{
       key: 'main', title: 'The whole goal', requirementKeys: [...requirementKeys], ownedPaths: ['**'], newPaths: [],
-      interface: '', dependsOn: [], isIntegration: false, templateId,
+      interface: '', dependsOn: [], isIntegration: false, templateId, registrations: [],
     }],
   }
 }
@@ -144,6 +168,8 @@ export function validateConduct(answer: unknown, context: ConductContext): Resul
   }
 
   const problems: string[] = []
+  // Plan A D2: only a set extracted since skeleton spec S6 carries RUN; an older set validates as before.
+  const runKey = context.requirementKeys.includes(RUN_REQUIREMENT_KEY) ? RUN_REQUIREMENT_KEY : null
   const keys = value.packages.map((p) => p.key)
   if (new Set(keys).size !== keys.length) problems.push('package keys must be unique')
 
@@ -152,11 +178,21 @@ export function validateConduct(answer: unknown, context: ConductContext): Resul
     for (const glob of [...p.ownedPaths, ...p.newPaths]) {
       if (!isValidOwnedGlob(glob)) problems.push(`package "${p.key}": "${glob}" is not a repository-relative path`)
     }
+    for (const registration of p.registrations) {
+      if (!isValidRegistration(registration)) {
+        problems.push(`package "${p.key}": registration ${JSON.stringify(registration)} needs a plain directory of at most ${REGISTRATION_DIRECTORY_MAX_CHARS} characters and a prefix of at most ${REGISTRATION_PREFIX_MAX_CHARS} with no "/", "*" or "?"`)
+      }
+    }
+    if (p.key === SKELETON_PACKAGE_KEY && p.dependsOn.length > 0) {
+      problems.push(`package "${SKELETON_PACKAGE_KEY}" depends on nothing: it runs first, and every other package depends on it`)
+    }
     for (const dep of p.dependsOn) {
       // Integration is made to depend on every other package below, so the reverse edge is always
       // a cycle (final review I4) -- refused by name, since "a cycle" alone would not say which.
       if (dep === INTEGRATION_PACKAGE_KEY && p.key !== INTEGRATION_PACKAGE_KEY) {
         problems.push(`package "${p.key}": dependsOn "${INTEGRATION_PACKAGE_KEY}" is not allowed -- the integration package depends on every other package, never the other way round`)
+      } else if (dep === SKELETON_PACKAGE_KEY && p.key !== SKELETON_PACKAGE_KEY) {
+        // Skeleton spec S1: always there -- named by the conductor, or added below.
       } else if (!keys.includes(dep) || dep === p.key) {
         problems.push(`package "${p.key}": dependsOn "${dep}" names no other package`)
       }
@@ -164,36 +200,57 @@ export function validateConduct(answer: unknown, context: ConductContext): Resul
     for (const path of p.newPaths) {
       if (!p.ownedPaths.some((g) => globToRegExp(g).test(path))) problems.push(`package "${p.key}": new path "${path}" is not inside its own ownedPaths`)
     }
+    if (runKey !== null && p.requirementKeys.includes(runKey)) {
+      problems.push(`package "${p.key}": requirement ${runKey} is Slave's own and belongs to the ${INTEGRATION_PACKAGE_KEY} package -- list it in no package`)
+    }
   }
   const owners = new Map<string, string[]>()
   for (const p of value.packages) for (const r of p.requirementKeys) owners.set(r, [...(owners.get(r) ?? []), p.key])
   for (const r of context.requirementKeys) {
+    if (r === runKey) continue
     const holders = owners.get(r) ?? []
     if (holders.length === 0) problems.push(`requirement ${r} is in no package`)
     if (holders.length > 1) problems.push(`requirement ${r} is in ${holders.length} packages (${holders.join(', ')})`)
   }
   for (const r of owners.keys()) if (!context.requirementKeys.includes(r)) problems.push(`requirement ${r} does not exist`)
 
-  // Disjointness over what exists and what the packages SAID they will create (spec R3). The
-  // conductor-named integration package's own globs count like anyone's.
   const declared = value.packages.flatMap((p) => p.newPaths)
-  const matchers = value.packages.map((p) => ({ key: p.key, regexes: p.ownedPaths.map(globToRegExp) }))
-  const clashes: string[] = []
-  for (const path of new Set([...context.repoFiles, ...declared])) {
-    const matching = matchers.filter((m) => m.regexes.some((r) => r.test(path))).map((m) => m.key)
-    if (matching.length > 1 && clashes.length < 10) clashes.push(`${path} (${matching.join(', ')})`)
-  }
-  if (clashes.length > 0) problems.push(`two packages own the same file: ${clashes.join('; ')}`)
+  const known = [...new Set([...context.repoFiles, ...declared])]
+  const firstTemplate = value.packages[0]?.templateId ?? ''
+  const templateOr = (id: string | undefined): string => (id !== undefined && context.templateIds.has(id) ? id : firstTemplate)
 
-  const named = value.packages.find((p) => p.key === INTEGRATION_PACKAGE_KEY)
-  const others = value.packages.filter((p) => p.key !== INTEGRATION_PACKAGE_KEY).map((p) => p.key)
-  const packages: PackageSpec[] = value.packages.map((p) => ({
-    key: p.key, title: p.title, requirementKeys: p.requirementKeys, ownedPaths: p.ownedPaths, newPaths: p.newPaths,
-    interface: p.interface, templateId: p.templateId,
+  let packages: PackageSpec[] = value.packages.map((p) => ({
+    key: p.key,
+    title: p.title,
+    requirementKeys: p.requirementKeys,
+    // Plan A D5: a registration is owned as its prefix glob, so the gate and the diff audit enforce it.
+    ownedPaths: [...p.ownedPaths, ...p.registrations.map(registrationGlob)],
+    newPaths: p.newPaths,
+    interface: p.interface,
+    dependsOn: p.dependsOn,
     isIntegration: p.key === INTEGRATION_PACKAGE_KEY,
-    dependsOn: p.key === INTEGRATION_PACKAGE_KEY ? others : p.dependsOn,
+    templateId: p.templateId,
+    registrations: p.registrations,
   }))
-  if (named === undefined) {
+  problems.push(...manifestProblems(packages, known))
+
+  // Skeleton spec S1 (plan A D3): first in the list, because it runs first.
+  const namedSkeleton = packages.some((p) => p.key === SKELETON_PACKAGE_KEY)
+  if (!namedSkeleton) {
+    packages.unshift({
+      key: SKELETON_PACKAGE_KEY,
+      title: 'The runnable skeleton',
+      requirementKeys: [],
+      ownedPaths: [],
+      newPaths: [],
+      interface: SKELETON_INTERFACE,
+      dependsOn: [],
+      isIntegration: false,
+      templateId: templateOr(value.skeletonTemplateId),
+      registrations: [],
+    })
+  }
+  if (!packages.some((p) => p.isIntegration)) {
     packages.push({
       key: INTEGRATION_PACKAGE_KEY,
       title: 'Integrate the packages',
@@ -201,15 +258,37 @@ export function validateConduct(answer: unknown, context: ConductContext): Resul
       ownedPaths: [],
       newPaths: [],
       interface: 'Wire the other packages together through the interfaces they declare; you own every file no other package owns.',
-      dependsOn: others,
+      dependsOn: [],
       isIntegration: true,
-      templateId: value.integrationTemplateId !== undefined && context.templateIds.has(value.integrationTemplateId)
-        ? value.integrationTemplateId
-        : value.packages[0]?.templateId ?? '',
+      templateId: templateOr(value.integrationTemplateId),
+      registrations: [],
     })
   }
-  // On the graph as it will be WRITTEN, after the integration rewrite: checked on the answer as
-  // given, a cycle through the rewritten edges slipped through and neither task could ever start.
+  const skeletonShare = skeletonPaths(packages, known, !namedSkeleton)
+  problems.push(...skeletonShare.problems)
+  const nonIntegration = packages.filter((p) => !p.isIntegration).map((p) => p.key)
+  packages = packages.map((p): PackageSpec => {
+    // Plan A D7: each package owns exactly its own check file.
+    const ownedPaths = [...p.ownedPaths, ...(p.key === SKELETON_PACKAGE_KEY ? skeletonShare.add : []), verifyCheckPathFor(p.key)]
+    if (p.isIntegration) {
+      return { ...p, ownedPaths, dependsOn: nonIntegration, requirementKeys: runKey === null ? p.requirementKeys : [...p.requirementKeys, runKey] }
+    }
+    if (p.key === SKELETON_PACKAGE_KEY) return { ...p, ownedPaths }
+    return { ...p, ownedPaths, dependsOn: p.dependsOn.includes(SKELETON_PACKAGE_KEY) ? p.dependsOn : [SKELETON_PACKAGE_KEY, ...p.dependsOn] }
+  })
+  problems.push(...registrationProblems(packages))
+
+  // Disjointness over what exists, what the packages SAID they will create (spec R3), and every
+  // path the rules above named outright -- the skeleton's, each `scripts/verify.d/<key>.sh`.
+  const literal = packages.flatMap((p) => p.ownedPaths.filter(isLiteralPath))
+  const matchers = packages.map((p) => ({ key: p.key, regexes: p.ownedPaths.map(globToRegExp) }))
+  const clashes: string[] = []
+  for (const path of new Set([...known, ...literal])) {
+    const matching = matchers.filter((m) => m.regexes.some((r) => r.test(path))).map((m) => m.key)
+    if (matching.length > 1 && clashes.length < 10) clashes.push(`${path} (${matching.join(', ')})`)
+  }
+  if (clashes.length > 0) problems.push(`two packages own the same file: ${clashes.join('; ')}`)
+  // On the graph as it will be WRITTEN, after the integration and skeleton rewrites.
   if (hasCycle(packages)) problems.push('the packages\' dependsOn form a cycle')
   if (problems.length > 0) return err(problems.join('; '))
   return ok({ mode: 'partitioned', reason: value.reason, packages })
