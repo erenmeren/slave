@@ -35,6 +35,23 @@ vi.mock('../../src/gitMerge.js', async (importOriginal) => {
   }
 })
 
+/** Final review M3: makes one of the pass's hand-off steps throw, to show the pass goes on without it. */
+const handOffStep = vi.hoisted(() => ({ throwing: null as 'routeStoredHandOffs' | 'reopenForHandOffs' | null }))
+vi.mock('@slave-of-ai/control', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@slave-of-ai/control')>()
+  return {
+    ...original,
+    routeStoredHandOffs: async (deliveryId: string): Promise<void> => {
+      if (handOffStep.throwing === 'routeStoredHandOffs') throw new Error('routeStoredHandOffs failed')
+      return original.routeStoredHandOffs(deliveryId)
+    },
+    reopenForHandOffs: async (deliveryId: string): Promise<void> => {
+      if (handOffStep.throwing === 'reopenForHandOffs') throw new Error('reopenForHandOffs failed')
+      return original.reopenForHandOffs(deliveryId)
+    },
+  }
+})
+
 const repos: string[] = []
 
 function git(args: readonly string[], cwd: string): string {
@@ -589,6 +606,26 @@ describe('runGoalPass', () => {
     expect((await delivery(f)).status).toBe('integrating')
     expect(await prisma.smokeAttempt.count()).toBe(0)
   })
+
+  for (const step of ['routeStoredHandOffs', 'reopenForHandOffs'] as const) {
+    it(`still merges an accepted version on a pass whose ${step} throws (final review M3)`, async (): Promise<void> => {
+      const f = await seed()
+      await integrateAll(f)
+      await acceptVerified(f)
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      handOffStep.throwing = step
+      let lines: string[] = []
+      try {
+        await pass(f)
+        lines = logged.mock.calls.map((call) => String(call[0]))
+      } finally {
+        handOffStep.throwing = null
+        logged.mockRestore()
+      }
+      expect((await delivery(f)).mergedAt).not.toBeNull()
+      expect(lines.some((line) => line.includes(`${step} failed on this pass`))).toBe(true)
+    })
+  }
 
   it('does not merge a tip nothing verified: an integration branch that moved after acceptance is verified again', async (): Promise<void> => {
     const f = await seed()

@@ -109,8 +109,18 @@ async function advanceDelivery(
   // reopen that a filing could not do (the lock was busy) is done. A version with nothing pending
   // takes no lock (ruling F12). First, a report whose filing could not route its hand-offs (a lock
   // busy past every retry) is routed here (Task 6 ruling), with no lock held.
-  await routeStoredHandOffs(id)
-  await reopenForHandOffs(id)
+  // Final review M3: each is its own step. One that throws (on every pass, for one stored report or
+  // row) must not skip this version's smoke, verification or merge: logged, and the pass goes on.
+  try {
+    await routeStoredHandOffs(id)
+  } catch (error) {
+    console.error(`[goal] goal delivery ${id}: routeStoredHandOffs failed on this pass --`, error)
+  }
+  try {
+    await reopenForHandOffs(id)
+  } catch (error) {
+    console.error(`[goal] goal delivery ${id}: reopenForHandOffs failed on this pass --`, error)
+  }
   let delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { id } })
   if (delivery.activeSmokeId !== null) {
     // Plan B D8: a smoke claim nothing will conclude is settled here; a live one is waited for.
