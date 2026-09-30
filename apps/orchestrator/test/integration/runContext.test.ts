@@ -995,6 +995,43 @@ describe('buildRunContext', () => {
       expect((await prisma.packageHandOff.findUniqueOrThrow({ where: { id: other.id } })).shownInRunId).toBeNull()
     })
 
+    /** Fix round 1: requests already acted on never crowd a newer one out of the budget. */
+    it('shows a new pending request before seen ones and never re-presents delivered ones', async () => {
+      await bindToPackage()
+      for (let i = 0; i < 6; i += 1) {
+        await prisma.packageHandOff.create({
+          data: {
+            workspaceId: fixture.workspaceId, goalVersion: 1, source: 'report', sourceKey: `report:r0:${String(i)}`, fromRunId: 'r0', fromPackageKey: 'config',
+            toPackageKey: 'report', packageKey: 'report', change: `delivered ${String(i)} ${'d'.repeat(1100)}`, fingerprint: `d${String(i)}`, status: 'delivered',
+            shownInRunId: 'an-earlier-run', createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, i)),
+          },
+        })
+      }
+      const seen = await prisma.packageHandOff.create({
+        data: {
+          workspaceId: fixture.workspaceId, goalVersion: 1, source: 'report', sourceKey: 'report:r0:6', fromRunId: 'r0', fromPackageKey: 'config', toPackageKey: 'report',
+          packageKey: 'report', change: 'seen before', fingerprint: 's', status: 'pending', shownInRunId: 'an-earlier-run', createdAt: new Date(Date.UTC(2026, 0, 1, 0, 1, 0)),
+        },
+      })
+      const fresh = await prisma.packageHandOff.create({
+        data: {
+          workspaceId: fixture.workspaceId, goalVersion: 1, source: 'report', sourceKey: 'report:r1:0', fromRunId: 'r1', fromPackageKey: 'config', toPackageKey: 'report',
+          packageKey: 'report', change: 'a newer request', fingerprint: 'n', status: 'pending', createdAt: new Date(Date.UTC(2026, 0, 1, 0, 2, 0)),
+        },
+      })
+
+      const { prompt } = await buildImplementation(fixture)
+
+      expect(prompt).toContain('- from config: a newer request')
+      expect(prompt.indexOf('a newer request')).toBeLessThan(prompt.indexOf('seen before'))
+      expect(prompt).not.toContain('delivered 0')
+      expect(prompt).not.toContain('ddddd')
+      expect((await prisma.packageHandOff.findUniqueOrThrow({ where: { id: fresh.id } })).shownInRunId).toBe(fixture.runId)
+      expect((await prisma.packageHandOff.findUniqueOrThrow({ where: { id: seen.id } })).shownInRunId).toBe(fixture.runId)
+      const delivered = await prisma.packageHandOff.findMany({ where: { workspaceId: fixture.workspaceId, status: 'delivered' } })
+      expect(delivered.every((row) => row.shownInRunId === 'an-earlier-run')).toBe(true)
+    })
+
     it('stamps nothing when the prompt is refused, since nobody was shown it', async () => {
       await bindToPackage()
       const row = await prisma.packageHandOff.create({

@@ -733,7 +733,9 @@ async function packageSections(
     // Final review I1: the contract names the real gate, and where a check must go for it to run.
     prisma.workspace.findUniqueOrThrow({ where: { id: pkg.workspaceId }, select: { verifyCommands: true } }),
     pkg.key === SKELETON_PACKAGE_KEY ? checkoutHasProduct(worktreePath) : Promise.resolve(undefined),
-    // Spec C3: the version's shared decisions, oldest first -- the plan's, then (Plan B) the answers'.
+    // Spec C3: the version's shared decisions by creation time -- the plan's, then (Plan B) the
+    // answers'. Decisions one plan wrote in one `createMany` share a timestamp and then read in
+    // `titleKey` order, not in the order the plan listed them.
     prisma.goalDecision.findMany({
       where: { workspaceId: pkg.workspaceId, goalVersion: pkg.goalVersion },
       orderBy: [{ createdAt: 'asc' }, { titleKey: 'asc' }],
@@ -755,7 +757,13 @@ async function packageSections(
     const row = dependencyByKey.get(key)
     return row === undefined ? [] : [row]
   })
-  const asked = renderAskedOfYou(handOffs.map(handOffView))
+  // Fix round 1 (review I1): what is still to do goes first. Never-shown pending requests, then the
+  // pending and reopened ones an earlier run already saw; delivered rows were acted on and are not
+  // presented again as "do each one". Stable within each group (the query's creation order), so
+  // older requests can no longer crowd a newer one out of the budget.
+  const unseen = handOffs.filter((row) => row.status === 'pending' && row.shownInRunId === null)
+  const seenAgain = handOffs.filter((row) => (row.status === 'pending' && row.shownInRunId !== null) || row.status === 'reopened')
+  const asked = renderAskedOfYou([...unseen, ...seenAgain].map(handOffView))
   // `workerLeads` reads in key order; the contract lists dependencies in `dependsOn` order, and so do their leads.
   const dependencyLeads = [...leads].sort((a, b) => pkg.dependsOn.indexOf(a.packageKey) - pkg.dependsOn.indexOf(b.packageKey))
   const text = renderPackageContract({
