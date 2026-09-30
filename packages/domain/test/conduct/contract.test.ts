@@ -155,7 +155,7 @@ describe('renderPackageContract: the skeleton job', () => {
     expect(fallback).toContain('You own no dependency manifest')
     expect(fallback).not.toContain('every dependency manifest')
     expect(fallback).not.toContain('other packages cannot change them')
-    expect(fallback).toContain('If starting it needs a file you do not own, ask the conductor')
+    expect(fallback).toContain('list it in your report\'s "handOffs"')
   })
 
   it('updates the README only when it owns it', () => {
@@ -174,5 +174,31 @@ describe('renderReportProtocol', () => {
     expect(text).toContain('"R2"')
     expect(text).toContain('one entry per workflow step (3)')
     expect(text).toContain('done|partial|not_done')
+  })
+})
+
+describe('hand-offs in the contract (spec C1, plan A D11)', () => {
+  const report = { pkg: { key: 'report', title: 'R', ownedPaths: ['src/report/**'], isIntegration: false, interface: '' }, requirements: [], dependencies: [], verifyCommands: GATE }
+
+  it('tells the worker to hand off a change outside its files, and no longer to ask the conductor for it', () => {
+    const text = renderPackageContract(report)
+    expect(text).toContain('list it in your report\'s "handOffs"')
+    expect(text).not.toContain('ask the conductor (see the ask protocol) instead of making it')
+    const skeleton = renderPackageContract({ ...report, pkg: { ...report.pkg, key: 'skeleton', ownedPaths: ['src/main.ts'] } })
+    expect(skeleton).not.toContain('ask the conductor for it')
+    expect(skeleton).toContain('"handOffs"')
+  })
+
+  it('appends the caller\'s blocks after the dependencies, skipping empty ones', () => {
+    const text = renderPackageContract({ ...report, notes: ['Shared decisions (x):\n- a: b', '', 'Asked of your package by other packages (y):\n- from c: d'] })
+    expect(text).toContain('\n\nShared decisions (x):\n- a: b\n\nAsked of your package by other packages (y):\n- from c: d')
+    expect(text.endsWith('- from c: d')).toBe(true)
+  })
+
+  it('shows handOffs in the report protocol and narrows questions to decisions', () => {
+    const protocol = renderReportProtocol(['R1'], 0)
+    expect(protocol).toContain('"handOffs":[]')
+    expect(protocol).toContain('- "handOffs": ')
+    expect(protocol).toContain('- "questions": a choice nobody has made')
   })
 })
