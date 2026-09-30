@@ -276,6 +276,15 @@ export function reportQuestionKey(runId: string, index: number): string {
   return `${REPORT_QUESTION_KEY_PREFIX}${runId}:${String(index)}`
 }
 
+/**
+ * Supervisor-as-conductor plan A D7: the key a hand-off's conductor question is sent under. It
+ * starts with the report prefix, so {@link stillPendingQuestion} keeps it pending the way it keeps
+ * a report question -- its run is over, and nobody is parked on it.
+ */
+export function handOffQuestionKey(runId: string, handOffId: string): string {
+  return `${REPORT_QUESTION_KEY_PREFIX}${runId}:handoff:${handOffId}`
+}
+
 const REPORT_QUESTION_KEY_PREFIX = 'report:'
 
 /** The stored form of {@link reportQuestionKey}'s prefix: `sendMessage` namespaces every key it

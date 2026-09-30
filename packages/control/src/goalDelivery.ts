@@ -218,6 +218,27 @@ async function resolveGoalEscalations(workspaceId: string, goalVersion: number, 
   })
 }
 
+/**
+ * Supervisor-as-conductor plan A D4, controller ruling F3: the version's `pending` hand-offs, once it
+ * is accepted or abandoned, can no longer be delivered in it -- they become `expired` with the reason,
+ * which the report shows (spec C2: nothing silently lost). Called in the SAME locked transaction that
+ * moves the delivery (`abandonGoal`, the orchestrator's `acceptInLock`), so no pass can reopen a
+ * package for one after the move; `reopenForHandOffs` keeps the same branch as a backstop. Lives here,
+ * not in `handOffs.ts`, which imports this module.
+ */
+export async function expirePendingHandOffs(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  goalVersion: number,
+  status: 'accepted' | 'abandoned',
+): Promise<number> {
+  const expired = await tx.packageHandOff.updateMany({
+    where: { workspaceId, goalVersion, status: 'pending' },
+    data: { status: 'expired', note: `the version was ${status} before it could be delivered` },
+  })
+  return expired.count
+}
+
 /** The statuses a package task can be cancelled from when its version is abandoned: never
  *  started, parked for a person, or sent back and not yet picked up again. */
 const ABANDONABLE_TASK_STATUSES: readonly string[] = ['backlog', 'ready', 'blocked', 'rework']
@@ -318,6 +339,7 @@ export async function abandonGoal(
       })
       // The claim goes in the same write: from here no conclusion of that run can move the version.
       await tx.goalDelivery.update({ where: { id: found.id }, data: { status: 'abandoned', activeRunId: null, activeSmokeId: null } })
+      await expirePendingHandOffs(tx, workspaceId, goalVersion, 'abandoned')
       return {
         cancelled: cancelled.map((task) => ({ id: task.id, goalVersion: task.goalVersion })),
         verification: claim === null ? null : { runId: claim.id, worktreePath: claim.worktreePath },

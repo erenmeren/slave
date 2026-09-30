@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { goalEventSaid, goalEventWith, settleGoalEvidence, withDeliveryLock } from '@slave-of-ai/control'
+import { expirePendingHandOffs, goalEventSaid, goalEventWith, settleGoalEvidence, withDeliveryLock } from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import { VERIFICATION_REASON_MAX_CHARS, VERIFICATION_RUN_RETRY_CAP, handMergeInstruction, type GuardrailKind } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
@@ -242,7 +242,10 @@ export async function acceptInLock(tx: Prisma.TransactionClient, deliveryId: str
     where: { id: deliveryId, status: 'verifying', activeRunId: verdict.runId },
     data: { status: 'accepted', acceptedAt: new Date(), activeRunId: null, verifiedCommit: verdict.verifiedCommit },
   })
-  return moved.count > 0
+  if (moved.count === 0) return false
+  // Plan A D4, ruling F3: what this version was asked but never delivered expires with the move.
+  await expirePendingHandOffs(tx, delivery.workspaceId, delivery.goalVersion, 'accepted')
+  return true
 }
 
 /**

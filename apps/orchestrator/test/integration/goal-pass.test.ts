@@ -695,6 +695,26 @@ describe('acceptGoal', () => {
     expect((await delivery(f)).status).toBe('accepted')
   })
 
+  it('expires the version\'s undelivered hand-offs in the acceptance itself (plan A D4, ruling F3)', async (): Promise<void> => {
+    const f = await seed()
+    const verdict = await verifying(f)
+    const handOff = { workspaceId: f.workspaceId, goalVersion: 1, source: 'report' as const, fromRunId: f.runIds[0], fromPackageKey: 'csv', toPackageKey: 'json', packageKey: 'json', change: 'x', fingerprint: 'f' }
+    await prisma.packageHandOff.createMany({
+      data: [
+        { ...handOff, sourceKey: 'report:a:0', status: 'pending' },
+        { ...handOff, sourceKey: 'report:a:1', status: 'reopened' },
+      ],
+    })
+
+    expect(await acceptGoal(f.deliveryId, verdict)).toBe(true)
+
+    const rows = await prisma.packageHandOff.findMany({ where: { workspaceId: f.workspaceId }, orderBy: { sourceKey: 'asc' } })
+    expect(rows.map((row) => [row.status, row.note])).toEqual([
+      ['expired', 'the version was accepted before it could be delivered'],
+      ['reopened', null],
+    ])
+  })
+
   it('never accepts an integrating version, nor for a run that does not hold the claim', async (): Promise<void> => {
     const f = await seed()
     const tip = git(['rev-parse', f.branch], f.repoPath)
