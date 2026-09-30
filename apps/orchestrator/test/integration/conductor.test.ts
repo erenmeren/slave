@@ -172,7 +172,8 @@ describe('conduct: requirements', () => {
     const set = await prisma.requirementSet.findUniqueOrThrow({
       where: { workspaceId_goalVersion: { workspaceId: f.workspaceId, goalVersion: 1 } },
     })
-    expect((set.items as { key: string }[]).map((i) => i.key)).toEqual(['R1', 'R2'])
+    expect((set.items as { key: string }[]).map((i) => i.key)).toEqual(['R1', 'R2', 'RUN'])
+    expect((set.items as { key: string; source: string }[]).at(-1)?.source).toBe('added by Slave: a verified version must run')
     const calls = await prisma.conductorCall.findMany({ where: { workspaceId: f.workspaceId } })
     expect(calls).toEqual([expect.objectContaining({ stage: 'requirements', outcome: 'ok', modelCostUsd: 0.02 })])
     const events = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_requirements_set' } })
@@ -244,7 +245,7 @@ describe('conduct: requirements', () => {
     const set = await prisma.requirementSet.findUniqueOrThrow({
       where: { workspaceId_goalVersion: { workspaceId: f.workspaceId, goalVersion: 2 } },
     })
-    expect((set.items as { key: string }[]).map((i) => i.key)).toEqual(['R2', 'R3'])
+    expect((set.items as { key: string }[]).map((i) => i.key)).toEqual(['R2', 'R3', 'RUN'])
   })
 
   it('counts the conductor in the workspace spend, unmeasured calls at the per-call cap', async () => {

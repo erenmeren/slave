@@ -78,8 +78,8 @@ export function evidenceCut(text: string): number {
   return match === null ? 0 : Number(match[1])
 }
 
-/** The heading anchor GitHub-style renderers give `### Evidence for <key>`. Keys are `R<n>`
- *  (`requirementItemsSchema`), so no other character needs mapping. */
+/** The heading anchor GitHub-style renderers give `### Evidence for <key>`. Keys are `R<n>` or
+ *  `RUN` (`requirementItemsSchema`), so lowercasing is the only mapping needed. */
 export function evidenceAnchor(key: string): string {
   return `evidence-for-${key.toLowerCase()}`
 }

@@ -5,7 +5,7 @@ import {
   CONDUCT_PER_CALL_CAP_USD,
   CONDUCT_RETRY_CAP,
   PACKAGE_WORKER_ROLE,
-  assignRequirementKeys,
+  keyRequirementSet,
   buildConductPrompt,
   buildRequirementsPrompt,
   candidateSchema,
@@ -596,7 +596,8 @@ async function extractRequirements(
     select: { items: true },
   })
   const previous = previousRow === null ? null : requirementItemsSchema.parse(previousRow.items)
-  const items = assignRequirementKeys(answer.value, previous)
+  // Skeleton spec S6: `RUN` is appended here, once per set, after the model's items are keyed.
+  const items = keyRequirementSet(answer.value, previous)
 
   let setId: string
   try {
