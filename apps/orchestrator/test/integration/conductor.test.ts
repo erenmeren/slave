@@ -324,7 +324,8 @@ describe('conduct: the size decision', () => {
     expect(packages.find((p) => p.key === 'skeleton')?.tasks[0]?.description).toContain(SKELETON_INTERFACE)
     expect(packages.find((p) => p.key === 'report')?.tasks[0]?.description).toBe('Requirements:\nR1: hsql --format csv prints CSV')
     const integrationTask = packages.find((p) => p.key === 'integration')?.tasks[0]
-    expect(integrationTask?.description).toBe(`Requirements:\nRUN: ${RUN_REQUIREMENT_TEXT}`)
+    // Final review: the wiring line survives RUN being the integration package's requirement.
+    expect(integrationTask?.description).toBe(`Wire the packages together: skeleton, report, config.\nRequirements:\nRUN: ${RUN_REQUIREMENT_TEXT}`)
     const deps = await prisma.taskDependency.findMany({ where: { taskId: integrationTask?.id ?? '' } })
     expect(deps).toHaveLength(3)
     const reportDeps = await prisma.taskDependency.findMany({ where: { taskId: packages.find((p) => p.key === 'report')?.tasks[0]?.id ?? '' } })
@@ -506,7 +507,9 @@ describe('conduct: the size decision', () => {
     const cli = packages.find((p) => p.key === 'cli')?.tasks[0]?.description
     expect(cli).not.toContain('Wire the packages together')
     expect(cli).toContain('CLI flags')
-    expect(packages.find((p) => p.key === 'integration')?.tasks[0]?.description).toBe(`Requirements:\nRUN: ${RUN_REQUIREMENT_TEXT}`)
+    expect(packages.find((p) => p.key === 'integration')?.tasks[0]?.description).toBe(
+      `Wire the packages together: skeleton, cli, report, config.\nRequirements:\nRUN: ${RUN_REQUIREMENT_TEXT}`,
+    )
   })
 
   /** Plan 4b D4 (spec R8): every conducted version has a verifier seat that implements none of it. */

@@ -308,20 +308,22 @@ export async function tripConductor(workspaceId: string, detail: string): Promis
 /**
  * What a package task's description says: the requirements it delivers, word for word, or -- for
  * a package with none of its own -- what it is for: the skeleton builds the runnable empty product,
- * the integration package wires the others together, any other package delivers its own contract. Keyed on `isIntegration` (final review
- * M4): an ordinary package with no requirement used to read "Wire the packages together: .". The
- * full contract (owned paths, interfaces) is the run context's job (Conductor Task 8).
+ * any other package delivers its own contract. The integration package always opens with the
+ * wiring line (final review M4: only it wires the others together), and then lists its
+ * requirements -- RUN at least, since skeleton spec S6 gives RUN to it. The full contract (owned
+ * paths, interfaces) is the run context's job (Conductor Task 8).
  */
 function taskDescription(pkg: PackageSpec, items: readonly { readonly key: string; readonly text: string }[]): string {
+  const wiring = pkg.isIntegration ? [`Wire the packages together: ${pkg.dependsOn.join(', ')}.`] : []
   if (pkg.requirementKeys.length === 0) {
     // Controller ruling F10: the skeleton's job is said once, in SKELETON_INTERFACE.
     if (pkg.key === SKELETON_PACKAGE_KEY) return `Build the skeleton. ${SKELETON_INTERFACE}`
     return pkg.isIntegration
-      ? `Wire the packages together: ${pkg.dependsOn.join(', ')}.`
+      ? wiring.join('\n')
       : `${pkg.title}: no requirement is this package's alone. Deliver what its contract describes, so the packages that depend on it can build on it.`
   }
   const textOf = new Map(items.map((item) => [item.key, item.text] as const))
-  return `Requirements:\n${pkg.requirementKeys.map((k) => `${k}: ${textOf.get(k) ?? ''}`).join('\n')}`
+  return [...wiring, 'Requirements:', ...pkg.requirementKeys.map((k) => `${k}: ${textOf.get(k) ?? ''}`)].join('\n')
 }
 
 /**
