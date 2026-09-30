@@ -12,7 +12,8 @@ import { join, resolve, sep } from 'node:path'
  * group down. The opposite failure is just as real: the script's leader died, a server it
  * backgrounded lives on in the group, and a check on the leader alone kills nothing. So each member
  * of the stored group is kept only on evidence of its own: its working directory lies inside the
- * attempt's checkout, or it started no earlier than the attempt did.
+ * attempt's checkout, or it started no earlier than the attempt did -- and nothing at all is claimed
+ * on a machine that booted after the attempt started, where every process is "newer" than it.
  */
 
 /** The start-time comparison's slack: `btime` is whole seconds, so a computed start can read up
@@ -63,17 +64,32 @@ function cwdInside(procRoot: string, pid: string, dir: string): boolean {
   }
 }
 
-/**
- * The pids in process group `pgid` that belong to the attempt, or `null` when `/proc` cannot be
- * read (not Linux, or a restricted mount) -- the caller then kills nothing and says so.
- */
-export function attemptGroupMembers(input: {
+/** What a scan of the attempt's group found (Task 3 fix rounds 1-2). */
+export type AttemptGroupScan =
+  | { readonly kind: 'unreadable' }
+  | { readonly kind: 'rebooted' }
+  | { readonly kind: 'members'; readonly pids: readonly number[] }
+
+/** The attempt and where to look. `procRoot` and `clockTicks` exist for tests. */
+export interface AttemptGroupInput {
   readonly pgid: number
   readonly worktreePath: string | null
   readonly startedAt: Date
   readonly procRoot?: string
   readonly clockTicks?: number
-}): readonly number[] | null {
+}
+
+/**
+ * The pids in process group `pgid` that belong to the attempt.
+ *
+ * `rebooted` first, and it settles the question: a machine that booted after the attempt started
+ * runs nothing of the attempt's, and on it EVERY process started after the attempt -- so the
+ * start-time evidence below would claim any shell job that happens to lead a group of the stored
+ * id. Without a reboot a reused id can only lead a group after the attempt's own leader died, which
+ * needs the pid counter to wrap within the attempt's lifetime. `unreadable` when `/proc` (or its
+ * boot time) cannot be read -- not Linux, or a restricted mount.
+ */
+export function scanAttemptGroup(input: AttemptGroupInput): AttemptGroupScan {
   const procRoot = input.procRoot ?? '/proc'
   let entries: string[]
   let boot: number | null
@@ -81,11 +97,13 @@ export function attemptGroupMembers(input: {
     entries = readdirSync(procRoot).filter((name) => /^\d+$/u.test(name))
     boot = bootTimeMs(procRoot)
   } catch {
-    return null
+    return { kind: 'unreadable' }
   }
+  if (boot === null) return { kind: 'unreadable' }
+  if (boot > input.startedAt.getTime()) return { kind: 'rebooted' }
   const ticks = input.clockTicks ?? clockTicksPerSecond()
   const dir = input.worktreePath === null ? null : resolve(input.worktreePath)
-  const members: number[] = []
+  const pids: number[] = []
   for (const pid of entries) {
     let stat: ReturnType<typeof parseStat>
     try {
@@ -96,26 +114,39 @@ export function attemptGroupMembers(input: {
     // A zombie is already dead, waiting for its parent to reap it; signalling it again does nothing.
     if (stat === null || stat.pgid !== input.pgid || stat.state === 'Z') continue
     const inCheckout = dir !== null && cwdInside(procRoot, pid, dir)
-    const startedSince = boot !== null && boot + (stat.startTicks / ticks) * 1000 >= input.startedAt.getTime() - START_SLACK_MS
-    if (inCheckout || startedSince) members.push(Number(pid))
+    const startedSince = boot + (stat.startTicks / ticks) * 1000 >= input.startedAt.getTime() - START_SLACK_MS
+    if (inCheckout || startedSince) pids.push(Number(pid))
   }
-  return members
+  return { kind: 'members', pids }
+}
+
+/** {@link scanAttemptGroup} as a list: `null` when unreadable, empty after a reboot. */
+export function attemptGroupMembers(input: AttemptGroupInput): readonly number[] | null {
+  const scan = scanAttemptGroup(input)
+  return scan.kind === 'unreadable' ? null : scan.kind === 'rebooted' ? [] : scan.pids
 }
 
 /**
- * SIGKILLs each proven member of the attempt's group, one pid at a time -- never `kill(-pgid)`,
- * which would also reach any member the scan could NOT tie to the attempt. Scanned again after each
- * round, a few times, for children forked meanwhile. Returns false when `/proc` could not be read
- * and nothing was killed.
+ * How a settle's kill went: `done` (no proven member is left), `survivors` (some outlived three
+ * rounds), `rebooted` or `no_proc` (nothing was killed, and the settle's reason says why).
  */
-export function killAttemptGroup(input: Parameters<typeof attemptGroupMembers>[0], kill: (pid: number) => void = defaultKill): boolean {
-  for (let round = 0; round < 3; round += 1) {
-    const members = attemptGroupMembers(input)
-    if (members === null) return round > 0
-    if (members.length === 0) return true
-    for (const pid of members) kill(pid)
+export type AttemptGroupKill = 'done' | 'survivors' | 'rebooted' | 'no_proc'
+
+/**
+ * SIGKILLs each proven member of the attempt's group, one pid at a time -- never `kill(-pgid)`,
+ * which would also reach any member the scan could NOT tie to the attempt. Up to three rounds,
+ * each on a fresh scan (children forked meanwhile), then one last scan for the answer.
+ */
+export function killAttemptGroup(input: AttemptGroupInput, kill: (pid: number) => void = defaultKill): AttemptGroupKill {
+  for (let round = 0; round <= 3; round += 1) {
+    const scan = scanAttemptGroup(input)
+    if (scan.kind === 'unreadable') return round === 0 ? 'no_proc' : 'survivors'
+    if (scan.kind === 'rebooted') return 'rebooted'
+    if (scan.pids.length === 0) return 'done'
+    if (round === 3) return 'survivors'
+    for (const pid of scan.pids) kill(pid)
   }
-  return true
+  return 'survivors'
 }
 
 function defaultKill(pid: number): void {

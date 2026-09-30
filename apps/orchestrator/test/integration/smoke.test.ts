@@ -237,6 +237,33 @@ describe('a smoke attempt', () => {
     expect(await taskStatus(f.taskOf.integration)).toBe('done')
   }, 60_000)
 
+  it('kills nothing for an attempt that started before the machine booted, and says so', async (): Promise<void> => {
+    const f = await seed('#!/usr/bin/env bash\necho ok\n')
+    const attempt = await prisma.smokeAttempt.create({
+      data: {
+        workspaceId: f.workspaceId, goalDeliveryId: f.deliveryId, goalVersion: 1, round: 1, tip: git(['rev-parse', f.branch], f.repoPath),
+        ownerInstance: '999999/dead-daemon', startedAt: new Date('2000-01-01T00:00:00Z'),
+      },
+    })
+    // Whatever now leads a group of the stored id is somebody else's, even with its cwd in the checkout.
+    const leftover = join(worktreeRootFor(f.repoPath), smokeWorktreeKey(attempt.id))
+    git(['worktree', 'add', '--quiet', '--detach', leftover, attempt.tip], f.repoPath)
+    const stranger = spawn('sleep', ['60'], { cwd: leftover, detached: true, stdio: 'ignore' })
+    const pid = stranger.pid as number
+    await prisma.smokeAttempt.update({ where: { id: attempt.id }, data: { worktreePath: leftover, pid } })
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'verifying', round: 1, activeSmokeId: attempt.id } })
+    try {
+      await settleStrandedSmoke(attempt.id)
+      expect(isAlive(pid)).toBe(true)
+      const settled = await prisma.smokeAttempt.findUniqueOrThrow({ where: { id: attempt.id } })
+      expect(settled.status).toBe('error')
+      expect(settled.output).toContain('the machine restarted since the attempt started')
+      expect(await deliveryOf(f)).toMatchObject({ roundRunFailures: 1, activeSmokeId: null })
+    } finally {
+      process.kill(pid, 'SIGKILL')
+    }
+  }, 60_000)
+
   it('applies an outcome at most once', async (): Promise<void> => {
     const f = await seed('#!/usr/bin/env bash\nexit 1\n')
     const id = await startSmoke(f.deliveryId)

@@ -4,12 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isAlive } from '@slave-of-ai/control'
 import { afterAll, describe, expect, it } from 'vitest'
-import { attemptGroupMembers, killAttemptGroup } from '../src/procGroup.js'
+import { attemptGroupMembers, killAttemptGroup, scanAttemptGroup } from '../src/procGroup.js'
 
 /**
  * Skeleton plan B, Task 3 fix ruling 1: a stranded smoke's settler kills only the processes it can
  * tie to the attempt -- by a working directory inside the checkout, or a start no earlier than the
- * attempt's -- never a stored pid's whole group on the pid's word alone.
+ * attempt's, and nothing on a machine rebooted since -- never a stored pid's group on its word alone.
  */
 const dirs: string[] = []
 const tempDir = (prefix: string): string => {
@@ -25,13 +25,16 @@ const BOOT_S = 1_000_000
 const TICKS = 100
 
 /** A fake `/proc` with a boot time and the given processes (`comm` holds a space and a paren, as real ones can). */
-function fakeProc(processes: readonly { readonly pid: number; readonly pgid: number; readonly startedAtMs: number; readonly cwd: string; readonly state?: string }[]): string {
+function fakeProc(
+  processes: readonly { readonly pid: number; readonly pgid: number; readonly startedAtMs: number; readonly cwd: string; readonly state?: string }[],
+  bootS: number = BOOT_S,
+): string {
   const root = tempDir('fake-proc-')
-  writeFileSync(join(root, 'stat'), `cpu  1 2 3\nbtime ${String(BOOT_S)}\nprocesses 9\n`)
+  writeFileSync(join(root, 'stat'), `cpu  1 2 3\nbtime ${String(bootS)}\nprocesses 9\n`)
   for (const proc of processes) {
     const dir = join(root, String(proc.pid))
     mkdirSync(dir)
-    const ticks = Math.round(((proc.startedAtMs - BOOT_S * 1000) / 1000) * TICKS)
+    const ticks = Math.round(((proc.startedAtMs - bootS * 1000) / 1000) * TICKS)
     // Fields 3..22: state ppid pgrp session tty tpgid flags minflt cminflt majflt cmajflt utime stime cutime cstime priority nice threads itreal starttime
     const rest = [proc.state ?? 'S', 1, proc.pgid, proc.pgid, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 1, 0, ticks, 1234, 56].join(' ')
     writeFileSync(join(dir, 'stat'), `${String(proc.pid)} (odd name) x) ${rest}\n`)
@@ -44,12 +47,29 @@ describe('attemptGroupMembers', () => {
   const attemptStart = (BOOT_S + 5000) * 1000
   const worktree = '/repo/.slaveofai-worktrees/verify-smoke-abcd1234'
 
-  it('does not claim a reused pid: same group id, cwd elsewhere, started long before the attempt', (): void => {
-    const procRoot = fakeProc([{ pid: 4242, pgid: 4242, startedAtMs: attemptStart - 3_600_000, cwd: '/home/someone' }])
-    expect(attemptGroupMembers({ pgid: 4242, worktreePath: worktree, startedAt: new Date(attemptStart), procRoot, clockTicks: TICKS })).toEqual([])
+  it('claims nothing after a reboot: a pid reused by a newer shell job, cwd elsewhere, is left alone', (): void => {
+    // The machine booted an hour after the attempt started; the stored id now leads someone's job.
+    const bootS = BOOT_S + 5000 + 3600
+    const procRoot = fakeProc(
+      [
+        { pid: 4242, pgid: 4242, startedAtMs: (bootS + 60) * 1000, cwd: '/home/someone' },
+        { pid: 4243, pgid: 4242, startedAtMs: (bootS + 61) * 1000, cwd: worktree }, // even a cwd match proves nothing now
+      ],
+      bootS,
+    )
+    const input = { pgid: 4242, worktreePath: worktree, startedAt: new Date(attemptStart), procRoot, clockTicks: TICKS }
+    expect(scanAttemptGroup(input)).toEqual({ kind: 'rebooted' })
+    expect(attemptGroupMembers(input)).toEqual([])
     const killed: number[] = []
-    expect(killAttemptGroup({ pgid: 4242, worktreePath: worktree, startedAt: new Date(attemptStart), procRoot, clockTicks: TICKS }, (pid) => killed.push(pid))).toBe(true)
+    expect(killAttemptGroup(input, (pid) => killed.push(pid))).toBe('rebooted')
     expect(killed).toEqual([])
+  })
+
+  it('reports members that outlive every kill round as survivors', (): void => {
+    const procRoot = fakeProc([{ pid: 300, pgid: 300, startedAtMs: attemptStart + 2000, cwd: worktree }])
+    const killed: number[] = []
+    expect(killAttemptGroup({ pgid: 300, worktreePath: worktree, startedAt: new Date(attemptStart), procRoot, clockTicks: TICKS }, (pid) => killed.push(pid))).toBe('survivors')
+    expect(killed).toEqual([300, 300, 300])
   })
 
   it('claims members by checkout cwd or by a start since the attempt, and nothing outside the group', (): void => {
@@ -68,7 +88,7 @@ describe('attemptGroupMembers', () => {
     const input = { pgid: 1, worktreePath: null, startedAt: new Date(), procRoot: join(tmpdir(), 'no-such-proc-root'), clockTicks: TICKS }
     expect(attemptGroupMembers(input)).toBeNull()
     const killed: number[] = []
-    expect(killAttemptGroup(input, (pid) => killed.push(pid))).toBe(false)
+    expect(killAttemptGroup(input, (pid) => killed.push(pid))).toBe('no_proc')
     expect(killed).toEqual([])
   })
 
@@ -86,7 +106,7 @@ describe('attemptGroupMembers', () => {
       expect(isAlive(pgid)).toBe(false)
       expect(isAlive(survivor)).toBe(true)
       expect(attemptGroupMembers({ pgid, worktreePath, startedAt: new Date(Date.now() + 3_600_000) })).toEqual([survivor])
-      expect(killAttemptGroup({ pgid, worktreePath, startedAt })).toBe(true)
+      expect(killAttemptGroup({ pgid, worktreePath, startedAt })).toBe('done')
       for (let i = 0; i < 50 && isAlive(survivor); i += 1) await new Promise((res) => setTimeout(res, 20))
       expect(isAlive(survivor)).toBe(false)
     } finally {

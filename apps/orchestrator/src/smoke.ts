@@ -31,7 +31,7 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import { CHILD_ENV_ALLOW } from '@slave-of-ai/providers'
 import { needsHumanInLock } from './goal.js'
-import { killAttemptGroup } from './procGroup.js'
+import { killAttemptGroup, type AttemptGroupKill } from './procGroup.js'
 import { OWNER_INSTANCE, ownerGone } from './runs.js'
 import { runShellCommand } from './shell.js'
 import { pumps } from './tick.js'
@@ -57,6 +57,10 @@ const DOCKER_CLEANUP_TIMEOUT_MS = 120_000
  * never releasing the claim -- so the stored text leaves the marker room.
  */
 const SMOKE_STORED_OUTPUT_MAX_CHARS = SMOKE_OUTPUT_MAX_CHARS - 64
+
+/** `durationMs` is a Postgres `integer`: a stranded attempt settled after a daemon was down for
+ *  weeks (over 24.8 days) would otherwise fail its record on every pass and hold the claim forever. */
+const INT4_MAX = 2_147_483_647
 
 /** The recorded output of a script that exists without its executable bit (F10). Its conclusion
  *  reads this prefix back to tell the skeleton to `chmod +x` rather than to write the script. A
@@ -235,7 +239,7 @@ async function recordSmokeResult(attemptId: string, result: SmokeResult, duratio
       status: result.status,
       exitCode: result.exitCode,
       signal: result.signal,
-      durationMs: Math.max(0, Math.round(durationMs)),
+      durationMs: Math.min(INT4_MAX, Math.max(0, Math.round(durationMs))),
       output: trimEvidence(result.output, SMOKE_STORED_OUTPUT_MAX_CHARS),
       endedAt: new Date(),
     },
@@ -381,8 +385,14 @@ export async function settleStrandedSmoke(attemptId: string): Promise<void> {
   if (!mine && !ownerGone(attempt.ownerInstance) && !overdue) return
   // Task 3 fix ruling 1: only the processes /proc ties to this attempt, never the stored pid's group
   // on the pid's word -- a reboot or a wrapped counter may have given it to someone else's shell.
-  const killed = attempt.pid === null || killAttemptGroup({ pgid: attempt.pid, worktreePath: attempt.worktreePath, startedAt: attempt.startedAt })
-  if (!killed) console.warn(`[smoke] could not read /proc to find attempt ${attemptId}'s processes (group ${String(attempt.pid)}); none were killed`)
+  const killed = attempt.pid === null ? 'done' : killAttemptGroup({ pgid: attempt.pid, worktreePath: attempt.worktreePath, startedAt: attempt.startedAt })
+  const unkilled: Readonly<Record<AttemptGroupKill, string>> = {
+    done: '',
+    survivors: ` (some of its processes in group ${String(attempt.pid)} outlived three SIGKILL rounds)`,
+    rebooted: ' (the machine restarted since the attempt started, so none of its processes can be running and none were killed)',
+    no_proc: ` (its processes could not be checked without /proc, so none were killed: group ${String(attempt.pid)})`,
+  }
+  if (killed === 'no_proc' || killed === 'survivors') console.warn(`[smoke] attempt ${attemptId}:${unkilled[killed]}`)
   await cleanUpSmokeProject(smokeProjectName(attemptId))
   await removeVerificationWorktree(attempt.workspace.repoPath, attempt.worktreePath)
   await recordSmokeResult(
@@ -391,7 +401,7 @@ export async function settleStrandedSmoke(attemptId: string): Promise<void> {
       status: 'error',
       exitCode: null,
       signal: null,
-      output: `the process running this smoke check is gone; it will be tried again${killed ? '' : ` (its processes could not be checked without /proc, so none were killed: group ${String(attempt.pid)})`}`,
+      output: `the process running this smoke check is gone; it will be tried again${unkilled[killed]}`,
     },
     Date.now() - attempt.startedAt.getTime(),
   )
