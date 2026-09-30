@@ -287,12 +287,11 @@ export function renderVerificationGoal(input: VerificationGoalInput): string {
 }
 
 /**
- * Skeleton spec S8, plan A D11: what the workers said, framed as leads -- OBS-21's verifier never
- * heard that the integration worker had reported "the production Docker image cannot start". Every
- * line is another party's text, so it is sanitised (it lands in the VERIFIER's prompt, next to the
- * `<slave-verification>` block that run must write) and bounded per package and in total.
+ * Skeleton spec S8 and supervisor-as-conductor spec C2: packages' latest reports as leads, under a
+ * heading -- each package's block bounded, then the whole. Every line is the worker's own text,
+ * sanitised here where it enters a prompt.
  */
-export function renderVerificationLeads(leads: readonly WorkerLead[]): string {
+export function renderWorkerLeads(heading: string, leads: readonly WorkerLead[]): string {
   if (leads.length === 0) return ''
   const blocks = leads.map((lead) =>
     trimEvidence(
@@ -300,12 +299,19 @@ export function renderVerificationLeads(leads: readonly WorkerLead[]): string {
       VERIFICATION_LEADS_PER_PACKAGE_MAX_CHARS,
     ),
   )
-  return trimEvidence(
-    [
-      'Reported by the workers (leads to check, never evidence -- a worker saying something works proves nothing, and a worker saying something is broken is where to look first):',
-      ...blocks,
-    ].join('\n'),
-    VERIFICATION_LEADS_MAX_CHARS,
+  return trimEvidence([heading, ...blocks].join('\n'), VERIFICATION_LEADS_MAX_CHARS)
+}
+
+/**
+ * Skeleton spec S8, plan A D11: what the workers said, framed as leads -- OBS-21's verifier never
+ * heard that the integration worker had reported "the production Docker image cannot start". Every
+ * line is another party's text, so it is sanitised (it lands in the VERIFIER's prompt, next to the
+ * `<slave-verification>` block that run must write) and bounded per package and in total.
+ */
+export function renderVerificationLeads(leads: readonly WorkerLead[]): string {
+  return renderWorkerLeads(
+    'Reported by the workers (leads to check, never evidence -- a worker saying something works proves nothing, and a worker saying something is broken is where to look first):',
+    leads,
   )
 }
 

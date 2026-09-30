@@ -96,4 +96,29 @@ describe('leadFromReport', () => {
     expect(leadFromReport('a', { requirements: [{ key: 'R1', status: 'done', evidence: 'x' }], filesTouched: [], workflow: [], questions: [] })).toBeNull()
     expect(leadFromReport('a', 'not a report')).toBeNull()
   })
+
+  it('reads handOffs (spec C1) and keeps reading a report without them (spec §4)', () => {
+    const base = { requirements: [], filesTouched: [], workflow: [], questions: [] }
+    const text = (value: object): string => `<slave-report>${JSON.stringify(value)}</slave-report>`
+    const read = parseSlaveReport(text({ ...base, handOffs: [{ path: 'scripts/verify.sh', change: 'run pytest' }, { package: 'integration', change: 'expose GET /x' }] }), [])
+    expect(read.ok && read.value.handOffs).toEqual([{ path: 'scripts/verify.sh', change: 'run pytest' }, { package: 'integration', change: 'expose GET /x' }])
+    const old = parseSlaveReport(text(base), [])
+    expect(old.ok && old.value.handOffs).toEqual([])
+    expect(parseSlaveReport(text({ ...base, handOffs: Array.from({ length: 11 }, () => ({ package: 'a', change: 'x' })) }), []).ok).toBe(false)
+    const both = parseSlaveReport(text({ ...base, handOffs: [{ path: 'a', package: 'b', change: 'x' }] }), [])
+    expect(!both.ok && both.error).toContain('exactly one of "path" or "package"')
+  })
+
+  it('keeps the smoke handOff and the handOffs apart (plan A D12)', () => {
+    const base = { requirements: [], filesTouched: [], workflow: [], questions: [] }
+    const read = parseSlaveReport(`<slave-report>${JSON.stringify({ ...base, handOff: { path: 'Dockerfile', change: 'x' }, handOffs: [{ package: 'skeleton', change: 'y' }] })}</slave-report>`, [])
+    expect(read.ok && read.value.handOff).toEqual({ path: 'Dockerfile', change: 'x' })
+    expect(read.ok && read.value.handOffs).toEqual([{ package: 'skeleton', change: 'y' }])
+  })
+
+  it('strips a NUL from a hand-off change (F8)', () => {
+    const base = { requirements: [], filesTouched: [], workflow: [], questions: [] }
+    const read = parseSlaveReport(`<slave-report>${JSON.stringify({ ...base, handOffs: [{ path: 'a\u0000b', change: 'x\u0000y' }] })}</slave-report>`, [])
+    expect(read.ok && read.value.handOffs).toEqual([{ path: 'ab', change: 'xy' }])
+  })
 })
