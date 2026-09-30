@@ -88,6 +88,14 @@ describe('registrations', () => {
     expect(isValidRegistration({ directory: 'm', prefix: 'x'.repeat(41) })).toBe(false)
     expect(isValidRegistration({ directory: 'm/'.repeat(101), prefix: 'x' })).toBe(false)
   })
+  it('refuses a directory that is not written the way git writes paths', () => {
+    expect(isValidRegistration({ directory: './db/m', prefix: 'x' })).toBe(false)
+    expect(isValidRegistration({ directory: 'db//m', prefix: 'x' })).toBe(false)
+    expect(isValidRegistration({ directory: '.', prefix: 'x' })).toBe(false)
+    expect(isValidRegistration({ directory: 'db/m/.', prefix: 'x' })).toBe(false)
+    expect(isValidRegistration({ directory: 'db/./m', prefix: 'x' })).toBe(false)
+    expect(isValidRegistration({ directory: 'db/m/', prefix: 'x' })).toBe(true)
+  })
   it('refuses a whole shared directory owned by one package while another registers there', () => {
     const problems = registrationProblems([
       { key: 'core', ownedPaths: ['backend/migrations/**'], registrations: [] },
@@ -102,6 +110,32 @@ describe('registrations', () => {
       { key: 'a', ownedPaths: ['m/01_*'], registrations: [{ directory: 'm', prefix: '01_' }] },
       { key: 'b', ownedPaths: ['m/01_b_*'], registrations: [{ directory: 'm', prefix: '01_b_' }] },
     ])).toHaveLength(1)
+  })
+  it('refuses an extension-limited glob over the shared directory', () => {
+    const problems = registrationProblems([
+      { key: 'a', ownedPaths: ['db/m/*.sql'], registrations: [] },
+      { key: 'b', ownedPaths: ['db/m/02_b_*'], registrations: [{ directory: 'db/m', prefix: '02_b_' }] },
+    ])
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain('package "a" owns files in db/m that package "b" registers there')
+  })
+  it('refuses a recursive glob that covers the shared directory', () => {
+    expect(registrationProblems([
+      { key: 'a', ownedPaths: ['**/*.py'], registrations: [] },
+      { key: 'b', ownedPaths: ['db/m/02_b_*'], registrations: [{ directory: 'db/m', prefix: '02_b_' }] },
+    ])).toHaveLength(1)
+  })
+  it('refuses a file named outright under another package\'s prefix', () => {
+    expect(registrationProblems([
+      { key: 'a', ownedPaths: ['db/m/02_b_x.sql'], registrations: [] },
+      { key: 'b', ownedPaths: ['db/m/02_b_*'], registrations: [{ directory: 'db/m', prefix: '02_b_' }] },
+    ])).toHaveLength(1)
+  })
+  it('accepts a sibling directory, disjoint prefixes, and a literal file beside the directory', () => {
+    expect(registrationProblems([
+      { key: 'a', ownedPaths: ['db/seeds/**', 'db/m/01_a_*', 'db/m.md'], registrations: [{ directory: 'db/m', prefix: '01_a_' }] },
+      { key: 'b', ownedPaths: ['db/m/02_b_*'], registrations: [{ directory: 'db/m', prefix: '02_b_' }] },
+    ])).toEqual([])
   })
   it('names each package its own check file', () => {
     expect(verifyCheckPathFor('identity-access')).toBe('scripts/verify.d/identity-access.sh')

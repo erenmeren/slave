@@ -210,6 +210,17 @@ describe('validateConduct: manifests, verify.d and registrations (spec S2, S3)',
     ]), withRun)
     expect(!refused.ok && refused.error).toContain('package "report" owns files in db/migrations that package "config" registers there')
   })
+  it('accepts a package\'s own registration file among its new paths', () => {
+    const plan = validateConduct(partition([
+      pkg({ newPaths: ['db/m/01_a_init.sql'], registrations: [{ directory: 'db/m', prefix: '01_a_' }] }),
+      twoPackages[1] ?? {},
+    ]), withRun)
+    expect(plan.ok).toBe(true)
+  })
+  it('refuses a stored plan whose registrations are malformed, rather than reading them as none', () => {
+    const stored = { mode: 'single', reason: 'r', packages: [{ key: 'a', title: 'a', requirementKeys: [], ownedPaths: ['**'], newPaths: [], interface: '', dependsOn: [], isIntegration: false, templateId: 't', registrations: 'nope' }] }
+    expect(conductPlanSchema.safeParse(stored).success).toBe(false)
+  })
   it('reads a stored plan from before registrations existed', () => {
     const stored = { mode: 'partitioned', reason: 'r', packages: [{ key: 'a', title: 'a', requirementKeys: [], ownedPaths: ['a/**'], newPaths: [], interface: '', dependsOn: [], isIntegration: false, templateId: 't' }] }
     expect(conductPlanSchema.parse(stored).packages[0]?.registrations).toEqual([])

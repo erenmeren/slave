@@ -14,7 +14,6 @@ import {
   registrationGlob,
   registrationProblems,
   registrationSchema,
-  registrationsSchema,
   skeletonPaths,
   verifyCheckPathFor,
   type PackageRegistration,
@@ -61,8 +60,9 @@ export const conductPlanSchema: z.ZodType<ConductPlan, z.ZodTypeDef, unknown> = 
     dependsOn: z.array(z.string()),
     isIntegration: z.boolean(),
     templateId: z.string().min(1),
-    // A plan stored before registrations existed reads as registering nothing.
-    registrations: registrationsSchema,
+    // A plan stored before registrations existed reads as registering nothing; a malformed one is
+    // refused, not read as none (a silent catch would hide corruption).
+    registrations: z.array(registrationSchema).default([]),
   })).min(1),
 })
 
@@ -180,7 +180,7 @@ export function validateConduct(answer: unknown, context: ConductContext): Resul
     }
     for (const registration of p.registrations) {
       if (!isValidRegistration(registration)) {
-        problems.push(`package "${p.key}": registration ${JSON.stringify(registration)} needs a plain directory of at most ${REGISTRATION_DIRECTORY_MAX_CHARS} characters and a prefix of at most ${REGISTRATION_PREFIX_MAX_CHARS} with no "/", "*" or "?"`)
+        problems.push(`package "${p.key}": registration ${JSON.stringify(registration)} needs a plain directory as git writes it (no glob operator, no "./", "//" or "." segment; at most ${REGISTRATION_DIRECTORY_MAX_CHARS} characters) and a prefix of at most ${REGISTRATION_PREFIX_MAX_CHARS} with no "/", "*" or "?"`)
       }
     }
     if (p.key === SKELETON_PACKAGE_KEY && p.dependsOn.length > 0) {
@@ -197,8 +197,10 @@ export function validateConduct(answer: unknown, context: ConductContext): Resul
         problems.push(`package "${p.key}": dependsOn "${dep}" names no other package`)
       }
     }
+    // A package's own registration files are its own new paths too (review fix I1).
+    const ownGlobs = [...p.ownedPaths, ...p.registrations.map(registrationGlob)]
     for (const path of p.newPaths) {
-      if (!p.ownedPaths.some((g) => globToRegExp(g).test(path))) problems.push(`package "${p.key}": new path "${path}" is not inside its own ownedPaths`)
+      if (!ownGlobs.some((g) => globToRegExp(g).test(path))) problems.push(`package "${p.key}": new path "${path}" is not inside its own ownedPaths`)
     }
     if (runKey !== null && p.requirementKeys.includes(runKey)) {
       problems.push(`package "${p.key}": requirement ${runKey} is Slave's own and belongs to the ${INTEGRATION_PACKAGE_KEY} package -- list it in no package`)

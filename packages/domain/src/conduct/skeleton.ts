@@ -68,11 +68,16 @@ export function registrationGlob(registration: PackageRegistration): string {
   return `${trimSlash(registration.directory)}/${registration.prefix}*`
 }
 
-/** A plain repository-relative directory (no glob operator) and a prefix with no `/`, `*` or `?`. */
+/**
+ * A plain repository-relative directory, written as git writes paths (no glob operator, no `./`,
+ * no empty or `.` segment -- such a directory never matches a real path, so its prefix glob and the
+ * overlap check would both miss), and a prefix with no `/`, `*` or `?`.
+ */
 export function isValidRegistration(registration: PackageRegistration): boolean {
   const directory = trimSlash(registration.directory)
   return (
     directory !== '' &&
+    directory.split('/').every((segment) => segment !== '' && segment !== '.') &&
     directory.length <= REGISTRATION_DIRECTORY_MAX_CHARS &&
     isValidOwnedGlob(directory) &&
     !/[*?]/u.test(directory) &&
@@ -154,20 +159,43 @@ export function skeletonPaths(
 /** A file name under a registration's prefix that no real file will have: what "another package owns this directory" is tested against. */
 const REGISTRATION_PROBE = 'registration-probe'
 
+/** The part of a glob before its first operator: every path it can match starts with this. */
+const literalPrefix = (glob: string): string => glob.slice(0, glob.search(/[*?]/u) === -1 ? glob.length : glob.search(/[*?]/u))
+
+/**
+ * Whether `glob` can own a file under `<directory>/<prefix>`, judged by prefixes alone (review
+ * fix I2): an extension-limited glob such as `db/m/*.sql` passes the extensionless probe, yet owns
+ * `db/m/02_b_x.sql`. A named file is refused when it lies under the prefix; a glob with an operator
+ * (or a trailing `/`) when its literal prefix and `<directory>/<prefix>` are prefixes of one
+ * another -- which also refuses a few globs that only share a directory prefix, on purpose.
+ */
+const mayOwnUnder = (glob: string, registered: string): boolean => {
+  if (isLiteralPath(glob)) return glob.startsWith(registered)
+  const head = literalPrefix(glob)
+  return head.startsWith(registered) || registered.startsWith(head)
+}
+
 /**
  * S3, plan A D5: a package that owns files in a directory another package registers into is
  * refused -- a whole shared directory given to one package (OBS-11), or two prefixes where one is a
- * prefix of the other. Tested with a probe path under the registering package's prefix.
+ * prefix of the other. Tested with a probe path under the registering package's prefix, and by
+ * {@link mayOwnUnder} for globs the probe cannot see.
  */
 export function registrationProblems(
   packages: readonly (Owned & { readonly registrations: readonly PackageRegistration[] })[],
 ): readonly string[] {
   const problems: string[] = []
+  // One refusal per pair: nested prefixes (`01_`, `01_b_`) overlap in both directions.
+  const refusedPairs = new Set<string>()
   for (const pkg of packages) {
     for (const registration of pkg.registrations) {
       const probe = `${trimSlash(registration.directory)}/${registration.prefix}${REGISTRATION_PROBE}`
       for (const other of packages) {
-        if (other.key === pkg.key || !owns(other, probe)) continue
+        const registered = `${trimSlash(registration.directory)}/${registration.prefix}`
+        if (other.key === pkg.key || !(owns(other, probe) || other.ownedPaths.some((glob) => mayOwnUnder(glob, registered)))) continue
+        const pair = [other.key, pkg.key].sort().join('\n')
+        if (refusedPairs.has(pair)) continue
+        refusedPairs.add(pair)
         problems.push(
           `package "${other.key}" owns files in ${trimSlash(registration.directory)} that package "${pkg.key}" registers there ` +
             `(${registrationGlob(registration)}): a shared directory is file-per-package -- give each package only the files ` +
