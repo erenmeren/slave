@@ -199,6 +199,8 @@ describe('hand-offs in the contract (spec C1, plan A D11)', () => {
     const protocol = renderReportProtocol(['R1'], 0)
     expect(protocol).toContain('"handOffs":[]')
     expect(protocol).toContain('- "handOffs": ')
+    // Final review M4: the limits the parser holds a hand-off to are stated where the worker reads them.
+    expect(protocol).toContain('At most 10; each "change" at most 2000 characters, with exactly one of "path" or "package".')
     expect(protocol).toContain('- "questions": a choice nobody has made')
   })
 })

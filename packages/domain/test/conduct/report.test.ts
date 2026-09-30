@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { hasSlaveReportBlock, leadFromReport, parseSlaveReport } from '../../src/conduct/report.js'
+import { HANDOFF_CHANGE_MAX_CHARS } from '../../src/conduct/constants.js'
 
 const wrap = (value: unknown): string => `Done.\n<slave-report>${JSON.stringify(value)}</slave-report>`
 const good = {
@@ -105,8 +106,22 @@ describe('leadFromReport', () => {
     const old = parseSlaveReport(text(base), [])
     expect(old.ok && old.value.handOffs).toEqual([])
     expect(parseSlaveReport(text({ ...base, handOffs: Array.from({ length: 11 }, () => ({ package: 'a', change: 'x' })) }), []).ok).toBe(false)
-    const both = parseSlaveReport(text({ ...base, handOffs: [{ path: 'a', package: 'b', change: 'x' }] }), [])
-    expect(!both.ok && both.error).toContain('exactly one of "path" or "package"')
+    expect(parseSlaveReport(text({ ...base, handOffs: 'scripts/verify.sh' }), []).ok).toBe(false)
+  })
+
+  /** Final review M4: one item that does not read degrades to a conductor question; the report still files. */
+  it('keeps an unreadable hand-off item in its place, with its raw text and why, and reads the rest', () => {
+    const base = { requirements: [], filesTouched: [], workflow: [], questions: [] }
+    const text = (value: object): string => `<slave-report>${JSON.stringify(value)}</slave-report>`
+    const read = parseSlaveReport(text({ ...base, handOffs: [{ path: 'a', package: 'b', change: 'x' }, { package: 'integration', change: 'expose GET /x' }, { package: 'c', change: `  ${'z'.repeat(2500)}` }, 'just words'] }), [])
+    expect(read.ok).toBe(true)
+    if (!read.ok) return
+    const [both, valid, long, words] = read.value.handOffs
+    expect(both).toEqual({ unreadable: '{"path":"a","package":"b","change":"x"}', reason: expect.stringContaining('exactly one of "path" or "package"') })
+    expect(valid).toEqual({ package: 'integration', change: 'expose GET /x' })
+    expect(long && 'unreadable' in long && long.unreadable.length).toBeLessThanOrEqual(HANDOFF_CHANGE_MAX_CHARS)
+    expect(long && 'unreadable' in long && long.reason).toContain('change')
+    expect(words).toEqual({ unreadable: 'just words', reason: expect.any(String) })
   })
 
   it('keeps the smoke handOff and the handOffs apart (plan A D12)', () => {

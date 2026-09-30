@@ -9,9 +9,9 @@ import {
   resolveHandOff,
   storableText,
   trimToFit,
-  handOffItemSchema,
-  type HandOffItem,
+  reportedHandOffSchema,
   type HandOffView,
+  type ReportedHandOff,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { expirePendingHandOffs, goalEventWith, withDeliveryLock } from './goalDelivery.js'
@@ -39,7 +39,8 @@ export interface RouteHandOffsInput {
   readonly fromRunId: string
   /** The reporting package; null for a conductor answer, which is nobody's own (Plan B). */
   readonly fromPackageKey: string | null
-  readonly items: readonly HandOffItem[]
+  /** In the report's order; an unreadable item (final review M4) keeps its place and becomes a conductor question. */
+  readonly items: readonly ReportedHandOff[]
 }
 
 /** How a routed hand-off reaches its target, as `workspace.package_handed_off` names it. */
@@ -106,7 +107,8 @@ export function handOffView(row: {
 }
 
 /** Controller ruling F8: stored worker text never carries a NUL byte or a lone surrogate (spec §5). */
-function storableItem(item: HandOffItem): HandOffItem {
+function storableItem(item: ReportedHandOff): ReportedHandOff {
+  if ('unreadable' in item) return { unreadable: storableText(item.unreadable).trim(), reason: storableText(item.reason).trim() }
   const change = storableText(item.change).trim()
   return 'path' in item ? { path: storableText(item.path).trim(), change } : { package: storableText(item.package).trim(), change }
 }
@@ -153,7 +155,8 @@ export async function routeHandOffs(input: RouteHandOffsInput): Promise<readonly
         continue
       }
       const item = storableItem(raw)
-      const target = resolveHandOff(item, input.fromPackageKey, packages)
+      // Final review M4: an item that did not read has no target -- the no-target question path.
+      const target = 'unreadable' in item ? { kind: 'none' as const, reason: `its item could not be read (${item.reason})` } : resolveHandOff(item, input.fromPackageKey, packages)
       const toKey = target.kind === 'package' ? target.key : target.kind === 'own' ? input.fromPackageKey : null
       const task = taskOf(toKey)
       const fingerprint = handOffFingerprint({ from: input.fromPackageKey, to: toKey ?? '', item })
@@ -190,7 +193,7 @@ export async function routeHandOffs(input: RouteHandOffsInput): Promise<readonly
           toPackageKey: toKey,
           path: 'path' in item ? item.path : null,
           packageKey: 'package' in item ? item.package : null,
-          change: item.change,
+          change: 'unreadable' in item ? item.unreadable : item.change,
           fingerprint,
           status,
           note,
@@ -248,7 +251,7 @@ export async function routeStoredHandOffs(deliveryId: string): Promise<void> {
       )
     ORDER BY r."createdAt", r."runId"`
   for (const report of unrouted) {
-    const items = Array.isArray(report.handOffs) ? report.handOffs.map((item) => handOffItemSchema.safeParse(item)) : []
+    const items = Array.isArray(report.handOffs) ? report.handOffs.map((item) => reportedHandOffSchema.safeParse(item)) : []
     if (items.length === 0 || items.some((item) => !item.success)) {
       // Positions are the keys: a report whose items cannot all be read is not routed in part.
       console.error(`[hand-off] run ${report.runId}: its stored report's hand-offs cannot be read -- not routed`)

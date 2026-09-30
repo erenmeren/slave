@@ -374,6 +374,28 @@ describe('a package run files its report before verify', () => {
     expect(questions).toEqual([expect.objectContaining({ recipientRole: CONDUCTOR_ROLE, taskId: f.taskId, body: expect.stringContaining('no package has the key "billing"') })])
   })
 
+  /** Final review M4: an unreadable item is asked of the conductor; the run's finished work goes on. */
+  it('routes the readable hand-offs, asks the conductor about an unreadable one, and never sends the run back for it', async (): Promise<void> => {
+    const f = await seedPackageTask({
+      report: { ...goodReport, handOffs: [{ package: 'docs', change: 'document the csv flag' }, { path: 'docs/a.md', package: 'docs', change: 'both at once' }] },
+    })
+    const docs = await prisma.workPackage.create({ data: { workspaceId: f.workspaceId, goalVersion: 1, key: 'docs', title: 'Docs', requirementKeys: [], ownedPaths: ['docs/**'], interface: '', templateId: 'tpl' } })
+    await prisma.task.create({ data: { workspaceId: f.workspaceId, title: 'Docs', description: 'x', status: 'backlog', requiredRole: PACKAGE_WORKER_ROLE, maxAttempts: 3, goalVersion: 1, workPackageId: docs.id } })
+    const before = (await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })).attempt
+    await tickUntil(f, async () => (await taskStatus(f.taskId)) !== 'running')
+    expect(await taskStatus(f.taskId)).toBe('reviewing')
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })
+    expect(task).toMatchObject({ attempt: before, lastRejectionReason: null })
+    expect((await prisma.slaveRun.findFirstOrThrow({ where: { taskId: f.taskId } })).status).toBe('succeeded')
+    expect(await prisma.runReport.count()).toBe(1)
+    const rows = await prisma.packageHandOff.findMany({ where: { workspaceId: f.workspaceId }, orderBy: { sourceKey: 'asc' } })
+    expect(rows.map((r) => [r.toPackageKey, r.status])).toEqual([['docs', 'pending'], [null, 'to_conductor']])
+    expect(rows[1]?.change).toBe('{"path":"docs/a.md","package":"docs","change":"both at once"}')
+    expect(rows[1]?.note).toContain('exactly one of "path" or "package"')
+    const questions = await prisma.slaveMessage.findMany({ where: { workspaceId: f.workspaceId, kind: 'question' } })
+    expect(questions).toEqual([expect.objectContaining({ recipientRole: CONDUCTOR_ROLE, body: expect.stringContaining('both at once') })])
+  })
+
   it('files a report through a busy delivery lock: the routing is tried again and the run goes on to verify (Task 6)', async (): Promise<void> => {
     busyLock.failures = 1
     const f = await seedPackageTask({ report: { ...goodReport, handOffs: [{ package: 'billing', change: 'charge for exports' }] } })

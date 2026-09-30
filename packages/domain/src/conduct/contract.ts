@@ -1,6 +1,6 @@
 import { sanitisePersonText } from '../handoff/contract.js'
 import type { RequirementItem } from './requirements.js'
-import { SKELETON_PACKAGE_KEY } from './constants.js'
+import { HANDOFF_CHANGE_MAX_CHARS, HANDOFFS_PER_REPORT_MAX, SKELETON_PACKAGE_KEY } from './constants.js'
 import { globToRegExp } from './glob.js'
 import {
   gateRunsVerifyScript,
@@ -223,7 +223,9 @@ export function renderReportProtocol(requirementKeys: readonly string[], workflo
       ? `- "workflow": one entry per workflow step (${workflowSteps}), by its number.`
       : '- "workflow": [] (you were given no workflow).',
     '- "handOffs": a change in a file you do not own ({"path": "...", "change": "..."}) or work another package must do',
-    '  ({"package": "<key>", "change": "..."}); each is delivered to the package that owns it. At most 10.',
+    '  ({"package": "<key>", "change": "..."}); each is delivered to the package that owns it.',
+    `  At most ${String(HANDOFFS_PER_REPORT_MAX)}; each "change" at most ${String(HANDOFF_CHANGE_MAX_CHARS)} characters, with exactly one of "path" or "package".`,
+    '  An item that breaks these is not delivered: it goes to the conductor as a question.',
     '- "questions": a choice nobody has made (a design decision, an ambiguous requirement) for the conductor to decide; never a hand-off.',
     'A missing or malformed report sends this task back to you.',
   ].join('\n')

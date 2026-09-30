@@ -36,6 +36,42 @@ export const handOffItemSchema: z.ZodType<HandOffItem, z.ZodTypeDef, unknown> = 
   })
   .transform((value): HandOffItem => (value.path !== undefined ? { path: value.path, change: value.change } : { package: value.package ?? '', change: value.change }))
 
+/**
+ * Final review M4: a `handOffs` item that does not read as a {@link HandOffItem} -- kept in its place
+ * (the position is its routing key), with the worker's raw text and why, so it becomes a conductor
+ * question instead of refusing a report whose work is otherwise done. Only item-level problems
+ * degrade this way: a report that is itself malformed (not JSON, `handOffs` not a list, more than
+ * `HANDOFFS_PER_REPORT_MAX`) is still refused.
+ */
+export interface UnreadableHandOff {
+  /** The item as the worker wrote it (a JSON rendering unless it was a string), NUL-free, trimmed to `HANDOFF_CHANGE_MAX_CHARS`. */
+  readonly unreadable: string
+  /** Why it did not read, as the parser says it, trimmed to {@link UNREADABLE_REASON_MAX_CHARS}. */
+  readonly reason: string
+}
+
+/** One `handOffs` item as a filed report carries it. */
+export type ReportedHandOff = HandOffItem | UnreadableHandOff
+
+/** Bounds the parser's reason, which quotes paths and limits but never the item itself. */
+const UNREADABLE_REASON_MAX_CHARS = 300
+
+/** Final review M4: an item, read on its own -- a {@link HandOffItem}, or an {@link UnreadableHandOff} saying why not. */
+export function readHandOffItem(raw: unknown): ReportedHandOff {
+  const parsed = handOffItemSchema.safeParse(raw)
+  if (parsed.success) return parsed.data
+  const issues = parsed.error.issues.slice(0, 3).map((i) => (i.path.length === 0 ? i.message : `${i.path.join('.')}: ${i.message}`))
+  const text = typeof raw === 'string' ? raw : (JSON.stringify(raw) ?? String(raw))
+  const unreadable = trimToFit(storableText(text).trim(), HANDOFF_CHANGE_MAX_CHARS)
+  return { unreadable: unreadable === '' ? '(empty)' : unreadable, reason: trimToFit(storableText(issues.join('; ')), UNREADABLE_REASON_MAX_CHARS) }
+}
+
+/** A stored report's item: what {@link readHandOffItem} wrote, read back as it was written. */
+export const reportedHandOffSchema: z.ZodType<ReportedHandOff, z.ZodTypeDef, unknown> = z.union([
+  z.object({ unreadable: z.string().min(1).max(HANDOFF_CHANGE_MAX_CHARS), reason: z.string().max(UNREADABLE_REASON_MAX_CHARS) }).strict(),
+  handOffItemSchema,
+])
+
 /** What {@link resolveHandOff} needs of a package: the fields the ownership rule reads. */
 export interface HandOffOwner {
   readonly key: string
@@ -79,9 +115,9 @@ export function resolveHandOff(item: HandOffItem, fromPackageKey: string | null,
  * Plan A D6: the same request from the same source to the same target, however it is spaced or
  * cased. `goalSha256`, the domain's own hash: `packages/domain` must not import `node:crypto`.
  */
-export function handOffFingerprint(input: { readonly from: string | null; readonly to: string; readonly item: HandOffItem }): string {
-  const target = 'path' in input.item ? `path:${input.item.path}` : `package:${input.item.package}`
-  const change = input.item.change.toLowerCase().replace(/\s+/gu, ' ').trim()
+export function handOffFingerprint(input: { readonly from: string | null; readonly to: string; readonly item: ReportedHandOff }): string {
+  const target = 'unreadable' in input.item ? 'unreadable' : 'path' in input.item ? `path:${input.item.path}` : `package:${input.item.package}`
+  const change = ('unreadable' in input.item ? input.item.unreadable : input.item.change).toLowerCase().replace(/\s+/gu, ' ').trim()
   return goalSha256([input.from ?? '', input.to, target, change].join('\n'))
 }
 

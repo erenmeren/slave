@@ -149,6 +149,18 @@ describe('routeHandOffs', () => {
     expect((await rows(f)).filter((r) => r.status === 'to_conductor').every((r) => r.questionMessageId !== null)).toBe(true)
   })
 
+  /** Final review M4: an item the report could not read keeps its place and is asked of the conductor. */
+  it('asks the conductor about an unreadable item, in its place, and routes the rest', async () => {
+    const f = await seed({ skeleton: 'done', report: 'running', integration: 'ready' })
+    await route(f, [{ unreadable: '{"path":"a","package":"b","change":"x"}', reason: 'give exactly one of "path" or "package"' }, { package: 'integration', change: 'expose GET /x' }])
+    const [bad, good] = await rows(f)
+    expect(bad).toMatchObject({ sourceKey: `report:${f.runId}:0`, status: 'to_conductor', toPackageKey: null, path: null, packageKey: null, change: '{"path":"a","package":"b","change":"x"}' })
+    expect(bad?.note).toBe('no target found: its item could not be read (give exactly one of "path" or "package")')
+    expect(good).toMatchObject({ status: 'pending', toPackageKey: 'integration' })
+    const questions = await prisma.slaveMessage.findMany({ where: { workspaceId: f.workspaceId, kind: 'question' } })
+    expect(questions.map((q) => q.body)).toEqual([expect.stringContaining('its item could not be read')])
+  })
+
   it('asks the conductor when the target package failed', async () => {
     const f = await seed({ skeleton: 'failed', report: 'running', integration: 'ready' })
     await route(f, [{ path: 'scripts/verify.sh', change: 'x' }])
