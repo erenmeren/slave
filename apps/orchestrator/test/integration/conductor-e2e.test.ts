@@ -119,7 +119,7 @@ function checked(key: string, status: 'pass' | 'fail' | 'unverifiable'): object 
   return {
     key,
     status,
-    check: `pytest -k ${key}`,
+    check: key === 'RUN' ? 'docker compose up -d && curl -fsS localhost:8080/health' : `pytest -k ${key}`,
     output: status === 'pass' ? '1 passed' : `1 ${status === 'fail' ? 'failed' : 'skipped'}`,
     reason: status === 'pass' ? '' : status === 'fail' ? `${key} prints nothing` : `${key} needs a network this checkout lacks`,
   }
@@ -128,6 +128,7 @@ function checked(key: string, status: 'pass' | 'fail' | 'unverifiable'): object 
 /** The file each package's worker writes: one its own package owns. A `single` package owns
  *  everything, and each version writes a file of its own so its commit is never empty. */
 function workFileFor(packageKey: string, goalVersion: number): string {
+  if (packageKey === 'skeleton') return 'scripts/verify.d/skeleton.sh'
   if (packageKey === 'report') return 'src/report/csv.py'
   if (packageKey === 'config') return 'src/config.py'
   if (packageKey === 'integration') return 'wiring.txt'
@@ -440,11 +441,11 @@ describe('conductor end to end', () => {
     const set = await prisma.requirementSet.findUniqueOrThrow({
       where: { workspaceId_goalVersion: { workspaceId: f.workspaceId, goalVersion: 1 } },
     })
-    expect((set.items as { key: string }[]).map((i) => i.key)).toEqual(['R1', 'R2'])
+    expect((set.items as { key: string }[]).map((i) => i.key)).toEqual(['R1', 'R2', 'RUN'])
     const decision = await prisma.supervisorDecision.findFirstOrThrow({ where: { workspaceId: f.workspaceId, situationKind: 'conduct' } })
     expect(decision.rationale).toContain('fits one session')
     const packages = await prisma.workPackage.findMany({ where: { workspaceId: f.workspaceId } })
-    expect(packages).toEqual([expect.objectContaining({ goalVersion: 1, requirementKeys: ['R1', 'R2'], templateId: 't-backend' })])
+    expect(packages).toEqual([expect.objectContaining({ goalVersion: 1, requirementKeys: ['R1', 'R2', 'RUN'], templateId: 't-backend' })])
 
     // The package task: pinned to a package-worker seat, ready -> running -> ... -> done.
     const seat = await prisma.slave.findUniqueOrThrow({ where: { id: packageTask.assigneeId ?? '' } })
@@ -483,10 +484,11 @@ describe('conductor end to end', () => {
     expect(await prisma.verificationResult.findMany({ where: { runId: verification.id }, select: { key: true, status: true }, orderBy: { key: 'asc' } })).toEqual([
       { key: 'R1', status: 'pass' },
       { key: 'R2', status: 'pass' },
+      { key: 'RUN', status: 'pass' },
     ])
     const verified = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_verified' } })
     expect(verified.map((event) => event.payload)).toEqual([
-      { version: 1, round: 1, runId: verification.id, pass: 2, fail: 0, unverifiable: 0, failedKeys: [] },
+      { version: 1, round: 1, runId: verification.id, pass: 3, fail: 0, unverifiable: 0, failedKeys: [] },
     ])
     expect(git(['worktree', 'list'], f.repoPath)).not.toContain('verify-')
     expect(verifyWorktrees(f)).toEqual([])
@@ -496,7 +498,7 @@ describe('conductor end to end', () => {
     expect((await prisma.slave.findUniqueOrThrow({ where: { id: verification.slaveId } })).runtimeRoles).toContain(VERIFIER_ROLE)
     const verifierStart = f.starts.find((s) => s.runId === verification.id)
     expect(verifierStart?.prompt).toContain('Verification round 1 of goal v1.')
-    expect(readdirSync(join(verifierStart?.runDir ?? '', 'verify')).sort()).toEqual(['check-R1.sh', 'check-R2.sh'])
+    expect(readdirSync(join(verifierStart?.runDir ?? '', 'verify')).sort()).toEqual(['check-R1.sh', 'check-R2.sh', 'check-RUN.sh'])
     expect(filesOn(f, 'main').filter((file) => file.startsWith('check-'))).toEqual([])
 
     // Accepted, then merged -- each once.
@@ -511,7 +513,10 @@ describe('conductor end to end', () => {
     const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: packageTask.id, kind: 'implementation', status: 'succeeded' } })
     const report = await prisma.runReport.findFirstOrThrow({ where: { taskId: packageTask.id } })
     expect(report.runId).toBe(run.id)
-    expect((report.report as { requirements: { key: string }[] }).requirements.map((r) => r.key)).toEqual(['R1', 'R2'])
+    expect((report.report as { requirements: { key: string }[] }).requirements.map((r) => r.key)).toEqual(['R1', 'R2', 'RUN'])
+
+    const runContextRow = await prisma.runContext.findFirstOrThrow({ where: { run: { kind: 'implementation' } } })
+    expect(runContextRow.prompt).toContain('`bash scripts/smoke.sh`')
 
     // The planner stayed out, and the conductor's two calls are in the spend.
     expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(0)
@@ -531,9 +536,10 @@ describe('conductor end to end', () => {
     expect(r.requirements?.map((item) => [item.key, item.verdict?.status, item.packageKey])).toEqual([
       ['R1', 'pass', packages[0]?.key],
       ['R2', 'pass', packages[0]?.key],
+      ['RUN', 'pass', packages[0]?.key],
     ])
     expect(r.requirements?.[1]?.verdict).toEqual(expect.objectContaining({ round: 1, runId: verification.id, check: 'pytest -k R2', output: '1 passed' }))
-    expect(r.rounds).toEqual([expect.objectContaining({ round: 1, runId: verification.id, pass: 2, fail: 0, unverifiable: 0, commit: d1?.verifiedCommit })])
+    expect(r.rounds).toEqual([expect.objectContaining({ round: 1, runId: verification.id, pass: 3, fail: 0, unverifiable: 0, commit: d1?.verifiedCommit })])
     expect(r.packages).toHaveLength(1)
     // Git's own list at the package's merge, next to the worker's claim.
     expect(r.packages[0]?.mergedFiles).toEqual(['m8a-work.txt'])
@@ -565,7 +571,7 @@ describe('conductor end to end', () => {
     expect(notes.map((n) => n.noteKey)).toEqual(['goal-report:v1:merged'])
     expect(notes[0]?.text).toContain('Goal v1 report: merged into main')
     expect(notes[0]?.text).toContain('the verified commit')
-    expect(notes[0]?.text).toContain('Requirements: 2 of 2 pass (round 1).')
+    expect(notes[0]?.text).toContain('Requirements: 3 of 3 pass (round 1).')
     expect((await delivery(f, 1))?.reportNotedKey).toBe('merged')
   })
 
@@ -574,15 +580,17 @@ describe('conductor end to end', () => {
     await tickUntil(f, merged(f, 1))
 
     const packages = await prisma.workPackage.findMany({ where: { workspaceId: f.workspaceId }, include: { tasks: true }, orderBy: { key: 'asc' } })
-    expect(packages.map((p) => p.key)).toEqual(['config', 'integration', 'report'])
+    expect(packages.map((p) => p.key)).toEqual(['config', 'integration', 'report', 'skeleton'])
     const taskOf = (key: string): string => packages.find((p) => p.key === key)?.tasks[0]?.id ?? ''
-    expect(await prisma.taskDependency.findMany({ where: { taskId: taskOf('config') }, select: { dependsOnTaskId: true } })).toEqual([
-      { dependsOnTaskId: taskOf('report') },
-    ])
+    expect(await prisma.taskDependency.findMany({ where: { taskId: taskOf('config') }, select: { dependsOnTaskId: true } })).toEqual(
+      expect.arrayContaining([{ dependsOnTaskId: taskOf('report') }, { dependsOnTaskId: taskOf('skeleton') }]),
+    )
     expect(packages.every((p) => p.tasks[0]?.status === 'done')).toBe(true)
 
     const startOf = (key: string): Start | undefined => f.starts.find((s) => s.kind === 'implementation' && s.packageKey === key)
     // `report` was cut before any package merged: no csv.py anywhere yet.
+    expect(startOf('skeleton')?.mainTip).toBe(f.initialTip)
+    expect(f.starts.findIndex((s) => s.packageKey === 'skeleton')).toBe(0)
     expect(startOf('report')?.worktreeFiles).not.toContain('src/report/csv.py')
     // `config` was cut from the integration branch after `report` merged into it: its worktree has
     // report's file at dispatch time, while main does not.
@@ -612,17 +620,20 @@ describe('conductor end to end', () => {
     if (!report.ok) return
     expect(report.value.state).toBe('merged')
     expect(report.value.packages.map((p) => [p.key, p.isIntegration, p.dependsOn])).toEqual([
-      ['config', false, ['report']],
-      ['integration', true, ['report', 'config']],
-      ['report', false, []],
+      ['config', false, ['skeleton', 'report']],
+      ['integration', true, ['skeleton', 'report', 'config']],
+      ['report', false, ['skeleton']],
+      ['skeleton', false, []],
     ])
     const files = (key: string): readonly string[] | null => report.value.packages.find((p) => p.key === key)?.mergedFiles ?? null
     expect(files('report')).toEqual(['src/report/csv.py'])
     expect(files('config')).toEqual(['src/config.py'])
     expect(files('integration')).toEqual(['wiring.txt'])
+    expect(files('skeleton')).toEqual(['scripts/verify.d/skeleton.sh'])
     expect(report.value.requirements?.map((r) => [r.key, r.packageKey, r.verdict?.status])).toEqual([
       ['R1', 'report', 'pass'],
       ['R2', 'config', 'pass'],
+      ['RUN', 'integration', 'pass'],
     ])
     expect(report.value.decision).toEqual(expect.objectContaining({ mode: 'partitioned', reason: 'config builds on the report modes' }))
     const md = renderGoalReportMarkdown(report.value)
@@ -764,8 +775,8 @@ describe('conductor end to end', () => {
     const f = await seed({
       conductAnswer: PARTITIONED,
       verificationRounds: [
-        [checked('R1', 'pass'), checked('R2', 'fail')],
-        [checked('R1', 'pass'), checked('R2', 'pass')],
+        [checked('R1', 'pass'), checked('R2', 'fail'), checked('RUN', 'pass')],
+        [checked('R1', 'pass'), checked('R2', 'pass'), checked('RUN', 'pass')],
       ],
     })
     await tickUntil(f, merged(f, 1))
@@ -779,6 +790,7 @@ describe('conductor end to end', () => {
     expect(config[1]?.prompt).toContain('R2 prints nothing')
     expect(await implementationRunsOf(f, 'report')).toHaveLength(1)
     expect(await implementationRunsOf(f, 'integration')).toHaveLength(1)
+    expect(await implementationRunsOf(f, 'skeleton')).toHaveLength(1)
     expect(await verificationReworks(f)).toEqual([{ key: 'config', round: 1 }])
     const configTask = await prisma.task.findFirstOrThrow({ where: { workspaceId: f.workspaceId, workPackage: { key: 'config' } } })
     expect(configTask.status).toBe('done')
@@ -789,10 +801,10 @@ describe('conductor end to end', () => {
     expect(runs).toHaveLength(2)
     const verified = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_verified' }, orderBy: { seq: 'asc' } })
     expect(verified.map((event) => event.payload)).toEqual([
-      expect.objectContaining({ version: 1, round: 1, pass: 1, fail: 1, failedKeys: ['R2'] }),
-      expect.objectContaining({ version: 1, round: 2, pass: 2, fail: 0, failedKeys: [] }),
+      expect.objectContaining({ version: 1, round: 1, pass: 2, fail: 1, failedKeys: ['R2'] }),
+      expect.objectContaining({ version: 1, round: 2, pass: 3, fail: 0, failedKeys: [] }),
     ])
-    expect(await prisma.verificationResult.count({ where: { runId: { in: runs.map((run) => run.id) } } })).toBe(4)
+    expect(await prisma.verificationResult.count({ where: { runId: { in: runs.map((run) => run.id) } } })).toBe(6)
     expect(f.starts.filter((s) => s.kind === 'verification').map((s) => /Verification round (\d+)/.exec(s.prompt)?.[1])).toEqual(['1', '2'])
 
     // Accepted after two rounds, and exactly the verified commit reached main, with both packages' work.
@@ -813,8 +825,8 @@ describe('conductor end to end', () => {
   it('stops for a person when a requirement cannot be checked, escalates it, and accepts once a retry verifies it', async (): Promise<void> => {
     const f = await seed({
       verificationRounds: [
-        [checked('R1', 'pass'), checked('R2', 'unverifiable')],
-        [checked('R1', 'pass'), checked('R2', 'pass')],
+        [checked('R1', 'pass'), checked('R2', 'unverifiable'), checked('RUN', 'pass')],
+        [checked('R1', 'pass'), checked('R2', 'pass'), checked('RUN', 'pass')],
       ],
     })
     await tickUntil(f, status(f, 1, 'needs_human'))
@@ -874,8 +886,8 @@ describe('conductor end to end', () => {
     // The report keeps both rounds, and R2's history says what round 1 found.
     const report = await loadGoalReport(f.workspaceId, 1)
     expect(report.ok && report.value.rounds.map((round) => [round.round, round.pass, round.unverifiable])).toEqual([
-      [1, 1, 1],
-      [2, 2, 0],
+      [1, 2, 1],
+      [2, 3, 0],
     ])
     expect(report.ok && report.value.requirements?.find((r) => r.key === 'R2')?.history).toEqual([
       { round: 1, status: 'unverifiable' },
@@ -889,7 +901,7 @@ describe('conductor end to end', () => {
     const f = await seed({
       conductAnswer: PARTITIONED,
       verificationRoundCap: 2,
-      verificationRounds: [[checked('R1', 'pass'), checked('R2', 'fail')]],
+      verificationRounds: [[checked('R1', 'pass'), checked('R2', 'fail'), checked('RUN', 'pass')]],
     })
     await tickUntil(f, status(f, 1, 'needs_human'))
 
@@ -923,6 +935,7 @@ describe('conductor end to end', () => {
     expect(stopped.value.requirements?.map((r) => [r.key, r.verdict?.status, r.verdict?.round])).toEqual([
       ['R1', 'pass', 2],
       ['R2', 'fail', 2],
+      ['RUN', 'pass', 2],
     ])
     expect(stopped.value.packages.find((p) => p.key === 'config')?.implementationRuns).toBe(2)
     expect(stopped.value.trail.map((e) => e.text)).toContain('config: sent back for rework by verification round 1.')
