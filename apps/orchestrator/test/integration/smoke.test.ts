@@ -3,7 +3,7 @@
  * a fresh checkout of the integration tip, concluded into a pass, a rework or a stop. Real git, a
  * real bash script on the integration branch, task states driven with Prisma.
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -210,9 +210,26 @@ describe('a smoke attempt', () => {
     // The dead daemon's checkout is still there: settling removes it.
     const leftover = join(worktreeRootFor(f.repoPath), smokeWorktreeKey(attempt.id))
     git(['worktree', 'add', '--quiet', '--detach', leftover, attempt.tip], f.repoPath)
-    await prisma.smokeAttempt.update({ where: { id: attempt.id }, data: { worktreePath: leftover } })
+    // ...and so is a server its script backgrounded, in the group of a leader that already exited.
+    const leader = spawn('/bin/sh', ['-c', 'sleep 60 >/dev/null 2>&1 & echo $!'], { cwd: leftover, detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
+    let printed = ''
+    leader.stdout.on('data', (chunk: Buffer) => { printed += chunk.toString() })
+    await new Promise<void>((res) => leader.stdout.on('close', () => res()))
+    const survivor = Number(printed.trim())
+    expect(isAlive(survivor)).toBe(true)
+    await prisma.smokeAttempt.update({ where: { id: attempt.id }, data: { worktreePath: leftover, pid: leader.pid ?? null } })
     await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'verifying', round: 1, activeSmokeId: attempt.id } })
-    await settleStrandedSmoke(attempt.id)
+    try {
+      await settleStrandedSmoke(attempt.id)
+      for (let i = 0; i < 50 && isAlive(survivor); i += 1) await new Promise((res) => setTimeout(res, 20))
+      expect(isAlive(survivor)).toBe(false)
+    } finally {
+      try {
+        process.kill(survivor, 'SIGKILL')
+      } catch {
+        // Gone, as it should be.
+      }
+    }
     expect(await prisma.smokeAttempt.findUniqueOrThrow({ where: { id: attempt.id } })).toMatchObject({ status: 'error' })
     expect(smokeWorktrees(f)).toEqual([])
     expect((await prisma.executionEvent.findFirstOrThrow({ where: { workspaceId: f.workspaceId, type: 'workspace_smoke_run' } })).payload).toMatchObject({ attemptId: attempt.id, outcome: 'error', reworkedPackage: null })

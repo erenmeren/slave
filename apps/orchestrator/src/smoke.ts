@@ -12,7 +12,7 @@
 import { statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { goalEventWith, isAlive, withDeliveryLock } from '@slave-of-ai/control'
+import { goalEventWith, withDeliveryLock } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
   SMOKE_OUTPUT_MAX_CHARS,
@@ -31,6 +31,7 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import { CHILD_ENV_ALLOW } from '@slave-of-ai/providers'
 import { needsHumanInLock } from './goal.js'
+import { killAttemptGroup } from './procGroup.js'
 import { OWNER_INSTANCE, ownerGone } from './runs.js'
 import { runShellCommand } from './shell.js'
 import { pumps } from './tick.js'
@@ -58,7 +59,8 @@ const DOCKER_CLEANUP_TIMEOUT_MS = 120_000
 const SMOKE_STORED_OUTPUT_MAX_CHARS = SMOKE_OUTPUT_MAX_CHARS - 64
 
 /** The recorded output of a script that exists without its executable bit (F10). Its conclusion
- *  reads this prefix back to tell the skeleton to `chmod +x` rather than to write the script. */
+ *  reads this prefix back to tell the skeleton to `chmod +x` rather than to write the script. A
+ *  script cannot forge it: a `missing` attempt's output is only ever the orchestrator's own text. */
 const NOT_EXECUTABLE_OUTPUT = `${SMOKE_SCRIPT_PATH} is not executable`
 
 /**
@@ -153,8 +155,13 @@ function scriptState(path: string): { readonly exists: boolean; readonly executa
   }
 }
 
-/** Kills what is left of a finished script's process group -- a server it backgrounded and never
- *  stopped. Its leader is gone, so the group id cannot yet belong to anything else. */
+/**
+ * Kills what is left of a finished script's process group -- a server it backgrounded and never
+ * stopped. Called the moment this process reaped the group's leader: while any member lives the
+ * id stays the group's, and once none does it is free again, so another process could in principle
+ * lead a group of that id -- which would need the pid counter to wrap onto it within that moment.
+ * A settler in ANOTHER process, much later, has no such window and uses `killAttemptGroup` instead.
+ */
 function killLeftovers(pid: number | null): void {
   if (pid === null) return
   try {
@@ -165,8 +172,12 @@ function killLeftovers(pid: number | null): void {
 }
 
 /**
- * The attempt itself: checkout, script, cleanup, record, apply. The checkout and the script's
- * containers are removed whatever happened, before the result is recorded.
+ * The attempt itself: checkout, script, record, cleanup, apply. The result is recorded BEFORE the
+ * containers and the checkout are removed (Task 3 fix ruling 2): the Docker cleanup may take up to
+ * {@link DOCKER_CLEANUP_TIMEOUT_MS}, and a settler elsewhere declares an attempt overdue at its
+ * timeout plus `SMOKE_STRANDED_GRACE_MS` -- which must then only cover a timed-out group's kill
+ * grace (`KILL_GRACE_MS`) and the pipes' drain, seconds against a minute. The cleanup still runs on
+ * every path, a failed record included.
  */
 async function executeSmoke(attemptId: string): Promise<void> {
   const attempt = await prisma.smokeAttempt.findUniqueOrThrow({ where: { id: attemptId }, include: { workspace: { select: { repoPath: true, smokeTimeoutMs: true } } } })
@@ -206,10 +217,13 @@ async function executeSmoke(attemptId: string): Promise<void> {
   } finally {
     killLeftovers(pid)
     await pidWritten
+  }
+  try {
+    await recordSmokeResult(attemptId, result, Date.now() - started)
+  } finally {
     await cleanUpSmokeProject(project)
     await removeVerificationWorktree(repoPath, worktreePath)
   }
-  await recordSmokeResult(attemptId, result, Date.now() - started)
   await applySmokeOutcome(attemptId)
 }
 
@@ -343,7 +357,7 @@ export async function applySmokeOutcome(attemptId: string): Promise<void> {
  * Plan B D8: a claim the goal pass found. Nothing while this process runs the attempt, or while a
  * live owner elsewhere may still be inside its timeout. A claim naming no row, a `running` attempt
  * whose owner is gone (or is this process, which no longer runs it), or one past its timeout plus
- * the grace, is recorded `error` (its group killed, its checkout removed) and applied. An attempt
+ * the grace, is recorded `error` (its proven processes killed, its checkout removed) and applied. An attempt
  * already concluded but still holding the claim (a crash between the two writes) is applied again.
  */
 export async function settleStrandedSmoke(attemptId: string): Promise<void> {
@@ -365,12 +379,20 @@ export async function settleStrandedSmoke(attemptId: string): Promise<void> {
   const mine = attempt.ownerInstance === OWNER_INSTANCE
   const overdue = Date.now() - attempt.startedAt.getTime() > attempt.workspace.smokeTimeoutMs + SMOKE_STRANDED_GRACE_MS
   if (!mine && !ownerGone(attempt.ownerInstance) && !overdue) return
-  if (attempt.pid !== null && isAlive(attempt.pid)) killLeftovers(attempt.pid)
+  // Task 3 fix ruling 1: only the processes /proc ties to this attempt, never the stored pid's group
+  // on the pid's word -- a reboot or a wrapped counter may have given it to someone else's shell.
+  const killed = attempt.pid === null || killAttemptGroup({ pgid: attempt.pid, worktreePath: attempt.worktreePath, startedAt: attempt.startedAt })
+  if (!killed) console.warn(`[smoke] could not read /proc to find attempt ${attemptId}'s processes (group ${String(attempt.pid)}); none were killed`)
   await cleanUpSmokeProject(smokeProjectName(attemptId))
   await removeVerificationWorktree(attempt.workspace.repoPath, attempt.worktreePath)
   await recordSmokeResult(
     attemptId,
-    { status: 'error', exitCode: null, signal: null, output: 'the process running this smoke check is gone; it will be tried again' },
+    {
+      status: 'error',
+      exitCode: null,
+      signal: null,
+      output: `the process running this smoke check is gone; it will be tried again${killed ? '' : ` (its processes could not be checked without /proc, so none were killed: group ${String(attempt.pid)})`}`,
+    },
     Date.now() - attempt.startedAt.getTime(),
   )
   await applySmokeOutcome(attemptId)

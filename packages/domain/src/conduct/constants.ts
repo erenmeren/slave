@@ -114,5 +114,7 @@ export const SMOKE_TIMEOUT_MS_DEFAULT = 900_000
 /** A smoke attempt's output as stored, sent in its event and shown -- head and tail kept (`trimEvidence`). */
 export const SMOKE_OUTPUT_MAX_CHARS = 4000
 
-/** Past its timeout plus this, a `running` attempt nobody is running is stranded (plan B D8). */
+/** Past its timeout plus this, a `running` attempt nobody is running is stranded (plan B D8). It covers
+ *  the owner's post-timeout path up to its record -- the kill grace and the pipes' drain; the owner
+ *  records before its Docker cleanup, so that cleanup's bound need not fit in here. */
 export const SMOKE_STRANDED_GRACE_MS = 60_000
