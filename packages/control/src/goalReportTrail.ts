@@ -89,6 +89,8 @@ const VERSION_TRAIL_TYPES = [
   'workspace_requirements_set',
   'workspace_conducted',
   'workspace_goal_waiting',
+  'workspace_smoke_run',
+  'workspace_smoke_handed_off',
   'workspace_verification_started',
   'workspace_verified',
   'workspace_goal_accepted',
@@ -112,7 +114,7 @@ interface Draft {
 
 /** One event as a trail sentence (plan D6), or null for a payload this build cannot read. The
  *  sentences name ids, keys and counts only; free text goes in `detail`, labelled. */
-function eventDraft(type: DomainEventType, p: Payload, pkg: string | null, mergesInto: string, mergedBySlave: boolean): Draft | null {
+function eventDraft(type: DomainEventType, p: Payload, pkg: string | null, mergesInto: string, mergedBySlave: boolean, abandoned: boolean): Draft | null {
   const on = pkg === null ? '' : `${pkg}: `
   switch (type) {
     case 'workspace.goal_set': {
@@ -128,6 +130,29 @@ function eventDraft(type: DomainEventType, p: Payload, pkg: string | null, merge
     }
     case 'workspace.goal_waiting':
       return { text: typeof p['waitingOn'] === 'number' ? `Waited for goal v${String(p['waitingOn'])} to reach the base branch.` : "Waited for the planner's board to go quiet." }
+    case 'workspace.smoke_run': {
+      const outcome = (str(p, 'outcome') ?? '?').replace('_', ' ')
+      const exitCode = typeof p['exitCode'] === 'number' ? String(p['exitCode']) : null
+      const back = str(p, 'reworkedPackage')
+      const round = `Smoke check, round ${String(num(p, 'round'))}`
+      // Task 4: an attempt concluded after the version's abandon and sending nothing back ended by
+      // the abandon's SIGTERM, not by the product: its recorded outcome is shown, never as the verdict.
+      if (abandoned && back === null) {
+        return { text: `${round}: stopped when the version was abandoned (recorded as ${outcome}${exitCode === null ? '' : `, exit ${exitCode}`}).` }
+      }
+      return {
+        text: `${round}: ${outcome}${exitCode === null ? '' : ` (exit ${exitCode})`}${back === null ? '' : `; ${back} sent back`}.`,
+        detail: outcome === 'passed' ? null : str(p, 'output'),
+        detailBy: 'system',
+      }
+    }
+    case 'workspace.smoke_handed_off':
+      // `detailBy: 'model'`: the change is the worker's own words.
+      return {
+        text: `Smoke check, round ${String(num(p, 'round'))}: ${str(p, 'fromPackage') ?? '?'} handed the fix to ${str(p, 'toPackage') ?? '?'} (${str(p, 'path') ?? '?'}).`,
+        detail: str(p, 'change'),
+        detailBy: 'model',
+      }
     case 'workspace.verification_started':
       return { text: `Verification round ${String(num(p, 'round'))} started.` }
     case 'workspace.verified': {
@@ -281,10 +306,13 @@ export async function versionTrail(
     scope.deliveryId !== null ? [] : scope.tasks.filter((task) => !task.integrated || confirmed.has(task.taskId)).map((task) => task.taskId),
   )
   const byEvent: Timed[] = []
+  // Seq order: an event after the version's `workspace.goal_abandoned` happened once it was abandoned.
+  let abandoned = false
   for (const row of events) {
     const type = DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? (row.type as DomainEventType)
     const pkg = row.taskId === null ? null : (keyOf.get(row.taskId) ?? null)
-    const draft = eventDraft(type, (row.payload ?? {}) as Payload, pkg, mergesInto, row.taskId === null || !handMerged.has(row.taskId))
+    const draft = eventDraft(type, (row.payload ?? {}) as Payload, pkg, mergesInto, row.taskId === null || !handMerged.has(row.taskId), abandoned)
+    if (type === 'workspace.goal_abandoned') abandoned = true
     if (draft === null) continue
     if (type === 'workspace.conducted') {
       const fallback = (row.payload as Payload)['fallback'] === true

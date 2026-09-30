@@ -1,5 +1,5 @@
 import { CONDUCT_PER_CALL_CAP_USD } from '../conduct/constants.js'
-import { GOAL_REPORT_STATE_LABEL, acceptedCommitText, noPackagesLabel, reportCaveats, unverifiedRequirementLabel } from './caveats.js'
+import { GOAL_REPORT_STATE_LABEL, acceptedCommitText, noPackagesLabel, reportCaveats, smokeOutcomeLabel, unverifiedRequirementLabel } from './caveats.js'
 import { evidenceAnchor, evidenceCut, formatReportUsd, mdFence, mdInline, mdQuote, shortCommit } from './escape.js'
 import type { GoalReport, GoalReportAuthor } from './types.js'
 
@@ -20,8 +20,8 @@ export const GOAL_REPORT_ANSWERED_BY = { person: 'a person', supervisor: 'the Su
  * The goal version's report as Markdown (spec R10, plan D7): deterministic (a pure function of
  * `report`, no clock read, no sorting of its own) and inert (every value another party wrote goes
  * through `mdInline`, `mdFence` or `mdQuote`). Sections, in order: state, what to know, why it
- * stopped, a refused merge, goal, requirements, rounds, evidence, packages, spend, decision trail,
- * questions.
+ * stopped, a refused merge, goal, requirements, rounds, smoke checks, evidence, packages, denied
+ * tool calls, spend, decision trail, questions.
  */
 export function renderGoalReportMarkdown(report: GoalReport): string {
   const lines: string[] = []
@@ -66,6 +66,36 @@ export function renderGoalReportMarkdown(report: GoalReport): string {
     lines.push('')
   }
 
+  // Skeleton spec S7 (plan B D10): every smoke attempt of the version, and each hand-off (D11).
+  lines.push('## Smoke checks', '')
+  if (report.smoke.length === 0) {
+    lines.push('No smoke check has run.', '')
+  } else {
+    lines.push('| Round | Outcome | Exit | Took | Commit checked | Sent back | Finished |', '| --- | --- | --- | --- | --- | --- | --- |')
+    for (const s of report.smoke) {
+      lines.push(
+        `| ${String(s.round)} | ${mdInline(smokeOutcomeLabel(s))} | ${s.exitCode === null ? '—' : String(s.exitCode)} | ` +
+          `${s.durationMs === null ? '—' : `${String(Math.round(s.durationMs / 1000))} s`} | ${shortCommit(s.tip)} | ` +
+          `${s.reworkedPackage === null ? '—' : mdInline(s.reworkedPackage)} | ${mdInline(s.at)} |`,
+      )
+    }
+    // The change is the worker's raw words: `mdInline` defuses markers, escapes HTML and Markdown
+    // punctuation, and folds its lines into one, so no fence, heading or tag can start from it.
+    const handed = report.smoke.filter((s) => s.handOff !== null)
+    if (handed.length > 0) lines.push('')
+    for (const s of handed) {
+      const h = s.handOff
+      if (h === null) continue
+      lines.push(
+        `- Round ${String(s.round)}: ${s.reworkedPackage === null ? 'a package' : mdInline(s.reworkedPackage)} handed the fix to ${mdInline(h.toPackage)} (${mdInline(h.path)})` +
+          `${h.change === '' ? '' : `: ${mdInline(h.change)}`}`,
+      )
+    }
+    const latest = report.smoke.at(-1)
+    if (latest !== undefined && latest.output !== '') lines.push('', `Output of the latest smoke check (round ${String(latest.round)}):`, '', mdFence(latest.output))
+    lines.push('')
+  }
+
   const verified = (report.requirements ?? []).filter((item) => item.verdict !== null)
   if (verified.length > 0) {
     lines.push('## Evidence', '')
@@ -106,6 +136,15 @@ export function renderGoalReportMarkdown(report: GoalReport): string {
     lines.push('')
   }
   lines.push(`Verifier: ${report.verifier === null ? 'none recorded' : mdInline(report.verifier)}`, '')
+
+  // Skeleton spec S9 (plan B D10): the tool calls the version's runs were refused.
+  lines.push('## Denied tool calls', '')
+  if (report.deniedToolCalls.length === 0) lines.push('No tool call was denied.', '')
+  for (const denial of report.deniedToolCalls) {
+    lines.push(`- ${mdInline(denial.at)} · ${denial.packageKey === null ? 'the verifier' : mdInline(denial.packageKey)}: ${mdInline(denial.detail)} (run ${mdInline(denial.runId)})`)
+  }
+  if (report.deniedToolCallsOmitted > 0) lines.push(`- … and ${String(report.deniedToolCallsOmitted)} more, not listed.`)
+  if (report.deniedToolCalls.length > 0 || report.deniedToolCallsOmitted > 0) lines.push('')
 
   const s = report.spend
   lines.push('## Spend', '', '| Part | Amount |', '| --- | --- |')

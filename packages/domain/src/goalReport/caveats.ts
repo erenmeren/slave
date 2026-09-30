@@ -1,7 +1,7 @@
 import { TERMINAL } from '../task/state.js'
 import { GOAL_REPORT_FILES_MAX, GOAL_REPORT_TRAIL_MAX } from './constants.js'
 import { evidenceCut, shortCommit } from './escape.js'
-import type { GoalReport, GoalReportState } from './types.js'
+import type { GoalReport, GoalReportSmoke, GoalReportState } from './types.js'
 
 /** How a person says each state. One wording for the page, the export and the chat note. */
 export const GOAL_REPORT_STATE_LABEL: Readonly<Record<GoalReportState, string>> = {
@@ -41,6 +41,13 @@ export function acceptedCommitText(report: GoalReport, branch: string): string {
   if (verified !== null) return `verified commit ${shortCommit(verified)} on ${branch}`
   const recorded = report.delivery?.verifiedCommit ?? null
   return recorded === null ? `no verified commit is recorded on ${branch}` : `commit ${shortCommit(recorded)} on ${branch}; no verification round is recorded`
+}
+
+/** A smoke attempt's outcome, in words, for the page and the export alike (plan B Task 7). An
+ *  attempt the abandon stopped says so rather than reading as the product's failure: its SIGTERM
+ *  is recorded `failed` (exit 143), and nothing was sent back for it. */
+export function smokeOutcomeLabel(smoke: GoalReportSmoke): string {
+  return smoke.stoppedByAbandon ? 'stopped when the version was abandoned' : smoke.outcome.replace('_', ' ')
 }
 
 /** What the page and the export print for a version with no packages: "yet" only before conduct,

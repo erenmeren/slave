@@ -12,6 +12,7 @@ import {
   noPackagesLabel,
   reportCaveats,
   shortCommit,
+  smokeOutcomeLabel,
   unverifiedRequirementLabel,
   type GoalReport,
   type GoalReportState,
@@ -55,6 +56,7 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
   const caveats = reportCaveats(report)
   const base = `/w/${report.workspaceId}`
   const verified = (report.requirements ?? []).filter((item) => item.verdict !== null)
+  const latestSmoke = report.smoke.at(-1)
   return (
     <ScrollArea testId="goal-report" className="flex flex-col gap-[var(--gap-2)] p-[var(--gap-3)]">
       <header className="flex flex-wrap items-center gap-3">
@@ -188,6 +190,42 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
         )}
       </Panel>
 
+      {/* Skeleton spec S7 (plan B D10/D11): every smoke attempt, each hand-off, the latest output. The
+        * hand-off's change is the worker's raw words, so it is a JSX child like every other quote. */}
+      <Panel title="Smoke checks">
+        {report.smoke.length === 0 ? (
+          <p className="text-[13px] text-t2">No smoke check has run.</p>
+        ) : (
+          <>
+            <ul className="flex flex-col gap-1 text-[13px] text-t2">
+              {report.smoke.map((s) => (
+                <li key={s.attemptId} data-testid="goal-report-smoke">
+                  Round {s.round}: {smokeOutcomeLabel(s)}
+                  {s.exitCode !== null && `, exit ${String(s.exitCode)}`}
+                  {s.durationMs !== null && `, took ${String(Math.round(s.durationMs / 1000))} s`}, on commit{' '}
+                  <span className="font-mono">{shortCommit(s.tip)}</span>
+                  {s.reworkedPackage !== null && `, ${s.reworkedPackage} sent back`}, finished {s.at}.
+                  {s.handOff !== null && (
+                    <p data-testid="goal-report-smoke-handoff" className="pl-4 text-[12.5px]">
+                      {s.reworkedPackage ?? 'a package'} handed the fix to {s.handOff.toPackage} (<span className="font-mono">{s.handOff.path}</span>)
+                      {s.handOff.change !== '' && `: ${s.handOff.change}`}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
+            {latestSmoke !== undefined && latestSmoke.output !== '' && (
+              <>
+                <p className="mt-2 text-[12px] text-t3">Output of the latest smoke check (round {latestSmoke.round})</p>
+                <pre data-testid="goal-report-smoke-output" className={PRE}>
+                  {latestSmoke.output}
+                </pre>
+              </>
+            )}
+          </>
+        )}
+      </Panel>
+
       {verified.length > 0 && (
         <Panel title="Evidence">
           {verified.map((item) => {
@@ -278,6 +316,26 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
           </section>
         ))}
         <p className="text-[13px] text-t2">Verifier: {report.verifier ?? 'none recorded'}</p>
+      </Panel>
+
+      {/* Skeleton spec S9 (plan B D10): the tool calls the version's runs were refused. */}
+      <Panel title="Denied tool calls">
+        {report.deniedToolCalls.length === 0 && <p className="text-[13px] text-t2">No tool call was denied.</p>}
+        {report.deniedToolCalls.length > 0 && (
+          <ul className="flex flex-col gap-1 text-[13px] text-t2">
+            {report.deniedToolCalls.map((denial, index) => (
+              <li key={`${denial.runId}-${String(index)}`} data-testid="goal-report-denial">
+                <span className="font-mono text-[11.5px] text-t3">{denial.at}</span> {denial.packageKey ?? 'the verifier'}: {denial.detail} (run{' '}
+                <span className="font-mono">{denial.runId}</span>)
+              </li>
+            ))}
+          </ul>
+        )}
+        {report.deniedToolCallsOmitted > 0 && (
+          <p data-testid="goal-report-denials-omitted" className="text-[12.5px] text-t3">
+            … and {String(report.deniedToolCallsOmitted)} more, not listed.
+          </p>
+        )}
       </Panel>
 
       <Panel title="Spend">

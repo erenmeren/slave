@@ -8,6 +8,10 @@ export const GOAL_REPORT_FILES_MAX = 500
  *  many older ones were left out. */
 export const GOAL_REPORT_TRAIL_MAX = 1000
 
+/** Denied tool calls one report lists (skeleton spec S9, plan B D10): a run that loops on a refused
+ *  tool can write hundreds; the report keeps the oldest and says how many more there were. */
+export const GOAL_REPORT_DENIALS_MAX = 200
+
 /** One trail entry's quoted text. A verification rework reason carries the verifier's evidence
  *  (up to `VERIFICATION_REWORK_MAX_CHARS`), so this is the same order of size. */
 export const GOAL_REPORT_DETAIL_MAX_CHARS = 6000

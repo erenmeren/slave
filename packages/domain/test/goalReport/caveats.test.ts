@@ -82,6 +82,9 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
     },
     trail: [{ at: '2026-09-29T10:00:00.000Z', text: 'Size decision: one package does the whole goal.', detail: 'fits one session', detailBy: 'model', packageKey: null }],
     trailOmitted: 0,
+    smoke: [],
+    deniedToolCalls: [],
+    deniedToolCallsOmitted: 0,
     asOf: '2026-09-29T10:06:00.000Z',
     ...over,
   }

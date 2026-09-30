@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { GOAL_REPORT_ANSWERED_BY, GOAL_REPORT_AUTHOR_WORDS, GOAL_REPORT_STATES, GOAL_REPORT_STATE_LABEL, type GoalReport } from '@slave-of-ai/domain'
+import { GOAL_REPORT_ANSWERED_BY, GOAL_REPORT_AUTHOR_WORDS, GOAL_REPORT_STATES, GOAL_REPORT_STATE_LABEL, type GoalReport, type GoalReportSmoke } from '@slave-of-ai/domain'
 import { GoalReportView } from '../src/components/project/GoalReportView'
 
 function report(over: Partial<GoalReport> = {}): GoalReport {
@@ -42,6 +42,9 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
     },
     trail: [{ at: '2026-09-29T10:00:00.000Z', text: 'Size decision: one package does the whole goal.', detail: 'fits one session', detailBy: 'model', packageKey: null }],
     trailOmitted: 0,
+    smoke: [],
+    deniedToolCalls: [],
+    deniedToolCallsOmitted: 0,
     asOf: '2026-09-29T10:06:00.000Z',
     ...over,
   }
@@ -181,5 +184,78 @@ describe('GoalReportView', () => {
     )
     expect(screen.getByTestId('goal-report-trail-entry').textContent).toContain(GOAL_REPORT_AUTHOR_WORDS.model)
     expect(screen.getByTestId('goal-report-question').textContent).toContain(`Answered by ${GOAL_REPORT_ANSWERED_BY.supervisor}`)
+  })
+
+  describe('smoke checks and denied tool calls (skeleton spec S7/S9, plan B Task 7)', () => {
+    const failed: GoalReportSmoke = {
+      attemptId: 'a1', round: 1, outcome: 'failed', exitCode: 1, durationMs: 61_000, tip: 'd'.repeat(40), output: 'npm error Missing script: "start"',
+      at: '2026-09-30T10:00:00.000Z', reworkedPackage: 'integration', handOff: { toPackage: 'skeleton', path: 'backend/package.json', change: 'add a "start" script' },
+      stoppedByAbandon: false,
+    }
+    const passed: GoalReportSmoke = { ...failed, attemptId: 'a2', round: 2, outcome: 'passed', exitCode: 0, durationMs: 4_000, output: 'flow ok', at: '2026-09-30T11:00:00.000Z', reworkedPackage: null, handOff: null }
+
+    it('lists every attempt with its hand-off and the latest output, and every denial', () => {
+      render(
+        <GoalReportView
+          report={report({
+            smoke: [failed, passed],
+            deniedToolCalls: [{ at: '2026-09-30T09:50:00.000Z', runId: 'r9', packageKey: 'integration', kind: 'permission_mode', detail: 'Bash was denied by the permission mode (tu_1)' }],
+            deniedToolCallsOmitted: 2,
+          })}
+        />,
+      )
+      const rows = screen.getAllByTestId('goal-report-smoke')
+      expect(rows).toHaveLength(2)
+      expect(rows[0]?.textContent).toContain(`Round 1: failed, exit 1, took 61 s, on commit ${'d'.repeat(12)}, integration sent back, finished 2026-09-30T10:00:00.000Z`)
+      expect(rows[1]?.textContent).toContain('Round 2: passed, exit 0, took 4 s')
+      const handOffs = screen.getAllByTestId('goal-report-smoke-handoff')
+      expect(handOffs).toHaveLength(1)
+      expect(handOffs[0]?.textContent).toBe('integration handed the fix to skeleton (backend/package.json): add a "start" script')
+      expect(screen.getByTestId('goal-report-smoke-output').textContent).toBe('flow ok')
+      const denial = screen.getByTestId('goal-report-denial')
+      expect(denial.textContent).toContain('Bash was denied by the permission mode (tu_1)')
+      expect(denial.textContent).toContain('integration')
+      expect(denial.textContent).toContain('r9')
+      expect(screen.getByTestId('goal-report-denials-omitted').textContent).toBe('… and 2 more, not listed.')
+    })
+
+    it('says so when no smoke check has run and no tool call was denied', () => {
+      render(<GoalReportView report={report()} />)
+      expect(screen.getByText('No smoke check has run.')).toBeTruthy()
+      expect(screen.getByText('No tool call was denied.')).toBeTruthy()
+    })
+
+    it('renders a hostile hand-off change and output as characters, never as elements', () => {
+      const change = '<img src=x onerror=alert(1)>\n# Heading <script>alert(1)</script>'
+      const { container } = render(
+        <GoalReportView report={report({ smoke: [{ ...failed, output: '<b>bold</b>', handOff: { toPackage: 'skeleton', path: 'backend/package.json', change } }] })} />,
+      )
+      expect(container.querySelector('img')).toBe(null)
+      expect(container.querySelector('script')).toBe(null)
+      expect(container.querySelector('b')).toBe(null)
+      expect(screen.getByTestId('goal-report-smoke-handoff').textContent).toContain('<img src=x onerror=alert(1)>')
+      expect(screen.getByTestId('goal-report-smoke-output').textContent).toBe('<b>bold</b>')
+    })
+
+    it('never calls an attempt the abandon stopped a smoke failure (Task 4 carry)', () => {
+      const d = report().delivery!
+      render(
+        <GoalReportView
+          report={report({
+            state: 'abandoned',
+            delivery: { ...d, mergedAt: null, merge: null },
+            smoke: [{ ...failed, exitCode: 143, reworkedPackage: null, handOff: null, stoppedByAbandon: true }],
+          })}
+        />,
+      )
+      const row = screen.getByTestId('goal-report-smoke').textContent ?? ''
+      expect(row).toContain('Round 1: stopped when the version was abandoned, exit 143')
+      expect(row).not.toContain('failed')
+    })
+
+    it('names the verifier for a verification run\'s denial', () => {
+      render(<GoalReportView report={report({ deniedToolCalls: [{ at: '2026-09-30T09:51:00.000Z', runId: 'rv', packageKey: null, kind: 'permission_matrix', detail: 'Edit (write_repo) was refused by the permission matrix' }] })} />)
+      expect(screen.getByTestId('goal-report-denial').textContent).toContain('the verifier')
+    })
   })
 })

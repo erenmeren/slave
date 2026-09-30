@@ -167,6 +167,41 @@ export interface GoalReportTrailEntry {
   readonly packageKey: string | null
 }
 
+/** Skeleton-and-smoke spec S7 (plan B D10): one smoke attempt of the version, as `SmokeAttempt`
+ *  stores it. */
+export interface GoalReportSmoke {
+  readonly attemptId: string
+  readonly round: number
+  readonly outcome: 'running' | 'passed' | 'missing' | 'stub' | 'failed' | 'timed_out' | 'error'
+  readonly exitCode: number | null
+  readonly durationMs: number | null
+  /** The integration commit it checked. */
+  readonly tip: string
+  /** Trimmed at `SMOKE_OUTPUT_MAX_CHARS` when it was recorded. */
+  readonly output: string
+  /** `endedAt`, or `startedAt` while it runs. */
+  readonly at: string
+  /** The package its failure sent back, or null. */
+  readonly reworkedPackage: string | null
+  /** Plan B D11 (user ruling 2026-09-30): the package the fix was handed on to, the file and the
+   *  change asked for; null when there was no hand-off. `change` is the worker's own words, raw:
+   *  renderers escape it like any other text. */
+  readonly handOff: { readonly toPackage: string; readonly path: string; readonly change: string } | null
+  /** The version was abandoned while this attempt ran, and it sent nothing back: its outcome (a
+   *  SIGTERM reads `failed`, exit 143) is the abandon's doing, not the product's (plan B Task 4). */
+  readonly stoppedByAbandon: boolean
+}
+
+/** Skeleton spec S9 (plan B D10): one tool call the version's runs were refused. */
+export interface GoalReportDenial {
+  readonly at: string
+  readonly runId: string
+  /** The package whose task the run worked, or null for a verification run. */
+  readonly packageKey: string | null
+  readonly kind: 'permission_mode' | 'permission_matrix'
+  readonly detail: string
+}
+
 export interface GoalReport {
   readonly workspaceId: string
   readonly workspaceName: string
@@ -186,6 +221,12 @@ export interface GoalReport {
   readonly packages: readonly GoalReportPackage[]
   readonly verifier: string | null
   readonly questions: readonly GoalReportQuestion[]
+  /** Every smoke attempt of the version, oldest first. */
+  readonly smoke: readonly GoalReportSmoke[]
+  /** The oldest `GOAL_REPORT_DENIALS_MAX` denials of the version's runs, oldest first. */
+  readonly deniedToolCalls: readonly GoalReportDenial[]
+  /** Denials past `GOAL_REPORT_DENIALS_MAX`, left out. */
+  readonly deniedToolCallsOmitted: number
   readonly spend: GoalReportSpend
   readonly trail: readonly GoalReportTrailEntry[]
   /** Trail entries older than the newest `GOAL_REPORT_TRAIL_MAX`, left out. */
