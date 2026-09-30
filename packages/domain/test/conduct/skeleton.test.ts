@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   MANIFEST_LOCK_PAIRS,
+  gateRunsVerifyScript,
+  hasProductFiles,
   isValidRegistration,
   manifestFamily,
   manifestProblems,
@@ -160,5 +162,29 @@ describe('registrations', () => {
   })
   it('names each package its own check file', () => {
     expect(verifyCheckPathFor('identity-access')).toBe('scripts/verify.d/identity-access.sh')
+  })
+})
+
+describe('gateRunsVerifyScript (final review I1)', () => {
+  it('is true only for a gate that runs scripts/verify.sh', () => {
+    expect(gateRunsVerifyScript(['bash scripts/verify.sh'])).toBe(true)
+    expect(gateRunsVerifyScript(['npm run lint', './scripts/verify.sh --all'])).toBe(true)
+    expect(gateRunsVerifyScript(['/srv/repo/scripts/verify.sh'])).toBe(true)
+    expect(gateRunsVerifyScript(['npm test'])).toBe(false)
+    expect(gateRunsVerifyScript(['bash myscripts/verify.sh', 'bash scripts/verify.sh.bak'])).toBe(false)
+    expect(gateRunsVerifyScript([])).toBe(false)
+  })
+})
+
+describe('hasProductFiles (final review I3)', () => {
+  it('sees no product in a new repository\'s first commit or repository furniture', () => {
+    expect(hasProductFiles(['README.md', 'scripts/verify.sh', 'scripts/smoke.sh', ''])).toBe(false)
+    expect(hasProductFiles(['README', 'LICENSE', '.gitignore', '.gitattributes', '.editorconfig', 'scripts/verify.d/skeleton.sh'])).toBe(false)
+    expect(hasProductFiles([])).toBe(false)
+  })
+  it('sees a product in anything else', () => {
+    expect(hasProductFiles(['README.md', 'src/main.ts'])).toBe(true)
+    expect(hasProductFiles(['package.json'])).toBe(true)
+    expect(hasProductFiles(['docs/README.md'])).toBe(true)
   })
 })

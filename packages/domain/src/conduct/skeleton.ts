@@ -31,6 +31,28 @@ export const MANIFEST_LOCK_PAIRS: readonly { readonly manifest: string; readonly
   { manifest: 'composer.json', locks: ['composer.lock'] },
 ]
 
+/** Whether a project's verification gate runs `scripts/verify.sh` -- the only way a
+ *  `scripts/verify.d/` check reaches the gate (final review I1). A draft may name its own gate
+ *  (`npm test`) though the runner is planted beside it. */
+export function gateRunsVerifyScript(verifyCommands: readonly string[]): boolean {
+  const named = new RegExp(`(?:^|[\\s/'"(;&|])${VERIFY_SCRIPT_PATH.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?![\\w.-])`, 'u')
+  return verifyCommands.some((command) => named.test(command))
+}
+
+/** What a new repository's first commit holds, and repository furniture: none of it is a product.
+ *  Root-level names, plus the gate scripts and their check directory. */
+const NOT_PRODUCT_FILE = /^(?:README(?:\.[^/]*)?|LICEN[CS]E(?:\.[^/]*)?|\.git[^/]*|\.editorconfig|scripts\/verify\.sh|scripts\/smoke\.sh|scripts\/verify\.d\/[^/]*)$/u
+
+/**
+ * Final review I3: whether a repository's tracked files already hold a product -- anything beyond
+ * a new repository's first commit (README, the two gate scripts) and repository furniture. A
+ * skeleton on such a base keeps the product runnable rather than building an empty one over it
+ * (goal v2, or a project created over an existing repository).
+ */
+export function hasProductFiles(trackedFiles: readonly string[]): boolean {
+  return trackedFiles.some((path) => path !== '' && !NOT_PRODUCT_FILE.test(path))
+}
+
 /** Plan A D3: the build/start/deploy files a FALLBACK skeleton takes at the root when nobody claims them. */
 export const SKELETON_ROOT_BUILD_FILES: readonly string[] = [
   'Dockerfile', '.dockerignore', 'docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml', 'Makefile',

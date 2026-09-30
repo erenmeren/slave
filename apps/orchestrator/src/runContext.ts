@@ -17,6 +17,7 @@ import {
   effectiveSkills,
   fitSkillBodies,
   handoffCanonicalJson,
+  hasProductFiles,
   neutraliseMarkers,
   parseHandoffContract,
   profileOverridesSchema,
@@ -29,6 +30,7 @@ import {
   renderVerificationGoal,
   renderVerificationProtocol,
   registrationsSchema,
+  SKELETON_PACKAGE_KEY,
   requirementItemsSchema,
   stageOrder,
   type FittedSkillBodies,
@@ -664,6 +666,23 @@ function handoffSection(task: { readonly id: string; readonly handoff: unknown }
 }
 
 /**
+ * Final review I3: whether the skeleton's checkout already holds a product -- what its job line
+ * says (keep it runnable, or build an empty one). Read from the run's own worktree, which is its
+ * base before the skeleton's first attempt: goal v2, or a project created over an existing
+ * repository, has one. `undefined` (the job line then covers both) when there is no worktree or
+ * git cannot list it -- a dispatch is never refused for this.
+ */
+async function checkoutHasProduct(worktreePath: string | null): Promise<boolean | undefined> {
+  if (worktreePath === null) return undefined
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', worktreePath, 'ls-files', '-z'], { maxBuffer: 64 * 1024 * 1024 })
+    return hasProductFiles(stdout.split('\0'))
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * A package task's `package` and `report_protocol` sections (Conductor Plan 2).
  *
  * The requirements shown are the package's own keys, read out of its goal version's
@@ -672,10 +691,10 @@ function handoffSection(task: { readonly id: string; readonly handoff: unknown }
  * report must cover every key the package owns, so the contract names every one. A package row that
  * is gone (the task's `workPackageId` is `SetNull` on delete, so this is a race) renders nothing.
  */
-async function packageSections(workPackageId: string, workflowSteps: number): Promise<readonly Section[]> {
+async function packageSections(workPackageId: string, workflowSteps: number, worktreePath: string | null): Promise<readonly Section[]> {
   const pkg = await prisma.workPackage.findUnique({ where: { id: workPackageId } })
   if (pkg === null) return []
-  const [set, dependencyRows] = await Promise.all([
+  const [set, dependencyRows, workspace, existingProduct] = await Promise.all([
     prisma.requirementSet.findUnique({
       where: { workspaceId_goalVersion: { workspaceId: pkg.workspaceId, goalVersion: pkg.goalVersion } },
       select: { items: true },
@@ -684,6 +703,9 @@ async function packageSections(workPackageId: string, workflowSteps: number): Pr
       where: { workspaceId: pkg.workspaceId, goalVersion: pkg.goalVersion, key: { in: pkg.dependsOn } },
       select: { key: true, interface: true },
     }),
+    // Final review I1: the contract names the real gate, and where a check must go for it to run.
+    prisma.workspace.findUniqueOrThrow({ where: { id: pkg.workspaceId }, select: { verifyCommands: true } }),
+    pkg.key === SKELETON_PACKAGE_KEY ? checkoutHasProduct(worktreePath) : Promise.resolve(undefined),
   ])
   // `.parse`, as `conductor.ts` reads the same column: a set the conductor wrote that no longer
   // parses is a broken invariant, not a shape to tolerate.
@@ -697,7 +719,13 @@ async function packageSections(workPackageId: string, workflowSteps: number): Pr
     const row = dependencyByKey.get(key)
     return row === undefined ? [] : [row]
   })
-  const text = renderPackageContract({ pkg: { ...pkg, registrations: registrationsSchema.parse(pkg.registrations) }, requirements, dependencies })
+  const text = renderPackageContract({
+    pkg: { ...pkg, registrations: registrationsSchema.parse(pkg.registrations) },
+    requirements,
+    dependencies,
+    verifyCommands: workspace.verifyCommands,
+    ...(existingProduct === undefined ? {} : { existingProduct }),
+  })
   return [
     {
       kind: 'package',
@@ -1171,7 +1199,7 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     // Conductor Plan 2: a package task's contract and the report it must end with. Only where the
     // order has a place for them (implementation), and only for a task the conductor made.
     if (task.workPackageId !== null && order.includes('package')) {
-      sections.push(...(await packageSections(task.workPackageId, workflowSteps)))
+      sections.push(...(await packageSections(task.workPackageId, workflowSteps, input.worktreePath)))
     }
     // The whole point of spec §8's loop: a rework is supposed to act on why the last attempt was
     // rejected, and one that arrives without it is just a retry. Never on a review run, whose

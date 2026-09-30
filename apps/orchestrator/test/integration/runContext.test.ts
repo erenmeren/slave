@@ -781,7 +781,21 @@ describe('buildRunContext', () => {
         },
       })
       await prisma.task.update({ where: { id: fixture.taskId }, data: { workPackageId: pkg.id } })
+      // The gate a new repository whose draft named none is created with (M60 §7b).
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { verifyCommands: ['bash scripts/verify.sh'] } })
       return pkg.id
+    }
+
+    /** Binds the fixture's task to a skeleton package owning `ownedPaths`. */
+    async function bindToSkeleton(ownedPaths: readonly string[]): Promise<void> {
+      const pkg = await prisma.workPackage.create({
+        data: {
+          workspaceId: fixture.workspaceId, goalVersion: 1, key: 'skeleton', title: 'The runnable skeleton',
+          requirementKeys: [], ownedPaths: [...ownedPaths], interface: '', templateId: 'tpl',
+        },
+      })
+      await prisma.task.update({ where: { id: fixture.taskId }, data: { workPackageId: pkg.id } })
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { verifyCommands: ['bash scripts/verify.sh'] } })
     }
 
     it('carries its contract after the task, the report protocol, and the conductor in the ask protocol', async () => {
@@ -796,6 +810,7 @@ describe('buildRunContext', () => {
       expect(prompt).not.toContain('R3: config file')
       expect(prompt).toContain('- src/report/**')
       expect(prompt).toContain('- db/migrations/0100_report_* (in db/migrations, which the skeleton loads)')
+      expect(prompt).toContain('The verification gate (a task is accepted only when it passes): `bash scripts/verify.sh`.')
       expect(prompt).toContain('Your checks go in scripts/verify.d/report.sh')
       expect(prompt).toContain('- config: load(): Config')
       expect(prompt).toContain('<slave-report>')
@@ -815,6 +830,35 @@ describe('buildRunContext', () => {
       })
       // The manifest round-trips through the reader's schema.
       expect(runContextManifestSchema.safeParse(manifest).success).toBe(true)
+    })
+
+    /** Final review I1: a draft's own gate does not run scripts/verify.d/, and the contract says so. */
+    it("names the workspace's own gate, and where checks go when it does not run verify.d", async () => {
+      await bindToPackage()
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { verifyCommands: ['npm test'] } })
+
+      const { prompt } = await buildImplementation(fixture)
+
+      expect(prompt).toContain('The verification gate (a task is accepted only when it passes): `npm test`.')
+      expect(prompt).toContain('That gate does not run scripts/verify.sh')
+      expect(prompt).not.toContain('scripts/verify.sh runs every')
+    })
+
+    /** Final review I3: the skeleton's job follows what its checkout already holds. */
+    it('tells a skeleton on a new repository to build an empty product, and one on an existing product to keep it runnable', async () => {
+      await bindToSkeleton(['src/main.ts', 'scripts/verify.sh', 'scripts/smoke.sh', 'scripts/verify.d/skeleton.sh'])
+
+      const fresh = await buildImplementation(fixture)
+      expect(fresh.prompt).toContain('Deliver a runnable EMPTY product')
+      expect(fresh.prompt).toContain('If scripts/verify.sh does not run every scripts/verify.d/*.sh in name order, make it do so, keeping its existing checks.')
+
+      mkdirSync(join(fixture.worktreePath, 'src'), { recursive: true })
+      writeFileSync(join(fixture.worktreePath, 'src/main.ts'), 'export {}\n')
+      git(['add', 'src/main.ts'], fixture.worktreePath)
+      git(['commit', '-q', '-m', 'a product'], fixture.worktreePath)
+      const existing = await buildImplementation(fixture)
+      expect(existing.prompt).toContain('This repository already has a product: make the existing product start and keep it runnable.')
+      expect(existing.prompt).not.toContain('EMPTY')
     })
 
     it("counts the persona's workflow steps in the report protocol", async () => {

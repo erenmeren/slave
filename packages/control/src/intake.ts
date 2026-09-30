@@ -708,6 +708,8 @@ export async function acceptIntake(
         const target = draft.repo.path ?? intakeRepositoryPath(root.root, slugify(draft.name))
         // The runner is planted in every new repository (skeleton spec S4, ruling F7); only the
         // goal clause and the substituted gate command below depend on the draft naming no gate.
+        // A draft's own gate (`npm test`) does not run the runner: each package's contract names
+        // the workspace's real gate and says where checks go for it (`renderPackageContract`).
         const created = await initRepository({
           path: target,
           name: draft.name,
