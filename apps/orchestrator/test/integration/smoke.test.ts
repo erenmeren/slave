@@ -459,6 +459,28 @@ describe('the goal pass and the smoke gate', () => {
     expect(await deliveryOf(f)).toMatchObject({ status: 'verifying', round: 1, roundRunFailures: 1, activeSmokeId: null })
   }, 120_000)
 
+  it('says once that the integration branch is gone, from integrating and from verifying, instead of waiting in silence (final review I1)', async (): Promise<void> => {
+    const f = await seedWithVerifier('#!/usr/bin/env bash\necho ok\n')
+    git(['update-ref', '-d', `refs/heads/${f.branch}`], f.repoPath)
+    const trips = async (): Promise<readonly string[]> =>
+      (await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'guardrail_tripped' }, orderBy: { seq: 'asc' } })).map(
+        (row) => String((row.payload as Record<string, unknown>)['detail']),
+      )
+    await runGoalPass(depsFor(f.workspaceId, verifier()), { mayStartRuns: true })
+    await drainPumps()
+    const gone = `the integration branch ${f.branch} of goal v1 is gone: restore it or run abandon-goal --workspace ${f.workspaceId} --version 1`
+    expect(await trips()).toEqual([gone])
+    expect(await attemptsOf(f)).toEqual([])
+    expect(await deliveryOf(f)).toMatchObject({ status: 'integrating', activeSmokeId: null, activeRunId: null })
+    // Mid-version (a round already started): the same trip, said once, and nothing dispatched.
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'verifying', round: 1 } })
+    await runGoalPass(depsFor(f.workspaceId, verifier()), { mayStartRuns: true })
+    await drainPumps()
+    expect(await trips()).toEqual([gone])
+    expect(await attemptsOf(f)).toEqual([])
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(0)
+  }, 60_000)
+
   it('abandons a version mid-smoke: the script is signalled, its outcome moves nothing', async (): Promise<void> => {
     const f = await seedWithVerifier('#!/usr/bin/env bash\ntrap "echo stopped; exit 143" TERM\nsleep 30 &\nwait\n')
     await startSmoke(f.deliveryId)

@@ -104,7 +104,8 @@ export async function startSmoke(deliveryId: string): Promise<string | null> {
   try {
     tip = await gitIn(delivery.workspace.repoPath, 'rev-parse', '--verify', '--quiet', `refs/heads/${delivery.integrationBranch}^{commit}`)
   } catch {
-    // A deleted branch: the goal pass's own trip says so (`integrationTipOrTrip`); nothing to check.
+    // A deleted branch: the goal pass trips on it before calling here (`smokeOrVerify` ->
+    // `integrationTipOrTrip`); a branch deleted in between is tripped on by the next pass.
     return null
   }
   const round = newRound ? delivery.round + 1 : delivery.round

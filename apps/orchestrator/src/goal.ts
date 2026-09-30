@@ -174,13 +174,17 @@ async function advanceDelivery(
  * `integrating`, the same round again from `verifying`), and a later pass verifies once it passed.
  * One that already passed on this tip -- a retry of an unchanged tree, or a verification that was
  * unusable -- is not run again. A version whose set was extracted before RUN existed
- * (`smokeRequired` false) is verified as it always was.
+ * (`smokeRequired` false) is verified as it always was. A branch that is gone trips, once, instead.
  */
 async function smokeOrVerify(
   deps: TickDeps,
   repoPath: string,
-  delivery: { readonly id: string; readonly integrationBranch: string; readonly smokeRequired: boolean },
+  delivery: { readonly id: string; readonly workspaceId: string; readonly goalVersion: number; readonly integrationBranch: string; readonly smokeRequired: boolean },
 ): Promise<void> {
+  // Final review I1: a deleted integration branch is said once, here -- the smoke gate and the
+  // verification both need its tip, and without the trip the version (and every later one, D6)
+  // would sit in `integrating`/`verifying` with nothing to say why.
+  if ((await integrationTipOrTrip(repoPath, delivery)) === null) return
   const smoked = delivery.smokeRequired ? await passedSmokeAtTip(repoPath, delivery) : null
   if (delivery.smokeRequired && smoked === null) {
     await startSmoke(delivery.id)
