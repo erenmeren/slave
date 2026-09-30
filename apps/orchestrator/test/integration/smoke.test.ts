@@ -436,6 +436,50 @@ describe('the goal pass and the smoke gate', () => {
     expect(smokeWorktrees(f)).toEqual([])
   }, 60_000)
 
+  it('never starts the script of a version abandoned while its checkout was made (fix ruling 2)', async (): Promise<void> => {
+    const marker = join(mkdtempSync(join(tmpdir(), 'smoke-marker-')), 'ran')
+    const f = await seedWithVerifier(`#!/usr/bin/env bash\ntouch '${marker}'\n`)
+    // `git worktree add` runs post-checkout: a slow one holds the attempt in its checkout while the person abandons.
+    writeFileSync(join(f.repoPath, '.git/hooks/post-checkout'), '#!/bin/sh\nsleep 1.5\n')
+    chmodSync(join(f.repoPath, '.git/hooks/post-checkout'), 0o755)
+    await startSmoke(f.deliveryId)
+    expect((await abandonGoal(f.workspaceId, 1)).ok).toBe(true)
+    await drainPumps()
+    expect(existsSync(marker)).toBe(false)
+    const [attempt] = await attemptsOf(f)
+    expect(attempt).toMatchObject({ status: 'error', pid: null })
+    expect(attempt?.output).toContain('was not started')
+    const events = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_smoke_run' } })
+    expect(events).toHaveLength(1)
+    expect(events[0]?.payload).toMatchObject({ outcome: 'error', reworkedPackage: null })
+    expect(await deliveryOf(f)).toMatchObject({ status: 'abandoned', activeSmokeId: null, roundRunFailures: 0 })
+    expect(smokeWorktrees(f)).toEqual([])
+  }, 60_000)
+
+  it('abandoning a stranded attempt from before a reboot signals nothing, even a process in its checkout (fix ruling 1)', async (): Promise<void> => {
+    const f = await seedWithVerifier('#!/usr/bin/env bash\necho ok\n')
+    const attempt = await prisma.smokeAttempt.create({
+      data: {
+        workspaceId: f.workspaceId, goalDeliveryId: f.deliveryId, goalVersion: 1, round: 1, tip: git(['rev-parse', f.branch], f.repoPath),
+        ownerInstance: '999999/dead-daemon', startedAt: new Date('2000-01-01T00:00:00Z'),
+      },
+    })
+    const leftover = join(worktreeRootFor(f.repoPath), smokeWorktreeKey(attempt.id))
+    git(['worktree', 'add', '--quiet', '--detach', leftover, attempt.tip], f.repoPath)
+    // Started after the attempt, on a machine booted after it: whoever leads the stored id now is a stranger.
+    const stranger = spawn('sleep', ['60'], { cwd: leftover, detached: true, stdio: 'ignore' })
+    const pid = stranger.pid as number
+    await prisma.smokeAttempt.update({ where: { id: attempt.id }, data: { worktreePath: leftover, pid } })
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'verifying', round: 1, activeSmokeId: attempt.id } })
+    try {
+      expect((await abandonGoal(f.workspaceId, 1)).ok).toBe(true)
+      await new Promise((res) => setTimeout(res, 200))
+      expect(isAlive(pid)).toBe(true)
+    } finally {
+      process.kill(pid, 'SIGKILL')
+    }
+  }, 60_000)
+
   it('settles an abandoned version\'s attempt whose process died, so it still gets its one event (F2)', async (): Promise<void> => {
     const f = await seedWithVerifier('#!/usr/bin/env bash\necho ok\n')
     const attempt = await prisma.smokeAttempt.create({

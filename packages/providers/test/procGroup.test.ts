@@ -2,9 +2,9 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { isAlive } from '@slave-of-ai/control'
 import { afterAll, describe, expect, it } from 'vitest'
-import { attemptGroupMembers, killAttemptGroup, scanAttemptGroup } from '../src/procGroup.js'
+import { attemptGroupMembers, killAttemptGroup, scanAttemptGroup, signalAttemptGroup } from '../src/runtime/procGroup.js'
+import { isAlive } from '../src/runtime/process.js'
 
 /**
  * Skeleton plan B, Task 3 fix ruling 1: a stranded smoke's settler kills only the processes it can
@@ -112,6 +112,56 @@ describe('attemptGroupMembers', () => {
     } finally {
       try {
         process.kill(survivor, 'SIGKILL')
+      } catch {
+        // Gone, as it should be.
+      }
+    }
+  }, 15_000)
+})
+
+describe('signalAttemptGroup (Task 4 fix ruling 1: abandon)', () => {
+  const attemptStart = (BOOT_S + 5000) * 1000
+  const worktree = '/repo/.slaveofai-worktrees/verify-smoke-abcd1234'
+
+  it('signals nothing on a machine booted after the attempt, even a process started since it', (): void => {
+    const bootS = BOOT_S + 5000 + 3600
+    const procRoot = fakeProc([{ pid: 4242, pgid: 4242, startedAtMs: (bootS + 60) * 1000, cwd: '/home/someone' }], bootS)
+    const sent: number[] = []
+    const scan = signalAttemptGroup({ pgid: 4242, worktreePath: worktree, startedAt: new Date(attemptStart), procRoot, clockTicks: TICKS }, 'SIGTERM', (pid) => sent.push(pid))
+    expect(scan).toEqual({ kind: 'rebooted' })
+    expect(sent).toEqual([])
+  })
+
+  it('signals nothing without a /proc', (): void => {
+    const sent: number[] = []
+    const input = { pgid: 1, worktreePath: null, startedAt: new Date(), procRoot: join(tmpdir(), 'no-such-proc-root'), clockTicks: TICKS }
+    expect(signalAttemptGroup(input, 'SIGTERM', (pid) => sent.push(pid))).toEqual({ kind: 'unreadable' })
+    expect(sent).toEqual([])
+  })
+
+  it('signals only the proven members, each with the given signal', (): void => {
+    const procRoot = fakeProc([
+      { pid: 100, pgid: 100, startedAtMs: attemptStart + 2000, cwd: worktree },
+      { pid: 102, pgid: 100, startedAtMs: attemptStart - 3_600_000, cwd: '/home/someone' },
+    ])
+    const sent: (readonly [number, string])[] = []
+    signalAttemptGroup({ pgid: 100, worktreePath: worktree, startedAt: new Date(attemptStart), procRoot, clockTicks: TICKS }, 'SIGTERM', (pid, signal) => sent.push([pid, signal]))
+    expect(sent).toEqual([[100, 'SIGTERM']])
+  })
+
+  it.runIf(existsSync('/proc/self/stat'))('SIGTERMs a live member whose cwd is in the checkout (real /proc)', async (): Promise<void> => {
+    const worktreePath = tempDir('verify-smoke-')
+    const child = spawn('sleep', ['60'], { cwd: worktreePath, detached: true, stdio: 'ignore' })
+    const pid = child.pid as number
+    const exited = new Promise<NodeJS.Signals | null>((res) => child.on('exit', (_code, signal) => res(signal)))
+    try {
+      // Started "before" the attempt, so only the cwd proves it.
+      const scan = signalAttemptGroup({ pgid: pid, worktreePath, startedAt: new Date(Date.now() + 3_600_000) }, 'SIGTERM')
+      expect(scan).toEqual({ kind: 'members', pids: [pid] })
+      expect(await exited).toBe('SIGTERM')
+    } finally {
+      try {
+        process.kill(pid, 'SIGKILL')
       } catch {
         // Gone, as it should be.
       }

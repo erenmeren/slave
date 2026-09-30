@@ -2,9 +2,9 @@ import { basename, resolve } from 'node:path'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import { type Result, err, ok } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { signalAttemptGroup } from '@slave-of-ai/providers'
 import { settleTaskEvidence } from './evidence.js'
 import { gitIn } from './git.js'
-import { isAlive } from './kill.js'
 import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
 import { requestStop } from './stop.js'
@@ -256,8 +256,8 @@ class Refused extends Error {
  * Package work in flight still refuses, as before.
  *
  * Skeleton-and-smoke plan B D9: so does a smoke check holding the version (`activeSmokeId`): the
- * same locked write clears that claim, and the script's process group is sent SIGTERM after the
- * commit. The attempt ends as the process running it records it; its conclusion finds no claim.
+ * same locked write clears that claim, and the script's proven processes are sent SIGTERM after
+ * the commit. The attempt ends as the process running it records it; its conclusion finds no claim.
  */
 export async function abandonGoal(
   workspaceId: string,
@@ -271,7 +271,7 @@ export async function abandonGoal(
   let outcome: {
     readonly cancelled: readonly { readonly id: string; readonly goalVersion: number | null }[]
     readonly verification: { readonly runId: string; readonly worktreePath: string | null } | null
-    readonly smokePid: number | null
+    readonly smoke: { readonly pgid: number; readonly worktreePath: string | null; readonly startedAt: Date } | null
   }
   try {
     outcome = await withDeliveryLock(found.id, async (tx) => {
@@ -289,10 +289,12 @@ export async function abandonGoal(
         throw new Refused({ kind: 'goal_version_busy', goalVersion, holder: `run ${delivery.activeRunId}` })
       }
       // Skeleton-and-smoke plan B D9: a smoke check holding the version is not a refusal either --
-      // it is the orchestrator's own check, not a person's work. Its script's group is signalled
-      // below, only while the attempt is still running (a finished attempt's pid may be anyone's).
+      // it is the orchestrator's own check, not a person's work. Its script's processes are
+      // signalled below, only while the attempt is still running.
       const smoke =
-        delivery.activeSmokeId === null ? null : await tx.smokeAttempt.findUnique({ where: { id: delivery.activeSmokeId }, select: { pid: true, status: true } })
+        delivery.activeSmokeId === null
+          ? null
+          : await tx.smokeAttempt.findUnique({ where: { id: delivery.activeSmokeId }, select: { pid: true, status: true, worktreePath: true, startedAt: true } })
       const ids = (await tx.task.findMany({ where: { workspaceId, workPackage: { goalVersion } }, select: { id: true } })).map((task) => task.id)
       if (ids.length > 0) await tx.$queryRaw`SELECT id FROM "Task" WHERE id = ANY(${ids}::text[]) FOR UPDATE`
       const tasks = await tx.task.findMany({
@@ -318,7 +320,8 @@ export async function abandonGoal(
       return {
         cancelled: cancelled.map((task) => ({ id: task.id, goalVersion: task.goalVersion })),
         verification: claim === null ? null : { runId: claim.id, worktreePath: claim.worktreePath },
-        smokePid: smoke?.status === 'running' ? smoke.pid : null,
+        smoke:
+          smoke?.status === 'running' && smoke.pid !== null ? { pgid: smoke.pid, worktreePath: smoke.worktreePath, startedAt: smoke.startedAt } : null,
       }
     })
   } catch (error) {
@@ -326,16 +329,13 @@ export async function abandonGoal(
     throw error
   }
 
-  // Skeleton-and-smoke plan B D9: the smoke check's group is signalled; its script's trap cleans up,
-  // and its conclusion finds the version abandoned: it records the attempt's one `workspace.smoke_run`
-  // (ruling F2) and moves nothing. The attempt's owner removes its checkout and containers as on any end.
-  if (outcome.smokePid !== null && isAlive(outcome.smokePid)) {
-    try {
-      process.kill(-outcome.smokePid, 'SIGTERM')
-    } catch {
-      // Already gone.
-    }
-  }
+  // Skeleton-and-smoke plan B D9: the smoke check's processes are sent SIGTERM; its script's trap
+  // cleans up, and its conclusion finds the version abandoned: it records the attempt's one
+  // `workspace.smoke_run` (ruling F2) and moves nothing. The attempt's owner removes its checkout and
+  // containers as on any end. Task 4 fix ruling 1: this may run in a CLI or the web while the daemon
+  // is down, even after a reboot, so only the processes /proc ties to the attempt are signalled --
+  // never the stored pid's group on its word (a rebooted machine, or no /proc: nothing at all).
+  if (outcome.smoke !== null) signalAttemptGroup(outcome.smoke, 'SIGTERM')
   if (outcome.verification !== null) {
     await requestStop(outcome.verification.runId, `the person abandoning goal v${String(goalVersion)}`, principal)
     // After the stop, which waits for the process to exit: nothing writes in the checkout any more.

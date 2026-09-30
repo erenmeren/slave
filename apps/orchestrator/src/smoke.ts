@@ -29,9 +29,8 @@ import {
   type SmokeOutcome,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
-import { CHILD_ENV_ALLOW } from '@slave-of-ai/providers'
+import { CHILD_ENV_ALLOW, killAttemptGroup, type AttemptGroupKill } from '@slave-of-ai/providers'
 import { needsHumanInLock } from './goal.js'
-import { killAttemptGroup, type AttemptGroupKill } from './procGroup.js'
 import { OWNER_INSTANCE, ownerGone } from './runs.js'
 import { runShellCommand } from './shell.js'
 import { pumps } from './tick.js'
@@ -61,6 +60,9 @@ const SMOKE_STORED_OUTPUT_MAX_CHARS = SMOKE_OUTPUT_MAX_CHARS - 64
 /** `durationMs` is a Postgres `integer`: a stranded attempt settled after a daemon was down for
  *  weeks (over 24.8 days) would otherwise fail its record on every pass and hold the claim forever. */
 const INT4_MAX = 2_147_483_647
+
+/** The recorded output of an attempt whose claim was released before its script started (Task 4 fix ruling 2). */
+const ABANDONED_BEFORE_START_OUTPUT = 'the smoke check was not started: its goal version no longer holds it (abandoned while its checkout was made)'
 
 /** The recorded output of a script that exists without its executable bit (F10). Its conclusion
  *  reads this prefix back to tell the skeleton to `chmod +x` rather than to write the script. A
@@ -199,7 +201,12 @@ async function executeSmoke(attemptId: string): Promise<void> {
     // Plan B D6: no setup commands -- the smoke starts the product the way the README says, from a clean clone.
     await provisionDetachedWorktree({ repoPath, ref: attempt.tip, key, setupCommands: [] })
     const state = scriptState(join(worktreePath, SMOKE_SCRIPT_PATH))
-    if (smokeScriptFailure(state) === 'missing') {
+    if ((await prisma.goalDelivery.count({ where: { activeSmokeId: attemptId } })) === 0) {
+      // Task 4 fix ruling 2: the claim went while the checkout was made -- a person abandoned the
+      // version before the script had a pid to signal. Nothing is started for a version nobody
+      // wants; the attempt still ends through the one path below, with its one event (ruling F2).
+      result = { status: 'error', exitCode: null, signal: null, output: ABANDONED_BEFORE_START_OUTPUT }
+    } else if (smokeScriptFailure(state) === 'missing') {
       const why = state.exists ? NOT_EXECUTABLE_OUTPUT : `${SMOKE_SCRIPT_PATH} does not exist`
       result = { status: 'missing', exitCode: null, signal: null, output: `${why} at ${attempt.tip.slice(0, 12)}` }
     } else {

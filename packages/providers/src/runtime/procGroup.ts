@@ -156,3 +156,27 @@ function defaultKill(pid: number): void {
     // Already gone.
   }
 }
+
+/**
+ * Sends `signal` to each proven member of the attempt's group, one pid at a time, once (Task 4 fix
+ * ruling 1: a person abandoning a version mid-smoke, possibly from the CLI or the web while the
+ * daemon is down). Nothing is signalled on a machine rebooted since the attempt started, nor
+ * without `/proc` -- a stored pid alone never names a group. Returns the scan it acted on.
+ */
+export function signalAttemptGroup(
+  input: AttemptGroupInput,
+  signal: NodeJS.Signals,
+  send: (pid: number, signal: NodeJS.Signals) => void = defaultSend,
+): AttemptGroupScan {
+  const scan = scanAttemptGroup(input)
+  if (scan.kind === 'members') for (const pid of scan.pids) send(pid, signal)
+  return scan
+}
+
+function defaultSend(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal)
+  } catch {
+    // Already gone.
+  }
+}
