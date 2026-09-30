@@ -5,6 +5,8 @@ import {
   CONDUCT_PER_CALL_CAP_USD,
   CONDUCT_RETRY_CAP,
   PACKAGE_WORKER_ROLE,
+  SKELETON_INTERFACE,
+  SKELETON_PACKAGE_KEY,
   keyRequirementSet,
   buildConductPrompt,
   buildRequirementsPrompt,
@@ -200,14 +202,23 @@ async function decideAndMaterialise(
     }
   }
 
-  const seats = await staffPackages(workspaceId, version, plan.packages)
-  if (!seats.ok) {
-    await tripConductor(workspaceId, `staffing goal v${version}: ${seats.error}`)
+  // Plan A D6: the skeleton runs first and the integration package last, and every other package
+  // waits on the skeleton -- so when they share a persona, one seat serves both, and a plan does not
+  // need a person more than it did before the skeleton existed.
+  const skeleton = plan.packages.find((p) => p.key === SKELETON_PACKAGE_KEY)
+  const integration = plan.packages.find((p) => p.isIntegration)
+  const shareSeat = skeleton !== undefined && integration !== undefined && skeleton.templateId === integration.templateId
+  const staffed = await staffPackages(workspaceId, version, shareSeat ? plan.packages.filter((p) => p.key !== SKELETON_PACKAGE_KEY) : plan.packages)
+  if (!staffed.ok) {
+    await tripConductor(workspaceId, `staffing goal v${version}: ${staffed.error}`)
     return 'conduct_failed'
   }
+  const seats = new Map(staffed.value)
+  const integrationSeat = integration === undefined ? undefined : seats.get(integration.key)
+  if (shareSeat && integrationSeat !== undefined) seats.set(SKELETON_PACKAGE_KEY, integrationSeat)
   // Plan 4b D4 (spec R8): the version's verifier, a seat that implements none of it, staffed before
   // anything is written so a version never exists without one on record.
-  const verifier = await staffVerifier(workspaceId, version, new Set(seats.value.values()), verifierPersonas(plan))
+  const verifier = await staffVerifier(workspaceId, version, new Set(seats.values()), verifierPersonas(plan))
   if (!verifier.ok) {
     await tripConductor(workspaceId, `staffing the verifier of goal v${version}: ${verifier.error}`)
     return 'conduct_failed'
@@ -224,7 +235,7 @@ async function decideAndMaterialise(
     return 'conduct_failed'
   }
   try {
-    await materialise(workspaceId, version, workspace.maxAttempts, plan, fallback, seats.value, items, {
+    await materialise(workspaceId, version, workspace.maxAttempts, plan, fallback, seats, items, {
       integrationBranch,
       baseCommit: cut.baseCommit,
       verifierSlaveId: verifier.value,
@@ -296,13 +307,15 @@ export async function tripConductor(workspaceId: string, detail: string): Promis
 
 /**
  * What a package task's description says: the requirements it delivers, word for word, or -- for
- * a package with none of its own -- what it is for: the integration package wires the others
- * together, any other package delivers its own contract. Keyed on `isIntegration` (final review
+ * a package with none of its own -- what it is for: the skeleton builds the runnable empty product,
+ * the integration package wires the others together, any other package delivers its own contract. Keyed on `isIntegration` (final review
  * M4): an ordinary package with no requirement used to read "Wire the packages together: .". The
  * full contract (owned paths, interfaces) is the run context's job (Conductor Task 8).
  */
 function taskDescription(pkg: PackageSpec, items: readonly { readonly key: string; readonly text: string }[]): string {
   if (pkg.requirementKeys.length === 0) {
+    // Controller ruling F10: the skeleton's job is said once, in SKELETON_INTERFACE.
+    if (pkg.key === SKELETON_PACKAGE_KEY) return `Build the skeleton. ${SKELETON_INTERFACE}`
     return pkg.isIntegration
       ? `Wire the packages together: ${pkg.dependsOn.join(', ')}.`
       : `${pkg.title}: no requirement is this package's alone. Deliver what its contract describes, so the packages that depend on it can build on it.`
@@ -388,6 +401,7 @@ async function materialise(
           requirementKeys: [...pkg.requirementKeys],
           ownedPaths: [...pkg.ownedPaths],
           newPaths: [...pkg.newPaths],
+          registrations: pkg.registrations as unknown as Prisma.InputJsonValue,
           interface: pkg.interface,
           dependsOn: [...pkg.dependsOn],
           isIntegration: pkg.isIntegration,

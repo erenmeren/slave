@@ -1450,6 +1450,9 @@ model WorkPackage {
   requirementKeys String[]
   ownedPaths      String[]
   newPaths        String[] @default([])
+  /// Skeleton spec S3 (plan A D5): the shared directories this package adds files to, each under its
+  /// own prefix (`[{ "directory", "prefix" }]`); their globs are already in `ownedPaths`.
+  registrations   Json     @default("[]")
   interface       String
   dependsOn       String[] @default([])
   isIntegration   Boolean  @default(false)

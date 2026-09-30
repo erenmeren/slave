@@ -18,6 +18,8 @@ import {
   CONDUCT_PER_CALL_CAP_USD,
   CONDUCT_RETRY_CAP,
   PACKAGE_WORKER_ROLE,
+  RUN_REQUIREMENT_TEXT,
+  SKELETON_INTERFACE,
   VERIFIER_ROLE,
   integrationBranchName,
   workspaceId as brandWorkspaceId,
@@ -310,26 +312,51 @@ describe('conduct: the size decision', () => {
     const f = await seedWithRequirements()
     expect(await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) }).decider))).toBe('conducted')
     const packages = await prisma.workPackage.findMany({ where: { workspaceId: f.workspaceId }, include: { tasks: true }, orderBy: { key: 'asc' } })
-    expect(packages.map((p) => p.key)).toEqual(['config', 'integration', 'report'])
+    expect(packages.map((p) => p.key)).toEqual(['config', 'integration', 'report', 'skeleton'])
     const tasks = packages.flatMap((p) => p.tasks)
-    expect(tasks).toHaveLength(3)
+    expect(tasks).toHaveLength(4)
     expect(tasks.every((t) => t.status === 'ready' && t.requiredRole === PACKAGE_WORKER_ROLE && t.goalVersion === 1 && t.assigneeId !== null)).toBe(true)
+    // Plan A D6: the skeleton runs first and integration last, so they share a seat.
     expect(new Set(tasks.map((t) => t.assigneeId)).size).toBe(3)
+    const seatOf = (key: string): string | null | undefined => packages.find((p) => p.key === key)?.tasks[0]?.assigneeId
+    expect(seatOf('skeleton')).toBe(seatOf('integration'))
+    // Controller ruling F10: the skeleton's task says its job through SKELETON_INTERFACE, not a second copy.
+    expect(packages.find((p) => p.key === 'skeleton')?.tasks[0]?.description).toContain(SKELETON_INTERFACE)
     expect(packages.find((p) => p.key === 'report')?.tasks[0]?.description).toBe('Requirements:\nR1: hsql --format csv prints CSV')
     const integrationTask = packages.find((p) => p.key === 'integration')?.tasks[0]
-    expect(integrationTask?.description).toBe('Wire the packages together: report, config.')
+    expect(integrationTask?.description).toBe(`Requirements:\nRUN: ${RUN_REQUIREMENT_TEXT}`)
     const deps = await prisma.taskDependency.findMany({ where: { taskId: integrationTask?.id ?? '' } })
-    expect(deps).toHaveLength(2)
+    expect(deps).toHaveLength(3)
+    const reportDeps = await prisma.taskDependency.findMany({ where: { taskId: packages.find((p) => p.key === 'report')?.tasks[0]?.id ?? '' } })
+    expect(reportDeps.map((d) => d.dependsOnTaskId)).toEqual([packages.find((p) => p.key === 'skeleton')?.tasks[0]?.id])
     const decision = await prisma.supervisorDecision.findFirstOrThrow({ where: { workspaceId: f.workspaceId, situationKind: 'conduct' } })
     expect(decision).toEqual(expect.objectContaining({ tier: 'applied', status: 'applied', subjectId: `${f.workspaceId}:v1`, modelCalled: false, rationale: 'two large disjoint parts', decidedBy: 'model' }))
-    expect(decision.action).toEqual({ kind: 'conduct', goalVersion: 1, mode: 'partitioned', packageKeys: ['report', 'config', 'integration'] })
-    expect(await prisma.executionEvent.count({ where: { workspaceId: f.workspaceId, type: 'task_created' } })).toBe(3)
+    expect(decision.action).toEqual({ kind: 'conduct', goalVersion: 1, mode: 'partitioned', packageKeys: ['skeleton', 'report', 'config', 'integration'] })
+    expect(await prisma.executionEvent.count({ where: { workspaceId: f.workspaceId, type: 'task_created' } })).toBe(4)
     const conducted = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_conducted' } })
     expect(conducted).toHaveLength(1)
-    expect(conducted[0]?.payload).toEqual({ version: 1, mode: 'partitioned', packages: ['report', 'config', 'integration'], decisionId: decision.id, fallback: false })
+    expect(conducted[0]?.payload).toEqual({ version: 1, mode: 'partitioned', packages: ['skeleton', 'report', 'config', 'integration'], decisionId: decision.id, fallback: false })
     // idempotent: a second tick does nothing
     expect(await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(PARTITIONED) }).decider))).toBe('none')
     expect(await prisma.conductorCall.count({ where: { workspaceId: f.workspaceId, stage: 'conduct' } })).toBe(1)
+  })
+
+  it('stores a package\'s registrations on its row', async () => {
+    const f = await seedWithRequirements()
+    const answerWith = JSON.stringify({
+      conductAnswer: {
+        mode: 'partitioned',
+        reason: 'two large disjoint parts',
+        packages: [
+          { key: 'report', title: 'Report modes', requirementKeys: ['R1'], ownedPaths: ['src/report/**'], newPaths: [], interface: 'render(rows, mode)', dependsOn: [], templateId: 't-backend', registrations: [{ directory: 'db/migrations', prefix: '0100_report_' }] },
+          { key: 'config', title: 'Config', requirementKeys: ['R2'], ownedPaths: ['src/config.py'], newPaths: [], interface: 'load()', dependsOn: [], templateId: 't-backend' },
+        ],
+      },
+    })
+    expect(await conduct(depsFor(f, scripted({ requirements: () => answer(REQUIREMENTS), conduct: () => answer(answerWith) }).decider))).toBe('conducted')
+    const report = await prisma.workPackage.findFirstOrThrow({ where: { workspaceId: f.workspaceId, key: 'report' } })
+    expect(report.registrations).toEqual([{ directory: 'db/migrations', prefix: '0100_report_' }])
+    expect(report.ownedPaths).toEqual(['src/report/**', 'db/migrations/0100_report_*', 'scripts/verify.d/report.sh'])
   })
 
   it('hands the refusal to the next attempt and falls back to single after the cap', async () => {
@@ -354,8 +381,11 @@ describe('conduct: the size decision', () => {
     expect(prompts).toHaveLength(CONDUCT_RETRY_CAP)
     expect(await prisma.conductorCall.count({ where: { workspaceId: f.workspaceId, stage: 'conduct' } })).toBe(CONDUCT_RETRY_CAP)
     const packages = await prisma.workPackage.findMany({ where: { workspaceId: f.workspaceId } })
-    // No open seat holds the package role yet, so the first template shown (by name) staffs it.
-    expect(packages).toEqual([expect.objectContaining({ key: 'main', ownedPaths: ['**'], requirementKeys: ['R1', 'R2'], templateId: 't-backend' })])
+    // No open seat holds the package role yet, so the first template shown (by name) staffs it --
+    // read from the catalogue, because the shared test database may hold another file's active
+    // template that sorts before this file's own.
+    const first = await prisma.slaveTemplate.findFirstOrThrow({ where: { active: true }, orderBy: { name: 'asc' } })
+    expect(packages).toEqual([expect.objectContaining({ key: 'main', ownedPaths: ['**'], requirementKeys: ['R1', 'R2', 'RUN'], templateId: first.id })])
     const decision = await prisma.supervisorDecision.findFirstOrThrow({ where: { workspaceId: f.workspaceId, situationKind: 'conduct' } })
     expect(decision.decidedBy).toBe('rules')
     expect(decision.rationale).toContain('single by default')
@@ -463,6 +493,7 @@ describe('conduct: the size decision', () => {
         mode: 'partitioned',
         reason: 'three parts',
         integrationTemplateId: 't-docs',
+        skeletonTemplateId: 't-docs',
         packages: [
           { key: 'cli', title: 'CLI flags', requirementKeys: [], ownedPaths: ['src/cli.py'], interface: 'parse(argv)', templateId: 't-backend' },
           { key: 'report', title: 'Report', requirementKeys: ['R1'], ownedPaths: ['src/report/**'], templateId: 't-backend' },
@@ -475,7 +506,7 @@ describe('conduct: the size decision', () => {
     const cli = packages.find((p) => p.key === 'cli')?.tasks[0]?.description
     expect(cli).not.toContain('Wire the packages together')
     expect(cli).toContain('CLI flags')
-    expect(packages.find((p) => p.key === 'integration')?.tasks[0]?.description).toBe('Wire the packages together: cli, report, config.')
+    expect(packages.find((p) => p.key === 'integration')?.tasks[0]?.description).toBe(`Requirements:\nRUN: ${RUN_REQUIREMENT_TEXT}`)
   })
 
   /** Plan 4b D4 (spec R8): every conducted version has a verifier seat that implements none of it. */
@@ -488,7 +519,7 @@ describe('conduct: the size decision', () => {
     expect(verifier.runtimeRoles).toContain(VERIFIER_ROLE)
     expect(verifier.runtimeRoles).not.toContain(PACKAGE_WORKER_ROLE)
     const tasks = await prisma.task.findMany({ where: { workspaceId: f.workspaceId } })
-    expect(tasks).toHaveLength(3)
+    expect(tasks).toHaveLength(4)
     expect(tasks.map((t) => t.assigneeId)).not.toContain(verifier.id)
   })
 
