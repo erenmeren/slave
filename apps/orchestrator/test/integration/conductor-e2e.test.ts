@@ -582,9 +582,9 @@ describe('conductor end to end', () => {
     const packages = await prisma.workPackage.findMany({ where: { workspaceId: f.workspaceId }, include: { tasks: true }, orderBy: { key: 'asc' } })
     expect(packages.map((p) => p.key)).toEqual(['config', 'integration', 'report', 'skeleton'])
     const taskOf = (key: string): string => packages.find((p) => p.key === key)?.tasks[0]?.id ?? ''
-    expect(await prisma.taskDependency.findMany({ where: { taskId: taskOf('config') }, select: { dependsOnTaskId: true } })).toEqual(
-      expect.arrayContaining([{ dependsOnTaskId: taskOf('report') }, { dependsOnTaskId: taskOf('skeleton') }]),
-    )
+    const configDeps = await prisma.taskDependency.findMany({ where: { taskId: taskOf('config') }, select: { dependsOnTaskId: true } })
+    expect(configDeps).toEqual(expect.arrayContaining([{ dependsOnTaskId: taskOf('report') }, { dependsOnTaskId: taskOf('skeleton') }]))
+    expect(configDeps).toHaveLength(2)
     expect(packages.every((p) => p.tasks[0]?.status === 'done')).toBe(true)
 
     const startOf = (key: string): Start | undefined => f.starts.find((s) => s.kind === 'implementation' && s.packageKey === key)
