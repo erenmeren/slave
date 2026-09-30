@@ -35,7 +35,7 @@
 
 ## Global Constraints
 
-- Vocabulary: the product says "slave", never "agent" (`node scripts/gate-m26-vocabulary.mjs`). Never write the string "agency-agents" anywhere tracked.
+- Vocabulary: the product says "slave", never "agent" (`node scripts/gate-m26-vocabulary.mjs`). Never write the external persona catalogue's repository name anywhere tracked.
 - Never run prettier. The repository has no prettier config, and `prettier --write` reformats against the codebase's style. Match surrounding code: WHY doc comments, `readonly`, explicit return types, `.js` import suffixes (not in `apps/web`), `Result`/`ok`/`err`.
 - Tests: `set -a; . ./.env; set +a; export DATABASE_URL=$TEST_DATABASE_URL` in the shell first. That export also applies to any scratch Prisma script: a script's `PrismaClient` reads `DATABASE_URL`, which is the dev DB unless exported. Run ONE vitest process at a time. Iterate per file. Run `npx tsc --build` after changing a package that another package's test imports. Run `npm run typecheck` before every commit, not `tsc --build`: the script also checks every `tsconfig.test.json` and `apps/web`. Run the whole suite once, at the end, in the background.
 - `apps/web` changes gate on `npm run web:build`, with no `next dev` running, then `rm -rf apps/web/.next`.
@@ -1927,7 +1927,7 @@ function smokeScript(stateFile: string, failures: number): string {
 ### Task 9: Whole suite, web build, gates
 
 - [ ] **Step 1:** Stop any daemon, and make sure no `next dev` is running. Run `npm run typecheck`, then `npx vitest run > "$SCRATCH/skeleton-b-suite.log" 2>&1` in the background. Wait on the log's summary line, not on `pgrep`. Re-run any failing file alone before believing it.
-- [ ] **Step 2:** `npm run web:build && rm -rf apps/web/.next`; `node scripts/gate-m26-vocabulary.mjs`; `git grep -n "agency-agents"` prints nothing.
+- [ ] **Step 2:** `npm run web:build && rm -rf apps/web/.next`; `node scripts/gate-m26-vocabulary.mjs`; `git grep -nE "agency-agent[s]"` prints nothing new.
 - [ ] **Step 3:** `DATABASE_URL="$GATE_DATABASE_URL" npm run db:migrate`. Then run the CI gate list with the fake-CLI env exactly as `ci.yml` sets it, `DATABASE_URL="$GATE_DATABASE_URL"`, under `systemd-inhibit --what=sleep:idle`, with `CHROMIUM_PATH` set. Known red on main: m44 m46 m47 m48 m49 m50 m52 m54 m55 m57 m58. m56a must be green (stage 12: 24 situations, 75 lanes, hook-plane digests unchanged, `prisma migrate diff` clean). A gate that drives a conducted goal to acceptance with a fixture repository that has no `scripts/smoke.sh` now stops with a skeleton or single rework. That is the intended legacy path (spec §4). Give such a gate's fixture a passing `scripts/smoke.sh`, and never loosen the product. Compare any other red gate against the same gate on main.
 
 ---
