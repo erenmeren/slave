@@ -511,6 +511,29 @@ describe('loadGoalReport', () => {
       expect(sentence).toBe('Smoke check, round 2: stopped when the version was abandoned (recorded as failed, exit 143).')
     })
 
+    it('decides "stopped by the abandon" by one rule on the page and in the trail: when the attempt ended, not when its event was written (final review 5b)', async (): Promise<void> => {
+      const w = await world()
+      const c = await conduct(w, { status: 'abandoned', round: 1 })
+      // The script ended on its own BEFORE the abandon; its conclusion (and its event) landed after it.
+      const ended = await prisma.smokeAttempt.create({
+        data: {
+          workspaceId: w.workspaceId, goalDeliveryId: c.deliveryId, goalVersion: 1, round: 1, tip: 'd'.repeat(40), status: 'failed', exitCode: 1, durationMs: 5_000,
+          output: 'boom', startedAt: new Date(Date.now() - 60_000), endedAt: new Date(Date.now() - 10_000),
+        },
+      })
+      await appendEvent({ type: 'workspace.goal_abandoned', workspaceId: w.workspaceId, actor: 'human', payload: { version: 1, cancelled: [] } })
+      await appendEvent({
+        type: 'workspace.smoke_run', workspaceId: w.workspaceId, actor: 'system',
+        payload: { version: 1, round: 1, attemptId: ended.id, outcome: 'failed', exitCode: 1, durationMs: 5_000, output: 'boom', reworkedPackage: null },
+      })
+      const result = await loadGoalReport(w.workspaceId, 1)
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value.smoke.map((s) => s.stoppedByAbandon)).toEqual([false])
+      const sentence = result.value.trail.map((entry) => entry.text).find((text) => text.startsWith('Smoke check, round 1')) ?? ''
+      expect(sentence).toBe('Smoke check, round 1: failed (exit 1).')
+    })
+
     it('keeps the oldest GOAL_REPORT_DENIALS_MAX denials and counts the rest', async (): Promise<void> => {
       const w = await world()
       const c = await conduct(w)

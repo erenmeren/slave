@@ -5,6 +5,8 @@ import {
   GOAL_REPORT_TRAIL_MAX,
   type GOAL_REPORT_ANSWERED_BY,
   SITUATION_LABEL,
+  smokeRecordedAs,
+  smokeStoppedByAbandon,
   trimEvidence,
   type GoalReportAuthor,
   type GoalReportQuestion,
@@ -114,7 +116,7 @@ interface Draft {
 
 /** One event as a trail sentence (plan D6), or null for a payload this build cannot read. The
  *  sentences name ids, keys and counts only; free text goes in `detail`, labelled. */
-function eventDraft(type: DomainEventType, p: Payload, pkg: string | null, mergesInto: string, mergedBySlave: boolean, abandoned: boolean): Draft | null {
+function eventDraft(type: DomainEventType, p: Payload, pkg: string | null, mergesInto: string, mergedBySlave: boolean, stoppedByAbandon: boolean): Draft | null {
   const on = pkg === null ? '' : `${pkg}: `
   switch (type) {
     case 'workspace.goal_set': {
@@ -135,10 +137,10 @@ function eventDraft(type: DomainEventType, p: Payload, pkg: string | null, merge
       const exitCode = typeof p['exitCode'] === 'number' ? String(p['exitCode']) : null
       const back = str(p, 'reworkedPackage')
       const round = `Smoke check, round ${String(num(p, 'round'))}`
-      // Task 4: an attempt concluded after the version's abandon and sending nothing back ended by
-      // the abandon's SIGTERM, not by the product: its recorded outcome is shown, never as the verdict.
-      if (abandoned && back === null) {
-        return { text: `${round}: stopped when the version was abandoned (recorded as ${outcome}${exitCode === null ? '' : `, exit ${exitCode}`}).` }
+      // Task 4: an attempt the abandon stopped (`smokeStoppedByAbandon`, the page's rule too) ended
+      // by its SIGTERM, not by the product: its recorded outcome is shown, never as the verdict.
+      if (stoppedByAbandon) {
+        return { text: `${round}: stopped when the version was abandoned (${smokeRecordedAs(outcome, typeof p['exitCode'] === 'number' ? p['exitCode'] : null)}).` }
       }
       return {
         text: `${round}: ${outcome}${exitCode === null ? '' : ` (exit ${exitCode})`}${back === null ? '' : `; ${back} sent back`}.`,
@@ -306,13 +308,25 @@ export async function versionTrail(
     scope.deliveryId !== null ? [] : scope.tasks.filter((task) => !task.integrated || confirmed.has(task.taskId)).map((task) => task.taskId),
   )
   const byEvent: Timed[] = []
-  // Seq order: an event after the version's `workspace.goal_abandoned` happened once it was abandoned.
-  let abandoned = false
+  // Final review 5b: whether the abandon stopped a smoke attempt is decided as the page decides it
+  // (`smokeStoppedByAbandon`) -- by when the attempt ENDED against the version's (last) abandon, not
+  // by where its event fell in `seq`, which a conclusion written just after the abandon would cross.
+  const abandonedAt = events.findLast((row) => row.type === 'workspace_goal_abandoned')?.ts ?? null
+  const smokeIds = events.filter((row) => row.type === 'workspace_smoke_run').map((row) => str((row.payload ?? {}) as Payload, 'attemptId')).filter((id): id is string => id !== null)
+  const endedAtOf = new Map(
+    abandonedAt === null || smokeIds.length === 0
+      ? []
+      : (await prisma.smokeAttempt.findMany({ where: { id: { in: smokeIds } }, select: { id: true, endedAt: true } })).map((a) => [a.id, a.endedAt] as const),
+  )
   for (const row of events) {
     const type = DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? (row.type as DomainEventType)
     const pkg = row.taskId === null ? null : (keyOf.get(row.taskId) ?? null)
-    const draft = eventDraft(type, (row.payload ?? {}) as Payload, pkg, mergesInto, row.taskId === null || !handMerged.has(row.taskId), abandoned)
-    if (type === 'workspace.goal_abandoned') abandoned = true
+    const payload = (row.payload ?? {}) as Payload
+    const attemptId = type === 'workspace.smoke_run' ? str(payload, 'attemptId') : null
+    // An attempt row that is gone ends, at the latest, when its event was written.
+    const endedAt = attemptId === null ? null : endedAtOf.has(attemptId) ? (endedAtOf.get(attemptId) ?? null) : row.ts
+    const stopped = attemptId !== null && smokeStoppedByAbandon({ endedAt, sentBack: str(payload, 'reworkedPackage') !== null }, abandonedAt)
+    const draft = eventDraft(type, payload, pkg, mergesInto, row.taskId === null || !handMerged.has(row.taskId), stopped)
     if (draft === null) continue
     if (type === 'workspace.conducted') {
       const fallback = (row.payload as Payload)['fallback'] === true

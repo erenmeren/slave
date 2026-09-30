@@ -293,10 +293,10 @@ describe('renderGoalReportMarkdown', () => {
       expect([...order].sort((a, b) => a - b)).toEqual(order)
     })
 
-    it('says so when no smoke check has run and no tool call was denied', () => {
+    it('says so when no smoke check has run and no denied tool call is recorded', () => {
       const lines = renderGoalReportMarkdown(report()).split('\n')
       expect(lines).toContain('No smoke check has run.')
-      expect(lines).toContain('No tool call was denied.')
+      expect(lines).toContain('No denied tool call is recorded.')
     })
 
     it('keeps a fence inside the output fenced, and a hostile hand-off inert', () => {
@@ -327,6 +327,22 @@ describe('renderGoalReportMarkdown', () => {
       const row = md.split('\n').find((line) => line.startsWith('| 1 |')) ?? ''
       expect(row).toBe('| 1 | stopped when the version was abandoned | 143 | 9 s | dddddddddddd | — | 2026-09-30T10:00:00.000Z |')
       expect(row).not.toContain('failed')
+    })
+
+    it('says what an attempt the abandon stopped recorded when that was not a failure (final review 5a)', () => {
+      const md = renderGoalReportMarkdown(
+        report({
+          state: 'abandoned',
+          rounds: [],
+          smoke: [
+            smoke({ outcome: 'passed', exitCode: 0, durationMs: 9_000, reworkedPackage: null, handOff: null, stoppedByAbandon: true }),
+            smoke({ round: 2, outcome: 'timed_out', exitCode: null, durationMs: 9_000, reworkedPackage: null, handOff: null, stoppedByAbandon: true }),
+          ],
+        }),
+      )
+      const rows = md.split('\n').filter((line) => /^\| [12] \|/u.test(line))
+      expect(rows[0]).toBe('| 1 | stopped when the version was abandoned \\(recorded as passed, exit 0\\) | 0 | 9 s | dddddddddddd | — | 2026-09-30T10:00:00.000Z |')
+      expect(rows[1]).toContain('| 2 | stopped when the version was abandoned \\(recorded as timed out\\) | — |')
     })
 
     it('counts the denials it left out, and names the verifier for a verification run', () => {

@@ -219,10 +219,10 @@ describe('GoalReportView', () => {
       expect(screen.getByTestId('goal-report-denials-omitted').textContent).toBe('… and 2 more, not listed.')
     })
 
-    it('says so when no smoke check has run and no tool call was denied', () => {
+    it('says so when no smoke check has run and no denied tool call is recorded', () => {
       render(<GoalReportView report={report()} />)
       expect(screen.getByText('No smoke check has run.')).toBeTruthy()
-      expect(screen.getByText('No tool call was denied.')).toBeTruthy()
+      expect(screen.getByText('No denied tool call is recorded.')).toBeTruthy()
     })
 
     it('renders a hostile hand-off change and output as characters, never as elements', () => {
@@ -251,6 +251,21 @@ describe('GoalReportView', () => {
       const row = screen.getByTestId('goal-report-smoke').textContent ?? ''
       expect(row).toContain('Round 1: stopped when the version was abandoned, exit 143')
       expect(row).not.toContain('failed')
+    })
+
+    it('says what an attempt the abandon stopped recorded when that was not a failure, as the trail does (final review 5a)', () => {
+      const d = report().delivery!
+      render(
+        <GoalReportView
+          report={report({
+            state: 'abandoned',
+            delivery: { ...d, mergedAt: null, merge: null },
+            smoke: [{ ...passed, round: 1, reworkedPackage: null, handOff: null, stoppedByAbandon: true }],
+          })}
+        />,
+      )
+      const row = screen.getByTestId('goal-report-smoke').textContent ?? ''
+      expect(row).toContain('Round 1: stopped when the version was abandoned (recorded as passed, exit 0), took 4 s')
     })
 
     it('names the verifier for a verification run\'s denial', () => {

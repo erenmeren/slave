@@ -201,7 +201,8 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
               {report.smoke.map((s) => (
                 <li key={s.attemptId} data-testid="goal-report-smoke">
                   Round {s.round}: {smokeOutcomeLabel(s)}
-                  {s.exitCode !== null && `, exit ${String(s.exitCode)}`}
+                  {/* The label already names the exit of an attempt the abandon stopped that recorded something else. */}
+                  {s.exitCode !== null && !(s.stoppedByAbandon && s.outcome !== 'failed') && `, exit ${String(s.exitCode)}`}
                   {s.durationMs !== null && `, took ${String(Math.round(s.durationMs / 1000))} s`}, on commit{' '}
                   <span className="font-mono">{shortCommit(s.tip)}</span>
                   {s.reworkedPackage !== null && `, ${s.reworkedPackage} sent back`}, finished {s.at}.
@@ -320,7 +321,7 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
 
       {/* Skeleton spec S9 (plan B D10): the tool calls the version's runs were refused. */}
       <Panel title="Denied tool calls">
-        {report.deniedToolCalls.length === 0 && <p className="text-[13px] text-t2">No tool call was denied.</p>}
+        {report.deniedToolCalls.length === 0 && <p className="text-[13px] text-t2">No denied tool call is recorded.</p>}
         {report.deniedToolCalls.length > 0 && (
           <ul className="flex flex-col gap-1 text-[13px] text-t2">
             {report.deniedToolCalls.map((denial, index) => (

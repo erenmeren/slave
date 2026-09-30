@@ -5,6 +5,7 @@ import {
   err,
   ok,
   requirementItemsSchema,
+  smokeStoppedByAbandon,
   type GoalReport,
   type GoalReportDenial,
   type GoalReportPackage,
@@ -143,10 +144,11 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
           ? null
           : { toPackage: packageOfTask.get(row.handOffTaskId) ?? 'a package', path: row.handOffPath ?? '', change: row.handOffChange ?? '' },
       // Task 4: abandon SIGTERMs a running attempt, which then records `failed` (exit 143) with
-      // nothing sent back. An attempt of an abandoned version that sent nothing back and was still
-      // running at the abandon is the abandon's doing; one that ended before it ended on its own.
-      stoppedByAbandon:
-        delivery?.status === 'abandoned' && abandoned !== null && row.reworkedTaskId === null && (row.endedAt === null || row.endedAt.getTime() >= abandoned.ts.getTime()),
+      // nothing sent back. The trail decides it by the same rule (final review 5b).
+      stoppedByAbandon: smokeStoppedByAbandon(
+        { endedAt: row.endedAt, sentBack: row.reworkedTaskId !== null },
+        delivery?.status === 'abandoned' ? (abandoned?.ts ?? null) : null,
+      ),
     }),
   )
   // Skeleton spec S9 (plan B D10): the denials of the version's runs -- its package tasks' and its verification runs'.

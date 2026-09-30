@@ -139,7 +139,7 @@ export function renderGoalReportMarkdown(report: GoalReport): string {
 
   // Skeleton spec S9 (plan B D10): the tool calls the version's runs were refused.
   lines.push('## Denied tool calls', '')
-  if (report.deniedToolCalls.length === 0) lines.push('No tool call was denied.', '')
+  if (report.deniedToolCalls.length === 0) lines.push('No denied tool call is recorded.', '')
   for (const denial of report.deniedToolCalls) {
     lines.push(`- ${mdInline(denial.at)} · ${denial.packageKey === null ? 'the verifier' : mdInline(denial.packageKey)}: ${mdInline(denial.detail)} (run ${mdInline(denial.runId)})`)
   }

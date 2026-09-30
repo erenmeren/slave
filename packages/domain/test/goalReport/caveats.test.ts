@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { reportCaveats } from '../../src/goalReport/caveats.js'
+import { reportCaveats, smokeStoppedByAbandon } from '../../src/goalReport/caveats.js'
 import type { GoalReport, GoalReportPackage, GoalReportRequirement } from '../../src/goalReport/types.js'
 
 // (builders repeated from markdown.test.ts -- a test file must not import another test file)
@@ -190,5 +190,17 @@ describe('reportCaveats', () => {
   it('says nothing about a person who fast-forwarded to the verified commit', () => {
     const d = report().delivery!
     expect(reportCaveats(report({ delivery: { ...d, merge: { by: 'human', commit: 'c'.repeat(40), into: 'main' } } }))).toEqual([])
+  })
+})
+
+describe('smokeStoppedByAbandon (final review 5b: one rule for the page, the export and the trail)', () => {
+  const at = new Date('2026-09-30T10:00:00.000Z')
+  const before = new Date('2026-09-30T09:59:59.000Z')
+  it('is the abandon\'s doing only for an attempt that sent nothing back and had not ended before the abandon', () => {
+    expect(smokeStoppedByAbandon({ endedAt: null, sentBack: false }, at)).toBe(true)
+    expect(smokeStoppedByAbandon({ endedAt: at, sentBack: false }, at)).toBe(true)
+    expect(smokeStoppedByAbandon({ endedAt: before, sentBack: false }, at)).toBe(false)
+    expect(smokeStoppedByAbandon({ endedAt: null, sentBack: true }, at)).toBe(false)
+    expect(smokeStoppedByAbandon({ endedAt: null, sentBack: false }, null)).toBe(false)
   })
 })
