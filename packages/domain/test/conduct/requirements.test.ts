@@ -42,6 +42,11 @@ describe('parseRequirementsAnswer', () => {
     expect(parsed).toEqual({ ok: true, value: [{ text: 'hsql --format csv prints CSV', source: 'Add CSV output.' }] })
   })
 
+  it('reads every string without the NUL bytes and controls Postgres refuses (Task 6)', () => {
+    const parsed = parseRequirementsAnswer(answer([{ text: 'hsql\u0000 --format csv', source: 'Add\u0007 CSV.' }]))
+    expect(parsed).toEqual({ ok: true, value: [{ text: 'hsql --format csv', source: 'Add CSV.' }] })
+  })
+
   it('refuses an empty list, too many items, a blank text and no JSON', () => {
     expect(parseRequirementsAnswer(answer([])).ok).toBe(false)
     const many = Array.from({ length: REQUIREMENTS_MAX_ITEMS + 1 }, (_, i) => ({ text: `r${i}`, source: 's' }))

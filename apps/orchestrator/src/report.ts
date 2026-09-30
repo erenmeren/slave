@@ -92,9 +92,9 @@ const HAND_OFF_ROUTE_ATTEMPTS = 3
  * Task 6: `routeHandOffs` takes the version's delivery lock, and a waiter fails with P2028 when the
  * lock or a pooled connection is not had in time. That is contention, not a verdict on the run, so
  * filing tries again -- safe because routing is idempotent per `<sourceKey>:<i>` and a replay
- * announces what an interrupted pass stored. Anything else, and a lock still busy after the last
- * try, propagates like any other database failure in the conclusion: the run stays `succeeded`,
- * and the stranded-claim sweep hands the task back with no attempt charged.
+ * announces what an interrupted pass stored. A lock still busy after the last try never fails the
+ * filing (Task 6 ruling, review I1): the report is stored, so the goal pass's `routeStoredHandOffs`
+ * routes it, and the run's finished work goes on to verify. Any other error propagates.
  */
 async function routeThroughBusyLock(input: RouteHandOffsInput): Promise<void> {
   for (let attempt = 1; ; attempt += 1) {
@@ -102,7 +102,11 @@ async function routeThroughBusyLock(input: RouteHandOffsInput): Promise<void> {
       await routeHandOffs(input)
       return
     } catch (error) {
-      if (!isTransactionTimeout(error) || attempt >= HAND_OFF_ROUTE_ATTEMPTS) throw error
+      if (!isTransactionTimeout(error)) throw error
+      if (attempt >= HAND_OFF_ROUTE_ATTEMPTS) {
+        console.error(`[report] run ${input.fromRunId}: its hand-offs wait for the next goal pass -- the lock stayed busy through ${String(HAND_OFF_ROUTE_ATTEMPTS)} tries`)
+        return
+      }
       console.error(`[report] run ${input.fromRunId}: routing its hand-offs waited on a busy lock -- trying again (${String(attempt)}/${String(HAND_OFF_ROUTE_ATTEMPTS)})`)
     }
   }

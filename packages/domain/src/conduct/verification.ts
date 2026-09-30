@@ -14,6 +14,7 @@ import {
 import type { WorkerLead } from './report.js'
 import { RUN_REQUIREMENT_KEY, type RequirementItem } from './requirements.js'
 import { SMOKE_SCRIPT_PATH } from './skeleton.js'
+import { storableText } from './storable.js'
 import { renderSmokeEvidence } from './smoke.js'
 
 /** One requirement's verdict from a verification run (spec R8), as {@link parseSlaveVerification}
@@ -66,21 +67,8 @@ export function trimToFit(text: string, max: number): string {
   return text.length <= max ? text : trimEvidence(text, Math.max(0, max - 64))
 }
 
-/** Every C0 control but tab and newline; `\r` too, so a CRLF reads as one newline. */
-const UNSTORABLE_CONTROLS = /[\u0000-\u0008\u000B-\u001F]/gu
-/** A surrogate half without its other half (JavaScript strings can hold one; UTF-8 cannot). */
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/gu
-
-/**
- * Text a process or a worker produced, made storable (final review I2): Postgres refuses a NUL
- * byte in `text` and in `jsonb` alike, and a lone surrogate half in `jsonb`. A smoke script that
- * printed one made its attempt's record throw on every pass, until the attempt was settled as
- * "the process is gone" -- a pass included. The other C0 controls (terminal colours, bells) go
- * too: nobody reading the page or a rework prompt is helped by them. Tabs and newlines stay.
- */
-export function storableText(text: string): string {
-  return text.replace(UNSTORABLE_CONTROLS, '').replace(LONE_SURROGATE, '\uFFFD')
-}
+/** Moved to `storable.ts` (Task 6), which `requirements.ts` can import without a cycle; re-exported here for every caller. */
+export { storableJsonReviver, storableText } from './storable.js'
 
 /** Skips ASCII/Unicode whitespace forward from `pos`, for {@link scanJsonObjectEnd}'s caller: the
  *  closing tag need not sit flush against the JSON's final brace. */

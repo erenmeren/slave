@@ -9,6 +9,7 @@ import {
   resolveHandOff,
   storableText,
   trimToFit,
+  handOffItemSchema,
   type HandOffItem,
   type HandOffView,
 } from '@slave-of-ai/domain'
@@ -223,6 +224,46 @@ export async function routeHandOffs(input: RouteHandOffsInput): Promise<readonly
     orderBy: { sourceKey: 'asc' },
     select: { id: true, status: true },
   })
+}
+
+/**
+ * Task 6 ruling (review I1): the goal pass's backstop for a filing whose routing never landed -- a
+ * busy delivery lock after every retry, or a daemon that died between storing the report and
+ * routing it. Every `RunReport` of the version that carries hand-offs and has no row at its first
+ * position (`report:<runId>:0`; a routing stores a report's items in one transaction, so the first
+ * row stands for all of them) is routed now. One query, and nothing else, when there is nothing to
+ * route. Idempotent by `sourceKey`, like the filing it stands in for, and it must run with no lock
+ * held (`routeHandOffs`'s rule).
+ */
+export async function routeStoredHandOffs(deliveryId: string): Promise<void> {
+  const unrouted = await prisma.$queryRaw<{ runId: string; handOffs: unknown; packageKey: string; workspaceId: string; goalVersion: number }[]>`
+    SELECT r."runId", r.report -> 'handOffs' AS "handOffs", p.key AS "packageKey", d."workspaceId", d."goalVersion"
+    FROM "GoalDelivery" d
+    JOIN "WorkPackage" p ON p."workspaceId" = d."workspaceId" AND p."goalVersion" = d."goalVersion"
+    JOIN "RunReport" r ON r."workPackageId" = p.id
+    WHERE d.id = ${deliveryId}
+      AND CASE WHEN jsonb_typeof(r.report -> 'handOffs') = 'array' THEN jsonb_array_length(r.report -> 'handOffs') ELSE 0 END > 0
+      AND NOT EXISTS (
+        SELECT 1 FROM "PackageHandOff" h WHERE h."workspaceId" = d."workspaceId" AND h."sourceKey" = 'report:' || r."runId" || ':0'
+      )
+    ORDER BY r."createdAt", r."runId"`
+  for (const report of unrouted) {
+    const items = Array.isArray(report.handOffs) ? report.handOffs.map((item) => handOffItemSchema.safeParse(item)) : []
+    if (items.length === 0 || items.some((item) => !item.success)) {
+      // Positions are the keys: a report whose items cannot all be read is not routed in part.
+      console.error(`[hand-off] run ${report.runId}: its stored report's hand-offs cannot be read -- not routed`)
+      continue
+    }
+    await routeHandOffs({
+      workspaceId: report.workspaceId,
+      goalVersion: report.goalVersion,
+      source: 'report',
+      sourceKey: `report:${report.runId}`,
+      fromRunId: report.runId,
+      fromPackageKey: report.packageKey,
+      items: items.flatMap((item) => (item.success ? [item.data] : [])),
+    })
+  }
 }
 
 /** Plan A D8: the row's event, once -- a replay finds it by `handOffId` and writes nothing. Called

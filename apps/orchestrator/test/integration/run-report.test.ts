@@ -9,6 +9,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { CONDUCTOR_ROLE, PACKAGE_WORKER_ROLE, observe, runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import { ClaudeCodeAdapter } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { runGoalPass } from '../../src/goal.js'
 import { inboxSection } from '../../src/inbox.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 import { verifyConcludedRun } from '../../src/verify.js'
@@ -206,7 +207,7 @@ const taskStatus = async (taskId: string): Promise<string> =>
 describe('a package run files its report before verify', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveMessage", "PackageHandOff", "RunReport", "SlaveRun", "TaskDependency", "Task", "WorkPackage", "RequirementSet", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveMessage", "PackageHandOff", "GoalDelivery", "RunReport", "SlaveRun", "TaskDependency", "Task", "WorkPackage", "RequirementSet", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -382,6 +383,33 @@ describe('a package run files its report before verify', () => {
     expect((await prisma.slaveRun.findFirstOrThrow({ where: { taskId: f.taskId } })).status).toBe('succeeded')
     const rows = await prisma.packageHandOff.findMany({ where: { workspaceId: f.workspaceId } })
     expect(rows.map((r) => r.status)).toEqual(['to_conductor'])
+  })
+
+  it('files a report through a lock busy past every retry, and the goal pass routes its stored hand-offs once (Task 6 ruling)', async (): Promise<void> => {
+    busyLock.failures = 3
+    const f = await seedPackageTask({ report: { ...goodReport, handOffs: [{ package: 'billing', change: 'charge for exports' }] } })
+    await tickUntil(f, async () => (await taskStatus(f.taskId)) !== 'running')
+    // The filing gave up on the routing, not on the run: verified and on to review, nothing stranded.
+    expect(busyLock.calls).toBe(3)
+    expect(await taskStatus(f.taskId)).toBe('reviewing')
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: f.taskId } })
+    expect(run.status).toBe('succeeded')
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })).activeRunId).toBeNull()
+    expect(await prisma.packageHandOff.count()).toBe(0)
+
+    // The version's delivery, as the conductor writes it -- only now, so the fixture's run starts
+    // from the base branch as every other test here does (the mock refuses routing either way).
+    await prisma.goalDelivery.create({ data: { workspaceId: f.workspaceId, goalVersion: 1, integrationBranch: 'slaveofai/goal-v1', baseCommit: 'base' } })
+    const goalPass = async (): Promise<void> => runGoalPass(f.deps, { mayStartRuns: false })
+    await goalPass()
+    const rows = await prisma.packageHandOff.findMany({ where: { workspaceId: f.workspaceId } })
+    expect(rows.map((r) => [r.sourceKey, r.status])).toEqual([[`report:${run.id}:0`, 'to_conductor']])
+    expect(await prisma.slaveMessage.count({ where: { workspaceId: f.workspaceId, kind: 'question' } })).toBe(1)
+
+    await goalPass()
+    expect(await prisma.packageHandOff.count()).toBe(1)
+    expect(await prisma.slaveMessage.count({ where: { workspaceId: f.workspaceId, kind: 'question' } })).toBe(1)
+    expect(await prisma.executionEvent.count({ where: { workspaceId: f.workspaceId, type: 'workspace_package_handed_off' } })).toBe(1)
   })
 
   it('files a report without hand-offs exactly as before: nothing is routed (spec §4)', async (): Promise<void> => {
