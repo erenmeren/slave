@@ -268,8 +268,23 @@ describe('executing a resume intent from the daemon', () => {
   // confinement -- the rewritten permissions file still carries the owns-nothing rule, which the
   // writer would otherwise refuse -- and its child still sees the scratch directory.
   it('keeps a verification run confined and its scratch directory exported across a resume', async (): Promise<void> => {
-    // Nothing else startable in this workspace: the tick below is only the resume.
-    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'done' } })
+    // Nothing else startable in this workspace: the tick below is only the resume. The task is the
+    // version's one package, done and on the integration branch: a conducted delivery always has
+    // package tasks, and the verification claim re-checks that every one is integrated.
+    const pkg = await prisma.workPackage.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        goalVersion: 1,
+        key: 'main',
+        title: 'main',
+        requirementKeys: ['R1'],
+        ownedPaths: ['**'],
+        interface: '',
+        isIntegration: true,
+        templateId: 'tpl',
+      },
+    })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'done', integratedAt: new Date(), workPackageId: pkg.id } })
     const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
     const verifier = await prisma.slave.create({
       data: { teamId: team.id, role: 'Verifier', runtimeRoles: ['reviewer', 'verifier'], personId: (await prisma.person.create({ data: { name: 'Vera' } })).id },
