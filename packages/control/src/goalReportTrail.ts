@@ -93,6 +93,7 @@ const VERSION_TRAIL_TYPES = [
   'workspace_goal_waiting',
   'workspace_smoke_run',
   'workspace_smoke_handed_off',
+  'workspace_package_handed_off',
   'workspace_verification_started',
   'workspace_verified',
   'workspace_goal_accepted',
@@ -116,7 +117,15 @@ interface Draft {
 
 /** One event as a trail sentence (plan D6), or null for a payload this build cannot read. The
  *  sentences name ids, keys and counts only; free text goes in `detail`, labelled. */
-function eventDraft(type: DomainEventType, p: Payload, pkg: string | null, mergesInto: string, mergedBySlave: boolean, stoppedByAbandon: boolean): Draft | null {
+function eventDraft(
+  type: DomainEventType,
+  p: Payload,
+  pkg: string | null,
+  mergesInto: string,
+  mergedBySlave: boolean,
+  stoppedByAbandon: boolean,
+  handOffStatus: string | null,
+): Draft | null {
   const on = pkg === null ? '' : `${pkg}: `
   switch (type) {
     case 'workspace.goal_set': {
@@ -155,6 +164,26 @@ function eventDraft(type: DomainEventType, p: Payload, pkg: string | null, merge
         detail: str(p, 'change'),
         detailBy: 'model',
       }
+    case 'workspace.package_handed_off': {
+      const what = str(p, 'path') ?? str(p, 'package')
+      // Plan A Task 8: `delivery: 'rework'` is what routing decided, not that the reopen happened: a
+      // version that is verifying reopens at the round's end, and an expired row never does. The
+      // row's own status says which; with no row the event is worded as the routing decided.
+      const reopened = handOffStatus === 'pending' ? 'its finished task will be reopened when the round ends' : handOffStatus === 'expired' ? 'it was not reopened' : 'its finished task is reopened for it'
+      const went: Readonly<Record<string, string>> = {
+        prompt: 'it waits in its next prompt',
+        rework: reopened,
+        duplicate: 'already asked, not sent again',
+        own: "it is the reporter's own package",
+        question: 'no package could take it, so the conductor was asked',
+      }
+      return {
+        text: `${str(p, 'fromPackage') ?? 'The conductor'} handed work to ${str(p, 'toPackage') ?? 'no package'}${what === null ? '' : ` (${what})`}; ${went[str(p, 'delivery') ?? ''] ?? 'routed'}.`,
+        // `detailBy: 'model'`: the change is the worker's own words.
+        detail: str(p, 'change'),
+        detailBy: 'model',
+      }
+    }
     case 'workspace.verification_started':
       return { text: `Verification round ${String(num(p, 'round'))} started.` }
     case 'workspace.verified': {
@@ -201,6 +230,9 @@ function eventDraft(type: DomainEventType, p: Payload, pkg: string | null, merge
       return { text: `${on}the merge failed.`, detail: str(p, 'reason'), detailBy: 'system' }
     case 'task.rework': {
       const round = num(p, 'verificationRound')
+      const reopen = num(p, 'handOffReopen')
+      // Plan A D4: the reason is the hand-offs as the package's prompt words them: the workers'.
+      if (reopen > 0) return { text: `${on}sent back for rework by other packages' hand-offs (reopen ${String(reopen)}).`, detail: str(p, 'reason'), detailBy: 'model' }
       // A verification rework's reason quotes the verifier's check, output and reason: the model's.
       return round > 0
         ? { text: `${on}sent back for rework by verification round ${String(round)}.`, detail: str(p, 'reason'), detailBy: 'model' }
@@ -318,6 +350,13 @@ export async function versionTrail(
       ? []
       : (await prisma.smokeAttempt.findMany({ where: { id: { in: smokeIds } }, select: { id: true, endedAt: true } })).map((a) => [a.id, a.endedAt] as const),
   )
+  // Plan A Task 8: a hand-off event's reopen has happened only when its row says `reopened`.
+  const handOffIds = events.flatMap((row) => (row.type === 'workspace_package_handed_off' ? [str((row.payload ?? {}) as Payload, 'handOffId')] : [])).filter((id): id is string => id !== null)
+  const statusOfHandOff = new Map(
+    handOffIds.length === 0
+      ? []
+      : (await prisma.packageHandOff.findMany({ where: { workspaceId, id: { in: handOffIds } }, select: { id: true, status: true } })).map((r) => [r.id, r.status as string] as const),
+  )
   for (const row of events) {
     const type = DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? (row.type as DomainEventType)
     const pkg = row.taskId === null ? null : (keyOf.get(row.taskId) ?? null)
@@ -326,7 +365,7 @@ export async function versionTrail(
     // An attempt row that is gone ends, at the latest, when its event was written.
     const endedAt = attemptId === null ? null : endedAtOf.has(attemptId) ? (endedAtOf.get(attemptId) ?? null) : row.ts
     const stopped = attemptId !== null && smokeStoppedByAbandon({ endedAt, sentBack: str(payload, 'reworkedPackage') !== null }, abandonedAt)
-    const draft = eventDraft(type, payload, pkg, mergesInto, row.taskId === null || !handMerged.has(row.taskId), stopped)
+    const draft = eventDraft(type, payload, pkg, mergesInto, row.taskId === null || !handMerged.has(row.taskId), stopped, statusOfHandOff.get(str(payload, 'handOffId') ?? '') ?? null)
     if (draft === null) continue
     if (type === 'workspace.conducted') {
       const fallback = (row.payload as Payload)['fallback'] === true

@@ -1,7 +1,7 @@
 import { TERMINAL } from '../task/state.js'
 import { GOAL_REPORT_FILES_MAX, GOAL_REPORT_TRAIL_MAX } from './constants.js'
 import { evidenceCut, shortCommit } from './escape.js'
-import type { GoalReport, GoalReportSmoke, GoalReportState } from './types.js'
+import type { GoalReport, GoalReportHandOff, GoalReportSharedDecision, GoalReportSmoke, GoalReportState } from './types.js'
 
 /** How a person says each state. One wording for the page, the export and the chat note. */
 export const GOAL_REPORT_STATE_LABEL: Readonly<Record<GoalReportState, string>> = {
@@ -69,6 +69,34 @@ export function smokeOutcomeLabel(smoke: GoalReportSmoke): string {
   if (!smoke.stoppedByAbandon) return smoke.outcome.replace('_', ' ')
   const stopped = 'stopped when the version was abandoned'
   return smoke.outcome === 'failed' ? stopped : `${stopped} (${smokeRecordedAs(smoke.outcome, smoke.exitCode)})`
+}
+
+/** Supervisor-as-conductor spec C2: what became of a hand-off, in words (the page and the export). */
+export const HAND_OFF_STATUS_LABEL: Record<GoalReportHandOff['status'], string> = {
+  pending: 'waits for its next run',
+  delivered: 'shown in its prompt',
+  reopened: 'reopened for it',
+  duplicate: 'already asked',
+  own: "the reporter's own package",
+  to_conductor: 'asked the conductor',
+  expired: 'not delivered',
+}
+
+/** The note that goes after the label, or null: a reopened hand-off needs none. */
+export function handOffNote(h: GoalReportHandOff): string | null {
+  return h.note === null || h.status === 'reopened' ? null : h.note
+}
+
+export function handOffStatusLabel(h: GoalReportHandOff): string {
+  const note = handOffNote(h)
+  return `${HAND_OFF_STATUS_LABEL[h.status]}${note === null ? '' : ` (${note})`}`
+}
+
+/** Supervisor-as-conductor spec C3: who made a shared decision. */
+export const DECISION_SOURCE_LABEL: Record<GoalReportSharedDecision['source'], string> = {
+  conductor_plan: "the conductor's plan",
+  conductor_answer: "the conductor's answer",
+  person: 'a person',
 }
 
 /** What the page and the export print for a version with no packages: "yet" only before conduct,
