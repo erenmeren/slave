@@ -867,6 +867,48 @@ function WorkspaceGoalRetriedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+/** Skeleton spec S7: one smoke attempt. `working` when it passed, `danger` when a package was sent
+ *  back or the version stopped, `warn` for the orchestrator's own failure (retried, not charged). */
+function WorkspaceSmokeRunCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    version: number
+    round: number
+    outcome: 'passed' | 'missing' | 'stub' | 'failed' | 'timed_out' | 'error'
+    exitCode: number | null
+    output: string
+    reworkedPackage: string | null
+  }
+  const said: Record<typeof payload.outcome, string> = {
+    passed: 'the smoke check passed',
+    missing: 'there is no scripts/smoke.sh',
+    stub: 'scripts/smoke.sh is still the stub',
+    failed: `the smoke check failed${payload.exitCode === null ? '' : ` (exit ${String(payload.exitCode)})`}`,
+    timed_out: 'the smoke check timed out',
+    error: 'the smoke check could not be run; it will be tried again',
+  }
+  const label = `goal v${String(payload.version)} round ${String(payload.round)}: ${said[payload.outcome]}${payload.reworkedPackage === null ? '' : `; ${payload.reworkedPackage} sent back`}`
+  const tone = payload.outcome === 'passed' ? 'working' : payload.outcome === 'error' ? 'warn' : 'danger'
+  return (
+    <ActivityCard {...props}>
+      <Transition tone={tone} label={label}>
+        {payload.output !== '' && <span data-testid="smoke-run-output">{payload.output}</span>}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+/** User ruling 2026-09-30 (plan B D11): a failed smoke's fix handed from integration to the skeleton. */
+function WorkspaceSmokeHandedOffCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; round: number; fromPackage: string; toPackage: string; path: string; change: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="working" label={`goal v${String(payload.version)} round ${String(payload.round)}: ${payload.fromPackage} handed the smoke fix to ${payload.toPackage} (${payload.path})`}>
+        {payload.change !== '' && <span data-testid="smoke-handoff-change">{payload.change}</span>}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 /**
  * A task taken off the board (M40 §4) -- by a human, or by a human approving the Supervisor's
  * `cancel_task` proposal.
@@ -1734,6 +1776,8 @@ export const ACTIVITY_CARDS = {
   'workspace.verified': WorkspaceVerifiedCard,
   'workspace.goal_needs_human': WorkspaceGoalNeedsHumanCard,
   'workspace.goal_retried': WorkspaceGoalRetriedCard,
+  'workspace.smoke_run': WorkspaceSmokeRunCard,
+  'workspace.smoke_handed_off': WorkspaceSmokeHandedOffCard,
   'workspace.plan_created': WorkspacePlanCreatedCard,
   'workspace.replan_started': WorkspaceReplanStartedCard,
   'workspace.replanned': WorkspaceReplannedCard,

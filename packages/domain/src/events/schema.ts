@@ -549,6 +549,38 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       cause: z.literal('branch_moved').optional(),
     }),
   }),
+  // Skeleton spec S7: one smoke attempt concluded. `reworkedPackage` is the package sent back for
+  // it, null for a pass, an orchestrator error, or a failure the round cap stopped.
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.smoke_run'),
+    payload: z.object({
+      version: z.number().int().positive(),
+      round: z.number().int().positive(),
+      attemptId: z.string().min(1),
+      outcome: z.enum(['passed', 'missing', 'stub', 'failed', 'timed_out', 'error']),
+      exitCode: z.number().int().nullable(),
+      durationMs: z.number().int().nonnegative(),
+      // `SMOKE_OUTPUT_MAX_CHARS`, spelled here the way this file spells every stored bound.
+      output: z.string().max(4000),
+      reworkedPackage: z.string().min(1).nullable(),
+    }),
+  }),
+  // User ruling 2026-09-30 (plan B D11): the integration package's smoke rework named a file the
+  // skeleton owns, and the same failure went to the skeleton -- once per attempt, no round spent.
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.smoke_handed_off'),
+    payload: z.object({
+      version: z.number().int().positive(),
+      round: z.number().int().positive(),
+      attemptId: z.string().min(1),
+      fromPackage: z.string().min(1),
+      toPackage: z.string().min(1),
+      path: z.string().min(1).max(500),
+      change: z.string().max(2000),
+    }),
+  }),
   // M40 §4: `cancelTask` took a task off the board -- an operator's own call, or an approved
   // `stale_task` proposal. `goalVersion` is the task's own stamp (null for a hand-made task), so
   // the log says which requirement's work was dropped.

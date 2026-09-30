@@ -191,6 +191,11 @@ model Workspace {
   goalDeliveries  GoalDelivery[]
   /// Conductor Plan 4b (spec R8): the per-requirement evidence every verification round wrote.
   verificationResults VerificationResult[]
+  /// Skeleton spec S7: the project's own smoke check, one row per attempt.
+  smokeAttempts SmokeAttempt[]
+  /// Skeleton spec S7: how long one smoke attempt may run before its process group is killed
+  /// (15 minutes -- a Docker image build fits).
+  smokeTimeoutMs Int @default(900000)
 
   @@index([adoptedFromSimulationId])
 }
@@ -1545,6 +1550,12 @@ model GoalDelivery {
   /// Plan 4b (plan D3): the claim on the live verification run, the `Task.activeRunId` idiom for a
   /// task-less run -- `updateMany where activeRunId: null` claims it.
   activeRunId       String?            @unique
+  /// Skeleton spec S7: the claim on the live smoke attempt, the `activeRunId` idiom --
+  /// `updateMany where activeSmokeId: null` claims it.
+  activeSmokeId     String?            @unique
+  /// Skeleton spec S7: set for a delivery whose requirement set carries RUN, so versions conducted
+  /// before the smoke gate existed are verified as they were.
+  smokeRequired     Boolean            @default(false)
   /// Plan 4b (plan D6/D7): why the loop ended without acceptance, for the person's report.
   needsHumanReason  String?
   /// Plan 4b (plan D4): the seat staffed as this version's verifier, recorded so dispatch only
@@ -1562,6 +1573,8 @@ model GoalDelivery {
   results   VerificationResult[]
   /// Plan 4b (plan D3): the verification runs of this version.
   runs      SlaveRun[]
+  /// Skeleton spec S7: the smoke attempts of this version.
+  smokes    SmokeAttempt[]
 
   @@unique([workspaceId, goalVersion])
 }
@@ -1599,6 +1612,53 @@ model VerificationResult {
 
   @@unique([runId, key])
   @@index([goalDeliveryId, round])
+}
+
+/// Skeleton spec S7: how one smoke attempt ended. `running` until it concludes; `error` is the
+/// orchestrator's own failure (no worktree, no spawn, stranded) and is never charged to a package.
+enum SmokeOutcome {
+  running
+  passed
+  missing
+  stub
+  failed
+  timed_out
+  error
+}
+
+/// Skeleton spec S7: one attempt at the project's own `scripts/smoke.sh`, run with no model in a
+/// fresh checkout of the integration tip. Records the round, the commit it checked, its outcome,
+/// exit code, duration and trimmed output, and the process group and process that own it (so a
+/// daemon that died mid-smoke can be told from one still running it). Cascades from both
+/// `Workspace` and `GoalDelivery`.
+model SmokeAttempt {
+  id             String       @id @default(uuid())
+  workspaceId    String
+  goalDeliveryId String
+  goalVersion    Int
+  round          Int
+  tip            String
+  status         SmokeOutcome @default(running)
+  exitCode       Int?
+  signal         String?
+  durationMs     Int?
+  output         String       @default("")
+  pid            Int?
+  ownerInstance  String?
+  worktreePath   String?
+  reworkedTaskId String?
+  /// User ruling 2026-09-30 (plan B D11): the task the failed smoke's fix was handed to, and the
+  /// file and change that named it -- once per attempt.
+  handOffTaskId  String?
+  handOffPath    String?
+  handOffChange  String?
+  startedAt      DateTime     @default(now())
+  endedAt        DateTime?
+
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  goalDelivery GoalDelivery @relation(fields: [goalDeliveryId], references: [id], onDelete: Cascade)
+
+  @@index([goalDeliveryId, startedAt])
 }
 
 /// M53 R3: ONE ROW PER CONCLUDED RUN, and the whole of what this organisation knows about how its
@@ -2413,6 +2473,11 @@ enum EventType {
   /// Conductor Plan 4b (plan D9): a person moved a `needs_human` version back to `integrating`
   /// with `retry-goal`, giving it a fresh round window.
   workspace_goal_retried         @map("workspace.goal_retried")
+  /// Skeleton spec S7: one smoke attempt concluded -- its outcome, exit code, duration, trimmed
+  /// output, and the package it sent back.
+  workspace_smoke_run            @map("workspace.smoke_run")
+  /// User ruling 2026-09-30: the integration package handed a failed smoke's fix to the skeleton.
+  workspace_smoke_handed_off     @map("workspace.smoke_handed_off")
   workspace_plan_created      @map("workspace.plan_created")
   /// M40 §2: the goal moved on a board that already had tasks, so the tick started a DELTA re-plan
   /// run (`workspace.replan_started`, whose `version` is the dedup key for "one re-plan per goal

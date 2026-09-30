@@ -118,6 +118,22 @@ describe('conductor events', () => {
     expect(parsed.success).toBe(true)
   })
 
+  // Skeleton spec S7 and plan B D11: the smoke check's attempt, and its fix handed to the skeleton.
+  it('accepts workspace.smoke_run, refusing outcome running and an output of 4001 characters', () => {
+    const payload = { version: 1, round: 2, attemptId: 'a1', outcome: 'failed', exitCode: 1, durationMs: 1200, output: 'npm error Missing script: "start"', reworkedPackage: 'integration' }
+    const base = { ...BASE, type: 'workspace.smoke_run' }
+    expect(executionEventSchema.safeParse({ ...base, payload }).success).toBe(true)
+    expect(executionEventSchema.safeParse({ ...base, payload: { ...payload, outcome: 'running' } }).success).toBe(false)
+    expect(executionEventSchema.safeParse({ ...base, payload: { ...payload, output: 'x'.repeat(4001) } }).success).toBe(false)
+  })
+
+  it('accepts workspace.smoke_handed_off, refusing a change of 2001 characters', () => {
+    const payload = { version: 1, round: 1, attemptId: 'a1', fromPackage: 'integration', toPackage: 'skeleton', path: 'backend/package.json', change: 'add a "start" script' }
+    const base = { ...BASE, type: 'workspace.smoke_handed_off' }
+    expect(executionEventSchema.safeParse({ ...base, payload }).success).toBe(true)
+    expect(executionEventSchema.safeParse({ ...base, payload: { ...payload, change: 'x'.repeat(2001) } }).success).toBe(false)
+  })
+
   // Final wave M5: the goal pass's own retry of an accepted version whose branch moved says why.
   it('accepts workspace.goal_retried with cause branch_moved, and no other cause', () => {
     const base = { ...BASE, type: 'workspace.goal_retried' }

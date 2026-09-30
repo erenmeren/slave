@@ -1250,11 +1250,12 @@ try {
   // `workspace.goal_waiting`, `workspace.goal_accepted`, `workspace.goal_merged`,
   // `workspace.goal_abandoned`. Conductor Plan 4b added the `verification_failed` and
   // `goal_needs_human` situations and four events: `workspace.verification_started`,
-  // `workspace.verified`, `workspace.goal_needs_human`, `workspace.goal_retried`.
+  // `workspace.verified`, `workspace.goal_needs_human`, `workspace.goal_retried`. Skeleton-and-smoke Plan B
+  // added two events, `workspace.smoke_run` and `workspace.smoke_handed_off`.
   if (SITUATION_KINDS.length !== 24) await fail(`stage 12: SITUATION_KINDS is ${SITUATION_KINDS.length}, expected twenty-four`)
   if (ACTION_KINDS.length !== 25) await fail(`stage 12: ACTION_KINDS is ${ACTION_KINDS.length}, expected twenty-five`)
-  if (Object.keys(LANE_BY_TYPE).length !== 73) {
-    await fail(`stage 12: LANE_BY_TYPE holds ${Object.keys(LANE_BY_TYPE).length} event types, expected 73 -- a provider change adds none`)
+  if (Object.keys(LANE_BY_TYPE).length !== 75) {
+    await fail(`stage 12: LANE_BY_TYPE holds ${Object.keys(LANE_BY_TYPE).length} event types, expected 75 -- a provider change adds none`)
   }
 
   const enumRows = await prisma.$queryRaw`SELECT unnest(enum_range(NULL::"ProviderKind"))::text AS value`

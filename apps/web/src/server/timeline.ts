@@ -353,6 +353,22 @@ function titleFor(
       // Final wave M5: the goal pass's own retry, after the integration branch moved.
       return payload['cause'] === 'branch_moved' ? `goal v${v} went back to verification` : `retried goal v${v}`
     }
+    // Skeleton spec S7: one smoke attempt. No `title` in the payload, so without a case it would
+    // read as its own type name on the VERIFIED lane.
+    case 'workspace.smoke_run': {
+      const version = payload['version']
+      const round = payload['round']
+      const outcome = payload['outcome']
+      const v = typeof version === 'number' ? String(version) : '?'
+      const r = typeof round === 'number' ? String(round) : '?'
+      return `smoke goal v${v} round ${r}: ${typeof outcome === 'string' ? outcome.replace('_', ' ') : '?'}`
+    }
+    // Plan B D11: the smoke fix handed from integration to the skeleton.
+    case 'workspace.smoke_handed_off': {
+      const version = payload['version']
+      const to = payload['toPackage']
+      return `goal v${typeof version === 'number' ? String(version) : '?'}: smoke fix handed to ${typeof to === 'string' ? to : '?'}`
+    }
     // M48 R5/R7: a runbook adopted, or stopped. The payload's `title` is not a field this event
     // carries, so without a case of its own it would read as its own type name on the PLAN CHANGE
     // lane -- and this is the one entry that says how the project decided to work.

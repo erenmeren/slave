@@ -55,6 +55,8 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   // Conductor Plan 4b (plan D9): a person's `retry-goal` is their own call, the same lane
   // `workspace.goal_set` sits on.
   'workspace.goal_retried': 'user_request',
+  'workspace.smoke_run': 'verified', // Skeleton spec S7: the smoke check is the first half of a verification round.
+  'workspace.smoke_handed_off': 'work', // Plan B D11: a package sent back, like task.rework.
   // INTERPRETATION -- the delta IS the interpretation; no stored sentence exists (spec §3).
   'workspace.replan_started': 'interpretation',
   'workspace.replanned': 'interpretation',

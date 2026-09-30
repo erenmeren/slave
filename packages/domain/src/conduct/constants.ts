@@ -102,3 +102,17 @@ export const VERIFICATION_LEADS_PER_PACKAGE_MAX_CHARS = 1500
 
 /** Skeleton spec S8: every package's leads together. */
 export const VERIFICATION_LEADS_MAX_CHARS = 8000
+
+/** Skeleton spec S7: one smoke attempt's life. `running` until it concludes; `error` is the
+ *  orchestrator's own failure (no worktree, no spawn, stranded) and is never charged to a package. */
+export const SMOKE_OUTCOMES = ['running', 'passed', 'missing', 'stub', 'failed', 'timed_out', 'error'] as const
+export type SmokeOutcome = (typeof SMOKE_OUTCOMES)[number]
+
+/** `Workspace.smokeTimeoutMs`' default (spec S7: 15 minutes) -- a Docker image build fits. */
+export const SMOKE_TIMEOUT_MS_DEFAULT = 900_000
+
+/** A smoke attempt's output as stored, sent in its event and shown -- head and tail kept (`trimEvidence`). */
+export const SMOKE_OUTPUT_MAX_CHARS = 4000
+
+/** Past its timeout plus this, a `running` attempt nobody is running is stranded (plan B D8). */
+export const SMOKE_STRANDED_GRACE_MS = 60_000
