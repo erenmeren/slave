@@ -322,6 +322,29 @@ describe('a smoke attempt', () => {
     expect(await deliveryOf(f)).toMatchObject({ status: 'integrating', activeSmokeId: null })
   }, 60_000)
 
+  it('records a pass whose output holds a NUL byte and other control characters as a pass (final review I2)', async (): Promise<void> => {
+    const f = await seed("#!/usr/bin/env bash\nprintf 'ok\\0 bell\\a esc\\033[0m\\tTab\\r\\nnext line\\n'\nexit 0\n")
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    const [attempt] = await attemptsOf(f)
+    expect(attempt).toMatchObject({ status: 'passed', exitCode: 0 })
+    expect(attempt?.output).toBe('ok bell esc[0m\tTab\nnext line')
+    const event = await prisma.executionEvent.findFirstOrThrow({ where: { workspaceId: f.workspaceId, type: 'workspace_smoke_run' } })
+    expect(event.payload).toMatchObject({ outcome: 'passed', output: 'ok bell esc[0m\tTab\nnext line' })
+    expect(await deliveryOf(f)).toMatchObject({ status: 'verifying', activeSmokeId: null, roundRunFailures: 0 })
+  }, 60_000)
+
+  it('records a cut output that would split a character in two, so the outcome still applies (final review I2)', async (): Promise<void> => {
+    // 'x' then 10 000 emoji (two UTF-16 units each): the cut's head ends between an emoji's two halves.
+    const f = await seed("#!/usr/bin/env bash\nprintf x\nfor i in $(seq 1 10000); do printf '\\360\\237\\230\\200'; done\nexit 1\n")
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    const [attempt] = await attemptsOf(f)
+    expect(attempt).toMatchObject({ status: 'failed', reworkedTaskId: f.taskOf.integration })
+    expect(Buffer.from(attempt?.output ?? '', 'utf8').toString('utf8')).toBe(attempt?.output)
+    expect(await deliveryOf(f)).toMatchObject({ status: 'integrating', activeSmokeId: null })
+  }, 60_000)
+
   it('records one event for an attempt whose claim was already released, and moves nothing (F2)', async (): Promise<void> => {
     const f = await seed('#!/usr/bin/env bash\nexit 1\n')
     const attempt = await prisma.smokeAttempt.create({
@@ -641,6 +664,17 @@ describe('the smoke hand-off (plan B D11, user ruling 2026-09-30)', () => {
     await prisma.task.updateMany({ where: { id: { in: [f.taskOf.skeleton, f.taskOf.integration] } }, data: { status: 'done', integratedAt: new Date() } })
     expect(await startSmoke(f.deliveryId)).not.toBeNull()
     expect(await deliveryOf(f)).toMatchObject({ status: 'verifying', round: 2 })
+  }, 60_000)
+
+  it('files a report whose hand-off change holds a NUL byte, and hands it off with the control characters dropped (final review I2)', async (): Promise<void> => {
+    const f = await seed(FAILING)
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    await fileRework(f, 'integration', integrationReport({ path: 'skeleton/package.json', change: 'add a "start"\u0000 script\u001b[0m' }))
+    expect(await prisma.runReport.count({ where: { taskId: f.taskOf.integration } })).toBe(1)
+    expect(await taskStatus(f.taskOf.skeleton)).toBe('rework')
+    expect((await attemptsOf(f))[0]?.handOffChange).toBe('add a "start" script[0m')
+    expect((await handOffs(f)).map((e) => (e.payload as Record<string, unknown>)['change'])).toEqual(['add a "start" script[0m'])
   }, 60_000)
 
   it('hands off at most once per smoke attempt -- no ping-pong', async (): Promise<void> => {

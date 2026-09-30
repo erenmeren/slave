@@ -5,6 +5,7 @@ import {
   renderVerificationProtocol,
   renderVerificationRework,
   runCheckLeansOnSmoke,
+  storableText,
   trimEvidence,
   type VerificationItem,
 } from '../../src/conduct/verification.js'
@@ -181,6 +182,28 @@ describe('trimEvidence', () => {
     const cut = trimEvidence(`HEAD${'m'.repeat(100)}TAIL`, 20)
     expect(cut.startsWith('HEAD')).toBe(true)
     expect(cut.endsWith('TAIL')).toBe(true)
+  })
+
+  it('never cuts a character in two (final review I2: a lone half is refused by a jsonb column)', () => {
+    const wellFormed = (text: string): boolean => Buffer.from(text, 'utf8').toString('utf8') === text
+    // 'x' then emoji: a head of 10 would end between the fifth emoji's halves, and so would a tail that starts one unit in.
+    for (const text of [`x${'😀'.repeat(50)}`, `${'😀'.repeat(50)}x`]) {
+      for (const max of [9, 10, 11, 20, 21]) {
+        const cut = trimEvidence(text, max)
+        expect(wellFormed(cut)).toBe(true)
+        expect(cut.replace(/\n… \[\d+ characters cut\] …\n/u, '').length).toBeLessThanOrEqual(max)
+      }
+    }
+  })
+})
+
+describe('storableText', () => {
+  it('drops the NUL byte and every other C0 control a Postgres text or jsonb value refuses or a page cannot show, keeping tabs and newlines', () => {
+    expect(storableText('ok\u0000 bell\u0007 esc\u001b[0m\tTab\r\nnext\u000bline\u001f')).toBe('ok bell esc[0m\tTab\nnextline')
+  })
+
+  it('replaces a lone surrogate half with U+FFFD and keeps whole characters', () => {
+    expect(storableText('a\ud83d b \ude00 c 😀')).toBe('a\ufffd b \ufffd c 😀')
   })
 })
 

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { err, ok, type Result } from '../result.js'
 import { SLAVE_REPORT_TAG } from './contract.js'
+import { storableText } from './verification.js'
 
 /** A package worker's report on its run (spec R7), as {@link parseSlaveReport} reads it. */
 export interface SlaveReport {
@@ -96,7 +97,9 @@ export function parseSlaveReport(text: string, requirementKeys: readonly string[
   if (end === -1) return err(`the ${open} block is not closed`)
   let value: unknown
   try {
-    value = JSON.parse(text.slice(start + open.length, end))
+    // Final review I2: a `\u0000` escape parses to a NUL byte, which the stored report's jsonb
+    // refuses -- the filing then threw, and a hand-off's change never reached its attempt row.
+    value = JSON.parse(text.slice(start + open.length, end), (_key, v: unknown) => (typeof v === 'string' ? storableText(v) : v))
   } catch {
     return err(`the ${open} block is not valid JSON`)
   }

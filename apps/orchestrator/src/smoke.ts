@@ -26,6 +26,7 @@ import {
   smokeReworkTarget,
   smokeScriptFailure,
   smokeStopReason,
+  storableText,
   trimEvidence,
   type SmokeFailure,
   type SmokeOutcome,
@@ -241,7 +242,9 @@ async function executeSmoke(attemptId: string): Promise<void> {
   await applySmokeOutcome(attemptId)
 }
 
-/** `running` -> the outcome, once (a second writer finds it concluded). */
+/** `running` -> the outcome, once (a second writer finds it concluded). The output is made
+ *  storable first (final review I2): a NUL byte a script printed would fail this write on every
+ *  pass, and the event's copy of it after, leaving even a pass to be settled as an `error`. */
 async function recordSmokeResult(attemptId: string, result: SmokeResult, durationMs: number): Promise<void> {
   await prisma.smokeAttempt.updateMany({
     where: { id: attemptId, status: 'running' },
@@ -250,7 +253,7 @@ async function recordSmokeResult(attemptId: string, result: SmokeResult, duratio
       exitCode: result.exitCode,
       signal: result.signal,
       durationMs: Math.min(INT4_MAX, Math.max(0, Math.round(durationMs))),
-      output: trimEvidence(result.output, SMOKE_STORED_OUTPUT_MAX_CHARS),
+      output: trimEvidence(storableText(result.output), SMOKE_STORED_OUTPUT_MAX_CHARS),
       endedAt: new Date(),
     },
   })
@@ -448,8 +451,9 @@ export async function handOffSmokeRework(
   })
   if (attempt === null || (attempt.status !== 'failed' && attempt.status !== 'timed_out')) return false
   const outcome = attempt.status
-  const path = handOff.path.trim()
-  const change = handOff.change.trim().slice(0, 2000)
+  // Final review I2: stored in text and jsonb, so never a NUL byte (`parseSlaveReport` already drops them).
+  const path = storableText(handOff.path).trim()
+  const change = storableText(handOff.change).trim().slice(0, 2000)
   try {
     return await withDeliveryLock(attempt.goalDeliveryId, async (tx) => {
       const now = await tx.smokeAttempt.findUniqueOrThrow({ where: { id: attempt.id } })

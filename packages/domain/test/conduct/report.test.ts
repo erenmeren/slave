@@ -13,6 +13,21 @@ describe('parseSlaveReport', () => {
     expect(parsed.ok && parsed.value.questions).toEqual(['Should JSON nulls be omitted?'])
   })
 
+  it('drops the NUL byte and other control characters from every string, so the stored report is never refused (final review I2)', () => {
+    const report = {
+      ...good,
+      requirements: [{ key: 'R1', status: 'done', evidence: 'ok\u0000' }, good.requirements[1]],
+      questions: ['why\u0007?'],
+      handOff: { path: 'skeleton/package.json\u0000', change: 'add a "start"\u0000 script\ud83d' },
+    }
+    const parsed = parseSlaveReport(wrap(report), ['R1', 'R2'])
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.requirements[0]?.evidence).toBe('ok')
+    expect(parsed.value.questions).toEqual(['why?'])
+    expect(parsed.value.handOff).toEqual({ path: 'skeleton/package.json', change: 'add a "start" script\ufffd' })
+  })
+
   it('reads the LAST report when the message quotes an earlier one', () => {
     const text = `${wrap({ ...good, questions: ['old'] })}\n${wrap(good)}`
     const parsed = parseSlaveReport(text, ['R1', 'R2'])

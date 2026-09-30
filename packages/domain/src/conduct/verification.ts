@@ -36,17 +36,42 @@ const itemSchema = z.object({
 })
 const verificationSchema = z.object({ items: z.array(itemSchema).max(REQUIREMENTS_MAX_ITEMS * 2) })
 
+const isHighSurrogate = (code: number): boolean => code >= 0xd800 && code <= 0xdbff
+const isLowSurrogate = (code: number): boolean => code >= 0xdc00 && code <= 0xdfff
+
 /**
  * Cuts `text` to `max` characters, keeping the head and the tail rather than the head alone --
  * evidence a person or a rework prompt reads often shows what went wrong at the END of a run
  * (a traceback, a final assertion), not just how it started. Unchanged when it already fits.
+ *
+ * Never between the two halves of a character (final review I2): a lone half is not UTF-8, and a
+ * jsonb event payload holding one is refused -- a smoke's conclusion then threw on every pass. The
+ * head ends one unit early, or the tail starts one late, instead; the result stays within `max`.
  */
 export function trimEvidence(text: string, max: number): string {
   if (text.length <= max) return text
-  const headLen = Math.floor(max / 2)
-  const tailLen = max - headLen
+  let headLen = Math.floor(max / 2)
+  let tailLen = max - headLen
+  if (headLen > 0 && isHighSurrogate(text.charCodeAt(headLen - 1))) headLen -= 1
+  if (tailLen > 0 && isLowSurrogate(text.charCodeAt(text.length - tailLen))) tailLen -= 1
   const cut = text.length - headLen - tailLen
   return `${text.slice(0, headLen)}\n… [${String(cut)} characters cut] …\n${text.slice(text.length - tailLen)}`
+}
+
+/** Every C0 control but tab and newline; `\r` too, so a CRLF reads as one newline. */
+const UNSTORABLE_CONTROLS = /[\u0000-\u0008\u000B-\u001F]/gu
+/** A surrogate half without its other half (JavaScript strings can hold one; UTF-8 cannot). */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/gu
+
+/**
+ * Text a process or a worker produced, made storable (final review I2): Postgres refuses a NUL
+ * byte in `text` and in `jsonb` alike, and a lone surrogate half in `jsonb`. A smoke script that
+ * printed one made its attempt's record throw on every pass, until the attempt was settled as
+ * "the process is gone" -- a pass included. The other C0 controls (terminal colours, bells) go
+ * too: nobody reading the page or a rework prompt is helped by them. Tabs and newlines stay.
+ */
+export function storableText(text: string): string {
+  return text.replace(UNSTORABLE_CONTROLS, '').replace(LONE_SURROGATE, '\uFFFD')
 }
 
 /** Skips ASCII/Unicode whitespace forward from `pos`, for {@link scanJsonObjectEnd}'s caller: the
