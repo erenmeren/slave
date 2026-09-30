@@ -114,6 +114,7 @@ export const TYPES_BY_KIND = {
     'workspace.goal_retried',
     'workspace.smoke_run',
     'workspace.smoke_handed_off',
+    'workspace.package_handed_off',
     'workspace.plan_created',
     // M40 t1: a goal change on a non-empty board starts a delta re-plan, and both ends of that are
     // workspace lifecycle for the same reason `workspace.plan_created` is -- neither carries a

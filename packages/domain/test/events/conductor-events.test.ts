@@ -134,6 +134,25 @@ describe('conductor events', () => {
     expect(executionEventSchema.safeParse({ ...base, payload: { ...payload, change: 'x'.repeat(2001) } }).success).toBe(false)
   })
 
+  it('accepts workspace.package_handed_off with a path or a package, refusing an unknown delivery and a change of 501 characters', () => {
+    const payload = {
+      version: 1, handOffId: 'h1', source: 'report', fromPackage: 'report', toPackage: 'skeleton',
+      path: 'scripts/verify.sh', package: null, delivery: 'rework', change: 'run pytest -k report',
+    }
+    const base = { ...BASE, type: 'workspace.package_handed_off' }
+    expect(executionEventSchema.safeParse({ ...base, payload }).success).toBe(true)
+    expect(executionEventSchema.safeParse({ ...base, payload: { ...payload, path: null, package: 'integration', toPackage: null, delivery: 'question' } }).success).toBe(true)
+    expect(executionEventSchema.safeParse({ ...base, payload: { ...payload, fromPackage: null, source: 'answer' } }).success).toBe(true)
+    expect(executionEventSchema.safeParse({ ...base, payload: { ...payload, delivery: 'dropped' } }).success).toBe(false)
+    expect(executionEventSchema.safeParse({ ...base, payload: { ...payload, change: 'x'.repeat(501) } }).success).toBe(false)
+  })
+
+  it('accepts task.rework with a hand-off reopen count', () => {
+    const base = { ...BASE, type: 'task.rework', taskId: 'T-1' }
+    expect(executionEventSchema.safeParse({ ...base, payload: { reason: 'asked', attempt: 0, handOffReopen: 1 } }).success).toBe(true)
+    expect(executionEventSchema.safeParse({ ...base, payload: { reason: 'asked', attempt: 0, handOffReopen: 0 } }).success).toBe(false)
+  })
+
   // Final wave M5: the goal pass's own retry of an accepted version whose branch moved says why.
   it('accepts workspace.goal_retried with cause branch_moved, and no other cause', () => {
     const base = { ...BASE, type: 'workspace.goal_retried' }

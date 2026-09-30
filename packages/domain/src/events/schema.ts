@@ -106,6 +106,9 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       // CURRENT attempt, which is 0 for a package that passed verify and review first time.
       attempt: z.number().int().nonnegative(),
       verificationRound: z.number().int().positive().optional(),
+      // Supervisor-as-conductor plan A D4: other packages' hand-offs reopened a finished package --
+      // its n-th such reopen in the goal version, and the idempotency key of that reopen's event.
+      handOffReopen: z.number().int().positive().optional(),
     }),
   }),
   z.object({ ...envelope, type: z.literal('run.started'), payload: z.object({ sessionId: z.string() }) }),
@@ -579,6 +582,25 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       toPackage: z.string().min(1),
       path: z.string().min(1).max(500),
       change: z.string().max(2000),
+    }),
+  }),
+  // Supervisor-as-conductor spec C2 (plan A D8): one hand-off, routed by the ownership rule. `delivery`
+  // is what routing did with it: shown in the target's next prompt, its finished task reopened,
+  // a duplicate or the reporter's own package (recorded only), or a conductor question.
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.package_handed_off'),
+    payload: z.object({
+      version: z.number().int().positive(),
+      handOffId: z.string().min(1),
+      source: z.enum(['report', 'answer']),
+      fromPackage: z.string().min(1).nullable(),
+      toPackage: z.string().min(1).nullable(),
+      path: z.string().min(1).max(500).nullable(),
+      package: z.string().min(1).max(40).nullable(),
+      delivery: z.enum(['prompt', 'rework', 'duplicate', 'own', 'question']),
+      // `HANDOFF_EVENT_CHANGE_MAX_CHARS`, spelled here the way this file spells every stored bound.
+      change: z.string().max(500),
     }),
   }),
   // M40 §4: `cancelTask` took a task off the board -- an operator's own call, or an approved

@@ -57,6 +57,7 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   'workspace.goal_retried': 'user_request',
   'workspace.smoke_run': 'verified', // Skeleton spec S7: the smoke check is the first half of a verification round.
   'workspace.smoke_handed_off': 'work', // Plan B D11: a package sent back, like task.rework.
+  'workspace.package_handed_off': 'work', // Supervisor-as-conductor plan A D8: a package sent work, like the smoke hand-off.
   // INTERPRETATION -- the delta IS the interpretation; no stored sentence exists (spec §3).
   'workspace.replan_started': 'interpretation',
   'workspace.replanned': 'interpretation',
