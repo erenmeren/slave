@@ -58,6 +58,14 @@ export function trimEvidence(text: string, max: number): string {
   return `${text.slice(0, headLen)}\n… [${String(cut)} characters cut] …\n${text.slice(text.length - tailLen)}`
 }
 
+/**
+ * Controller ruling F1: `trimEvidence` returns up to `max` plus its cut marker, so a bound that must
+ * hold (an event's `change`, a prompt block) trims to `max - 64` and the result fits `max`.
+ */
+export function trimToFit(text: string, max: number): string {
+  return text.length <= max ? text : trimEvidence(text, Math.max(0, max - 64))
+}
+
 /** Every C0 control but tab and newline; `\r` too, so a CRLF reads as one newline. */
 const UNSTORABLE_CONTROLS = /[\u0000-\u0008\u000B-\u001F]/gu
 /** A surrogate half without its other half (JavaScript strings can hold one; UTF-8 cannot). */

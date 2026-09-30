@@ -11,7 +11,7 @@ import {
 import { isOwned, ownershipRuleFor } from './ownership.js'
 import type { WorkerLead } from './report.js'
 import { handOffPath } from './smoke.js'
-import { renderWorkerLeads, storableText, trimEvidence } from './verification.js'
+import { renderWorkerLeads, storableText, trimToFit } from './verification.js'
 
 /**
  * Supervisor-as-conductor spec C1/C2: a package's request of another package -- a change in a file
@@ -85,16 +85,10 @@ export function handOffFingerprint(input: { readonly from: string | null; readon
   return goalSha256([input.from ?? '', input.to, target, change].join('\n'))
 }
 
-/**
- * Controller ruling F1: `trimEvidence` returns up to `max` plus its cut marker, so a bound that must
- * hold (an event's `change`, a prompt block) trims to `max - 64` and the result fits `max`.
- */
-export function trimToFit(text: string, max: number): string {
-  return text.length <= max ? text : trimEvidence(text, max - 64)
-}
-
 /** One stored hand-off as the renderers read it. Worker text: every renderer strips NUL and sanitises. */
 export interface HandOffView {
+  /** The stored hand-off's id, handed back in `shownIds` so only what was shown is marked delivered. */
+  readonly id: string
   readonly from: string | null
   readonly path: string | null
   readonly packageKey: string | null
@@ -108,27 +102,54 @@ function itemLine(view: HandOffView): string {
   return `- from ${from}${where}: ${change}`
 }
 
+/** A rendered hand-off block and the ids of the hand-offs it shows whole (the rest stay pending). */
+export interface HandOffBlock {
+  readonly text: string
+  readonly shownIds: readonly string[]
+}
+
+/**
+ * Spec C2 "never dropped": items go in WHOLE, in order, while they fit `budget` (each already bounded
+ * by `itemLine`); the ones that do not fit are named in a trusted line and stay pending for the next
+ * run, never cut mid-sentence. `head` and `tail` sit outside the budget so they always appear.
+ */
+function fitItems(head: string, items: readonly HandOffView[], tail: readonly string[], budget: number): HandOffBlock {
+  const lines: string[] = []
+  const shownIds: string[] = []
+  let used = 0
+  for (const view of items) {
+    const line = itemLine(view)
+    if (shownIds.length > 0 && used + line.length + 1 > budget) break
+    lines.push(line)
+    shownIds.push(view.id)
+    used += line.length + 1
+  }
+  const rest = items.slice(shownIds.length)
+  if (rest.length > 0) {
+    const keys = [...new Set(rest.map((view) => (view.from === null ? 'the conductor' : sanitisePersonText(storableText(view.from)))))].join(', ')
+    lines.push(`${String(rest.length)} more requests from ${keys} wait for your next run.`)
+  }
+  return { text: [head, ...lines, ...tail].join('\n'), shownIds }
+}
+
 /** Plan A D9: the "Asked of your package" block of a contract; empty when nothing was asked. */
-export function renderAskedOfYou(items: readonly HandOffView[]): string {
-  if (items.length === 0) return ''
-  return trimToFit(
-    [
-      'Asked of your package by other packages (do each one that is right, in your own files; if one is not right, say why in your report):',
-      ...items.map(itemLine),
-    ].join('\n'),
+export function renderAskedOfYou(items: readonly HandOffView[]): HandOffBlock {
+  if (items.length === 0) return { text: '', shownIds: [] }
+  return fitItems(
+    'Asked of your package by other packages (do each one that is right, in your own files; if one is not right, say why in your report):',
+    items,
+    [],
     ASKED_OF_YOU_MAX_CHARS,
   )
 }
 
 /** Plan A D4: the rework reason when hand-offs reopen a finished package. */
-export function renderHandOffRework(items: readonly HandOffView[]): string {
-  return trimToFit(
-    [
-      'Your package was finished, and other packages have since asked it for these changes:',
-      ...items.map(itemLine),
-      'Make each change that is right, in your own files, and say in your report why you left any out. Then finish as your instructions describe.',
-    ].join('\n'),
-    VERIFICATION_REWORK_MAX_CHARS,
+export function renderHandOffRework(items: readonly HandOffView[]): HandOffBlock {
+  return fitItems(
+    'Your package was finished, and other packages have since asked it for these changes:',
+    items,
+    ['Make each change that is right, in your own files, and say in your report why you left any out. Then finish as your instructions describe.'],
+    VERIFICATION_REWORK_MAX_CHARS - 400,
   )
 }
 
@@ -141,7 +162,7 @@ export function renderHandOffQuestion(input: { readonly view: HandOffView; reado
   const from = input.view.from === null ? 'the conductor' : `the ${sanitisePersonText(storableText(input.view.from))} package`
   return [
     `A hand-off from ${from} was not delivered: ${sanitisePersonText(storableText(input.reason))}.`,
-    `It asks for a change${target}: ${trimToFit(sanitisePersonText(storableText(input.view.change)), HANDOFF_CHANGE_MAX_CHARS)}`,
+    `It asks for a change${target}: ${trimToFit(sanitisePersonText(storableText(input.view.change).replace(/\s+/gu, ' ').trim()), HANDOFF_CHANGE_MAX_CHARS)}`,
     'Decide which package does this work, or whether it is needed.',
   ].join('\n')
 }
