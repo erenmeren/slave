@@ -915,6 +915,8 @@ describe('conductor end to end', () => {
     expect(await prisma.smokeAttempt.count()).toBe(1)
     expect(await retryGoal(f.workspaceId, 1)).toEqual(expect.objectContaining({ ok: true }))
     await tickUntil(f, merged(f, 1))
+    // Plan B D5: the unchanged tree was not smoked again.
+    expect(await prisma.smokeAttempt.count()).toBe(1)
     const d1 = await delivery(f, 1)
     expect(d1).toEqual(expect.objectContaining({ status: 'accepted', round: 2, needsHumanReason: null }))
     const verifiers = f.starts.filter((s) => s.kind === 'verification')
