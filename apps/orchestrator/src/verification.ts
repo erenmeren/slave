@@ -29,13 +29,16 @@ import {
   VERIFICATION_DIFF_STAT_MAX_CHARS,
   VERIFIER_ROLE,
   err,
+  leadFromReport,
   parseSlaveVerification,
   renderVerificationRework,
   requirementItemsSchema,
+  runCheckLeansOnSmoke,
   runId as brandRunId,
   slaveId as brandSlaveId,
   type RunId,
   type VerificationItem,
+  type WorkerLead,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { checkpointRunFiles, runTokenHash, verifyDirPathFor, type RunHandle, type SlaveRuntimeAdapter } from '@slave-of-ai/providers'
@@ -285,6 +288,23 @@ async function diffStat(cwd: string, base: string, head: string): Promise<{ read
     : { text: stdout, capped: false }
 }
 
+/**
+ * Skeleton spec S8: every package's latest report, read as leads (plan A D11), in key order -- the
+ * newest `RunReport` per package, the one `loadGoalReport` shows.
+ */
+async function workerLeads(workspaceId: string, goalVersion: number): Promise<readonly WorkerLead[]> {
+  const packages = await prisma.workPackage.findMany({
+    where: { workspaceId, goalVersion },
+    orderBy: { key: 'asc' },
+    select: { key: true, reports: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1, select: { report: true } } },
+  })
+  return packages.flatMap((pkg) => {
+    const stored = pkg.reports[0]
+    const lead = stored === undefined ? null : leadFromReport(pkg.key, stored.report)
+    return lead === null ? [] : [lead]
+  })
+}
+
 const seatInclude = { person: { include: { template: true } }, permissions: true } as const
 type VerifierSeat = Prisma.SlaveGetPayload<{ include: typeof seatInclude }>
 
@@ -463,6 +483,7 @@ export async function dispatchVerification(deps: TickDeps, deliveryId: string): 
       where: { workspaceId_goalVersion: { workspaceId: workspace.id, goalVersion: delivery.goalVersion } },
     })
     const requirements = requirementItemsSchema.parse(requirementSet.items)
+    const leads = await workerLeads(workspace.id, delivery.goalVersion)
 
     const gitIdentity = { name: seat.person.name, email: `${emailLocalPart({ id: seat.id, name: seat.person.name })}@slaveofai.local` }
 
@@ -481,6 +502,7 @@ export async function dispatchVerification(deps: TickDeps, deliveryId: string): 
         diffStat: stat.text,
         diffCapped: stat.capped,
         verifyDir,
+        leads,
       },
     })
 
@@ -765,7 +787,11 @@ export async function concludeVerification(runId: RunId): Promise<void> {
     orderBy: { seq: 'asc' },
     select: { payload: true },
   })
-  const parsed = tampered !== null ? err(tampered) : parseSlaveVerification(joinRunOutput(rows.map((row) => row.payload)), keys)
+  const read = tampered !== null ? err(tampered) : parseSlaveVerification(joinRunOutput(rows.map((row) => row.payload)), keys)
+  // Plan A D10 (skeleton spec ruling 3): a RUN pass that only ran scripts/smoke.sh is no verdict on
+  // RUN -- the claim is released and the same round runs again, like any unusable verification.
+  const leaning = read.ok ? runCheckLeansOnSmoke(read.value) : null
+  const parsed = leaning === null ? read : err(leaning)
   if (!parsed.ok) {
     if (await releaseClaim(delivery.id, run.id)) {
       await failConcludedRun(run, workspace.id, `verification: ${parsed.error}`)

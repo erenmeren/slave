@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hasSlaveReportBlock, parseSlaveReport } from '../../src/conduct/report.js'
+import { hasSlaveReportBlock, leadFromReport, parseSlaveReport } from '../../src/conduct/report.js'
 
 const wrap = (value: unknown): string => `Done.\n<slave-report>${JSON.stringify(value)}</slave-report>`
 const good = {
@@ -48,5 +48,24 @@ describe('hasSlaveReportBlock', () => {
   it('is false when prose follows the closing tag, true when only whitespace does', () => {
     expect(hasSlaveReportBlock('<slave-report>{}</slave-report>\nNow let me also clean up the containers.')).toBe(false)
     expect(hasSlaveReportBlock('<slave-report>{}</slave-report>\n\n  \t\n')).toBe(true)
+  })
+})
+
+describe('leadFromReport', () => {
+  it('keeps questions, not-done requirements with their evidence, and workflow notes', () => {
+    const lead = leadFromReport('integration', {
+      requirements: [{ key: 'RUN', status: 'not_done', evidence: 'the image has no start script' }, { key: 'R1', status: 'done', evidence: 'ok' }],
+      filesTouched: [],
+      workflow: [{ step: 1, done: true, note: '' }, { step: 2, done: false, note: 'no frontend build stage' }],
+      questions: ['Needs a person: the production Docker image cannot start'],
+    })
+    expect(lead).toEqual({
+      packageKey: 'integration',
+      lines: ['Needs a person: the production Docker image cannot start', 'RUN not done: the image has no start script', 'workflow step 2: no frontend build stage'],
+    })
+  })
+  it('is null for a clean report or a row it cannot read', () => {
+    expect(leadFromReport('a', { requirements: [{ key: 'R1', status: 'done', evidence: 'x' }], filesTouched: [], workflow: [], questions: [] })).toBeNull()
+    expect(leadFromReport('a', 'not a report')).toBeNull()
   })
 })

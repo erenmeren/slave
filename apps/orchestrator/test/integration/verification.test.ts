@@ -12,7 +12,7 @@ import { abandonGoal, runDirPathFor } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
-import { integrationBranchName, runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { RUN_REQUIREMENT, integrationBranchName, runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import { ClaudeCodeAdapter, permissionsFilePathFor, verifyDirPathFor } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
@@ -521,6 +521,30 @@ describe('dispatchVerification', () => {
     expect(existsSync(join(worktreeRootFor(f.repoPath), verificationWorktreeKey(run.id)))).toBe(false)
     expect(await prisma.executionEvent.count({ where: { runId: run.id, type: 'run_failed' } })).toBe(1)
   }, 60_000)
+
+  it('hands the verifier each package\'s leads and the RUN rule (skeleton spec S8)', async (): Promise<void> => {
+    const f = await seed()
+    await prisma.requirementSet.update({
+      where: { workspaceId_goalVersion: { workspaceId: f.workspaceId, goalVersion: 1 } },
+      data: { items: [{ key: 'R1', text: 'a CSV mode', source: 'Add a CSV mode.' }, { key: 'R2', text: 'a JSON mode', source: 'And a JSON one.' }, { ...RUN_REQUIREMENT }] },
+    })
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: f.taskIds[1] ?? '' }, select: { id: true, workPackageId: true } })
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: task.id } })
+    await prisma.runReport.create({
+      data: {
+        runId: run.id, taskId: task.id, workPackageId: task.workPackageId ?? '',
+        report: { requirements: [{ key: 'R2', status: 'partial', evidence: 'the JSON writer has no tests' }], filesTouched: [], workflow: [], questions: ['Needs a person: the production Docker image cannot start'] },
+      },
+    })
+    const runId = await dispatchVerification(depsFor(f.workspaceId, verifier()), f.deliveryId)
+    await drainPumps()
+    const context = await prisma.runContext.findUniqueOrThrow({ where: { runId: runId ?? '' } })
+    expect(context.prompt).toContain('Reported by the workers')
+    expect(context.prompt).toContain('- json:\n  Needs a person: the production Docker image cannot start')
+    expect(context.prompt).toContain('R2 partial: the JSON writer has no tests')
+    expect(context.prompt).toContain('scripts/smoke.sh passing is not enough on its own')
+    expect(context.prompt).not.toContain('- csv:')
+  }, 60_000)
 })
 
 interface Item {
@@ -943,6 +967,19 @@ describe('the gate (concludeVerification)', () => {
     await verifyConcludedRun(brandRunId(second.runId))
 
     expect((await deliveryOf(f)).status).toBe('accepted')
+  }, 60_000)
+
+  it('throws away a verification whose RUN pass rests on smoke.sh alone, and runs the round again', async (): Promise<void> => {
+    const f = await seed()
+    await prisma.requirementSet.update({
+      where: { workspaceId_goalVersion: { workspaceId: f.workspaceId, goalVersion: 1 } },
+      data: { items: [{ key: 'R1', text: 'a CSV mode', source: '' }, { key: 'R2', text: 'a JSON mode', source: '' }, { ...RUN_REQUIREMENT }] },
+    })
+    const { runId } = await round(f, verdictText([passes('R1'), passes('R2'), { key: 'RUN', status: 'pass', check: 'bash scripts/smoke.sh', output: 'ok', reason: '' }]))
+    expect(await deliveryOf(f)).toMatchObject({ status: 'verifying', round: 1, roundRunFailures: 1, activeRunId: null })
+    expect(await prisma.verificationResult.count({ where: { runId } })).toBe(0)
+    const failed = await prisma.executionEvent.findFirstOrThrow({ where: { runId, type: 'run_failed' } })
+    expect((failed.payload as { reason: string }).reason).toContain('RUN passed on scripts/smoke.sh alone')
   }, 60_000)
 })
 

@@ -36,6 +36,30 @@ const reportSchema = z.object({
   questions: z.array(z.string().trim().min(1).max(4000)).max(10).default([]),
 })
 
+/** Skeleton spec S8: what one package's latest report asks a verifier to look into. */
+export interface WorkerLead {
+  readonly packageKey: string
+  readonly lines: readonly string[]
+}
+
+/**
+ * The leads in a stored `RunReport.report` (plan A D11): its questions, every requirement it did
+ * not call done (with the worker's own evidence), and every non-empty workflow note. `null` when
+ * there is none, or when the row does not read as a report (a later build's shape) -- a lead is
+ * never worth a thrown dispatch. The lines are the worker's RAW text: the verifier's prompt
+ * sanitises them where it renders them (`renderVerificationLeads`).
+ */
+export function leadFromReport(packageKey: string, stored: unknown): WorkerLead | null {
+  const parsed = reportSchema.safeParse(stored)
+  if (!parsed.success) return null
+  const lines = [
+    ...parsed.data.questions,
+    ...parsed.data.requirements.filter((r) => r.status !== 'done').map((r) => `${r.key} ${r.status.replace('_', ' ')}: ${r.evidence}`),
+    ...parsed.data.workflow.filter((w) => w.note.trim() !== '').map((w) => `workflow step ${String(w.step)}: ${w.note}`),
+  ]
+  return lines.length === 0 ? null : { packageKey, lines }
+}
+
 /**
  * Whether `text` ends with its LAST `<slave-report>` block, closed -- the pump's cheap "this worker
  * finished and reported" test (skeleton spec S9, plan A D9). Whether the report is USABLE is

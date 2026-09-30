@@ -95,3 +95,10 @@ export const VERIFICATION_REWORK_MAX_CHARS = 6000
 /** The tag a verification run's output is wrapped in (spec R8), the `SLAVE_REPORT_TAG` precedent:
  *  paired with `MARKERS` so quoted text in a transcript cannot forge or close one. */
 export const SLAVE_VERIFICATION_TAG = 'slave-verification'
+
+/** Skeleton spec S8: one package's leads in the verification prompt -- a report's questions and
+ *  unfinished items, never its whole evidence. */
+export const VERIFICATION_LEADS_PER_PACKAGE_MAX_CHARS = 1500
+
+/** Skeleton spec S8: every package's leads together. */
+export const VERIFICATION_LEADS_MAX_CHARS = 8000

@@ -36,6 +36,7 @@ import {
   type RequirementItem,
   type Runbook,
   type Section,
+  type WorkerLead,
 } from '@slave-of-ai/domain'
 import type { ProviderKind } from '@slave-of-ai/providers'
 import { askProtocolSection, inboxSection, rosterSection } from './inbox.js'
@@ -137,6 +138,8 @@ export interface BuildRunContextInput {
     readonly diffStat: string
     readonly diffCapped: boolean
     readonly verifyDir: string
+    /** Skeleton spec S8: each package's latest report, read as leads (plan A D11). */
+    readonly leads?: readonly WorkerLead[]
   }
   /** Test seam. Production passes nothing and gets `skillRoots()` -- which is itself redirectable
    *  through `SLAVEOFAI_SKILL_ROOTS_JSON` for the gate's real daemon subprocess. */
@@ -1221,6 +1224,7 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
         requirements: v.requirements,
         diffStat: v.diffStat,
         diffCapped: v.diffCapped,
+        ...(v.leads === undefined ? {} : { leads: v.leads }),
       }),
       source: {
         kind: 'verification_goal',

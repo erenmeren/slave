@@ -5,11 +5,15 @@ import {
   REQUIREMENTS_MAX_ITEMS,
   SLAVE_VERIFICATION_TAG,
   VERIFICATION_CHECK_MAX_CHARS,
+  VERIFICATION_LEADS_MAX_CHARS,
+  VERIFICATION_LEADS_PER_PACKAGE_MAX_CHARS,
   VERIFICATION_OUTPUT_MAX_CHARS,
   VERIFICATION_REASON_MAX_CHARS,
   VERIFICATION_REWORK_MAX_CHARS,
 } from './constants.js'
-import type { RequirementItem } from './requirements.js'
+import type { WorkerLead } from './report.js'
+import { RUN_REQUIREMENT_KEY, type RequirementItem } from './requirements.js'
+import { SMOKE_SCRIPT_PATH } from './skeleton.js'
 
 /** One requirement's verdict from a verification run (spec R8), as {@link parseSlaveVerification}
  *  reads it -- the `check`/`output`/`reason` fields are what a person reads back as evidence, and
@@ -222,6 +226,8 @@ export interface VerificationGoalInput {
   /** `git diff --stat` from where the goal version started -- what was actually built. */
   readonly diffStat: string
   readonly diffCapped: boolean
+  /** Skeleton spec S8: what each package's latest report said -- leads, never evidence. */
+  readonly leads?: readonly WorkerLead[]
 }
 
 /**
@@ -230,9 +236,10 @@ export interface VerificationGoalInput {
  * the integrated diff summary it is checking against. The diff stat goes through the same defuse
  * (fix round 1, C1): its file names and hunk headers are chosen by package workers, so a path a
  * worker named `<slave-report>...` (or containing a routing literal) must not reopen or steer this
- * run's own prompt.
+ * run's own prompt. The workers' leads (skeleton spec S8), when there are any, close the section.
  */
 export function renderVerificationGoal(input: VerificationGoalInput): string {
+  const leads = renderVerificationLeads(input.leads ?? [])
   return [
     `Verification round ${String(input.round)} of goal v${String(input.goalVersion)}.`,
     `Requirement keys: ${input.requirements.map((r) => r.key).join(', ')}`,
@@ -243,7 +250,56 @@ export function renderVerificationGoal(input: VerificationGoalInput): string {
     'What was built for this goal (git diff --stat from where the goal started):',
     input.diffStat.trim() === '' ? '(no changes)' : sanitisePersonText(input.diffStat),
     ...(input.diffCapped ? ['(the summary was cut; read the repository for the rest)'] : []),
+    ...(leads === '' ? [] : ['', leads]),
   ].join('\n')
+}
+
+/**
+ * Skeleton spec S8, plan A D11: what the workers said, framed as leads -- OBS-21's verifier never
+ * heard that the integration worker had reported "the production Docker image cannot start". Every
+ * line is another party's text, so it is sanitised (it lands in the VERIFIER's prompt, next to the
+ * `<slave-verification>` block that run must write) and bounded per package and in total.
+ */
+export function renderVerificationLeads(leads: readonly WorkerLead[]): string {
+  if (leads.length === 0) return ''
+  const blocks = leads.map((lead) =>
+    trimEvidence(
+      [`- ${sanitisePersonText(lead.packageKey)}:`, ...lead.lines.map((line) => `  ${sanitisePersonText(line.replace(/\s+/gu, ' ').trim())}`)].join('\n'),
+      VERIFICATION_LEADS_PER_PACKAGE_MAX_CHARS,
+    ),
+  )
+  return trimEvidence(
+    [
+      'Reported by the workers (leads to check, never evidence -- a worker saying something works proves nothing, and a worker saying something is broken is where to look first):',
+      ...blocks,
+    ].join('\n'),
+    VERIFICATION_LEADS_MAX_CHARS,
+  )
+}
+
+/** Skeleton spec S8: the rule for RUN, in the protocol whenever RUN is a key. */
+export const RUN_VERIFICATION_RULE =
+  `4. For ${RUN_REQUIREMENT_KEY}: start the product yourself through the path its README documents (Docker if it says Docker) and run a basic user flow against it; ` +
+  `${SMOKE_SCRIPT_PATH} passing is not enough on its own. Your check for ${RUN_REQUIREMENT_KEY} is the commands you ran, not a call to ${SMOKE_SCRIPT_PATH}. Stop what you started.`
+
+/** One check line that does nothing but run the project's smoke script (`bash`/`sh` prefix, `./`
+ *  and arguments allowed). */
+const SMOKE_ONLY_LINE = new RegExp(`^(?:(?:bash|sh)\\s+)?(?:\\./)?${SMOKE_SCRIPT_PATH.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?:\\s.*)?$`, 'u')
+
+/**
+ * Plan A D10 (spec ruling 3, "the verifier does not take smoke.sh on trust"): a RUN `pass` whose
+ * check only runs scripts/smoke.sh took the project's own script on trust. The reason, or null when
+ * RUN is absent, not a pass, or checked with commands of the verifier's own.
+ */
+export function runCheckLeansOnSmoke(items: readonly VerificationItem[]): string | null {
+  const run = items.find((item) => item.key === RUN_REQUIREMENT_KEY)
+  if (run === undefined || run.status !== 'pass') return null
+  const commands = run.check
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#'))
+  if (commands.length === 0 || !commands.every((line) => SMOKE_ONLY_LINE.test(line))) return null
+  return `${RUN_REQUIREMENT_KEY} passed on ${SMOKE_SCRIPT_PATH} alone; the verifier must start the product itself through the path the README documents`
 }
 
 /**
@@ -266,6 +322,7 @@ export function renderVerificationProtocol(requirementKeys: readonly string[], v
     `1. Write a check -- a command, a script or a test -- in the scratch directory $SLAVEOFAI_VERIFY_DIR (${verifyDir}). Never in the repository: writes there are denied, and a verification that changed the repository is thrown away.`,
     '2. Run it against this checkout. Send any output files your checks produce to $SLAVEOFAI_VERIFY_DIR, not into the checkout.',
     '3. Decide: pass (the check shows the requirement holds), fail (it shows it does not), or unverifiable (no check you can run here can show it either way -- say why).',
+    ...(requirementKeys.includes(RUN_REQUIREMENT_KEY) ? [RUN_VERIFICATION_RULE] : []),
     'End your final message with this block, exactly once, one item per requirement key:',
     `<${SLAVE_VERIFICATION_TAG}>${JSON.stringify(example)}</${SLAVE_VERIFICATION_TAG}>`,
     '"check" is the check itself (the script text or the command line); "output" is what running it printed.',
