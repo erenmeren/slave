@@ -12,7 +12,7 @@ import { abandonGoal, runDirPathFor } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
-import { integrationBranchName, runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { RUN_REQUIREMENT, integrationBranchName, runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import { ClaudeCodeAdapter, permissionsFilePathFor, verifyDirPathFor } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
@@ -345,6 +345,16 @@ describe('dispatchVerification', () => {
     expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(1)
   }, 60_000)
 
+  it('never starts a verification run while a smoke check holds the version (skeleton spec S7)', async (): Promise<void> => {
+    const f = await seed()
+    const tip = git(['rev-parse', f.branch], f.repoPath)
+    const smoke = await prisma.smokeAttempt.create({ data: { workspaceId: f.workspaceId, goalDeliveryId: f.deliveryId, goalVersion: 1, round: 1, tip } })
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'verifying', round: 1, activeSmokeId: smoke.id } })
+    expect(await dispatchVerification(depsFor(f.workspaceId, verifier()), f.deliveryId)).toBeNull()
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(0)
+    expect(await prisma.goalDelivery.findUniqueOrThrow({ where: { id: f.deliveryId } })).toMatchObject({ activeRunId: null, activeSmokeId: smoke.id, round: 1 })
+  }, 60_000)
+
   it('waits silently, taking no claim, while the verifier is busy with another run', async (): Promise<void> => {
     const f = await seed()
     await prisma.slaveRun.create({ data: { taskId: f.taskIds[1] ?? '', slaveId: f.verifierId, kind: 'review', status: 'working' } })
@@ -520,6 +530,30 @@ describe('dispatchVerification', () => {
     expect(delivery).toMatchObject({ status: 'verifying', round: 2, activeRunId: null, roundRunFailures: 2 })
     expect(existsSync(join(worktreeRootFor(f.repoPath), verificationWorktreeKey(run.id)))).toBe(false)
     expect(await prisma.executionEvent.count({ where: { runId: run.id, type: 'run_failed' } })).toBe(1)
+  }, 60_000)
+
+  it('hands the verifier each package\'s leads and the RUN rule (skeleton spec S8)', async (): Promise<void> => {
+    const f = await seed()
+    await prisma.requirementSet.update({
+      where: { workspaceId_goalVersion: { workspaceId: f.workspaceId, goalVersion: 1 } },
+      data: { items: [{ key: 'R1', text: 'a CSV mode', source: 'Add a CSV mode.' }, { key: 'R2', text: 'a JSON mode', source: 'And a JSON one.' }, { ...RUN_REQUIREMENT }] },
+    })
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: f.taskIds[1] ?? '' }, select: { id: true, workPackageId: true } })
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: task.id } })
+    await prisma.runReport.create({
+      data: {
+        runId: run.id, taskId: task.id, workPackageId: task.workPackageId ?? '',
+        report: { requirements: [{ key: 'R2', status: 'partial', evidence: 'the JSON writer has no tests' }], filesTouched: [], workflow: [], questions: ['Needs a person: the production Docker image cannot start'] },
+      },
+    })
+    const runId = await dispatchVerification(depsFor(f.workspaceId, verifier()), f.deliveryId)
+    await drainPumps()
+    const context = await prisma.runContext.findUniqueOrThrow({ where: { runId: runId ?? '' } })
+    expect(context.prompt).toContain('Reported by the workers')
+    expect(context.prompt).toContain('- json:\n  Needs a person: the production Docker image cannot start')
+    expect(context.prompt).toContain('R2 partial: the JSON writer has no tests')
+    expect(context.prompt).toContain('scripts/smoke.sh passing is not enough on its own')
+    expect(context.prompt).not.toContain('- csv:')
   }, 60_000)
 })
 
@@ -944,6 +978,19 @@ describe('the gate (concludeVerification)', () => {
 
     expect((await deliveryOf(f)).status).toBe('accepted')
   }, 60_000)
+
+  it('throws away a verification whose RUN pass rests on smoke.sh alone, and runs the round again', async (): Promise<void> => {
+    const f = await seed()
+    await prisma.requirementSet.update({
+      where: { workspaceId_goalVersion: { workspaceId: f.workspaceId, goalVersion: 1 } },
+      data: { items: [{ key: 'R1', text: 'a CSV mode', source: '' }, { key: 'R2', text: 'a JSON mode', source: '' }, { ...RUN_REQUIREMENT }] },
+    })
+    const { runId } = await round(f, verdictText([passes('R1'), passes('R2'), { key: 'RUN', status: 'pass', check: 'bash scripts/smoke.sh', output: 'ok', reason: '' }]))
+    expect(await deliveryOf(f)).toMatchObject({ status: 'verifying', round: 1, roundRunFailures: 1, activeRunId: null })
+    expect(await prisma.verificationResult.count({ where: { runId } })).toBe(0)
+    const failed = await prisma.executionEvent.findFirstOrThrow({ where: { runId, type: 'run_failed' } })
+    expect((failed.payload as { reason: string }).reason).toContain('RUN passed on scripts/smoke.sh alone')
+  }, 60_000)
 })
 
 describe('stranded verification claims', () => {
@@ -1010,7 +1057,7 @@ describe('stranded verification claims', () => {
 
   // Fix round 1, M4: a conclusion that throws every time (here: the integration branch is gone, so
   // its tip cannot be read) must not hold the claim forever nor stop the pass for other versions.
-  it('releases a claim whose conclusion throws, goes on to the other versions, and ends in needs_human naming the error', async (): Promise<void> => {
+  it('releases a claim whose conclusion throws, goes on to the other versions, and trips on the gone branch instead of dispatching again', async (): Promise<void> => {
     const f = await seed()
     const claimed = await claimRound(f)
     await say(f, claimed.runId, verdictText([passes('R1'), passes('R2')]))
@@ -1045,15 +1092,21 @@ describe('stranded verification claims', () => {
     expect(trips.some((detail) => detail.includes('goal v2 is accepted and autoMerge is off'))).toBe(true)
     expect((await deliveryOf(f)).activeRunId).toBeNull()
 
-    for (let i = 0; i < 4 && (await deliveryOf(f)).status === 'verifying'; i += 1) {
+    for (let i = 0; i < 4; i += 1) {
       await runGoalPass(deps, { mayStartRuns: true })
       await drainPumps()
     }
 
+    // Skeleton final review I1: the branch is gone, so the round is not dispatched again into a
+    // checkout that cannot be made -- the pass says so, once, as for an accepted version, and the
+    // version waits for the branch to be restored or the version abandoned.
     const delivery = await deliveryOf(f)
-    expect(delivery).toMatchObject({ status: 'needs_human', activeRunId: null })
-    expect(delivery.needsHumanReason).toContain('could not produce a usable verification 3 times')
-    expect(delivery.needsHumanReason).toContain(f.branch)
+    expect(delivery).toMatchObject({ status: 'verifying', activeRunId: null, roundRunFailures: 1 })
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(1)
+    const gone = (await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'guardrail_tripped' } }))
+      .map((event) => (event.payload as { detail: string }).detail)
+      .filter((detail) => detail.startsWith(`the integration branch ${f.branch} of goal v1 is gone`))
+    expect(gone).toHaveLength(1)
   }, 60_000)
 
   it('releases a claim naming a run that does not exist', async (): Promise<void> => {

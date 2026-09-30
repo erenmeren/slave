@@ -29,13 +29,16 @@ import {
   VERIFICATION_DIFF_STAT_MAX_CHARS,
   VERIFIER_ROLE,
   err,
+  leadFromReport,
   parseSlaveVerification,
   renderVerificationRework,
   requirementItemsSchema,
+  runCheckLeansOnSmoke,
   runId as brandRunId,
   slaveId as brandSlaveId,
   type RunId,
   type VerificationItem,
+  type WorkerLead,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { checkpointRunFiles, runTokenHash, verifyDirPathFor, type RunHandle, type SlaveRuntimeAdapter } from '@slave-of-ai/providers'
@@ -285,6 +288,23 @@ async function diffStat(cwd: string, base: string, head: string): Promise<{ read
     : { text: stdout, capped: false }
 }
 
+/**
+ * Skeleton spec S8: every package's latest report, read as leads (plan A D11), in key order -- the
+ * newest `RunReport` per package, the one `loadGoalReport` shows.
+ */
+async function workerLeads(workspaceId: string, goalVersion: number): Promise<readonly WorkerLead[]> {
+  const packages = await prisma.workPackage.findMany({
+    where: { workspaceId, goalVersion },
+    orderBy: { key: 'asc' },
+    select: { key: true, reports: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1, select: { report: true } } },
+  })
+  return packages.flatMap((pkg) => {
+    const stored = pkg.reports[0]
+    const lead = stored === undefined ? null : leadFromReport(pkg.key, stored.report)
+    return lead === null ? [] : [lead]
+  })
+}
+
 const seatInclude = { person: { include: { template: true } }, permissions: true } as const
 type VerifierSeat = Prisma.SlaveGetPayload<{ include: typeof seatInclude }>
 
@@ -338,7 +358,9 @@ async function eligibleVerifier(
 }
 
 /**
- * Starts the verification run of a goal version, or does nothing and returns `null`.
+ * Starts the verification run of a goal version, or does nothing and returns `null`. A version
+ * that needs a smoke (`smokeRequired`) is verified only with the passing attempt handed in as
+ * `smoked`, on exactly its commit (skeleton spec S7/S8); without one nothing starts.
  *
  * A new round starts from `integrating` (every package integrated); a retry of the same round
  * (plan D7) from `verifying` with no claim. Mirrors `dispatchReview`'s shape and discipline: the
@@ -347,11 +369,25 @@ async function eligibleVerifier(
  * and a spawn error cancels what was spawned, fails the row, releases the claim (counting one run
  * failure) and removes the worktree.
  */
-export async function dispatchVerification(deps: TickDeps, deliveryId: string): Promise<RunId | null> {
+export async function dispatchVerification(
+  deps: TickDeps,
+  deliveryId: string,
+  smoked?: { readonly output: string; readonly durationMs: number | null; readonly tip: string } | null,
+): Promise<RunId | null> {
   const delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { id: deliveryId }, include: { workspace: true } })
   const newRound = delivery.status === 'integrating'
   if (!newRound && !(delivery.status === 'verifying' && delivery.activeRunId === null)) return null
   const workspace = delivery.workspace
+  // Skeleton spec S7 (final review minor 3): a version that needs a smoke is verified only on a
+  // smoked commit -- refused here too, so no caller can reach the verifier past the gate.
+  if (delivery.smokeRequired && smoked == null) return null
+
+  // Skeleton spec S8: verification is pinned to the SHA that was smoked. The tip moving since the
+  // goal pass looked means the smoke no longer describes it -- dispatch nothing; the next pass smokes the new tip.
+  if (smoked != null) {
+    const tipNow = await gitIn(workspace.repoPath, 'rev-parse', '--verify', '--quiet', `refs/heads/${delivery.integrationBranch}^{commit}`).catch(() => null)
+    if (tipNow !== smoked.tip) return null
+  }
 
   const excluded = await implementersOf(workspace.id, delivery.goalVersion)
   const seat = await eligibleVerifier(workspace.id, delivery, excluded)
@@ -375,9 +411,10 @@ export async function dispatchVerification(deps: TickDeps, deliveryId: string): 
   // the run is set up, and a lost claim leaves no trace at all.
   const claimed = await withDeliveryLock(delivery.id, async (tx) => {
     const now = await tx.goalDelivery.findUniqueOrThrow({ where: { id: delivery.id } })
-    if (now.status !== delivery.status || now.round !== delivery.round || now.activeRunId !== null) return { count: 0 }
+    // Skeleton spec S7: a smoke check holding the version (`activeSmokeId`) is as much a claim as a run.
+    if (now.status !== delivery.status || now.round !== delivery.round || now.activeRunId !== null || now.activeSmokeId !== null) return { count: 0 }
     return tx.goalDelivery.updateMany({
-      where: { id: delivery.id, status: delivery.status, activeRunId: null },
+      where: { id: delivery.id, status: delivery.status, activeRunId: null, activeSmokeId: null },
       data: newRound ? { status: 'verifying', activeRunId: run.id, round, roundRunFailures: 0 } : { activeRunId: run.id },
     })
   })
@@ -418,12 +455,14 @@ export async function dispatchVerification(deps: TickDeps, deliveryId: string): 
     const runAdapter = adapter
     const model = resolved.model
 
-    // D12: a fresh detached checkout of the integration branch, setup commands run in it. The tip
-    // it checked out and the state setup left it in go on the row at once (rulings Q5/Q6), where
-    // the verifier's shell cannot reach them and the conclusion (Task 6) reads them back.
+    // D12: a fresh detached checkout of the smoked commit when one is handed in (spec S8), else of
+    // the integration branch's tip, setup commands run in it. The commit it checked out and the
+    // state setup left it in go on the row at once (rulings Q5/Q6), where the verifier's shell
+    // cannot reach them and the conclusion (Task 6) reads them back.
     const worktree = await provisionDetachedWorktree({
       repoPath: workspace.repoPath,
-      ref: delivery.integrationBranch,
+      // The smoked commit itself when there is one, so a branch that moves during setup cannot unpin it.
+      ref: smoked?.tip ?? delivery.integrationBranch,
       key: verificationWorktreeKey(run.id),
       setupCommands: workspace.setupCommands,
     })
@@ -463,6 +502,21 @@ export async function dispatchVerification(deps: TickDeps, deliveryId: string): 
       where: { workspaceId_goalVersion: { workspaceId: workspace.id, goalVersion: delivery.goalVersion } },
     })
     const requirements = requirementItemsSchema.parse(requirementSet.items)
+    const leads = await workerLeads(workspace.id, delivery.goalVersion)
+    // Skeleton spec S8: the passing smoke on the tip this run checks, handed over as evidence. The
+    // goal pass hands the attempt it smoked; any other caller gets the latest pass on this exact tip.
+    const smoke =
+      smoked != null
+        ? smoked.tip === worktree.refCommit
+          ? smoked
+          : null
+        : delivery.smokeRequired
+          ? await prisma.smokeAttempt.findFirst({
+              where: { goalDeliveryId: delivery.id, status: 'passed', tip: worktree.refCommit },
+              orderBy: { startedAt: 'desc' },
+              select: { output: true, durationMs: true, tip: true },
+            })
+          : null
 
     const gitIdentity = { name: seat.person.name, email: `${emailLocalPart({ id: seat.id, name: seat.person.name })}@slaveofai.local` }
 
@@ -481,6 +535,8 @@ export async function dispatchVerification(deps: TickDeps, deliveryId: string): 
         diffStat: stat.text,
         diffCapped: stat.capped,
         verifyDir,
+        leads,
+        smoke,
       },
     })
 
@@ -765,7 +821,11 @@ export async function concludeVerification(runId: RunId): Promise<void> {
     orderBy: { seq: 'asc' },
     select: { payload: true },
   })
-  const parsed = tampered !== null ? err(tampered) : parseSlaveVerification(joinRunOutput(rows.map((row) => row.payload)), keys)
+  const read = tampered !== null ? err(tampered) : parseSlaveVerification(joinRunOutput(rows.map((row) => row.payload)), keys)
+  // Plan A D10 (skeleton spec ruling 3): a RUN pass that only ran scripts/smoke.sh is no verdict on
+  // RUN -- the claim is released and the same round runs again, like any unusable verification.
+  const leaning = read.ok ? runCheckLeansOnSmoke(read.value) : null
+  const parsed = leaning === null ? read : err(leaning)
   if (!parsed.ok) {
     if (await releaseClaim(delivery.id, run.id)) {
       await failConcludedRun(run, workspace.id, `verification: ${parsed.error}`)

@@ -1,7 +1,7 @@
 import { TERMINAL } from '../task/state.js'
 import { GOAL_REPORT_FILES_MAX, GOAL_REPORT_TRAIL_MAX } from './constants.js'
 import { evidenceCut, shortCommit } from './escape.js'
-import type { GoalReport, GoalReportState } from './types.js'
+import type { GoalReport, GoalReportSmoke, GoalReportState } from './types.js'
 
 /** How a person says each state. One wording for the page, the export and the chat note. */
 export const GOAL_REPORT_STATE_LABEL: Readonly<Record<GoalReportState, string>> = {
@@ -41,6 +41,34 @@ export function acceptedCommitText(report: GoalReport, branch: string): string {
   if (verified !== null) return `verified commit ${shortCommit(verified)} on ${branch}`
   const recorded = report.delivery?.verifiedCommit ?? null
   return recorded === null ? `no verified commit is recorded on ${branch}` : `commit ${shortCommit(recorded)} on ${branch}; no verification round is recorded`
+}
+
+/**
+ * Whether a smoke attempt of an abandoned version was stopped by the abandon (plan B Task 4): it
+ * sent nothing back, and it had not ended when the version was abandoned -- still running, or
+ * recorded at or after the abandon. The one rule for the page, the export and the trail (final
+ * review 5b): when the ATTEMPT ended, not when its event was written, since a script that ended on
+ * its own just before an abandon may have its conclusion written just after it.
+ */
+export function smokeStoppedByAbandon(attempt: { readonly endedAt: Date | null; readonly sentBack: boolean }, abandonedAt: Date | null): boolean {
+  if (abandonedAt === null || attempt.sentBack) return false
+  return attempt.endedAt === null || attempt.endedAt.getTime() >= abandonedAt.getTime()
+}
+
+/** What an attempt the abandon stopped had recorded, when that is not the SIGTERM's own `failed`:
+ *  a script may finish between the abandon and the signal (final review 5a). The trail says it too. */
+export function smokeRecordedAs(outcome: string, exitCode: number | null): string {
+  return `recorded as ${outcome.replace('_', ' ')}${exitCode === null ? '' : `, exit ${String(exitCode)}`}`
+}
+
+/** A smoke attempt's outcome, in words, for the page and the export alike (plan B Task 7). An
+ *  attempt the abandon stopped says so rather than reading as the product's failure: its SIGTERM
+ *  is recorded `failed` (exit 143), and nothing was sent back for it. Any other recorded outcome
+ *  of such an attempt is named beside it (final review 5a), as the trail names it. */
+export function smokeOutcomeLabel(smoke: GoalReportSmoke): string {
+  if (!smoke.stoppedByAbandon) return smoke.outcome.replace('_', ' ')
+  const stopped = 'stopped when the version was abandoned'
+  return smoke.outcome === 'failed' ? stopped : `${stopped} (${smokeRecordedAs(smoke.outcome, smoke.exitCode)})`
 }
 
 /** What the page and the export print for a version with no packages: "yet" only before conduct,

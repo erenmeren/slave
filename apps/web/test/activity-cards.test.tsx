@@ -98,6 +98,8 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'workspace.verified': { version: 1, round: 1, runId: 'r1', pass: 1, fail: 1, unverifiable: 0, failedKeys: ['R2'] },
   'workspace.goal_needs_human': { version: 1, reason: 'the verification round cap (3) was reached' },
   'workspace.goal_retried': { version: 1, round: 3 },
+  'workspace.smoke_run': { version: 1, round: 2, attemptId: 'a1', outcome: 'failed', exitCode: 1, durationMs: 1200, output: 'npm error Missing script: "start"', reworkedPackage: 'integration' },
+  'workspace.smoke_handed_off': { version: 1, round: 1, attemptId: 'a1', fromPackage: 'integration', toPackage: 'skeleton', path: 'backend/package.json', change: 'add a "start" script' },
   'workspace.plan_created': {
     goal: 'Ship the checkout flow',
     goalVersion: 1,
@@ -518,6 +520,13 @@ describe('targeted card bodies', () => {
   })
 
   // Final wave M5: a retry is the person's unless it says the branch moved.
+  it('workspace.smoke_run says how the smoke check ended and who was sent back', () => {
+    const Card = ACTIVITY_CARDS['workspace.smoke_run']
+    render(<Card event={baseEvent('workspace.smoke_run', { version: 1, round: 2, attemptId: 'a1', outcome: 'failed', exitCode: 1, durationMs: 1200, output: 'npm error Missing script: "start"', reworkedPackage: 'integration' })} {...CARD_PROPS} />)
+    expect(screen.getByText('goal v1 round 2: the smoke check failed (exit 1); integration sent back')).toBeTruthy()
+    expect(screen.getByTestId('smoke-run-output').textContent).toContain('Missing script: "start"')
+  })
+
   it('workspace.goal_retried says a person retried it, or that its branch moved after acceptance', () => {
     const Card = ACTIVITY_CARDS['workspace.goal_retried']
     const { unmount } = render(<Card event={baseEvent('workspace.goal_retried', { version: 1, round: 3 })} {...CARD_PROPS} />)

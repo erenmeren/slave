@@ -8,7 +8,8 @@ import {
   validateConduct,
   type ConductContext,
 } from '../../src/conduct/packages.js'
-import { INTEGRATION_PACKAGE_KEY } from '../../src/conduct/constants.js'
+import { INTEGRATION_PACKAGE_KEY, SKELETON_PACKAGE_KEY } from '../../src/conduct/constants.js'
+import { RUN_REQUIREMENT_KEY } from '../../src/conduct/requirements.js'
 
 const context: ConductContext = {
   requirementKeys: ['R1', 'R2', 'R3'],
@@ -36,7 +37,7 @@ describe('validateConduct', () => {
     expect(plan.ok).toBe(true)
     if (!plan.ok) return
     const integration = plan.value.packages.find((p) => p.key === INTEGRATION_PACKAGE_KEY)
-    expect(integration).toEqual(expect.objectContaining({ isIntegration: true, dependsOn: ['report', 'config'], requirementKeys: [] }))
+    expect(integration).toEqual(expect.objectContaining({ isIntegration: true, dependsOn: [SKELETON_PACKAGE_KEY, 'report', 'config'], requirementKeys: [] }))
     expect(ownerOf('src/cli.py', plan.value.packages)).toBe(INTEGRATION_PACKAGE_KEY)
     expect(ownerOf('src/report/table.py', plan.value.packages)).toBe('report')
   })
@@ -89,7 +90,7 @@ describe('validateConduct', () => {
       mode: 'partitioned', reason: 'r',
       packages: [pkg({}), pkg({ key: INTEGRATION_PACKAGE_KEY, requirementKeys: ['R2', 'R3'], ownedPaths: ['src/cli.py'] })],
     }, context)
-    expect(plan.ok && plan.value.packages.find((p) => p.isIntegration)?.dependsOn).toEqual(['report'])
+    expect(plan.ok && plan.value.packages.find((p) => p.isIntegration)?.dependsOn).toEqual([SKELETON_PACKAGE_KEY, 'report'])
   })
 
   /** Final review I4: integration is rewritten to depend on every other package, so a package that
@@ -104,6 +105,125 @@ describe('validateConduct', () => {
     }, context)
     expect(plan.ok).toBe(false)
     expect(!plan.ok && plan.error).toContain(`package "report": dependsOn "${INTEGRATION_PACKAGE_KEY}" is not allowed`)
+  })
+})
+
+const withRun: ConductContext = { ...context, requirementKeys: ['R1', 'R2', 'R3', RUN_REQUIREMENT_KEY] }
+const partition = (packages: readonly Record<string, unknown>[], extra: Record<string, unknown> = {}): unknown =>
+  ({ mode: 'partitioned', reason: 'r', packages, ...extra })
+const twoPackages = [pkg({}), pkg({ key: 'config', requirementKeys: ['R2', 'R3'], ownedPaths: ['src/config.py'] })]
+
+describe('validateConduct: the skeleton (spec S1)', () => {
+  it('adds a skeleton first when none is named, and makes every other package depend on it', () => {
+    const plan = validateConduct(partition(twoPackages), withRun)
+    expect(plan.ok).toBe(true)
+    if (!plan.ok) return
+    expect(plan.value.packages.map((p) => p.key)).toEqual([SKELETON_PACKAGE_KEY, 'report', 'config', 'integration'])
+    const byKey = new Map(plan.value.packages.map((p) => [p.key, p] as const))
+    expect(byKey.get(SKELETON_PACKAGE_KEY)).toEqual(expect.objectContaining({ requirementKeys: [], dependsOn: [], templateId: 't-backend', isIntegration: false }))
+    expect(byKey.get(SKELETON_PACKAGE_KEY)?.ownedPaths).toEqual(expect.arrayContaining(['scripts/verify.sh', 'scripts/smoke.sh', 'scripts/verify.d/skeleton.sh', 'Dockerfile']))
+    expect(byKey.get('report')?.dependsOn).toEqual([SKELETON_PACKAGE_KEY])
+    expect(byKey.get('integration')?.dependsOn).toEqual([SKELETON_PACKAGE_KEY, 'report', 'config'])
+  })
+
+  it('keeps a skeleton the conductor named, with its persona, and still adds the gate scripts to it', () => {
+    const plan = validateConduct(partition([pkg({ key: SKELETON_PACKAGE_KEY, requirementKeys: [], ownedPaths: ['src/cli.py'], templateId: 't-docs' }), ...twoPackages]), withRun)
+    expect(plan.ok).toBe(true)
+    if (!plan.ok) return
+    const skeleton = plan.value.packages.find((p) => p.key === SKELETON_PACKAGE_KEY)
+    expect(skeleton?.templateId).toBe('t-docs')
+    expect(skeleton?.ownedPaths).toEqual(['src/cli.py', 'scripts/verify.sh', 'scripts/smoke.sh', 'scripts/verify.d/skeleton.sh'])
+  })
+
+  it('refuses a skeleton that depends on something', () => {
+    const plan = validateConduct(partition([pkg({ key: SKELETON_PACKAGE_KEY, requirementKeys: [], ownedPaths: ['src/cli.py'], dependsOn: ['report'] }), ...twoPackages]), withRun)
+    expect(!plan.ok && plan.error).toContain('package "skeleton" depends on nothing')
+  })
+
+  it('lets a package name the skeleton in dependsOn even when the validator adds it', () => {
+    const plan = validateConduct(partition([pkg({ dependsOn: [SKELETON_PACKAGE_KEY] }), twoPackages[1] ?? {}]), withRun)
+    expect(plan.ok && plan.value.packages.find((p) => p.key === 'report')?.dependsOn).toEqual([SKELETON_PACKAGE_KEY])
+  })
+})
+
+describe('validateConduct: RUN belongs to integration (spec S6)', () => {
+  it('gives RUN to the integration package and never asks the conductor to place it', () => {
+    const plan = validateConduct(partition(twoPackages), withRun)
+    expect(plan.ok && plan.value.packages.find((p) => p.isIntegration)?.requirementKeys).toEqual([RUN_REQUIREMENT_KEY])
+  })
+  it('refuses RUN in a package', () => {
+    const plan = validateConduct(partition([pkg({ requirementKeys: ['R1', RUN_REQUIREMENT_KEY] }), twoPackages[1] ?? {}]), withRun)
+    expect(!plan.ok && plan.error).toContain('requirement RUN is Slave\'s own and belongs to the integration package')
+  })
+  it('gives single mode every key, RUN included', () => {
+    const plan = validateConduct({ mode: 'single', reason: 'fits', templateId: 't-backend' }, withRun)
+    expect(plan.ok && plan.value.packages[0]?.requirementKeys).toEqual(['R1', 'R2', 'R3', RUN_REQUIREMENT_KEY])
+  })
+})
+
+describe('validateConduct: manifests, verify.d and registrations (spec S2, S3)', () => {
+  const repo: ConductContext = { ...withRun, repoFiles: [...context.repoFiles, 'backend/package.json', 'backend/src/app.ts'] }
+  it('refuses a manifest split from its lockfile, naming the pair', () => {
+    const plan = validateConduct(partition([
+      pkg({ ownedPaths: ['backend/package.json', 'src/report/**'] }),
+      pkg({ key: 'config', requirementKeys: ['R2', 'R3'], ownedPaths: ['backend/package-lock.json', 'src/config.py'] }),
+    ]), repo)
+    expect(!plan.ok && plan.error).toContain('backend/package.json, backend/package-lock.json')
+  })
+  it('refuses a manifest and its lockfile named outright by two packages, though neither exists (ruling F4)', () => {
+    const plan = validateConduct(partition([
+      pkg({ ownedPaths: ['backend/package.json', 'src/report/**'] }),
+      pkg({ key: 'config', requirementKeys: ['R2', 'R3'], ownedPaths: ['backend/package-lock.json', 'src/config.py'] }),
+    ]), withRun)
+    expect(!plan.ok && plan.error).toContain('package "report" owns backend/package.json, but backend/package.json, backend/package-lock.json')
+    expect(!plan.ok && plan.error).toContain('package "config" owns backend/package-lock.json')
+  })
+  it('refuses a feature package whose glob covers a manifest', () => {
+    const plan = validateConduct(partition([pkg({ ownedPaths: ['backend/**'] }), twoPackages[1] ?? {}]), repo)
+    expect(!plan.ok && plan.error).toContain('package "report" owns backend/package.json')
+  })
+  it('accepts the manifest family in the skeleton', () => {
+    const plan = validateConduct(partition([pkg({ ownedPaths: ['backend/src/**'] }), twoPackages[1] ?? {}]), repo)
+    expect(plan.ok && plan.value.packages.find((p) => p.key === SKELETON_PACKAGE_KEY)?.ownedPaths).toEqual(
+      expect.arrayContaining(['backend/package.json', 'backend/package-lock.json', 'backend/yarn.lock']),
+    )
+  })
+  it('gives every package exactly its own verify.d check, and refuses a glob over another package\'s', () => {
+    const ok = validateConduct(partition(twoPackages), withRun)
+    expect(ok.ok && ok.value.packages.map((p) => p.ownedPaths.filter((g) => g.startsWith('scripts/verify.d/')))).toEqual([
+      ['scripts/verify.d/skeleton.sh'], ['scripts/verify.d/report.sh'], ['scripts/verify.d/config.sh'], ['scripts/verify.d/integration.sh'],
+    ])
+    const refused = validateConduct(partition([pkg({ ownedPaths: ['src/report/**', 'scripts/**'] }), twoPackages[1] ?? {}]), withRun)
+    expect(!refused.ok && refused.error).toContain('scripts/verify.d/config.sh')
+    expect(!refused.ok && refused.error).toContain('scripts/smoke.sh, which belongs to the skeleton package')
+  })
+  it('turns registrations into owned prefix globs, and refuses a whole shared directory', () => {
+    const accepted = validateConduct(partition([
+      pkg({ registrations: [{ directory: 'db/migrations', prefix: '0100_report_' }] }),
+      pkg({ key: 'config', requirementKeys: ['R2', 'R3'], ownedPaths: ['src/config.py'], registrations: [{ directory: 'db/migrations', prefix: '0200_config_' }] }),
+    ]), withRun)
+    expect(accepted.ok && accepted.value.packages.find((p) => p.key === 'report')?.ownedPaths).toContain('db/migrations/0100_report_*')
+    expect(accepted.ok && accepted.value.packages.find((p) => p.key === 'report')?.registrations).toEqual([{ directory: 'db/migrations', prefix: '0100_report_' }])
+    const refused = validateConduct(partition([
+      pkg({ ownedPaths: ['src/report/**', 'db/migrations/**'] }),
+      pkg({ key: 'config', requirementKeys: ['R2', 'R3'], ownedPaths: ['src/config.py'], registrations: [{ directory: 'db/migrations', prefix: '0200_config_' }] }),
+    ]), withRun)
+    expect(!refused.ok && refused.error).toContain('package "report" owns files in db/migrations that package "config" registers there')
+  })
+  it('accepts a package\'s own registration file among its new paths', () => {
+    const plan = validateConduct(partition([
+      pkg({ newPaths: ['db/m/01_a_init.sql'], registrations: [{ directory: 'db/m', prefix: '01_a_' }] }),
+      twoPackages[1] ?? {},
+    ]), withRun)
+    expect(plan.ok).toBe(true)
+  })
+  it('refuses a stored plan whose registrations are malformed, rather than reading them as none', () => {
+    const stored = { mode: 'single', reason: 'r', packages: [{ key: 'a', title: 'a', requirementKeys: [], ownedPaths: ['**'], newPaths: [], interface: '', dependsOn: [], isIntegration: false, templateId: 't', registrations: 'nope' }] }
+    expect(conductPlanSchema.safeParse(stored).success).toBe(false)
+  })
+  it('reads a stored plan from before registrations existed', () => {
+    const stored = { mode: 'partitioned', reason: 'r', packages: [{ key: 'a', title: 'a', requirementKeys: [], ownedPaths: ['a/**'], newPaths: [], interface: '', dependsOn: [], isIntegration: false, templateId: 't' }] }
+    expect(conductPlanSchema.parse(stored).packages[0]?.registrations).toEqual([])
   })
 })
 

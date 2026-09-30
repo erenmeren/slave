@@ -3,7 +3,7 @@
  * D2, D4), read from seeded rows -- no git, no model.
  */
 import { prisma } from '@slave-of-ai/db/client'
-import { reportCaveats } from '@slave-of-ai/domain'
+import { GOAL_REPORT_DENIALS_MAX, reportCaveats } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { latestReportVersion, loadGoalReport, reportVersions } from '../../src/goalReport.js'
@@ -90,7 +90,7 @@ const HAND_MERGE_UNVERIFIED = 'was not itself verified'
 
 beforeEach(async (): Promise<void> => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SlaveMessage", "ConductorCall", "VerificationResult", "RunReport", "SlaveRun", "Task", "WorkPackage", "GoalDelivery", "RequirementSet", "GoalVersion", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SlaveMessage", "ConductorCall", "SmokeAttempt", "VerificationResult", "RunReport", "SlaveRun", "Task", "WorkPackage", "GoalDelivery", "RequirementSet", "GoalVersion", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
   )
 })
 
@@ -389,5 +389,164 @@ describe('loadGoalReport', () => {
     expect(result.value.questions.map((q) => q.id)).toEqual([question.id])
     expect(result.value.spend.supervisorMeasuredUsd).toBe(0.25)
     expect(result.value.trail.some((e) => e.detail === 'the goal says CSV')).toBe(true)
+  })
+
+  describe('smoke checks and denied tool calls (skeleton spec S7/S9, plan B Task 7)', () => {
+    /** Two more packages beside `report`: the integration package and the skeleton, each with a task. */
+    async function smokePackages(w: World): Promise<{ readonly integrationTask: string; readonly skeletonTask: string }> {
+      const made: string[] = []
+      for (const [key, isIntegration] of [['integration', true], ['skeleton', false]] as const) {
+        const pkg = await prisma.workPackage.create({
+          data: { workspaceId: w.workspaceId, goalVersion: 1, key, title: key, requirementKeys: [], ownedPaths: [`${key}/**`], interface: '', templateId: templateIds.at(-1) ?? 'tpl', isIntegration },
+        })
+        const task = await prisma.task.create({
+          data: { workspaceId: w.workspaceId, title: key, description: 'x', status: 'done', requiredRole: 'implementer', maxAttempts: 3, workPackageId: pkg.id, goalVersion: 1, assigneeId: w.alexSeat, integratedAt: new Date() },
+        })
+        made.push(task.id)
+      }
+      return { integrationTask: made[0] ?? '', skeletonTask: made[1] ?? '' }
+    }
+
+    it('lists every attempt and every denial of the version, oldest first, and the smoke sentences in the trail', async (): Promise<void> => {
+      const w = await world()
+      const c = await conduct(w, { status: 'verifying', round: 2 })
+      const { integrationTask, skeletonTask } = await smokePackages(w)
+      const first = await prisma.smokeAttempt.create({
+        data: {
+          workspaceId: w.workspaceId, goalDeliveryId: c.deliveryId, goalVersion: 1, round: 1, tip: 'd'.repeat(40), status: 'failed', exitCode: 1, durationMs: 61_000,
+          output: 'npm error Missing script: "start"', reworkedTaskId: integrationTask, handOffTaskId: skeletonTask, handOffPath: 'backend/package.json', handOffChange: 'add a "start" script',
+          startedAt: new Date('2026-09-30T09:59:00Z'), endedAt: new Date('2026-09-30T10:00:00Z'),
+        },
+      })
+      const second = await prisma.smokeAttempt.create({
+        data: {
+          workspaceId: w.workspaceId, goalDeliveryId: c.deliveryId, goalVersion: 1, round: 2, tip: 'e'.repeat(40), status: 'passed', exitCode: 0, durationMs: 4_000,
+          output: 'flow ok', startedAt: new Date('2099-01-01T11:00:00Z'), endedAt: new Date('2099-01-01T11:00:04Z'),
+        },
+      })
+      await appendEvent({
+        type: 'workspace.smoke_run', workspaceId: w.workspaceId, actor: 'system',
+        payload: { version: 1, round: 1, attemptId: first.id, outcome: 'failed', exitCode: 1, durationMs: 61_000, output: 'npm error Missing script: "start"', reworkedPackage: 'integration' },
+      })
+      await appendEvent({
+        type: 'workspace.smoke_handed_off', workspaceId: w.workspaceId, actor: 'system',
+        payload: { version: 1, round: 1, attemptId: first.id, fromPackage: 'integration', toPackage: 'skeleton', path: 'backend/package.json', change: 'add a "start" script' },
+      })
+      // Another version's smoke event stays out of this version's trail.
+      await appendEvent({
+        type: 'workspace.smoke_run', workspaceId: w.workspaceId, actor: 'system',
+        payload: { version: 2, round: 1, attemptId: 'other', outcome: 'stub', exitCode: 2, durationMs: 10, output: 'smoke not written yet', reworkedPackage: 'skeleton' },
+      })
+      const run = await prisma.slaveRun.create({ data: { slaveId: w.alexSeat, kind: 'implementation', status: 'succeeded', taskId: integrationTask } })
+      const verifyRun = await prisma.slaveRun.create({ data: { slaveId: w.samSeat, kind: 'verification', status: 'succeeded', goalDeliveryId: c.deliveryId } })
+      const elsewhere = await prisma.slaveRun.create({ data: { slaveId: w.alexSeat, kind: 'implementation', status: 'succeeded' } })
+      const trip = async (runId: string, taskId: string | null, guardrail: string, detail: string): Promise<void> => {
+        await appendEvent({ type: 'guardrail.tripped', workspaceId: w.workspaceId, taskId, runId, actor: 'system', payload: { guardrail, detail } })
+      }
+      await trip(run.id, integrationTask, 'permission_mode', 'Bash was denied by the permission mode (tu_1)')
+      await trip(run.id, integrationTask, 'budget', 'the budget ran out')
+      await appendEvent({ type: 'run.tool_denied', workspaceId: w.workspaceId, taskId: integrationTask, runId: run.id, actor: 'slave', payload: { tool: 'Write', capability: 'write_repo', toolUseId: null } })
+      await appendEvent({ type: 'run.tool_denied', workspaceId: w.workspaceId, runId: verifyRun.id, actor: 'slave', payload: { tool: 'Edit', capability: 'write_repo' } })
+      // A run of no task of this version, and no verification run of it, is not the version's.
+      await appendEvent({ type: 'run.tool_denied', workspaceId: w.workspaceId, runId: elsewhere.id, actor: 'slave', payload: { tool: 'Bash', capability: 'shell' } })
+
+      const result = await loadGoalReport(w.workspaceId, 1)
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      const r = result.value
+      expect(r.smoke).toEqual([
+        {
+          attemptId: first.id, round: 1, outcome: 'failed', exitCode: 1, durationMs: 61_000, tip: 'd'.repeat(40), output: 'npm error Missing script: "start"',
+          at: '2026-09-30T10:00:00.000Z', reworkedPackage: 'integration', handOff: { toPackage: 'skeleton', path: 'backend/package.json', change: 'add a "start" script' },
+          stoppedByAbandon: false,
+        },
+        {
+          attemptId: second.id, round: 2, outcome: 'passed', exitCode: 0, durationMs: 4_000, tip: 'e'.repeat(40), output: 'flow ok',
+          at: '2099-01-01T11:00:04.000Z', reworkedPackage: null, handOff: null, stoppedByAbandon: false,
+        },
+      ])
+      expect(r.deniedToolCalls.map(({ runId, packageKey, kind, detail }) => ({ runId, packageKey, kind, detail }))).toEqual([
+        { runId: run.id, packageKey: 'integration', kind: 'permission_mode', detail: 'Bash was denied by the permission mode (tu_1)' },
+        { runId: run.id, packageKey: 'integration', kind: 'permission_matrix', detail: 'Write (write_repo) was refused by the permission matrix' },
+        { runId: verifyRun.id, packageKey: null, kind: 'permission_matrix', detail: 'Edit (write_repo) was refused by the permission matrix' },
+      ])
+      expect(r.deniedToolCallsOmitted).toBe(0)
+      const texts = r.trail.map((entry) => entry.text)
+      expect(texts).toContain('Smoke check, round 1: failed (exit 1); integration sent back.')
+      expect(texts).toContain('Smoke check, round 1: integration handed the fix to skeleton (backend/package.json).')
+      expect(r.trail.find((entry) => entry.text.includes('handed the fix'))).toEqual(expect.objectContaining({ detail: 'add a "start" script', detailBy: 'model' }))
+      expect(r.trail.find((entry) => entry.text.startsWith('Smoke check, round 1: failed'))?.detail).toBe('npm error Missing script: "start"')
+      expect(texts.filter((text) => text.startsWith('Smoke check'))).toHaveLength(2)
+      // `asOf` counts the attempts' times.
+      expect(r.asOf).toBe('2099-01-01T11:00:04.000Z')
+    })
+
+    it('says an attempt the abandon stopped was stopped, not that the smoke failed (Task 4 carry)', async (): Promise<void> => {
+      const w = await world()
+      const c = await conduct(w, { status: 'abandoned', round: 2 })
+      // Round 1 failed on its own before the abandon; round 2 was running when a person abandoned the version.
+      const before = await prisma.smokeAttempt.create({
+        data: {
+          workspaceId: w.workspaceId, goalDeliveryId: c.deliveryId, goalVersion: 1, round: 1, tip: 'd'.repeat(40), status: 'failed', exitCode: 1, durationMs: 1_000,
+          output: 'boom', reworkedTaskId: null, startedAt: new Date(Date.now() - 60_000), endedAt: new Date(Date.now() - 59_000),
+        },
+      })
+      const running = await prisma.smokeAttempt.create({
+        data: { workspaceId: w.workspaceId, goalDeliveryId: c.deliveryId, goalVersion: 1, round: 2, tip: 'd'.repeat(40), startedAt: new Date(Date.now() - 30_000) },
+      })
+      await appendEvent({ type: 'workspace.goal_abandoned', workspaceId: w.workspaceId, actor: 'human', payload: { version: 1, cancelled: [] } })
+      await prisma.smokeAttempt.update({ where: { id: running.id }, data: { status: 'failed', exitCode: 143, durationMs: 31_000, output: 'Terminated', endedAt: new Date(Date.now() + 1_000) } })
+      await appendEvent({
+        type: 'workspace.smoke_run', workspaceId: w.workspaceId, actor: 'system',
+        payload: { version: 1, round: 2, attemptId: running.id, outcome: 'failed', exitCode: 143, durationMs: 31_000, output: 'Terminated', reworkedPackage: null },
+      })
+      const result = await loadGoalReport(w.workspaceId, 1)
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value.smoke.map((s) => [s.attemptId, s.stoppedByAbandon])).toEqual([
+        [before.id, false],
+        [running.id, true],
+      ])
+      const sentence = result.value.trail.map((entry) => entry.text).find((text) => text.startsWith('Smoke check, round 2')) ?? ''
+      expect(sentence).toBe('Smoke check, round 2: stopped when the version was abandoned (recorded as failed, exit 143).')
+    })
+
+    it('decides "stopped by the abandon" by one rule on the page and in the trail: when the attempt ended, not when its event was written (final review 5b)', async (): Promise<void> => {
+      const w = await world()
+      const c = await conduct(w, { status: 'abandoned', round: 1 })
+      // The script ended on its own BEFORE the abandon; its conclusion (and its event) landed after it.
+      const ended = await prisma.smokeAttempt.create({
+        data: {
+          workspaceId: w.workspaceId, goalDeliveryId: c.deliveryId, goalVersion: 1, round: 1, tip: 'd'.repeat(40), status: 'failed', exitCode: 1, durationMs: 5_000,
+          output: 'boom', startedAt: new Date(Date.now() - 60_000), endedAt: new Date(Date.now() - 10_000),
+        },
+      })
+      await appendEvent({ type: 'workspace.goal_abandoned', workspaceId: w.workspaceId, actor: 'human', payload: { version: 1, cancelled: [] } })
+      await appendEvent({
+        type: 'workspace.smoke_run', workspaceId: w.workspaceId, actor: 'system',
+        payload: { version: 1, round: 1, attemptId: ended.id, outcome: 'failed', exitCode: 1, durationMs: 5_000, output: 'boom', reworkedPackage: null },
+      })
+      const result = await loadGoalReport(w.workspaceId, 1)
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value.smoke.map((s) => s.stoppedByAbandon)).toEqual([false])
+      const sentence = result.value.trail.map((entry) => entry.text).find((text) => text.startsWith('Smoke check, round 1')) ?? ''
+      expect(sentence).toBe('Smoke check, round 1: failed (exit 1).')
+    })
+
+    it('keeps the oldest GOAL_REPORT_DENIALS_MAX denials and counts the rest', async (): Promise<void> => {
+      const w = await world()
+      const c = await conduct(w)
+      const run = await prisma.slaveRun.create({ data: { slaveId: w.alexSeat, kind: 'implementation', status: 'succeeded', taskId: c.taskId } })
+      for (let i = 0; i < GOAL_REPORT_DENIALS_MAX + 2; i += 1) {
+        await appendEvent({ type: 'run.tool_denied', workspaceId: w.workspaceId, taskId: c.taskId, runId: run.id, actor: 'slave', payload: { tool: `T${String(i)}`, capability: 'shell' } })
+      }
+      const result = await loadGoalReport(w.workspaceId, 1)
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value.deniedToolCalls).toHaveLength(GOAL_REPORT_DENIALS_MAX)
+      expect(result.value.deniedToolCalls[0]?.detail).toBe('T0 (shell) was refused by the permission matrix')
+      expect(result.value.deniedToolCallsOmitted).toBe(2)
+    })
   })
 })

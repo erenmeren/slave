@@ -100,6 +100,9 @@ export async function runShellCommand(input: {
   readonly cwd: string
   readonly timeoutMs: number
   readonly env?: NodeJS.ProcessEnv
+  /** The spawned shell's pid -- its process group's id, since it is spawned detached. The smoke gate
+   *  records it so a later process can kill the group of a smoke whose daemon died (plan B D8). */
+  readonly onSpawn?: (pid: number) => void
 }): Promise<CommandOutcome> {
   const { command, cwd, timeoutMs } = input
   const child = spawn('/bin/sh', ['-c', command], {
@@ -108,6 +111,7 @@ export async function runShellCommand(input: {
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  if (child.pid !== undefined) input.onSpawn?.(child.pid)
 
   let tail = ''
   let capturedBytes = 0

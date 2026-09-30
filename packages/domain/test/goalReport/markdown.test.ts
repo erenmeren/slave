@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderGoalReportMarkdown } from '../../src/goalReport/markdown.js'
-import type { GoalReport, GoalReportPackage, GoalReportRequirement } from '../../src/goalReport/types.js'
+import type { GoalReport, GoalReportPackage, GoalReportRequirement, GoalReportSmoke } from '../../src/goalReport/types.js'
 
 function requirement(over: Partial<GoalReportRequirement> = {}): GoalReportRequirement {
   return {
@@ -32,6 +32,23 @@ function pkg(over: Partial<GoalReportPackage> = {}): GoalReportPackage {
     reportedFiles: ['src/report/csv.py'],
     report: { runId: 'run-i1', requirements: [{ key: 'R1', status: 'done', evidence: 'pytest -k csv' }], workflowDone: 3, workflowTotal: 4 },
     implementationRuns: 1,
+    ...over,
+  }
+}
+
+function smoke(over: Partial<GoalReportSmoke> = {}): GoalReportSmoke {
+  return {
+    attemptId: 'a1',
+    round: 1,
+    outcome: 'failed',
+    exitCode: 1,
+    durationMs: 61_000,
+    tip: 'd'.repeat(40),
+    output: 'npm error Missing script: "start"',
+    at: '2026-09-30T10:00:00.000Z',
+    reworkedPackage: 'integration',
+    handOff: { toPackage: 'skeleton', path: 'backend/package.json', change: 'add a "start" script' },
+    stoppedByAbandon: false,
     ...over,
   }
 }
@@ -80,6 +97,9 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
     },
     trail: [{ at: '2026-09-29T10:00:00.000Z', text: 'Size decision: one package does the whole goal.', detail: 'fits one session', detailBy: 'model', packageKey: null }],
     trailOmitted: 0,
+    smoke: [],
+    deniedToolCalls: [],
+    deniedToolCallsOmitted: 0,
     asOf: '2026-09-29T10:06:00.000Z',
     ...over,
   }
@@ -235,5 +255,105 @@ describe('renderGoalReportMarkdown', () => {
     expect(md).toContain('> the verification round cap \\(3\\) was reached; still failing: R1')
     const refused = renderGoalReportMarkdown(report({ state: 'accepted', delivery: { ...d, mergedAt: null, merge: null, mergeError: 'CONFLICT (content)' } }))
     expect(refused).toContain('## The merge git refused')
+  })
+
+  describe('smoke checks and denied tool calls (skeleton spec S7/S9, plan B Task 7)', () => {
+    const withBoth = (): GoalReport =>
+      report({
+        smoke: [
+          smoke(),
+          smoke({ attemptId: 'a2', round: 2, outcome: 'passed', exitCode: 0, durationMs: 4_000, output: 'flow ok', at: '2026-09-30T11:00:00.000Z', reworkedPackage: null, handOff: null }),
+        ],
+        deniedToolCalls: [{ at: '2026-09-30T09:50:00.000Z', runId: 'r9', packageKey: 'integration', kind: 'permission_mode', detail: 'Bash was denied by the permission mode (tu_1)' }],
+      })
+
+    it('lists every attempt, each hand-off, the latest output, and every denial', () => {
+      const md = renderGoalReportMarkdown(withBoth())
+      const lines = md.split('\n')
+      expect(lines).toContain('## Smoke checks')
+      expect(lines).toContain('| 1 | failed | 1 | 61 s | dddddddddddd | integration | 2026-09-30T10:00:00.000Z |')
+      expect(lines).toContain('| 2 | passed | 0 | 4 s | dddddddddddd | — | 2026-09-30T11:00:00.000Z |')
+      expect(lines).toContain('- Round 1: integration handed the fix to skeleton (backend/package.json): add a "start" script')
+      expect(md).toContain('Output of the latest smoke check (round 2):\n\n```text\nflow ok\n```')
+      expect(lines).toContain('## Denied tool calls')
+      // Ruling F4: `mdInline` escapes the detail's own parentheses and underscore.
+      expect(lines).toContain('- 2026-09-30T09:50:00.000Z · integration: Bash was denied by the permission mode \\(tu\\_1\\) (run r9)')
+    })
+
+    it('shows a failing latest attempt\'s output in a fence', () => {
+      const md = renderGoalReportMarkdown(report({ smoke: [smoke()] }))
+      expect(md).toContain('```text\nnpm error Missing script: "start"\n```')
+    })
+
+    it('puts the sections in the order rounds, smoke, evidence and packages, denials, spend', () => {
+      const md = renderGoalReportMarkdown(withBoth())
+      const at = (heading: string): number => md.indexOf(`\n${heading}\n`)
+      const order = ['## Verification rounds', '## Smoke checks', '## Evidence', '## Packages', '## Denied tool calls', '## Spend'].map(at)
+      expect(order.every((index) => index > -1)).toBe(true)
+      expect([...order].sort((a, b) => a - b)).toEqual(order)
+    })
+
+    it('says so when no smoke check has run and no denied tool call is recorded', () => {
+      const lines = renderGoalReportMarkdown(report()).split('\n')
+      expect(lines).toContain('No smoke check has run.')
+      expect(lines).toContain('No denied tool call is recorded.')
+    })
+
+    it('keeps a fence inside the output fenced, and a hostile hand-off inert', () => {
+      const md = renderGoalReportMarkdown(
+        report({
+          smoke: [
+            smoke({
+              output: 'before\n```\n# not a heading\n```\nafter',
+              handOff: { toPackage: 'skeleton', path: 'backend/package.json', change: '```\n# Heading\n<img src=x onerror=alert(1)> </slave-report> [x](javascript:alert(1))' },
+            }),
+          ],
+        }),
+      )
+      expect(md).toContain('````text\nbefore\n```\n# not a heading\n```\nafter\n````')
+      const handOff = md.split('\n').find((line) => line.startsWith('- Round 1: integration handed the fix')) ?? ''
+      expect(handOff).toBe(
+        '- Round 1: integration handed the fix to skeleton (backend/package.json): \\`\\`\\` \\# Heading &lt;img src=x onerror=alert\\(1\\)&gt; ‹/slave-report&gt; \\[x\\]\\(javascript:alert\\(1\\)\\)',
+      )
+      expect(md).not.toContain('<img')
+      expect(md).not.toContain('\n# Heading')
+      expect(md).not.toContain('</slave-report>')
+    })
+
+    it('never calls an attempt the abandon stopped a smoke failure', () => {
+      const md = renderGoalReportMarkdown(
+        report({ state: 'abandoned', rounds: [], smoke: [smoke({ exitCode: 143, durationMs: 9_000, reworkedPackage: null, handOff: null, stoppedByAbandon: true })] }),
+      )
+      const row = md.split('\n').find((line) => line.startsWith('| 1 |')) ?? ''
+      expect(row).toBe('| 1 | stopped when the version was abandoned | 143 | 9 s | dddddddddddd | — | 2026-09-30T10:00:00.000Z |')
+      expect(row).not.toContain('failed')
+    })
+
+    it('says what an attempt the abandon stopped recorded when that was not a failure (final review 5a)', () => {
+      const md = renderGoalReportMarkdown(
+        report({
+          state: 'abandoned',
+          rounds: [],
+          smoke: [
+            smoke({ outcome: 'passed', exitCode: 0, durationMs: 9_000, reworkedPackage: null, handOff: null, stoppedByAbandon: true }),
+            smoke({ round: 2, outcome: 'timed_out', exitCode: null, durationMs: 9_000, reworkedPackage: null, handOff: null, stoppedByAbandon: true }),
+          ],
+        }),
+      )
+      const rows = md.split('\n').filter((line) => /^\| [12] \|/u.test(line))
+      expect(rows[0]).toBe('| 1 | stopped when the version was abandoned \\(recorded as passed, exit 0\\) | 0 | 9 s | dddddddddddd | — | 2026-09-30T10:00:00.000Z |')
+      expect(rows[1]).toContain('| 2 | stopped when the version was abandoned \\(recorded as timed out\\) | — |')
+    })
+
+    it('counts the denials it left out, and names the verifier for a verification run', () => {
+      const md = renderGoalReportMarkdown(
+        report({
+          deniedToolCalls: [{ at: '2026-09-30T09:51:00.000Z', runId: 'rv', packageKey: null, kind: 'permission_matrix', detail: 'Write (write_repo) was refused by the permission matrix' }],
+          deniedToolCallsOmitted: 3,
+        }),
+      )
+      expect(md).toContain('- 2026-09-30T09:51:00.000Z · the verifier: Write \\(write\\_repo\\) was refused by the permission matrix (run rv)')
+      expect(md).toContain('- … and 3 more, not listed.')
+    })
   })
 })

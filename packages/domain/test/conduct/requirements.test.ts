@@ -3,7 +3,11 @@ import {
   assignRequirementKeys,
   buildRequirementsPrompt,
   parseRequirementsAnswer,
+  keyRequirementSet,
   REQUIREMENTS_ANSWER_KEY,
+  requirementItemsSchema,
+  RUN_REQUIREMENT,
+  RUN_REQUIREMENT_TEXT,
 } from '../../src/conduct/requirements.js'
 import { REQUIREMENTS_MAX_ITEMS } from '../../src/conduct/constants.js'
 
@@ -75,5 +79,38 @@ describe('assignRequirementKeys', () => {
       { key: 'R4', text: 'd', source: 'x' },
       { key: 'R1', text: 'a', source: 'x' },
     ])
+  })
+})
+
+describe('keyRequirementSet (skeleton spec S6)', () => {
+  it('appends RUN last, with its fixed text and source', () => {
+    const items = keyRequirementSet([{ text: 'a', source: 's' }, { text: 'b', source: 's' }], null)
+    expect(items.map((i) => i.key)).toEqual(['R1', 'R2', 'RUN'])
+    expect(items.at(-1)).toEqual(RUN_REQUIREMENT)
+    expect(RUN_REQUIREMENT.text).toBe('The product starts through the path its README documents and one basic user flow works end to end.')
+    expect(RUN_REQUIREMENT.source).toBe('added by Slave: a verified version must run')
+  })
+
+  it('keeps R-numbers counting past a previous RUN, and never NaN', () => {
+    const previous = [{ key: 'R1', text: 'a', source: 's' }, { key: 'R4', text: 'b', source: 's' }, RUN_REQUIREMENT]
+    const items = keyRequirementSet([{ text: 'b', source: 'x' }, { text: 'c', source: 'x' }], previous)
+    expect(items.map((i) => i.key)).toEqual(['R4', 'R5', 'RUN'])
+  })
+
+  it('drops a draft that says what RUN says, instead of keying it', () => {
+    const items = keyRequirementSet([{ text: `  ${RUN_REQUIREMENT_TEXT.toUpperCase()} `, source: 'x' }, { text: 'a', source: 'x' }], null)
+    expect(items.map((i) => i.key)).toEqual(['R1', 'RUN'])
+    expect(items.filter((i) => i.key === 'RUN')).toHaveLength(1)
+  })
+
+  it('reads a stored set with RUN and refuses any other non-R key', () => {
+    expect(requirementItemsSchema.safeParse([RUN_REQUIREMENT]).success).toBe(true)
+    expect(requirementItemsSchema.safeParse([{ key: 'RUNS', text: 'x', source: '' }]).success).toBe(false)
+    expect(requirementItemsSchema.safeParse([{ key: 'R0', text: 'x', source: '' }]).success).toBe(false)
+  })
+
+  it('assignRequirementKeys ignores a previous RUN for text matches and numbering', () => {
+    const items = assignRequirementKeys([{ text: RUN_REQUIREMENT_TEXT, source: 'x' }], [RUN_REQUIREMENT])
+    expect(items).toEqual([{ key: 'R1', text: RUN_REQUIREMENT_TEXT, source: 'x' }])
   })
 })

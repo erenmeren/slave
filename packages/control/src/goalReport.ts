@@ -1,13 +1,17 @@
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
+  GOAL_REPORT_DENIALS_MAX,
   actionSchema,
   err,
   ok,
   requirementItemsSchema,
+  smokeStoppedByAbandon,
   type GoalReport,
+  type GoalReportDenial,
   type GoalReportPackage,
   type GoalReportRequirement,
   type GoalReportRound,
+  type GoalReportSmoke,
   type GoalReportState,
   type GoalReportVerdictStatus,
   type GoalReportWorkerReport,
@@ -121,6 +125,56 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
     select: { id: true, slaveId: true, verificationTip: true, startedAt: true, terminalAt: true },
   })
 
+  // Skeleton spec S7 (plan B D10): every smoke attempt of the version, oldest first.
+  const smokeRows = delivery === null ? [] : await prisma.smokeAttempt.findMany({ where: { goalDeliveryId: delivery.id }, orderBy: [{ startedAt: 'asc' }, { id: 'asc' }] })
+  const packageOfTask = new Map(scope.tasks.map((task) => [task.taskId, task.packageKey] as const))
+  const smoke = smokeRows.map(
+    (row): GoalReportSmoke => ({
+      attemptId: row.id,
+      round: row.round,
+      outcome: row.status,
+      exitCode: row.exitCode,
+      durationMs: row.durationMs,
+      tip: row.tip,
+      output: row.output,
+      at: (row.endedAt ?? row.startedAt).toISOString(),
+      reworkedPackage: row.reworkedTaskId === null ? null : (packageOfTask.get(row.reworkedTaskId) ?? null),
+      handOff:
+        row.handOffTaskId === null
+          ? null
+          : { toPackage: packageOfTask.get(row.handOffTaskId) ?? 'a package', path: row.handOffPath ?? '', change: row.handOffChange ?? '' },
+      // Task 4: abandon SIGTERMs a running attempt, which then records `failed` (exit 143) with
+      // nothing sent back. The trail decides it by the same rule (final review 5b).
+      stoppedByAbandon: smokeStoppedByAbandon(
+        { endedAt: row.endedAt, sentBack: row.reworkedTaskId !== null },
+        delivery?.status === 'abandoned' ? (abandoned?.ts ?? null) : null,
+      ),
+    }),
+  )
+  // Skeleton spec S9 (plan B D10): the denials of the version's runs -- its package tasks' and its verification runs'.
+  const versionRuns = await prisma.slaveRun.findMany({
+    where: { OR: [{ taskId: { in: scope.tasks.map((task) => task.taskId) } }, ...(delivery === null ? [] : [{ goalDeliveryId: delivery.id }])] },
+    select: { id: true, taskId: true },
+  })
+  const taskOfRun = new Map(versionRuns.map((run) => [run.id, run.taskId] as const))
+  const denialRows = await prisma.executionEvent.findMany({
+    where: { runId: { in: versionRuns.map((run) => run.id) }, type: { in: ['guardrail_tripped', 'run_tool_denied'] } },
+    orderBy: { seq: 'asc' },
+    select: { runId: true, type: true, ts: true, payload: true },
+  })
+  const denials = denialRows.flatMap((row): GoalReportDenial[] => {
+    const p = (row.payload ?? {}) as Record<string, unknown>
+    const taskId = row.runId === null ? null : (taskOfRun.get(row.runId) ?? null)
+    const base = { at: row.ts.toISOString(), runId: row.runId ?? '', packageKey: taskId === null ? null : (packageOfTask.get(taskId) ?? null) }
+    if (row.type === 'guardrail_tripped') {
+      // Only the permission mode's refusals are denied tool calls; every other trip is a guardrail's own.
+      return p['guardrail'] === 'permission_mode' && typeof p['detail'] === 'string' ? [{ ...base, kind: 'permission_mode', detail: p['detail'] }] : []
+    }
+    const tool = typeof p['tool'] === 'string' ? p['tool'] : 'a tool'
+    const capability = typeof p['capability'] === 'string' ? ` (${p['capability']})` : ''
+    return [{ ...base, kind: 'permission_matrix', detail: `${tool}${capability} was refused by the permission matrix` }]
+  })
+
   const packageTasks = packageRows.map((pkg) => ({ pkg, task: pkg.tasks[0] ?? null }))
   const taskIds = packageTasks.flatMap(({ task }) => (task === null ? [] : [task.id]))
   const [names, templates, implCounts, doneEvents] = await Promise.all([
@@ -231,6 +285,7 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
   const stamps = [
     ...trail.entries.map((entry) => entry.at),
     ...rounds.map((r) => r.at),
+    ...smoke.map((attempt) => attempt.at),
     ...questions.flatMap((q) => [q.at, ...(q.answer === null ? [] : [q.answer.at])]),
     ...[delivery?.acceptedAt, delivery?.mergedAt].flatMap((at) => (at == null ? [] : [at.toISOString()])),
   ].sort(byText)
@@ -270,6 +325,9 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
     packages,
     verifier: scope.verifier,
     questions,
+    smoke,
+    deniedToolCalls: denials.slice(0, GOAL_REPORT_DENIALS_MAX),
+    deniedToolCallsOmitted: Math.max(0, denials.length - GOAL_REPORT_DENIALS_MAX),
     spend,
     trail: trail.entries,
     trailOmitted: trail.omitted,

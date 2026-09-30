@@ -5,6 +5,8 @@ import { promisify } from 'node:util'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   INTAKE_BOOTSTRAP_GOAL_CLAUSE,
+  INTAKE_BOOTSTRAP_SMOKE_SCRIPT,
+  INTAKE_BOOTSTRAP_SMOKE_SCRIPT_PATH,
   INTAKE_BOOTSTRAP_VERIFY_COMMAND,
   INTAKE_BOOTSTRAP_VERIFY_SCRIPT,
   INTAKE_BOOTSTRAP_VERIFY_SCRIPT_PATH,
@@ -499,7 +501,10 @@ async function hasGitIdentity(cwd: string): Promise<boolean> {
  * `plantGate` (M60 §7b, amended 2026-09-20): when the project's gate is the system's own
  * `INTAKE_BOOTSTRAP_VERIFY_COMMAND`, the script it names is written here, executable, in the same
  * first commit -- so the gate passes from the first task and no task has to be spent creating it.
- * A draft that named its own gate gets no script: nothing would run it.
+ * The smoke stub is planted in every new repository. Skeleton spec S4 (ruling F7): the accept step
+ * also passes `plantGate` for a draft that named its own gate, so the runner exists everywhere; the
+ * named command stays the workspace's gate, and the repository is empty when this runs, so nothing
+ * a draft named can be overwritten.
  */
 export async function initRepository(input: {
   readonly path: string
@@ -533,6 +538,12 @@ export async function initRepository(input: {
     await git(path, ['init', '-q', '-b', 'main'])
     await writeFile(join(path, 'README.md'), `# ${name}\n\n## Goal\n\n${goal}\n`, 'utf8')
     const staged = ['README.md']
+    // Skeleton spec S4: the smoke stub in every new repository -- it is not a gate, and nothing
+    // runs it until a conducted goal's smoke check does.
+    const smoke = join(path, INTAKE_BOOTSTRAP_SMOKE_SCRIPT_PATH)
+    await mkdir(dirname(smoke), { recursive: true })
+    await writeFile(smoke, INTAKE_BOOTSTRAP_SMOKE_SCRIPT, { encoding: 'utf8', mode: 0o755 })
+    staged.push(INTAKE_BOOTSTRAP_SMOKE_SCRIPT_PATH)
     if (plantGate) {
       const script = join(path, INTAKE_BOOTSTRAP_VERIFY_SCRIPT_PATH)
       await mkdir(dirname(script), { recursive: true })
@@ -695,13 +706,15 @@ export async function acceptIntake(
       } else {
         const root = await resolveReposRoot()
         const target = draft.repo.path ?? intakeRepositoryPath(root.root, slugify(draft.name))
-        // The gate is planted exactly when it will be the project's gate -- the same condition
-        // `create_workspace` below substitutes `INTAKE_BOOTSTRAP_VERIFY_COMMAND` under.
+        // The runner is planted in every new repository (skeleton spec S4, ruling F7); only the
+        // goal clause and the substituted gate command below depend on the draft naming no gate.
+        // A draft's own gate (`npm test`) does not run the runner: each package's contract names
+        // the workspace's real gate and says where checks go for it (`renderPackageContract`).
         const created = await initRepository({
           path: target,
           name: draft.name,
           goal: draft.goal,
-          plantGate: draft.verifyCommands.length === 0,
+          plantGate: true,
         })
         if (!created.ok) return fail('init_repository', created.error)
         repoPath = created.value.path

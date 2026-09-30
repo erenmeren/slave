@@ -1,11 +1,73 @@
 import { sanitisePersonText } from '../handoff/contract.js'
 import type { RequirementItem } from './requirements.js'
+import { SKELETON_PACKAGE_KEY } from './constants.js'
+import { globToRegExp } from './glob.js'
+import {
+  gateRunsVerifyScript,
+  isLiteralPath,
+  manifestFamily,
+  registrationGlob,
+  trimSlash,
+  VERIFY_CHECKS_DIR,
+  VERIFY_SCRIPT_PATH,
+  verifyCheckPathFor,
+  type PackageRegistration,
+} from './skeleton.js'
 
 /**
  * The tag a package worker's final report is wrapped in (Conductor Plan 2). The pair is also in
  * `../run-context/markers.ts`' `MARKERS`, so quoted text cannot forge or close a report.
  */
 export const SLAVE_REPORT_TAG = 'slave-report'
+
+/**
+ * Skeleton spec S1: what the skeleton package is for, said in its own contract -- rendered from
+ * what it actually owns and what the repository already holds (final review I3). A fallback
+ * skeleton (plan A D3) owns only the paths nobody claimed, so it is never ordered to deliver an
+ * entry point or a manifest it cannot touch; a skeleton on a base that already has a product (goal
+ * v2, an existing repository) keeps that product runnable rather than building an empty one over
+ * it. README.md is the integration package's (it is none of S1's files, and RUN -- "starts through
+ * the path its README documents" -- is integration's, S6) unless the conductor gave it to the skeleton.
+ */
+export function renderSkeletonJobLines(ownedPaths: readonly string[], existingProduct: boolean | undefined): readonly string[] {
+  const owns = (path: string): boolean => ownedPaths.some((glob) => globToRegExp(glob).test(path))
+  const manifests = ownedPaths.filter((glob) => isLiteralPath(glob) && manifestFamily(glob).length > 0)
+  const product =
+    existingProduct === true
+      ? 'This repository already has a product: make the existing product start and keep it runnable. Change only what starting it needs; do not rewrite a working entry point.'
+      : existingProduct === false
+        ? 'Deliver a runnable EMPTY product with the files you own: it starts and does nothing yet; the other packages add the features.'
+        : 'If this repository already has a product, make the existing product start and keep it runnable (do not rewrite a working entry point); otherwise deliver a runnable EMPTY product with the files you own.'
+  const dependencies =
+    manifests.length > 0
+      ? `Your dependency manifests and lockfiles: ${manifests.join(', ')}. Declare in them every dependency the goal will need now -- no other package may change a manifest or a lockfile.`
+      : ownedPaths.some((glob) => !isLiteralPath(glob))
+        ? 'Declare in any dependency manifest among your files every dependency the goal will need now -- no other package may change a manifest or a lockfile.'
+        : 'You own no dependency manifest.'
+  return [
+    'Your package is the skeleton: it runs before every other package, and they all build on it.',
+    product,
+    dependencies,
+    'If starting it needs a file you do not own, ask the conductor for it (see the ask protocol) instead of creating it.',
+    'If you own the loader of a shared registration directory, make it load every file there: each package adds its own file; you own the loader, not the entries.',
+    owns('README.md')
+      ? 'Update README.md so it says how to start the product.'
+      : 'README.md is not yours: the integration package, which runs last, documents how to start the product.',
+  ]
+}
+
+/** Skeleton spec S5: the smoke contract, carried by the skeleton's contract (or the single package's). */
+export const SMOKE_CONTRACT_LINES: readonly string[] = [
+  'Write scripts/smoke.sh; the product is not accepted until it passes. The contract:',
+  '- `bash scripts/smoke.sh` from the repository root starts the product through the path the README documents',
+  '  (Docker if the README says Docker), runs one basic user flow end to end against it (for example: sign in,',
+  '  add a record, see it in a list), stops everything it started, and exits 0 only if the flow worked.',
+  '- Use $SLAVEOFAI_SMOKE_PROJECT as the compose project name and container name prefix, and never publish on',
+  '  a fixed host port without first checking that it is free. Name any docker network or volume it creates',
+  '  outside compose with that same prefix: after every run, containers, networks and volumes whose names',
+  '  start with $SLAVEOFAI_SMOKE_PROJECT are removed, and anything named otherwise is left behind.',
+  '- Print what it does, step by step. Only the stub exits 2 with "smoke not written yet".',
+]
 
 /** What {@link renderPackageContract} reads off a `WorkPackage` row -- only the fields it shows. */
 export interface PackageContractInput {
@@ -15,9 +77,53 @@ export interface PackageContractInput {
     readonly ownedPaths: readonly string[]
     readonly isIntegration: boolean
     readonly interface: string
+    /** The shared-directory prefixes this package owns (skeleton spec S3); absent reads as none. */
+    readonly registrations?: readonly PackageRegistration[]
   }
   readonly requirements: readonly RequirementItem[]
   readonly dependencies: readonly { readonly key: string; readonly interface: string }[]
+  /** The workspace's verification gate (`Workspace.verifyCommands`), so the contract says where a
+   *  check must go for that gate to run it (final review I1). */
+  readonly verifyCommands: readonly string[]
+  /** The skeleton only: whether its base already holds a product ({@link hasProductFiles});
+   *  absent when that could not be read, and the job line then covers both. */
+  readonly existingProduct?: boolean
+}
+
+/**
+ * Where this package's checks go, true for the project's real gate (final review I1):
+ * - the gate runs scripts/verify.sh (a new repository whose draft named no gate, or a project whose
+ *   gate is its own verify.sh): checks go in scripts/verify.d/, and the package that owns
+ *   scripts/verify.sh -- the skeleton, or the single package -- makes it the runner if it is still
+ *   a check list, keeping those checks;
+ * - it does not (a draft that named `npm test`): a verify.d check is reached only if the gate
+ *   happens to run it, so checks go where the gate runs them;
+ * - no gate at all: said, with verify.d as the place a later gate can reach.
+ */
+function checkLines(key: string, single: boolean, verifyCommands: readonly string[]): readonly string[] {
+  const own = single ? 'scripts/verify.d/' : verifyCheckPathFor(key)
+  if (verifyCommands.length === 0) {
+    return [`No verification gate is configured for this project yet. Add your checks to ${own} all the same.`]
+  }
+  const gate = `The verification gate (a task is accepted only when it passes): ${verifyCommands.map((c) => `\`${sanitisePersonText(c)}\``).join(', then ')}.`
+  if (!gateRunsVerifyScript(verifyCommands)) {
+    return [
+      gate,
+      `That gate does not run ${VERIFY_SCRIPT_PATH}, so a check in ${VERIFY_CHECKS_DIR}/ counts only if the gate itself reaches it: put your checks where it runs them, in files you own`,
+      `(for example, tests its test runner discovers).${single ? '' : ` ${verifyCheckPathFor(key)} is yours too; never edit another package's check.`}`,
+    ]
+  }
+  const runner = `${VERIFY_SCRIPT_PATH} runs every ${VERIFY_CHECKS_DIR}/*.sh in name order`
+  const convert = `If ${VERIFY_SCRIPT_PATH} does not run every ${VERIFY_CHECKS_DIR}/*.sh in name order, make it do so, keeping its existing checks.`
+  if (single) return [gate, `Add your checks to ${VERIFY_CHECKS_DIR}/. ${convert}`]
+  if (key === SKELETON_PACKAGE_KEY) {
+    return [gate, `Your checks go in ${own}. ${convert} Every other package's checks reach the gate only through it.`]
+  }
+  return [
+    gate,
+    `Your checks go in ${own} -- ${runner} (if it does not yet, the skeleton package, which runs before yours, makes it do so).`,
+    "Add checks for what you built; never edit another package's check.",
+  ]
 }
 
 /**
@@ -43,6 +149,19 @@ export function renderPackageContract(input: PackageContractInput): string {
     'Do not create or change any other file: other workers own them. If your work needs a change',
     'outside your files, ask the conductor (see the ask protocol) instead of making it.',
   ]
+  const single = input.pkg.ownedPaths.includes('**')
+  if (input.pkg.key === SKELETON_PACKAGE_KEY) lines.push('', ...renderSkeletonJobLines(input.pkg.ownedPaths, input.existingProduct))
+  if (input.pkg.key === SKELETON_PACKAGE_KEY || single) lines.push('', ...SMOKE_CONTRACT_LINES)
+  lines.push('', ...checkLines(input.pkg.key, single, input.verifyCommands))
+  const registrations = input.pkg.registrations ?? []
+  if (registrations.length > 0) {
+    lines.push(
+      '',
+      'You add files to shared directories only through your own prefix (the skeleton owns the loader, not the entries):',
+      ...registrations.map((r) => `- ${registrationGlob(r)} (in ${trimSlash(r.directory)}, which the skeleton loads)`),
+      'Name every such file with that prefix, and never put such a file anywhere else.',
+    )
+  }
   if (input.pkg.interface.trim() !== '') {
     lines.push('', 'What your package provides and uses:', sanitisePersonText(input.pkg.interface))
   }

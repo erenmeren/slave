@@ -114,6 +114,9 @@ describe('parseActivityFilters', () => {
       'workspace.restored',
       'workspace.runbook_adopted',
       'workspace.settings_changed',
+      // Skeleton spec S7: the smoke check of a goal version, beside its verification.
+      'workspace.smoke_handed_off',
+      'workspace.smoke_run',
       'workspace.verification_started',
       'workspace.verified',
     ])

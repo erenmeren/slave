@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { err, ok, type Result } from '../result.js'
 import { SLAVE_REPORT_TAG } from './contract.js'
+import { storableText } from './verification.js'
 
 /** A package worker's report on its run (spec R7), as {@link parseSlaveReport} reads it. */
 export interface SlaveReport {
@@ -12,6 +13,9 @@ export interface SlaveReport {
   readonly filesTouched: readonly string[]
   readonly workflow: readonly { readonly step: number | string; readonly done: boolean; readonly note: string }[]
   readonly questions: readonly string[]
+  /** User ruling 2026-09-30 (plan B D11): a smoke rework's claim that its fix is in a file another
+   *  package owns -- a path and what must change there. A claim only: `handOffSmokeRework` checks it. */
+  readonly handOff?: { readonly path: string; readonly change: string } | undefined
 }
 
 const reportSchema = z.object({
@@ -34,7 +38,49 @@ const reportSchema = z.object({
     .max(100)
     .default([]),
   questions: z.array(z.string().trim().min(1).max(4000)).max(10).default([]),
+  // User ruling 2026-09-30 (skeleton-and-smoke plan B D11): a smoke rework's structured hand-off --
+  // the file another package owns that the fix needs, and what must change in it. The bounds are
+  // `workspace.smoke_handed_off`'s, so a filed claim always fits its event.
+  handOff: z.object({ path: z.string().trim().min(1).max(500), change: z.string().trim().max(2000).default('') }).optional(),
 })
+
+/** Skeleton spec S8: what one package's latest report asks a verifier to look into. */
+export interface WorkerLead {
+  readonly packageKey: string
+  readonly lines: readonly string[]
+}
+
+/**
+ * The leads in a stored `RunReport.report` (plan A D11): its questions, every requirement it did
+ * not call done (with the worker's own evidence), and every non-empty workflow note. `null` when
+ * there is none, or when the row does not read as a report (a later build's shape) -- a lead is
+ * never worth a thrown dispatch. The lines are the worker's RAW text: the verifier's prompt
+ * sanitises them where it renders them (`renderVerificationLeads`).
+ */
+export function leadFromReport(packageKey: string, stored: unknown): WorkerLead | null {
+  const parsed = reportSchema.safeParse(stored)
+  if (!parsed.success) return null
+  const lines = [
+    ...parsed.data.questions,
+    ...parsed.data.requirements.filter((r) => r.status !== 'done').map((r) => `${r.key} ${r.status.replace('_', ' ')}: ${r.evidence}`),
+    ...parsed.data.workflow.filter((w) => w.note.trim() !== '').map((w) => `workflow step ${String(w.step)}: ${w.note}`),
+  ]
+  return lines.length === 0 ? null : { packageKey, lines }
+}
+
+/**
+ * Whether `text` ends with its LAST `<slave-report>` block, closed -- the pump's cheap "this worker
+ * finished and reported" test (skeleton spec S9, plan A D9). Whether the report is USABLE is
+ * `parseSlaveReport`'s question, asked afterwards by `fileRunReport`.
+ */
+export function hasSlaveReportBlock(text: string): boolean {
+  const start = text.lastIndexOf(`<${SLAVE_REPORT_TAG}>`)
+  const close = `</${SLAVE_REPORT_TAG}>`
+  // Anchored at the END (Task 6 fix round 1): the pump's text is every text event joined, so a
+  // report followed by "Now let me also clean up..." is a worker that went on working, not one
+  // that finished.
+  return start !== -1 && text.indexOf(close, start) !== -1 && text.trimEnd().endsWith(close)
+}
 
 /**
  * The worker's report (spec R7), from the LAST `<slave-report>` block of its final message -- a
@@ -51,7 +97,9 @@ export function parseSlaveReport(text: string, requirementKeys: readonly string[
   if (end === -1) return err(`the ${open} block is not closed`)
   let value: unknown
   try {
-    value = JSON.parse(text.slice(start + open.length, end))
+    // Final review I2: a `\u0000` escape parses to a NUL byte, which the stored report's jsonb
+    // refuses -- the filing then threw, and a hand-off's change never reached its attempt row.
+    value = JSON.parse(text.slice(start + open.length, end), (_key, v: unknown) => (typeof v === 'string' ? storableText(v) : v))
   } catch {
     return err(`the ${open} block is not valid JSON`)
   }

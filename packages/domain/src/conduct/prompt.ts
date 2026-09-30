@@ -1,7 +1,7 @@
 import { sanitisePersonText } from '../handoff/contract.js'
 import { CONDUCT_MAX_PACKAGES } from './constants.js'
 import { CONDUCT_ANSWER_KEY } from './packages.js'
-import type { RequirementItem } from './requirements.js'
+import { RUN_REQUIREMENT_KEY, type RequirementItem } from './requirements.js'
 
 export interface ConductPromptInput {
   readonly goal: string
@@ -35,6 +35,21 @@ export function buildConductPrompt(input: ConductPromptInput): string {
     'exist and the new files each package lists in "newPaths". Every requirement belongs to exactly one package.',
     'A file no package owns belongs to the "integration" package, which runs last and wires the others',
     'together; name it yourself (key "integration") if it has requirements of its own.',
+    'Every partitioned goal starts with a "skeleton" package (key "skeleton"): name it yourself to choose its files and',
+    'persona ("skeletonTemplateId" otherwise), or it is added for you. It runs first and every other package depends on',
+    'it. It owns the application entry point and server bootstrap, EVERY dependency manifest together with its lockfile',
+    '(package.json with package-lock.json, pyproject.toml with uv.lock, Cargo.toml with Cargo.lock, go.mod with go.sum,',
+    '...), the build, start and deploy files (Dockerfile, compose files), scripts/verify.sh, scripts/smoke.sh and the',
+    'loaders of shared registration directories; it declares every dependency up front. No other package may own a',
+    'manifest or a lockfile.',
+    'Shared registration points are file-per-package: each package owns scripts/verify.d/<its key>.sh (added for you)',
+    'and, in an ordered shared directory (migrations, routes, jobs), only the files that start with its own prefix --',
+    'declare them as "registrations": [{"directory": "backend/migrations", "prefix": "0100_identity_"}]. Never give a',
+    'whole shared directory to one package when another package adds files to it.',
+    // Said only when the set has it (final review): a set written before RUN existed has none to place.
+    ...(input.requirements.some((r) => r.key === RUN_REQUIREMENT_KEY)
+      ? [`Requirement ${RUN_REQUIREMENT_KEY} is added by Slave and always belongs to the integration package: list it in no package.`]
+      : []),
     '"interface" says what the package provides to others and uses from them (functions, types, CLI surface),',
     'so each worker can code against the others without touching their files.',
     'Pick each package\'s worker by "templateId" from the catalogue.',
@@ -59,6 +74,7 @@ export function buildConductPrompt(input: ConductPromptInput): string {
     'or',
     `{"${CONDUCT_ANSWER_KEY}": {"mode": "partitioned", "reason": "why it does not fit one session", "packages": [`,
     '  {"key": "kebab-case", "title": "...", "requirementKeys": ["R1"], "ownedPaths": ["src/x/**"], "newPaths": [],',
-    '   "interface": "...", "dependsOn": [], "templateId": "..."}], "integrationTemplateId": "..."}}',
+    '   "interface": "...", "dependsOn": [], "templateId": "...", "registrations": []}],',
+    '  "skeletonTemplateId": "...", "integrationTemplateId": "..."}}',
   ].join('\n')
 }

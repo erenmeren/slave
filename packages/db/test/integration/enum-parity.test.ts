@@ -18,6 +18,7 @@ import {
   PERMISSION_PROVIDERS,
   PERMISSION_RUN_KINDS,
   SITUATION_KINDS,
+  SMOKE_OUTCOMES,
   SKILL_GRANT_MODES,
   SLAVE_LIFECYCLES,
   TIERS,
@@ -218,5 +219,9 @@ describe('database enums match the domain unions', () => {
 
   it('IntakeRole matches INTAKE_ROLES, member for member', async () => {
     expect(await enumValues('IntakeRole')).toEqual([...INTAKE_ROLES].sort())
+  })
+
+  it('SmokeOutcome matches SMOKE_OUTCOMES, member for member', async () => {
+    expect(await enumValues('SmokeOutcome')).toEqual([...SMOKE_OUTCOMES].sort())
   })
 })

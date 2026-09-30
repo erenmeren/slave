@@ -23,7 +23,9 @@ export interface RequirementDraft {
 }
 
 export const requirementItemsSchema = z
-  .array(z.object({ key: z.string().regex(/^R[1-9][0-9]*$/u), text: z.string().min(1), source: z.string() }))
+  // Skeleton spec S6: `RUN` is the one key that is not `R<n>` -- Slave's own requirement, appended
+  // after extraction (`keyRequirementSet`), never numbered.
+  .array(z.object({ key: z.string().regex(/^(?:R[1-9][0-9]*|RUN)$/u), text: z.string().min(1), source: z.string() }))
   .readonly()
 
 const draftSchema = z.object({
@@ -93,6 +95,12 @@ export function parseRequirementsAnswer(text: string): Result<readonly Requireme
   return ok(drafts)
 }
 
+/** Skeleton spec S6: the requirement Slave adds to every set -- a verified version must run. */
+export const RUN_REQUIREMENT_KEY = 'RUN'
+export const RUN_REQUIREMENT_TEXT = 'The product starts through the path its README documents and one basic user flow works end to end.'
+export const RUN_REQUIREMENT_SOURCE = 'added by Slave: a verified version must run'
+export const RUN_REQUIREMENT: RequirementItem = { key: RUN_REQUIREMENT_KEY, text: RUN_REQUIREMENT_TEXT, source: RUN_REQUIREMENT_SOURCE }
+
 /**
  * Keys for a new set (spec R1: "items that are textually equal keep their key"). A new item gets
  * the next number after the HIGHEST key the previous set used, never a retired one's number: a
@@ -102,8 +110,11 @@ export function assignRequirementKeys(
   drafts: readonly RequirementDraft[],
   previous: readonly RequirementItem[] | null,
 ): readonly RequirementItem[] {
-  const byText = new Map((previous ?? []).map((item) => [normalise(item.text), item.key] as const))
-  let next = Math.max(0, ...(previous ?? []).map((item) => Number(item.key.slice(1)))) + 1
+  // Skeleton spec S6: `RUN` is not a numbered key. It neither lends its key to a textually equal
+  // draft nor counts toward the next number (`Number('UN')` is NaN, and NaN would poison `max`).
+  const numbered = (previous ?? []).filter((item) => item.key !== RUN_REQUIREMENT_KEY)
+  const byText = new Map(numbered.map((item) => [normalise(item.text), item.key] as const))
+  let next = Math.max(0, ...numbered.map((item) => Number(item.key.slice(1)))) + 1
   const used = new Set<string>()
   return drafts.map((draft) => {
     const text = draft.text.trim().replace(/\s+/gu, ' ')
@@ -116,4 +127,18 @@ export function assignRequirementKeys(
     next += 1
     return { key, text, source: draft.source }
   })
+}
+
+/**
+ * A goal version's requirement set (spec R1 + skeleton spec S6): the drafts keyed against the
+ * previous set, then `RUN` last. A draft that says what `RUN` says is dropped before keying, so it
+ * neither spends a number nor appears twice. Every set this builds holds exactly one `RUN`, with the
+ * same key and text, so no goal edit can merge it away (plan A D1).
+ */
+export function keyRequirementSet(
+  drafts: readonly RequirementDraft[],
+  previous: readonly RequirementItem[] | null,
+): readonly RequirementItem[] {
+  const own = drafts.filter((draft) => normalise(draft.text) !== normalise(RUN_REQUIREMENT_TEXT))
+  return [...assignRequirementKeys(own, previous), RUN_REQUIREMENT]
 }

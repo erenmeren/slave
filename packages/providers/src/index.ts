@@ -9,6 +9,7 @@ export * from './registry.js'
 export * from './runtime/event-queue.js'
 export * from './runtime/summary.js'
 export * from './runtime/process.js'
+export * from './runtime/procGroup.js'
 export * from './runtime/pause-flag.js'
 // `preflightGate` is deliberately NOT re-exported: `claude/flags.js` already exports a
 // `preflightGate` (its thin, Claude-shaped wrapper), and the generic probe is
