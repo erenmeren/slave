@@ -1021,7 +1021,9 @@ describe('conductor end to end', () => {
     await tickUntil(f, merged(f, 1))
 
     const handOffs = await prisma.packageHandOff.findMany({ where: { workspaceId: f.workspaceId }, orderBy: { sourceKey: 'asc' } })
-    expect(handOffs.map((h) => [h.toPackageKey, h.status])).toEqual([['integration', 'delivered'], ['skeleton', 'reopened']])
+    // Final review I2: the skeleton's reopen run finished, so its request is delivered; `reopenedAt`
+    // keeps that it was reopened for it, which the report below still says.
+    expect(handOffs.map((h) => [h.toPackageKey, h.status, h.reopenedAt !== null])).toEqual([['integration', 'delivered', false], ['skeleton', 'delivered', true]])
 
     const integration = await implementationRunsOf(f, 'integration')
     expect(integration[0]?.prompt).toContain('Asked of your package by other packages')
@@ -1031,6 +1033,9 @@ describe('conductor end to end', () => {
     const skeleton = await implementationRunsOf(f, 'skeleton')
     expect(skeleton).toHaveLength(2)
     expect(skeleton[1]?.prompt).toContain('- from report (scripts/verify.sh): run pytest -k report')
+    // Once, in the rework reason: not listed again as asked of the package.
+    expect(skeleton[1]?.prompt.split('run pytest -k report')).toHaveLength(2)
+    expect(skeleton[1]?.prompt).not.toContain('Asked of your package')
     expect((await prisma.workPackage.findFirstOrThrow({ where: { workspaceId: f.workspaceId, key: 'skeleton' } })).handOffReopens).toBe(1)
 
     const report = await loadGoalReport(f.workspaceId, 1)
