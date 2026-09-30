@@ -21,6 +21,19 @@ describe('manifestFamily', () => {
     expect(manifestFamily('src/app.ts')).toEqual([])
   })
 
+  it('ignores a manifest under node_modules, vendor, fixtures, __fixtures__ or testdata', () => {
+    for (const path of [
+      'node_modules/left-pad/package.json',
+      'vendor/github.com/x/go.mod',
+      'test/fixtures/x/package.json',
+      'src/__fixtures__/Cargo.lock',
+      'pkg/testdata/go.sum',
+    ]) {
+      expect(manifestFamily(path)).toEqual([])
+    }
+    expect(manifestFamily('fixtures-tool/package.json')).toHaveLength(7) // a segment NAMED fixtures only
+  })
+
   it('covers the spec S2 list exactly', () => {
     expect(MANIFEST_LOCK_PAIRS.map((p) => p.manifest)).toEqual(['package.json', 'pyproject.toml', 'Pipfile', 'Cargo.toml', 'go.mod', 'Gemfile', 'composer.json'])
   })
@@ -48,6 +61,14 @@ describe('manifestProblems', () => {
     expect(problems).toContain('package "api" owns backend/package.json, but backend/package.json, backend/package-lock.json')
     expect(problems).toContain('package "ui" owns backend/package-lock.json')
     expect(problems).toContain('belong to the skeleton package')
+  })
+  it('neither reserves a fixture manifest for the skeleton nor refuses a tests package that owns it', () => {
+    const packages = [{ key: 'skeleton', ownedPaths: [] }, { key: 'tests', ownedPaths: ['test/**'] }]
+    const repo = ['package.json', 'test/fixtures/x/package.json', 'test/fixtures/x/package-lock.json']
+    expect(manifestProblems(packages, repo)).toEqual([])
+    const { add } = skeletonPaths(packages, repo, true)
+    expect(add).toContain('package.json')
+    expect(add.filter((path) => path.startsWith('test/'))).toEqual([])
   })
   it('accepts the family in the skeleton', () => {
     expect(manifestProblems([{ key: 'skeleton', ownedPaths: ['backend/package.json', 'backend/package-lock.json'] }, { key: 'api', ownedPaths: ['backend/src/api/**'] }], known)).toEqual([])

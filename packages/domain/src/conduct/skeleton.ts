@@ -92,9 +92,19 @@ export function isLiteralPath(glob: string): boolean {
   return !/[*?]/u.test(glob) && !glob.endsWith('/')
 }
 
-/** The manifest-and-lockfile family `path` belongs to, in its directory; `[]` for any other path. */
+/**
+ * Directories whose manifests are not the product's own: installed or vendored dependencies, and
+ * test fixtures and test data (final review ruling). A `test/fixtures/x/package.json` reserved for
+ * the skeleton would refuse every plan giving `test/**` to a tests package, and burn the conduct
+ * retries of a legacy repository on it.
+ */
+export const NON_PRODUCT_MANIFEST_DIRECTORIES: ReadonlySet<string> = new Set(['node_modules', 'vendor', 'fixtures', '__fixtures__', 'testdata'])
+
+/** The manifest-and-lockfile family `path` belongs to, in its directory; `[]` for any other path,
+ *  and for one under a {@link NON_PRODUCT_MANIFEST_DIRECTORIES} segment. */
 export function manifestFamily(path: string): readonly string[] {
   const slash = path.lastIndexOf('/')
+  if (path.slice(0, Math.max(slash, 0)).split('/').some((segment) => NON_PRODUCT_MANIFEST_DIRECTORIES.has(segment))) return []
   const directory = slash === -1 ? '' : path.slice(0, slash + 1)
   const name = path.slice(slash + 1)
   const pair = MANIFEST_LOCK_PAIRS.find((entry) => entry.manifest === name || entry.locks.includes(name))
