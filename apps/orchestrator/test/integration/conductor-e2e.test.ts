@@ -55,8 +55,22 @@ function git(args: readonly string[], cwd: string): string {
   return execFileSync('git', [...args], { cwd, encoding: 'utf8' }).trim()
 }
 
+/** A smoke script that fails its first `failures` runs the way the 2026-09-29 project's image did,
+ *  then passes -- counted in a file outside the repository, so no package's commit resets it. */
+function smokeScript(stateFile: string, failures: number): string {
+  return [
+    '#!/usr/bin/env bash',
+    `n=$(cat '${stateFile}' 2>/dev/null || echo 0)`,
+    `echo $((n + 1)) > '${stateFile}'`,
+    'echo "smoke project: $SLAVEOFAI_SMOKE_PROJECT"',
+    `if [ "$n" -lt ${String(failures)} ]; then echo 'npm error Missing script: "start"' >&2; exit 1; fi`,
+    'echo "flow ok"',
+    '',
+  ].join('\n')
+}
+
 /** A real repository with files the conductor's map shows and the package worker commits beside. */
-function makeRepo(): string {
+function makeRepo(smoke: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'slaveofai-conductor-e2e-'))
   git(['init', '-q', '-b', 'main'], dir)
   git(['config', 'user.name', 'Fixture'], dir)
@@ -67,9 +81,9 @@ function makeRepo(): string {
     writeFileSync(join(dir, file), 'def main():\n    pass\n')
   }
   // Skeleton spec S7: every version conducted now carries RUN, so its goal pass runs this first.
-  // A passing one here; Task 8 of plan B makes it fail on purpose where a test wants that.
+  // The skeleton owns the file and no fake worker writes it.
   mkdirSync(join(dir, 'scripts'), { recursive: true })
-  writeFileSync(join(dir, 'scripts/smoke.sh'), '#!/usr/bin/env bash\necho "flow ok"\n')
+  writeFileSync(join(dir, 'scripts/smoke.sh'), smoke)
   chmodSync(join(dir, 'scripts/smoke.sh'), 0o755)
   git(['add', '-A'], dir)
   git(['commit', '-q', '-m', 'initial'], dir)
@@ -276,6 +290,8 @@ interface SeedOptions {
   /** The verifier's answer per round (`--verification-rounds-base64`); absent, everything passes. */
   readonly verificationRounds?: readonly (readonly object[])[]
   readonly verificationRoundCap?: number
+  /** How many times the fixture's smoke script fails before it passes (default 0). */
+  readonly smokeFailures?: number
 }
 
 /** A conducted workspace with its goal set, the backend template's managed pool, a reviewer seat,
@@ -286,7 +302,7 @@ async function seed(options: SeedOptions = {}): Promise<Fixture> {
     data: { id: 't-backend', name: 'Backend Developer', role: 'backend', description: 'x', active: true, capabilityKeys: [] },
   })
   await syncPersonPool()
-  const repoPath = makeRepo()
+  const repoPath = makeRepo(smokeScript(join(mkdtempSync(join(tmpdir(), 'e2e-smoke-')), 'count'), options.smokeFailures ?? 0))
   const workspace = await prisma.workspace.create({
     data: {
       name: 'Report Modes E2E',
@@ -497,6 +513,11 @@ describe('conductor end to end', () => {
     ])
     expect(git(['worktree', 'list'], f.repoPath)).not.toContain('verify-')
     expect(verifyWorktrees(f)).toEqual([])
+    // Plan B: one smoke, passed in round 1 at the tip that was verified; the verifier was handed its output.
+    const smokes = await prisma.smokeAttempt.findMany({ where: { goalDeliveryId: d1?.id ?? '' } })
+    expect(smokes.map((a) => [a.round, a.status])).toEqual([[1, 'passed']])
+    expect(smokes[0]?.tip).toBe(d1?.verifiedCommit)
+    expect(f.starts.find((s) => s.kind === 'verification')?.prompt).toContain('flow ok')
     // By a seat that implemented nothing in this version and holds `verifier`, which left one check
     // per requirement in its own scratch directory, outside the repository.
     expect(verification.slaveId).not.toBe(packageTask.assigneeId)
@@ -578,6 +599,31 @@ describe('conductor end to end', () => {
     expect(notes[0]?.text).toContain('the verified commit')
     expect(notes[0]?.text).toContain('Requirements: 3 of 3 pass (round 1).')
     expect((await delivery(f, 1))?.reportNotedKey).toBe('merged')
+  })
+
+  it('sends a partitioned goal whose smoke fails back to integration, then accepts it with RUN verified', async (): Promise<void> => {
+    const f = await seed({ conductAnswer: PARTITIONED, smokeFailures: 1 })
+    await tickUntil(f, merged(f, 1))
+    const d1 = await delivery(f, 1)
+    const attempts = await prisma.smokeAttempt.findMany({ where: { goalDeliveryId: d1?.id ?? '' }, orderBy: { startedAt: 'asc' } })
+    expect(attempts.map((a) => [a.round, a.status])).toEqual([[1, 'failed'], [2, 'passed']])
+    const integration = await implementationRunsOf(f, 'integration')
+    expect(integration).toHaveLength(2)
+    expect(integration[1]?.prompt).toContain('The smoke check of verification round 1 failed')
+    expect(integration[1]?.prompt).toContain('Missing script: "start"')
+    expect(await implementationRunsOf(f, 'skeleton')).toHaveLength(1)
+    expect(await implementationRunsOf(f, 'report')).toHaveLength(1)
+    // One verification run, in round 2, after the passing smoke.
+    const verifications = f.starts.filter((s) => s.kind === 'verification')
+    expect(verifications.map((s) => /Verification round (\d+)/.exec(s.prompt)?.[1])).toEqual(['2'])
+    expect(verifications[0]?.prompt).toContain('flow ok')
+    expect((await goalEvents(f)).find((e) => e.type === 'workspace.goal_accepted')?.payload).toEqual({ version: 1, rounds: 2 })
+    expect(await prisma.verificationResult.findFirst({ where: { key: 'RUN' }, select: { status: true } })).toEqual({ status: 'pass' })
+    const report = await loadGoalReport(f.workspaceId, 1)
+    expect(report.ok && report.value.smoke.map((s) => [s.round, s.outcome, s.reworkedPackage])).toEqual([[1, 'failed', 'integration'], [2, 'passed', null]])
+    // The fake's integration report names no handOff (plan B D11): nothing went to the skeleton.
+    expect(report.ok && report.value.smoke.map((s) => s.handOff)).toEqual([null, null])
+    expect(verifyWorktrees(f)).toEqual([])
   })
 
   it('cuts a dependent package from the integration branch after its dependency merged there; main gets both only at the final merge', async (): Promise<void> => {
@@ -866,6 +912,7 @@ describe('conductor end to end', () => {
     expect(atStop.ok && reportCaveats(atStop.value)).toEqual(['The verifier could not check R2; the version cannot be accepted until it is.'])
 
     // The person retries: the unchanged tree is verified again (round 2), and this time it passes.
+    expect(await prisma.smokeAttempt.count()).toBe(1)
     expect(await retryGoal(f.workspaceId, 1)).toEqual(expect.objectContaining({ ok: true }))
     await tickUntil(f, merged(f, 1))
     const d1 = await delivery(f, 1)
