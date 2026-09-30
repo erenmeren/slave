@@ -15,6 +15,7 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import { expirePendingHandOffs, goalEventWith, withDeliveryLock } from './goalDelivery.js'
 import { handOffQuestionKey, sendMessage } from './messaging.js'
+import { isTransactionTimeout } from './prisma-errors.js'
 import { refusalText } from './refusal.js'
 
 /**
@@ -66,13 +67,14 @@ class HandOffMoved extends Error {}
  * a row too, and a later version may repeat a request), so the "already on record?" read and the
  * insert must be serialised per version, and the delivery row may be created between the lookup
  * and the lock. Order is always delivery lock, then version lock; nothing takes them the other way.
+ * `deliveryId` null takes the version lock alone: the announcement pass needs no more.
  */
 async function withVersionLock<T>(deliveryId: string | null, workspaceId: string, goalVersion: number, work: (tx: Tx) => Promise<T>): Promise<T> {
   const locked = async (tx: Tx): Promise<T> => {
     await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtext(${`slaveofai:hand-offs:${workspaceId}:v${String(goalVersion)}`}))`
     return work(tx)
   }
-  return deliveryId === null ? prisma.$transaction(locked, { maxWait: 10_000 }) : withDeliveryLock(deliveryId, locked)
+  return deliveryId === null ? prisma.$transaction(locked, { maxWait: 10_000, timeout: 30_000 }) : withDeliveryLock(deliveryId, locked)
 }
 
 /** The version's packages with their one task (plan A D2: the oldest, as every rework path reads it). */
@@ -197,9 +199,25 @@ export async function routeHandOffs(input: RouteHandOffsInput): Promise<readonly
     }
     return out
   })
-  for (const { row, delivery: routedAs } of routed) await announceHandOff(row, routedAs)
+  // Task 5 review minor 3: the check-then-append of each event under the version lock, so two
+  // concurrent replays of one report cannot both find it missing. After the routing commits: an
+  // event must never name a row a rolled-back routing never stored.
+  await withVersionLock(null, workspaceId, goalVersion, async (tx) => {
+    for (const { row, delivery: routedAs } of routed) await announceHandOff(tx, row, routedAs)
+  })
   await sendHandOffQuestions(workspaceId)
-  if (delivery !== null) await reopenForHandOffs(delivery.id)
+  if (delivery !== null) {
+    try {
+      await reopenForHandOffs(delivery.id)
+    } catch (error) {
+      // Task 5 review minor 2: the rows are stored and announced; a reopen that could not get the
+      // delivery's lock (a final merge holding it) is the goal pass's next reopen to do, not a reason
+      // to fail the filing. Not forced in a test: only a lock held past the waiter's 120 s timeout, or a pool with no free
+      // connection for 10 s, reaches it.
+      if (!isTransactionTimeout(error)) throw error
+      console.error(`[hand-off] goal v${String(goalVersion)}: the reopen waits for the next goal pass -- the delivery lock was busy`)
+    }
+  }
   return prisma.packageHandOff.findMany({
     where: { workspaceId, sourceKey: { in: input.items.map((_, index) => `${input.sourceKey}:${String(index)}`) } },
     orderBy: { sourceKey: 'asc' },
@@ -207,9 +225,10 @@ export async function routeHandOffs(input: RouteHandOffsInput): Promise<readonly
   })
 }
 
-/** Plan A D8: the row's event, once -- a replay finds it by `handOffId` and writes nothing. */
-async function announceHandOff(row: HandOffRow, delivery: Delivery): Promise<void> {
-  const said = await prisma.executionEvent.findFirst({
+/** Plan A D8: the row's event, once -- a replay finds it by `handOffId` and writes nothing. Called
+ *  under the version lock and read on its `tx`, which sees every event committed before the grant. */
+async function announceHandOff(tx: Tx, row: HandOffRow, delivery: Delivery): Promise<void> {
+  const said = await tx.executionEvent.findFirst({
     where: { workspaceId: row.workspaceId, type: 'workspace_package_handed_off', payload: { path: ['handOffId'], equals: row.id } },
     select: { seq: true },
   })

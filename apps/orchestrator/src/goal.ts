@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { expirePendingHandOffs, goalEventSaid, goalEventWith, settleGoalEvidence, withDeliveryLock } from '@slave-of-ai/control'
+import { everyPackageIntegrated, expirePendingHandOffs, goalEventSaid, goalEventWith, settleGoalEvidence, withDeliveryLock } from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import { VERIFICATION_REASON_MAX_CHARS, VERIFICATION_RUN_RETRY_CAP, handMergeInstruction, type GuardrailKind } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
@@ -192,16 +192,6 @@ async function smokeOrVerify(
   }
   // The smoked attempt travels with the dispatch: it verifies that SHA or nothing (spec S8).
   await dispatchVerification(deps, delivery.id, smoked)
-}
-
-/** Every package task of the version is `done` and on the integration branch -- and there is at
- *  least one (a version whose tasks were all cancelled is not "delivered"; it is abandoned). */
-async function everyPackageIntegrated(workspaceId: string, goalVersion: number): Promise<boolean> {
-  const tasks = await prisma.task.findMany({
-    where: { workspaceId, workPackage: { goalVersion } },
-    select: { status: true, integratedAt: true },
-  })
-  return tasks.length > 0 && tasks.every((task) => task.status === 'done' && task.integratedAt !== null)
 }
 
 /** The verdict a goal version is accepted on (plan 4b, ruling Q6): the verification run that

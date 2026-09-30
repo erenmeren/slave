@@ -15,6 +15,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import {
   admitProvider,
+  everyPackageIntegrated,
   goalEventWith,
   implementersOf,
   refusalText,
@@ -413,6 +414,8 @@ export async function dispatchVerification(
     const now = await tx.goalDelivery.findUniqueOrThrow({ where: { id: delivery.id } })
     // Skeleton spec S7: a smoke check holding the version (`activeSmokeId`) is as much a claim as a run.
     if (now.status !== delivery.status || now.round !== delivery.round || now.activeRunId !== null || now.activeSmokeId !== null) return { count: 0 }
+    // Task 5 review I1: as in `startSmoke` -- a hand-off reopen since the pass's unlocked check wins.
+    if (newRound && !(await everyPackageIntegrated(now.workspaceId, now.goalVersion, tx))) return { count: 0 }
     return tx.goalDelivery.updateMany({
       where: { id: delivery.id, status: delivery.status, activeRunId: null, activeSmokeId: null },
       data: newRound ? { status: 'verifying', activeRunId: run.id, round, roundRunFailures: 0 } : { activeRunId: run.id },

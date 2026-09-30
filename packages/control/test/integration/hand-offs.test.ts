@@ -88,6 +88,15 @@ describe('routeHandOffs', () => {
     expect(routed.map((e) => e.payload)).toEqual([expect.objectContaining({ handOffId: (await rows(f))[0]?.id, delivery: 'prompt', toPackage: 'integration' })])
   })
 
+  it('announces a lost event once when two replays of the report race (review minor 3)', async () => {
+    const f = await seed({ skeleton: 'done', report: 'running', integration: 'ready' })
+    const items = [{ package: 'integration', change: 'expose GET /x' }, { package: 'integration', change: 'and GET /y' }]
+    await route(f, items)
+    await prisma.executionEvent.deleteMany({ where: { workspaceId: f.workspaceId, type: 'workspace_package_handed_off' } })
+    await Promise.all([route(f, items), route(f, items), route(f, items)])
+    expect(await events(f, 'workspace_package_handed_off')).toHaveLength(2)
+  })
+
   it('records a repeated request from a later run as a duplicate, opening nothing', async () => {
     const f = await seed({ skeleton: 'done', report: 'running', integration: 'ready' })
     await route(f, [{ path: 'scripts/verify.sh', change: 'Run pytest -k report' }])

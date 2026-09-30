@@ -12,7 +12,7 @@
 import { statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { goalEventWith, withDeliveryLock } from '@slave-of-ai/control'
+import { everyPackageIntegrated, goalEventWith, withDeliveryLock } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
   SMOKE_OUTPUT_MAX_CHARS,
@@ -116,6 +116,9 @@ export async function startSmoke(deliveryId: string): Promise<string | null> {
       // Re-read under the lock: an overlapping pass may have claimed it, or moved the version, meanwhile.
       const now = await tx.goalDelivery.findUniqueOrThrow({ where: { id: delivery.id } })
       if (now.status !== delivery.status || now.round !== delivery.round || now.activeRunId !== null || now.activeSmokeId !== null) return null
+      // Task 5 review I1: a hand-off reopen may have sent a package back since the pass's unlocked
+      // check; it moves tasks under this same lock, so the re-read here is the one that counts.
+      if (newRound && !(await everyPackageIntegrated(now.workspaceId, now.goalVersion, tx))) return null
       const attempt = await tx.smokeAttempt.create({
         data: { workspaceId: now.workspaceId, goalDeliveryId: now.id, goalVersion: now.goalVersion, round, tip, ownerInstance: OWNER_INSTANCE },
         select: { id: true },

@@ -407,6 +407,26 @@ describe('the goal pass and the smoke gate', () => {
     expect(await attemptsOf(f)).toHaveLength(2)
   }, 120_000)
 
+  it('takes no smoke claim when a hand-off reopened a package after the pass looked (Task 5 review I1)', async (): Promise<void> => {
+    const f = await seed('#!/usr/bin/env bash\necho ok\n')
+    // The pass read every package integrated; a report's hand-off reopened the skeleton since.
+    await prisma.task.update({ where: { id: f.taskOf.skeleton }, data: { status: 'rework', integratedAt: null } })
+    expect(await startSmoke(f.deliveryId)).toBeNull()
+    expect(await attemptsOf(f)).toEqual([])
+    expect(await deliveryOf(f)).toMatchObject({ status: 'integrating', round: 0, activeSmokeId: null, activeRunId: null })
+    expect(await taskStatus(f.taskOf.skeleton)).toBe('rework')
+  }, 60_000)
+
+  it('takes no verification claim when a hand-off reopened a package after the pass looked (Task 5 review I1)', async (): Promise<void> => {
+    const f = await seedWithVerifier(null)
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { smokeRequired: false } })
+    await prisma.task.update({ where: { id: f.taskOf.api }, data: { status: 'rework', integratedAt: null } })
+    expect(await dispatchVerification(depsFor(f.workspaceId, verifier()), f.deliveryId)).toBeNull()
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(0)
+    expect(await deliveryOf(f)).toMatchObject({ status: 'integrating', round: 0, activeRunId: null, activeSmokeId: null, roundRunFailures: 0 })
+    expect(await taskStatus(f.taskOf.api)).toBe('rework')
+  }, 60_000)
+
   it('refuses to verify a version that needs a smoke when no smoked attempt is handed in (final review minor 3)', async (): Promise<void> => {
     const f = await seedWithVerifier('#!/usr/bin/env bash\necho ok\n')
     expect(await dispatchVerification(depsFor(f.workspaceId, verifier()), f.deliveryId)).toBeNull()
