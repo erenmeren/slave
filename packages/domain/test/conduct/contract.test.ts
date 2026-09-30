@@ -39,6 +39,9 @@ describe('renderPackageContract skeleton, smoke and registrations', () => {
     expect(text).toContain('Your package is the skeleton')
     expect(text).toContain('`bash scripts/smoke.sh` from the repository root starts the product through the path the README documents')
     expect(text).toContain('$SLAVEOFAI_SMOKE_PROJECT')
+    // Final review minor 6: what the cleanup removes by that prefix, so a script names what it creates outside compose with it.
+    expect(text).toContain('Name any docker network or volume it creates\n  outside compose with that same prefix')
+    expect(text).toContain('containers, networks and volumes whose names\n  start with $SLAVEOFAI_SMOKE_PROJECT are removed')
     expect(text).toContain('scripts/verify.d/skeleton.sh')
   })
 

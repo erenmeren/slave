@@ -260,16 +260,24 @@ async function recordSmokeResult(attemptId: string, result: SmokeResult, duratio
 }
 
 /**
- * Plan B D6: best effort, by name -- containers a killed script started outside its process group
- * (a Docker daemon's children are not the script's). Logged, never thrown: a leftover container is
- * an operator's tidy-up, not a reason to lose the attempt's result.
+ * Plan B D6: best effort, by name -- what a killed script started outside its process group (a
+ * Docker daemon's children are not the script's): the compose project with its networks and
+ * volumes, then every container, network and volume whose name starts with the project name (the
+ * smoke contract tells the script to name what it creates outside compose that way), containers
+ * first, since a network still in use cannot be removed. The name is `[a-z0-9-]` only
+ * (`smokeProjectName`), so it is safe unquoted and as a pattern. Logged, never thrown: a leftover is
+ * an operator's tidy-up, not a reason to lose the attempt's result. Exported for its test.
  */
-async function cleanUpSmokeProject(project: string): Promise<void> {
+export async function cleanUpSmokeProject(project: string): Promise<void> {
   const command = [
     'command -v docker >/dev/null 2>&1 || exit 0',
     `docker compose -p ${project} down -v --remove-orphans >/dev/null 2>&1`,
     `ids=$(docker ps -aq --filter "name=^${project}" 2>/dev/null)`,
     '[ -z "$ids" ] || docker rm -f $ids >/dev/null 2>&1',
+    `nets=$(docker network ls --format '{{.Name}}' 2>/dev/null | grep -E '^${project}')`,
+    '[ -z "$nets" ] || docker network rm $nets >/dev/null 2>&1',
+    `vols=$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E '^${project}')`,
+    '[ -z "$vols" ] || docker volume rm -f $vols >/dev/null 2>&1',
     'exit 0',
   ].join('; ')
   await runShellCommand({ command, cwd: tmpdir(), timeoutMs: DOCKER_CLEANUP_TIMEOUT_MS, env: smokeEnv(project) }).catch((error: unknown) => {

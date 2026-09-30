@@ -16,7 +16,7 @@ import { ClaudeCodeAdapter } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { runGoalPass } from '../../src/goal.js'
 import { ensureIntegrationBranch, ensureIntegrationWorktree } from '../../src/goalBranch.js'
-import { applySmokeOutcome, handOffSmokeRework, settleStrandedSmoke, smokeWorktreeKey, startSmoke } from '../../src/smoke.js'
+import { applySmokeOutcome, cleanUpSmokeProject, handOffSmokeRework, settleStrandedSmoke, smokeWorktreeKey, startSmoke } from '../../src/smoke.js'
 import { drainPumps, type TickDeps } from '../../src/tick.js'
 import { worktreeRootFor } from '../../src/worktree.js'
 import { fileRunReport } from '../../src/report.js'
@@ -756,5 +756,44 @@ describe('the smoke hand-off (plan B D11, user ruling 2026-09-30)', () => {
     const report = { requirements: [{ key: 'R1', status: 'done', evidence: 'x' }, { key: 'RUN', status: 'not_done', evidence: 'x' }], filesTouched: [], workflow: [], questions: [], handOff: { path: 'package.json', change: 'x' } }
     expect(await handOffSmokeRework({ id: await fileRework(f, 'main', report) }, { id: f.taskOf.main }, { path: 'package.json', change: 'x' })).toBe(false)
     expect(await handOffs(f)).toEqual([])
+  }, 60_000)
+})
+
+describe('the smoke cleanup (final review minor 6)', () => {
+  it('removes the attempt\'s compose project, and every container, network and volume named with its prefix -- nothing else', async (): Promise<void> => {
+    const project = 'slaveofai-smoke-0123456789ab'
+    const bin = mkdtempSync(join(tmpdir(), 'smoke-fake-docker-'))
+    const log = join(bin, 'calls.log')
+    // A docker that answers the listings and records every call, so no Docker daemon is needed.
+    writeFileSync(
+      join(bin, 'docker'),
+      [
+        '#!/usr/bin/env bash',
+        `echo "$*" >> '${log}'`,
+        'case "$1 $2" in',
+        `  "ps -aq") echo c1 ;;`,
+        `  "network ls") printf '%s\\n' ${project}_default ${project}-net bridge slaveofai-smoke-ffffffffffff_default ;;`,
+        `  "volume ls") printf '%s\\n' ${project}-data unrelated-data ;;`,
+        'esac',
+        'exit 0',
+        '',
+      ].join('\n'),
+    )
+    chmodSync(join(bin, 'docker'), 0o755)
+    const path = process.env['PATH']
+    process.env['PATH'] = `${bin}:${path ?? ''}`
+    try {
+      await cleanUpSmokeProject(project)
+    } finally {
+      process.env['PATH'] = path
+    }
+    const calls = readFileSync(log, 'utf8').trim().split('\n')
+    expect(calls).toContain(`compose -p ${project} down -v --remove-orphans`)
+    expect(calls).toContain('rm -f c1')
+    expect(calls).toContain(`network rm ${project}_default ${project}-net`)
+    expect(calls).toContain(`volume rm -f ${project}-data`)
+    // Containers first: a network still in use by one cannot be removed.
+    expect(calls.findIndex((c) => c.startsWith('rm -f'))).toBeLessThan(calls.findIndex((c) => c.startsWith('network rm')))
+    rmSync(bin, { recursive: true, force: true })
   }, 60_000)
 })

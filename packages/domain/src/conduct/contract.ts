@@ -63,7 +63,9 @@ export const SMOKE_CONTRACT_LINES: readonly string[] = [
   '  (Docker if the README says Docker), runs one basic user flow end to end against it (for example: sign in,',
   '  add a record, see it in a list), stops everything it started, and exits 0 only if the flow worked.',
   '- Use $SLAVEOFAI_SMOKE_PROJECT as the compose project name and container name prefix, and never publish on',
-  '  a fixed host port without first checking that it is free.',
+  '  a fixed host port without first checking that it is free. Name any docker network or volume it creates',
+  '  outside compose with that same prefix: after every run, containers, networks and volumes whose names',
+  '  start with $SLAVEOFAI_SMOKE_PROJECT are removed, and anything named otherwise is left behind.',
   '- Print what it does, step by step. Only the stub exits 2 with "smoke not written yet".',
 ]
 
