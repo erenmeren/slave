@@ -1,7 +1,14 @@
 import { z } from 'zod'
 import { err, ok, type Result } from '../result.js'
 import { firstJsonObject } from '../supervisor/prompt.js'
-import { CONDUCT_MAX_PACKAGES, INTEGRATION_PACKAGE_KEY, SKELETON_PACKAGE_KEY } from './constants.js'
+import {
+  CONDUCT_MAX_PACKAGES,
+  INTEGRATION_PACKAGE_KEY,
+  SHARED_DECISIONS_MAX,
+  SHARED_DECISION_TEXT_MAX_CHARS,
+  SHARED_DECISION_TITLE_MAX_CHARS,
+  SKELETON_PACKAGE_KEY,
+} from './constants.js'
 import { globToRegExp, isValidOwnedGlob } from './glob.js'
 import { RUN_REQUIREMENT_KEY } from './requirements.js'
 import {
@@ -36,10 +43,28 @@ export interface PackageSpec {
   readonly registrations: readonly PackageRegistration[]
 }
 
+/** Supervisor-as-conductor spec C3: a decision every package follows (API shape, where routes
+ *  register, persistence, error shape, configuration). It never moves ownership (ownedPaths does). */
+export interface SharedDecision {
+  readonly title: string
+  readonly decision: string
+}
+
+export const sharedDecisionSchema = z.object({
+  title: z.string().trim().min(1).max(SHARED_DECISION_TITLE_MAX_CHARS),
+  decision: z.string().trim().min(1).max(SHARED_DECISION_TEXT_MAX_CHARS),
+})
+
+/** Plan A D10: a decision title as the uniqueness rule reads it -- trimmed, whitespace folded, lower-cased. */
+export function decisionTitleKey(title: string): string {
+  return title.trim().replace(/\s+/gu, ' ').toLowerCase()
+}
+
 export interface ConductPlan {
   readonly mode: 'single' | 'partitioned'
   readonly reason: string
   readonly packages: readonly PackageSpec[]
+  readonly decisions: readonly SharedDecision[]
 }
 
 /**
@@ -64,6 +89,8 @@ export const conductPlanSchema: z.ZodType<ConductPlan, z.ZodTypeDef, unknown> = 
     // refused, not read as none (a silent catch would hide corruption).
     registrations: z.array(registrationSchema).default([]),
   })).min(1),
+  // A plan stored before shared decisions existed reads as having none (spec 4).
+  decisions: z.array(sharedDecisionSchema).default([]),
 })
 
 export interface ConductContext {
@@ -86,18 +113,29 @@ const packageSchema = z.object({
   registrations: z.array(registrationSchema).max(10).default([]),
 })
 const answerSchema = z.discriminatedUnion('mode', [
-  z.object({ mode: z.literal('single'), reason: z.string().trim().min(1), templateId: z.string().min(1) }),
+  z.object({
+    mode: z.literal('single'),
+    reason: z.string().trim().min(1),
+    templateId: z.string().min(1),
+    decisions: z.array(sharedDecisionSchema).max(SHARED_DECISIONS_MAX).default([]),
+  }),
   z.object({
     mode: z.literal('partitioned'),
     reason: z.string().trim().min(1),
     packages: z.array(packageSchema).min(2).max(CONDUCT_MAX_PACKAGES),
+    decisions: z.array(sharedDecisionSchema).max(SHARED_DECISIONS_MAX).default([]),
     integrationTemplateId: z.string().min(1).optional(),
     skeletonTemplateId: z.string().min(1).optional(),
   }),
 ])
 
 /** The one package of a `single` goal: every requirement, every path (spec R4: owns `**`). */
-export function singlePlan(templateId: string, requirementKeys: readonly string[], reason: string): ConductPlan {
+export function singlePlan(
+  templateId: string,
+  requirementKeys: readonly string[],
+  reason: string,
+  decisions: readonly SharedDecision[] = [],
+): ConductPlan {
   return {
     mode: 'single',
     reason,
@@ -105,6 +143,7 @@ export function singlePlan(templateId: string, requirementKeys: readonly string[
       key: 'main', title: 'The whole goal', requirementKeys: [...requirementKeys], ownedPaths: ['**'], newPaths: [],
       interface: '', dependsOn: [], isIntegration: false, templateId, registrations: [],
     }],
+    decisions: [...decisions],
   }
 }
 
@@ -162,12 +201,17 @@ export function validateConduct(answer: unknown, context: ConductContext): Resul
     return err(`the answer's shape is wrong: ${parsed.error.issues.slice(0, 5).map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`)
   }
   const value = parsed.data
+  // Plan A D10: one decision per title, however it is cased or spaced.
+  const titleKeys = value.decisions.map((d) => decisionTitleKey(d.title))
+  const repeated = [...new Set(titleKeys.filter((key, index) => titleKeys.indexOf(key) !== index))]
+  const decisionProblems = repeated.map((key) => `decision titles must be unique: "${key}"`)
   if (value.mode === 'single') {
     if (!context.templateIds.has(value.templateId)) return err(`templateId "${value.templateId}" is not in the catalogue`)
-    return ok(singlePlan(value.templateId, context.requirementKeys, value.reason))
+    if (decisionProblems.length > 0) return err(decisionProblems.join('; '))
+    return ok(singlePlan(value.templateId, context.requirementKeys, value.reason, value.decisions))
   }
 
-  const problems: string[] = []
+  const problems: string[] = [...decisionProblems]
   // Plan A D2: only a set extracted since skeleton spec S6 carries RUN; an older set validates as before.
   const runKey = context.requirementKeys.includes(RUN_REQUIREMENT_KEY) ? RUN_REQUIREMENT_KEY : null
   const keys = value.packages.map((p) => p.key)
@@ -293,5 +337,5 @@ export function validateConduct(answer: unknown, context: ConductContext): Resul
   // On the graph as it will be WRITTEN, after the integration and skeleton rewrites.
   if (hasCycle(packages)) problems.push('the packages\' dependsOn form a cycle')
   if (problems.length > 0) return err(problems.join('; '))
-  return ok({ mode: 'partitioned', reason: value.reason, packages })
+  return ok({ mode: 'partitioned', reason: value.reason, packages, decisions: value.decisions })
 }

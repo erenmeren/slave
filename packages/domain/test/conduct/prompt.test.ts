@@ -48,4 +48,12 @@ describe('buildConductPrompt', () => {
     expect(buildConductPrompt(input)).not.toContain('RUN')
     expect(buildConductPrompt({ ...input, requirements: [...input.requirements, RUN_REQUIREMENT] })).toContain('Requirement RUN is added by Slave')
   })
+
+  it('asks for the shared decisions every package would otherwise guess (spec C3)', () => {
+    const prompt = buildConductPrompt(input)
+    expect(prompt).toContain('"decisions"')
+    expect(prompt).toContain('API shape and naming')
+    expect(prompt).toContain('never an in-memory stand-in for data the product stores')
+    expect(prompt).toContain('a decision never moves a file between packages')
+  })
 })
