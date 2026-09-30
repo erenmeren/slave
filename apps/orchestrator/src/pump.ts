@@ -654,6 +654,17 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   const questionDeniedToolUseIds = new Set<string>()
   const provider: ProviderKind = input.spawn?.provider ?? 'claude_code'
   /**
+   * Skeleton spec S9 (plan A D9, Task 6 fix round 1): the subset of `denied` that is a GENUINE
+   * permission-mode refusal -- the only denials a package run that reported may be excused for.
+   * Not `denied` itself: on a provider without a mid-run hook gate (Cursor), the only thing that
+   * produces a `permission_denied` is this system's own shell gate (see
+   * `recordCursorPauseIfRequested`), so every entry there is a gate deny; and a matrix-prefixed
+   * reason that failed to parse falls through to `denied` on purpose (fail-safe), which must keep
+   * failing the run. Filled only for a hook-gated provider's denial whose reason carries no
+   * matrix prefix.
+   */
+  const permissionModeDenied: string[] = []
+  /**
    * B1 (M19): seeded on resume from the run's own prior `run.tool_denied` events, not left at the
    * empty set above. A prior pump on this run confirmed these ids as matrix denies -- it emitted
    * `run.tool_denied` for each, `toolUseId` included -- but that confirmation lived only in THIS
@@ -955,6 +966,9 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
           break
         }
         denied.push(event.toolUseId)
+        if (capabilitiesOf(provider).canPauseMidRun && !(event.reason?.startsWith(PERMISSION_DENY_REASON_PREFIX) ?? false)) {
+          permissionModeDenied.push(event.toolUseId)
+        }
         await emit('guardrail.tripped', 'system', {
           guardrail: 'permission_mode' satisfies GuardrailKind,
           detail: `${event.toolName} was denied by the permission mode (${event.toolUseId})`,
@@ -1377,7 +1391,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // Skeleton spec S9 (OBS-17, plan A D9): a package worker that finished and filed its report is
   // not failed because one tool call was refused by the permission MODE -- the integration run on
   // 2026-09-29 lost ten minutes of the hardest package's work to a denied `docker rm` cleanup. Only
-  // denials this pump itself saw as permission-mode refusals (`denied`, each already recorded as
+  // denials this pump itself saw as permission-mode refusals (`permissionModeDenied`, each already recorded as
   // `guardrail.tripped { guardrail: 'permission_mode' }`) are excused, never a hook deny or an id
   // it cannot name, and only on a package run that ended with a `<slave-report>`: the report is
   // what says the run finished, and it is still parsed, audited and verified after this. A
@@ -1386,7 +1400,9 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   const excused =
     !outcome.isError &&
     nonMatrixDeniedToolUseIds.length > 0 &&
-    nonMatrixDeniedToolUseIds.every((id) => denied.includes(id)) &&
+    nonMatrixDeniedToolUseIds.every((id) => permissionModeDenied.includes(id)) &&
+    // `outputTail` is capped at ASK_TAIL_CAP: a report longer than that loses its opening tag here,
+    // and the run fails -- the safe direction.
     hasSlaveReportBlock(outputTail) &&
     (await isPackageImplementationRun(runId))
   const failingDenials = excused ? [] : nonMatrixDeniedToolUseIds

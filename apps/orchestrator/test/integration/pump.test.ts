@@ -559,6 +559,57 @@ describe('pumpRun', () => {
     expect(await eventTypesFor(second.runId)).toContain('run.failed')
   })
 
+  it('still fails a Cursor package run that reported and had one permission_denied -- on Cursor that is the shell gate', async (): Promise<void> => {
+    await bindToPackage()
+    await pumpRun({
+      ...ids,
+      spawn: {
+        settingsPath: '/tmp/slaveofai-obs17/.cursor/hooks.json',
+        pauseFlagPath: '/tmp/slaveofai-obs17/pause.flag',
+        hookPath: '/opt/slaveofai/cursor-shell-gate.sh',
+        gitIdentity: { name: 'Alex', email: 'alex@example.com' },
+        provider: 'cursor',
+      },
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'permission_denied', toolName: 'Shell', toolUseId: 'tu_gate' },
+        { kind: 'text', text: REPORT_TEXT },
+        { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['tu_gate'] } },
+      ]),
+    })
+    expect(await eventTypesFor(ids.runId)).toContain('run.failed')
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })).status).toBe('failed')
+  })
+
+  it('still fails a package run that reported when its denial carries a malformed matrix-prefixed reason', async (): Promise<void> => {
+    await bindToPackage()
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'permission_denied', toolName: 'Bash', toolUseId: 'tu_bad', reason: `${PERMISSION_DENY_REASON_PREFIX} not a parsable claim` },
+        { kind: 'text', text: REPORT_TEXT },
+        { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['tu_bad'] } },
+      ]),
+    })
+    expect(await eventTypesFor(ids.runId)).toContain('run.failed')
+  })
+
+  it('still fails a package run whose report is followed by more work', async (): Promise<void> => {
+    await bindToPackage()
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'text', text: REPORT_TEXT },
+        { kind: 'text', text: '\nNow let me also clean up the containers.' },
+        { kind: 'permission_denied', toolName: 'Bash', toolUseId: 'tu_cleanup' },
+        { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['tu_cleanup'] } },
+      ]),
+    })
+    expect(await eventTypesFor(ids.runId)).toContain('run.failed')
+  })
+
   it('reports a clean-completion-with-denials run as failed', async (): Promise<void> => {
     await pumpRun({
       ...ids,

@@ -37,13 +37,17 @@ const reportSchema = z.object({
 })
 
 /**
- * Whether `text` ends its LAST `<slave-report>` with a closing tag -- the pump's cheap "this worker
+ * Whether `text` ends with its LAST `<slave-report>` block, closed -- the pump's cheap "this worker
  * finished and reported" test (skeleton spec S9, plan A D9). Whether the report is USABLE is
  * `parseSlaveReport`'s question, asked afterwards by `fileRunReport`.
  */
 export function hasSlaveReportBlock(text: string): boolean {
   const start = text.lastIndexOf(`<${SLAVE_REPORT_TAG}>`)
-  return start !== -1 && text.indexOf(`</${SLAVE_REPORT_TAG}>`, start) !== -1
+  const close = `</${SLAVE_REPORT_TAG}>`
+  // Anchored at the END (Task 6 fix round 1): the pump's text is every text event joined, so a
+  // report followed by "Now let me also clean up..." is a worker that went on working, not one
+  // that finished.
+  return start !== -1 && text.indexOf(close, start) !== -1 && text.trimEnd().endsWith(close)
 }
 
 /**

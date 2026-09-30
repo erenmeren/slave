@@ -44,4 +44,9 @@ describe('hasSlaveReportBlock', () => {
     expect(hasSlaveReportBlock('no report')).toBe(false)
     expect(hasSlaveReportBlock('<slave-report>{}</slave-report> then <slave-report>{')).toBe(false)
   })
+
+  it('is false when prose follows the closing tag, true when only whitespace does', () => {
+    expect(hasSlaveReportBlock('<slave-report>{}</slave-report>\nNow let me also clean up the containers.')).toBe(false)
+    expect(hasSlaveReportBlock('<slave-report>{}</slave-report>\n\n  \t\n')).toBe(true)
+  })
 })
