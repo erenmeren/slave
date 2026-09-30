@@ -399,6 +399,8 @@ describe('loadGoalReport', () => {
     const base = { workspaceId: w.workspaceId, goalVersion: 1, source: 'report' as const, fromRunId: 'run1', fromPackageKey: 'report', path: 'scripts/verify.sh', toPackageKey: 'skeleton' }
     await prisma.packageHandOff.create({ data: { ...base, sourceKey: 'k2', change: 'later one', fingerprint: 'f2', status: 'expired', note: 'the version ended first', createdAt: late } })
     await prisma.packageHandOff.create({ data: { ...base, sourceKey: 'k1', change: 'run pytest', fingerprint: 'f1', status: 'pending', createdAt: early } })
+    // Final review I2: a reopen whose run finished is `delivered` with `reopenedAt`; the report still says reopened.
+    await prisma.packageHandOff.create({ data: { ...base, sourceKey: 'k4', change: 'reopened one', fingerprint: 'f4', status: 'delivered', reopenedAt: late, shownInRunId: 'run2', createdAt: new Date('2026-09-29T12:00:00Z') } })
     await prisma.packageHandOff.create({ data: { ...base, goalVersion: 2, sourceKey: 'k3', change: 'other version', fingerprint: 'f3', status: 'pending' } })
     await prisma.goalDecision.create({ data: { workspaceId: w.workspaceId, goalVersion: 1, title: 'API field naming', titleKey: 'api field naming', decision: 'camelCase', source: 'conductor_plan', createdAt: late } })
     await prisma.goalDecision.create({ data: { workspaceId: w.workspaceId, goalVersion: 2, title: 'Other', titleKey: 'other', decision: 'x', source: 'person' } })
@@ -408,6 +410,7 @@ describe('loadGoalReport', () => {
     expect(result.value.handOffs.map((h) => [h.change, h.status, h.toPackage, h.fromPackage, h.path, h.note])).toEqual([
       ['run pytest', 'pending', 'skeleton', 'report', 'scripts/verify.sh', null],
       ['later one', 'expired', 'skeleton', 'report', 'scripts/verify.sh', 'the version ended first'],
+      ['reopened one', 'reopened', 'skeleton', 'report', 'scripts/verify.sh', null],
     ])
     expect(result.value.handOffs[0]?.at).toBe(early.toISOString())
     expect(result.value.decisions).toEqual([{ title: 'API field naming', decision: 'camelCase', source: 'conductor_plan', at: late.toISOString() }])

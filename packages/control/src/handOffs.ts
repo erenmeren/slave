@@ -333,8 +333,11 @@ export async function sendHandOffQuestions(workspaceId: string): Promise<void> {
 export async function reopenForHandOffs(deliveryId: string): Promise<void> {
   const head = await prisma.goalDelivery.findUnique({ where: { id: deliveryId }, select: { workspaceId: true, goalVersion: true } })
   if (head === null) return
-  // Ruling F12: no lock for a version with nothing pending -- a final merge can hold it for minutes.
-  const waiting = await prisma.packageHandOff.count({ where: { workspaceId: head.workspaceId, goalVersion: head.goalVersion, status: 'pending' } })
+  // Ruling F12: no lock for a version with nothing to settle -- a final merge can hold it for minutes.
+  // Final review I2: a reopened request a later run was shown is something to settle too.
+  const waiting = await prisma.packageHandOff.count({
+    where: { workspaceId: head.workspaceId, goalVersion: head.goalVersion, OR: [{ status: 'pending' }, { status: 'reopened', shownInRunId: { not: null } }] },
+  })
   if (waiting > 0) {
     try {
       await withDeliveryLock(deliveryId, async (tx) => reopenInLock(tx, deliveryId))
@@ -353,11 +356,21 @@ async function reopenInLock(tx: Tx, deliveryId: string): Promise<void> {
     return
   }
   const pending = await tx.packageHandOff.findMany({ where: { workspaceId, goalVersion, status: 'pending' }, orderBy: HAND_OFF_ORDER })
-  if (pending.length === 0) return
   const mayReopen = delivery.status === 'integrating' && delivery.activeSmokeId === null && delivery.activeRunId === null
   for (const pkg of await packagesOf(tx, workspaceId, goalVersion)) {
     const mine = pending.filter((row) => row.toPackageKey === pkg.key)
     const task = pkg.tasks[0]
+    if (task?.status === 'done') {
+      // Final review I2: a `reopened` request leaves that status once the package is finished again.
+      // Its `shownInRunId` was null when it was reopened (only unseen rows are), so a stamp now is a
+      // run after the reopen -- the reopen run or its retry -- and that run has finished: it is
+      // `delivered`, and never listed to a later run. `reopenedAt` stays: the report and the trail
+      // read it to still say the package was reopened for it ({@link recordedHandOffStatus}).
+      await tx.packageHandOff.updateMany({
+        where: { workspaceId, goalVersion, toPackageKey: pkg.key, status: 'reopened', shownInRunId: { not: null } },
+        data: { status: 'delivered' },
+      })
+    }
     if (mine.length === 0) continue
     if (task === undefined || CANNOT_TAKE.has(task.status)) {
       await tx.packageHandOff.updateMany({
@@ -375,7 +388,8 @@ async function reopenInLock(tx: Tx, deliveryId: string): Promise<void> {
     if (unseen.length === 0 || !mayReopen) continue
     if (pkg.handOffReopens >= HANDOFF_REOPENS_MAX) {
       const chain = await tx.packageHandOff.findMany({
-        where: { workspaceId, goalVersion, toPackageKey: pkg.key, status: 'reopened' },
+        // `reopenedAt`, not the status: a reopen whose run has finished is `delivered` (final review I2).
+        where: { workspaceId, goalVersion, toPackageKey: pkg.key, reopenedAt: { not: null } },
         orderBy: HAND_OFF_ORDER,
         select: { fromPackageKey: true },
       })
@@ -417,6 +431,15 @@ async function reopenInLock(tx: Tx, deliveryId: string): Promise<void> {
     })
     if (marked.count !== reason.shownIds.length) throw new HandOffMoved()
   }
+}
+
+/**
+ * Final review I2: what became of a hand-off, as the report and the trail say it. A reopen whose run
+ * has finished is stored `delivered` (so no later run is told it again), but the package WAS reopened
+ * for it, and `reopenedAt` records that.
+ */
+export function recordedHandOffStatus<S extends string>(row: { readonly status: S; readonly reopenedAt: Date | null }): S | 'reopened' {
+  return row.status === 'delivered' && row.reopenedAt !== null ? 'reopened' : row.status
 }
 
 /** Plan A D3: every hand-off a package's prompt lists -- asked of it, not refused -- oldest first. */

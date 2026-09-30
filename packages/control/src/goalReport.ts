@@ -22,6 +22,7 @@ import {
 } from '@slave-of-ai/domain'
 import { loadVersionScope, seatNames, versionQuestions, versionSubject, versionTrail } from './goalReportTrail.js'
 import { versionSpend } from './goalReportSpend.js'
+import { recordedHandOffStatus } from './handOffs.js'
 import type { ControlRefusal } from './refusal.js'
 
 /** Plain `<` ordering (plan D7): the same on every machine, unlike `localeCompare`. */
@@ -170,7 +171,7 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
       path: row.path,
       packageKey: row.packageKey,
       change: row.change,
-      status: row.status,
+      status: recordedHandOffStatus(row),
       note: row.note,
     }),
   )

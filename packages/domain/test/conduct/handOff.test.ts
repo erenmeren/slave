@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   handOffFingerprint,
   handOffItemSchema,
+  handOffShownIn,
   renderAskedOfYou,
   renderDependencyLeads,
   renderHandOffQuestion,
@@ -93,6 +94,14 @@ describe('the renderers', () => {
     expect(rework.shownIds.length).toBeGreaterThan(0)
     expect(rework.text).toContain('Make each change that is right')
     expect(rework.text).not.toContain('characters cut')
+  })
+  it('tells whether a rework reason already shows a request whole (final review I2)', () => {
+    const view = { id: 'r1', from: 'config', path: null, packageKey: 'report', change: 'read the page size\nfrom Config' }
+    const other = { ...view, id: 'r2', change: 'something else' }
+    const reason = renderHandOffRework([view]).text
+    expect(handOffShownIn(reason, view)).toBe(true)
+    expect(handOffShownIn(reason, other)).toBe(false)
+    expect(handOffShownIn('the review found no tests', view)).toBe(false)
   })
   it('collapses the newlines of a question', () => {
     expect(renderHandOffQuestion({ view: { id: 'q', from: 'a', path: null, packageKey: 'b', change: 'one\ntwo\n\nthree' }, reason: 'r' })).toContain('one two three')

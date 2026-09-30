@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
-import { adoptRunbook, recordMemory, refusalText, syncCapabilityTaxonomy, syncRunbooks } from '@slave-of-ai/control'
+import { adoptRunbook, recordMemory, refusalText, reopenForHandOffs, routeHandOffs, syncCapabilityTaxonomy, syncRunbooks } from '@slave-of-ai/control'
 import { Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   ANSWER_BLOCK_OPEN,
@@ -1030,6 +1030,56 @@ describe('buildRunContext', () => {
       expect((await prisma.packageHandOff.findUniqueOrThrow({ where: { id: seen.id } })).shownInRunId).toBe(fixture.runId)
       const delivered = await prisma.packageHandOff.findMany({ where: { workspaceId: fixture.workspaceId, status: 'delivered' } })
       expect(delivered.every((row) => row.shownInRunId === 'an-earlier-run')).toBe(true)
+    })
+
+    /** Final review I2: a reopen's requests are shown once in the reopen run, and never again once it finished. */
+    it('shows a reopen run each request once, and a later rework of the package none of them', async () => {
+      await bindToPackage()
+      await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'done', integratedAt: new Date() } })
+      const delivery = await prisma.goalDelivery.create({ data: { workspaceId: fixture.workspaceId, goalVersion: 1, integrationBranch: 'slaveofai/goal-v1-x', baseCommit: 'a'.repeat(40) } })
+      const config = await prisma.workPackage.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId, key: 'config' } })
+      const configTask = await prisma.task.create({ data: { workspaceId: fixture.workspaceId, title: 'Config', description: 'x', status: 'running', requiredRole: 'implementer', maxAttempts: 3, goalVersion: 1, workPackageId: config.id } })
+      const configRun = await prisma.slaveRun.create({ data: { taskId: configTask.id, slaveId: fixture.slaveId, status: 'succeeded' } })
+      await routeHandOffs({
+        workspaceId: fixture.workspaceId, goalVersion: 1, source: 'report', sourceKey: `report:${configRun.id}`, fromRunId: configRun.id, fromPackageKey: 'config',
+        items: [{ package: 'report', change: 'read the page size from Config.pageSize' }],
+      })
+      const [row] = await prisma.packageHandOff.findMany({ where: { workspaceId: fixture.workspaceId } })
+      expect(row?.status).toBe('reopened')
+
+      // The reopen run: the request is in its rework reason, and only there.
+      const reopenRun = await buildImplementation(fixture)
+      expect(reopenRun.prompt.split('read the page size from Config.pageSize')).toHaveLength(2)
+      expect(reopenRun.prompt).not.toContain('Asked of your package')
+      expect((await prisma.packageHandOff.findUniqueOrThrow({ where: { id: row?.id ?? '' } })).shownInRunId).toBe(fixture.runId)
+
+      // The reopen run finished; the next goal pass settles its rows.
+      await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'done', integratedAt: new Date(), lastRejectionReason: null } })
+      await reopenForHandOffs(delivery.id)
+      expect(await prisma.packageHandOff.findUniqueOrThrow({ where: { id: row?.id ?? '' } })).toMatchObject({ status: 'delivered', reopenedAt: expect.any(Date) })
+
+      // A verification rework of the package later in the version is told nothing it already did.
+      await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'rework', integratedAt: null, lastRejectionReason: 'R1 failed verification' } })
+      const later = await buildImplementation(fixture)
+      expect(later.prompt).not.toContain('Asked of your package')
+      expect(later.prompt).not.toContain('read the page size from Config.pageSize')
+    })
+
+    /** Final review I2: a rework reason that no longer quotes the request (a review sent it back) lists it again. */
+    it('lists a reopened request again when the rework reason no longer carries it', async () => {
+      await bindToPackage()
+      await prisma.packageHandOff.create({
+        data: {
+          workspaceId: fixture.workspaceId, goalVersion: 1, source: 'report', sourceKey: 'report:r0:0', fromRunId: 'r0', fromPackageKey: 'config', toPackageKey: 'report',
+          packageKey: 'report', change: 'read the page size from Config.pageSize', fingerprint: 'f', status: 'reopened', reopenedAt: new Date(), shownInRunId: 'the-reopen-run',
+        },
+      })
+      await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'rework', lastRejectionReason: 'the review found no tests' } })
+
+      const { prompt } = await buildImplementation(fixture)
+
+      expect(prompt).toContain('Asked of your package by other packages')
+      expect(prompt.split('read the page size from Config.pageSize')).toHaveLength(2)
     })
 
     it('stamps nothing when the prompt is refused, since nobody was shown it', async () => {

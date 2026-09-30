@@ -218,6 +218,25 @@ describe('reopenForHandOffs', () => {
     expect((await task(f.taskOf.skeleton)).lastRejectionReason).toContain('more requests from report wait for your next run')
   })
 
+  /** Final review I2: a reopened request leaves `reopened` once the run it reopened for has finished. */
+  it('settles a reopened request the reopen run was shown as delivered once the task is done, keeping when it was reopened', async () => {
+    const f = await seed({ skeleton: 'done', report: 'running', integration: 'ready' })
+    await route(f, [{ path: 'scripts/verify.sh', change: 'run pytest -k report' }, { path: 'scripts/smoke.sh', change: 'curl the report' }])
+    const [shown, unshown] = await rows(f)
+    expect([shown?.status, unshown?.status]).toEqual(['reopened', 'reopened'])
+    await markHandOffsShown('the-reopen-run', [shown?.id ?? ''])
+    // Still in rework: the reopen run (or its retry) has not finished, so nothing moves.
+    await reopenForHandOffs(f.deliveryId)
+    expect((await rows(f)).map((r) => r.status)).toEqual(['reopened', 'reopened'])
+    await prisma.task.update({ where: { id: f.taskOf.skeleton }, data: { status: 'done', integratedAt: new Date() } })
+    await reopenForHandOffs(f.deliveryId)
+    const [after, untouched] = await rows(f)
+    expect(after).toMatchObject({ status: 'delivered', shownInRunId: 'the-reopen-run', reopenedAt: shown?.reopenedAt })
+    // Never shown to a run after the reopen: it stays reopened (only a later run can have shown it).
+    expect(untouched?.status).toBe('reopened')
+    expect((await task(f.taskOf.skeleton)).status).toBe('done')
+  })
+
   it('reopens a package twice at most, then asks the conductor, naming the chain (spec C2 loop guard)', async () => {
     const f = await seed({ skeleton: 'done', report: 'running', integration: 'ready' })
     for (const change of ['first', 'second', 'third']) {
@@ -229,6 +248,22 @@ describe('reopenForHandOffs', () => {
     expect((await rows(f))[2]?.note).toBe('the skeleton package has already been reopened 2 times in goal v1 by other packages\' hand-offs (from report)')
     expect((await task(f.taskOf.skeleton)).status).toBe('done')
     expect(await prisma.slaveMessage.count({ where: { workspaceId: f.workspaceId, kind: 'question' } })).toBe(1)
+  })
+
+  /** Final review I2: the chain is read from `reopenedAt`, so a delivered reopen still names its source. */
+  it('names the chain from requests whose reopen runs have finished', async () => {
+    const f = await seed({ skeleton: 'done', report: 'running', integration: 'ready' })
+    for (const change of ['first', 'second']) {
+      await prisma.task.update({ where: { id: f.taskOf.skeleton }, data: { status: 'done', integratedAt: new Date() } })
+      const run = await newRun(f)
+      await route(f, [{ path: 'scripts/verify.sh', change }], run.id)
+      const reopened = (await rows(f)).filter((r) => r.status === 'reopened')
+      await markHandOffsShown(`reopen-run-${change}`, reopened.map((r) => r.id))
+    }
+    await prisma.task.update({ where: { id: f.taskOf.skeleton }, data: { status: 'done', integratedAt: new Date() } })
+    await route(f, [{ path: 'scripts/verify.sh', change: 'third' }], (await newRun(f)).id)
+    expect((await rows(f)).map((r) => r.status)).toEqual(['delivered', 'delivered', 'to_conductor'])
+    expect((await rows(f))[2]?.note).toContain('(from report)')
   })
 })
 

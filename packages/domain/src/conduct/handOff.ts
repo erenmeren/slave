@@ -102,6 +102,16 @@ function itemLine(view: HandOffView): string {
   return `- from ${from}${where}: ${change}`
 }
 
+/**
+ * Final review I2: whether `text` (a task's rework reason) already shows this hand-off whole. Both
+ * blocks render an item through the same line, so a reason written by {@link renderHandOffRework}
+ * holds that exact line for every request it reopened the package for; a reason something else wrote
+ * since (a review, a verification round) does not, and the request is listed again.
+ */
+export function handOffShownIn(text: string, view: HandOffView): boolean {
+  return text.includes(itemLine(view))
+}
+
 /** A rendered hand-off block and the ids of the hand-offs it shows whole (the rest stay pending). */
 export interface HandOffBlock {
   readonly text: string

@@ -12,6 +12,7 @@ import {
   skillRoots,
   skillSourceDir,
   type SkillRoots,
+  type StoredHandOff,
 } from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
@@ -32,6 +33,7 @@ import {
   profileOverridesSchema,
   profileSpecSchema,
   providerRunsSkills,
+  handOffShownIn,
   renderAskedOfYou,
   renderDependencyLeads,
   renderHandoff,
@@ -718,6 +720,7 @@ async function packageSections(
   workPackageId: string,
   workflowSteps: number,
   worktreePath: string | null,
+  rejectionReason: string | null,
 ): Promise<{ readonly sections: readonly Section[]; readonly shownHandOffIds: readonly string[] }> {
   const pkg = await prisma.workPackage.findUnique({ where: { id: workPackageId } })
   if (pkg === null) return { sections: [], shownHandOffIds: [] }
@@ -761,8 +764,16 @@ async function packageSections(
   // pending and reopened ones an earlier run already saw; delivered rows were acted on and are not
   // presented again as "do each one". Stable within each group (the query's creation order), so
   // older requests can no longer crowd a newer one out of the budget.
+  //
+  // Final review I2: a `reopened` request whose line the rework reason (the `rejection` section this
+  // run is given) already holds is not listed a second time, but is still stamped shown -- the run
+  // saw it, and that stamp is what lets the next reopen pass settle it `delivered` once the task is
+  // done. The rule is the line itself, not "the first run after the reopen": a reason a review or a
+  // verification round wrote since no longer carries it, and the request is listed again.
+  const inReason = (row: StoredHandOff): boolean => row.status === 'reopened' && rejectionReason !== null && handOffShownIn(rejectionReason, handOffView(row))
+  const inRejection = handOffs.filter(inReason)
   const unseen = handOffs.filter((row) => row.status === 'pending' && row.shownInRunId === null)
-  const seenAgain = handOffs.filter((row) => (row.status === 'pending' && row.shownInRunId !== null) || row.status === 'reopened')
+  const seenAgain = handOffs.filter((row) => ((row.status === 'pending' && row.shownInRunId !== null) || row.status === 'reopened') && !inReason(row))
   const asked = renderAskedOfYou([...unseen, ...seenAgain].map(handOffView))
   // `workerLeads` reads in key order; the contract lists dependencies in `dependsOn` order, and so do their leads.
   const dependencyLeads = [...leads].sort((a, b) => pkg.dependsOn.indexOf(a.packageKey) - pkg.dependsOn.indexOf(b.packageKey))
@@ -786,7 +797,7 @@ async function packageSections(
       source: { kind: 'report_protocol', requirements: requirements.length, workflowSteps },
     },
   ]
-  return { sections, shownHandOffIds: asked.shownIds }
+  return { sections, shownHandOffIds: [...inRejection.map((row) => row.id), ...asked.shownIds] }
 }
 
 /**
@@ -1265,7 +1276,8 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     // Conductor Plan 2: a package task's contract and the report it must end with. Only where the
     // order has a place for them (implementation), and only for a task the conductor made.
     if (task.workPackageId !== null && order.includes('package')) {
-      const built = await packageSections(task.workPackageId, workflowSteps, input.worktreePath)
+      // The rework reason only when this run's prompt carries it (the `rejection` section below).
+      const built = await packageSections(task.workPackageId, workflowSteps, input.worktreePath, order.includes('rejection') ? task.lastRejectionReason : null)
       sections.push(...built.sections)
       shownHandOffIds = built.shownHandOffIds
     }

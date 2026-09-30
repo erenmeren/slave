@@ -228,6 +228,11 @@ describe('versionTrail', () => {
     await handed('h-pending', 'rework')
     await handed('h-expired', 'rework')
     await handed('h-prompt', 'prompt')
+    await handed('h-reopen-done', 'rework')
+    // Final review I2: a reopen whose run has finished is `delivered`; its `reopenedAt` still says it was reopened.
+    await prisma.packageHandOff.create({
+      data: { id: 'h-reopen-done', workspaceId: s.workspaceId, goalVersion: 1, source: 'report', sourceKey: 'z', fromRunId: 'r', toPackageKey: 'skeleton', change: 'c', fingerprint: 'f-z', status: 'delivered', reopenedAt: new Date(), shownInRunId: 'r2' },
+    })
     await prisma.packageHandOff.create({
       data: { id: 'h-pending', workspaceId: s.workspaceId, goalVersion: 1, source: 'report', sourceKey: 'a', fromRunId: 'r', toPackageKey: 'skeleton', change: 'c', fingerprint: 'f1', status: 'pending' },
     })
@@ -251,6 +256,7 @@ describe('versionTrail', () => {
       'report handed work to skeleton (scripts/verify.sh); it waits to be reopened.',
       'report handed work to skeleton (scripts/verify.sh); it was not reopened.',
       'report handed work to skeleton (scripts/verify.sh); it waits in its next prompt.',
+      'report handed work to skeleton (scripts/verify.sh); its finished task is reopened for it.',
       "pkg1: sent back for rework by other packages' hand-offs (reopen 1).",
     ])
     expect(entries[0]).toEqual(expect.objectContaining({ detail: 'run pytest -k report', detailBy: 'model' }))

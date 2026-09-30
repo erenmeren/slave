@@ -13,6 +13,7 @@ import {
   type GoalReportTrailEntry,
   type SituationKind,
 } from '@slave-of-ai/domain'
+import { recordedHandOffStatus } from './handOffs.js'
 
 /** What every part of a version's report is scoped by: its package tasks (with the package key
  *  and the current seat), its delivery, and its verifier (plan D6). */
@@ -356,12 +357,15 @@ export async function versionTrail(
       ? []
       : (await prisma.smokeAttempt.findMany({ where: { id: { in: smokeIds } }, select: { id: true, endedAt: true } })).map((a) => [a.id, a.endedAt] as const),
   )
-  // Plan A Task 8: a hand-off event's reopen has happened only when its row says `reopened`.
+  // Plan A Task 8: a hand-off event's reopen has happened only when its row says `reopened` -- or,
+  // once the reopen run finished, `delivered` with `reopenedAt` (final review I2).
   const handOffIds = events.flatMap((row) => (row.type === 'workspace_package_handed_off' ? [str((row.payload ?? {}) as Payload, 'handOffId')] : [])).filter((id): id is string => id !== null)
   const statusOfHandOff = new Map(
     handOffIds.length === 0
       ? []
-      : (await prisma.packageHandOff.findMany({ where: { workspaceId, id: { in: handOffIds } }, select: { id: true, status: true } })).map((r) => [r.id, r.status as string] as const),
+      : (await prisma.packageHandOff.findMany({ where: { workspaceId, id: { in: handOffIds } }, select: { id: true, status: true, reopenedAt: true } })).map(
+          (r) => [r.id, recordedHandOffStatus<string>(r)] as const,
+        ),
   )
   for (const row of events) {
     const type = DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? (row.type as DomainEventType)
