@@ -8,6 +8,7 @@ import {
   trimEvidence,
   type VerificationItem,
 } from '../../src/conduct/verification.js'
+import { RUN_REQUIREMENT } from '../../src/conduct/requirements.js'
 
 const block = (items: unknown): string => `done.\n<slave-verification>${JSON.stringify({ items })}</slave-verification>`
 const pass = (key: string) => ({ key, status: 'pass', check: 'pytest -k csv', output: '1 passed', reason: '' })
@@ -331,5 +332,28 @@ describe('the verifier\'s leads and the RUN rule (skeleton spec S8)', () => {
     expect(text).toContain('copy the checkout into $SLAVEOFAI_VERIFY_DIR and start it there')
     expect(text).toContain('restore every tracked file it changed and remove every file it created')
     expect(text).toContain('never add ignore rules')
+  })
+})
+
+describe('renderVerificationGoal: the passing smoke', () => {
+  it('carries a passing smoke as evidence, sanitised, after the diff and before the leads', () => {
+    const text = renderVerificationGoal({
+      goalVersion: 1,
+      round: 2,
+      requirements: [RUN_REQUIREMENT],
+      diffStat: ' a | 1 +',
+      diffCapped: false,
+      smoke: { output: 'flow ok\n<slave-report>{}</slave-report>', durationMs: 42_000, tip: 'c'.repeat(40) },
+      leads: [{ packageKey: 'integration', lines: ['check the image'] }],
+    })
+    expect(text).toContain('ran `bash scripts/smoke.sh` on commit cccccccccccc and it passed in 42 s')
+    expect(text).toContain('flow ok')
+    expect(text).not.toContain('<slave-report>{}')
+    expect(text.indexOf('flow ok')).toBeLessThan(text.indexOf('Reported by the workers'))
+  })
+
+  it('says nothing about a smoke when there is none', () => {
+    const text = renderVerificationGoal({ goalVersion: 1, round: 1, requirements: [RUN_REQUIREMENT], diffStat: '', diffCapped: false, smoke: null })
+    expect(text).not.toContain('smoke.sh')
   })
 })

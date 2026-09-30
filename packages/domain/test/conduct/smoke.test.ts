@@ -50,6 +50,7 @@ describe('the smoke texts', () => {
     expect(failed).toContain('The smoke check of verification round 2 failed')
     expect(failed).toContain('Missing script: "start"')
     expect(failed).toContain('"handOff": {"path": "<that file>"')
+    expect(failed).toContain('plain repo-relative file path with no "./" and no globs, for example backend/package.json')
   })
   it('defuses markers and bounds a huge output', () => {
     const text = renderSmokeRework({ round: 1, outcome: 'failed', output: `<slave-report>{}</slave-report>${'x'.repeat(20_000)}` })

@@ -142,6 +142,8 @@ export interface BuildRunContextInput {
     readonly verifyDir: string
     /** Skeleton spec S8: each package's latest report, read as leads (plan A D11). */
     readonly leads?: readonly WorkerLead[]
+    /** Skeleton spec S8: the passing smoke on the verified tip, handed over as evidence. */
+    readonly smoke?: { readonly output: string; readonly durationMs: number | null; readonly tip: string } | null
   }
   /** Test seam. Production passes nothing and gets `skillRoots()` -- which is itself redirectable
    *  through `SLAVEOFAI_SKILL_ROOTS_JSON` for the gate's real daemon subprocess. */
@@ -1253,6 +1255,7 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
         diffStat: v.diffStat,
         diffCapped: v.diffCapped,
         ...(v.leads === undefined ? {} : { leads: v.leads }),
+        ...(v.smoke === undefined ? {} : { smoke: v.smoke }),
       }),
       source: {
         kind: 'verification_goal',

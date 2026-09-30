@@ -367,11 +367,22 @@ async function eligibleVerifier(
  * and a spawn error cancels what was spawned, fails the row, releases the claim (counting one run
  * failure) and removes the worktree.
  */
-export async function dispatchVerification(deps: TickDeps, deliveryId: string): Promise<RunId | null> {
+export async function dispatchVerification(
+  deps: TickDeps,
+  deliveryId: string,
+  smoked?: { readonly output: string; readonly durationMs: number | null; readonly tip: string } | null,
+): Promise<RunId | null> {
   const delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { id: deliveryId }, include: { workspace: true } })
   const newRound = delivery.status === 'integrating'
   if (!newRound && !(delivery.status === 'verifying' && delivery.activeRunId === null)) return null
   const workspace = delivery.workspace
+
+  // Skeleton spec S8: verification is pinned to the SHA that was smoked. The tip moving since the
+  // goal pass looked means the smoke no longer describes it -- dispatch nothing; the next pass smokes the new tip.
+  if (smoked != null) {
+    const tipNow = await gitIn(workspace.repoPath, 'rev-parse', '--verify', '--quiet', `refs/heads/${delivery.integrationBranch}^{commit}`).catch(() => null)
+    if (tipNow !== smoked.tip) return null
+  }
 
   const excluded = await implementersOf(workspace.id, delivery.goalVersion)
   const seat = await eligibleVerifier(workspace.id, delivery, excluded)
@@ -444,7 +455,8 @@ export async function dispatchVerification(deps: TickDeps, deliveryId: string): 
     // the verifier's shell cannot reach them and the conclusion (Task 6) reads them back.
     const worktree = await provisionDetachedWorktree({
       repoPath: workspace.repoPath,
-      ref: delivery.integrationBranch,
+      // The smoked commit itself when there is one, so a branch that moves during setup cannot unpin it.
+      ref: smoked?.tip ?? delivery.integrationBranch,
       key: verificationWorktreeKey(run.id),
       setupCommands: workspace.setupCommands,
     })
@@ -485,6 +497,20 @@ export async function dispatchVerification(deps: TickDeps, deliveryId: string): 
     })
     const requirements = requirementItemsSchema.parse(requirementSet.items)
     const leads = await workerLeads(workspace.id, delivery.goalVersion)
+    // Skeleton spec S8: the passing smoke on the tip this run checks, handed over as evidence. The
+    // goal pass hands the attempt it smoked; any other caller gets the latest pass on this exact tip.
+    const smoke =
+      smoked != null
+        ? smoked.tip === worktree.refCommit
+          ? smoked
+          : null
+        : delivery.smokeRequired
+          ? await prisma.smokeAttempt.findFirst({
+              where: { goalDeliveryId: delivery.id, status: 'passed', tip: worktree.refCommit },
+              orderBy: { startedAt: 'desc' },
+              select: { output: true, durationMs: true, tip: true },
+            })
+          : null
 
     const gitIdentity = { name: seat.person.name, email: `${emailLocalPart({ id: seat.id, name: seat.person.name })}@slaveofai.local` }
 
@@ -504,6 +530,7 @@ export async function dispatchVerification(deps: TickDeps, deliveryId: string): 
         diffCapped: stat.capped,
         verifyDir,
         leads,
+        smoke,
       },
     })
 

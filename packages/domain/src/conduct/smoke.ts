@@ -81,7 +81,7 @@ export function renderSmokeRework(input: { readonly round: number; readonly outc
     [
       `The smoke check of verification round ${String(input.round)} ${input.outcome === 'timed_out' ? 'timed out' : 'failed'}: \`bash ${SMOKE_SCRIPT_PATH}\` must start the product the way the README documents and run one basic user flow. Make it pass, then finish as your instructions describe.`,
       // Plan B D11 (user ruling 2026-09-30): the structured hand-off `handOffSmokeRework` reads.
-      'If the fix is in a file another package owns, do not edit it: add "handOff": {"path": "<that file>", "change": "<exactly what must change>"} to your <slave-report>. A file the skeleton owns is sent to the skeleton, once.',
+      'If the fix is in a file another package owns, do not edit it: add "handOff": {"path": "<that file>", "change": "<exactly what must change>"} to your <slave-report>. The path is a plain repo-relative file path with no "./" and no globs, for example backend/package.json; anything else is refused silently. A file the skeleton owns is sent to the skeleton, once.',
       'Its output:',
       printed,
     ].join('\n'),

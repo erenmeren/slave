@@ -20,6 +20,7 @@ import { applySmokeOutcome, handOffSmokeRework, settleStrandedSmoke, smokeWorktr
 import { drainPumps, type TickDeps } from '../../src/tick.js'
 import { worktreeRootFor } from '../../src/worktree.js'
 import { fileRunReport } from '../../src/report.js'
+import { dispatchVerification } from '../../src/verification.js'
 
 const repos: string[] = []
 const git = (args: readonly string[], cwd: string): string => execFileSync('git', [...args], { cwd, encoding: 'utf8' }).trim()
@@ -361,6 +362,42 @@ describe('the goal pass and the smoke gate', () => {
     const runs = await prisma.slaveRun.findMany({ where: { kind: 'verification' } })
     expect(runs).toHaveLength(1)
     expect((await deliveryOf(f)).round).toBe(1)
+    const context = await prisma.runContext.findFirstOrThrow({ where: { runId: runs[0]?.id ?? '' } })
+    expect(context.prompt).toContain('and it passed')
+    expect(context.prompt).toContain('flow ok')
+  }, 120_000)
+
+  it('verifies the smoked SHA with the smoked output, and dispatches nothing once the tip has moved', async (): Promise<void> => {
+    const f = await seedWithVerifier('#!/usr/bin/env bash\necho "flow ok"\n')
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    const [attempt] = await attemptsOf(f)
+    const smoked = { output: 'pinned output', durationMs: 1000, tip: attempt?.tip ?? '' }
+    writeFileSync(join(f.integrationPath, 'app.txt'), 'moved after the smoke\n')
+    git(['commit', '-q', '-am', 'merge(T-pkg): a later rework'], f.integrationPath)
+    expect(await dispatchVerification(depsFor(f.workspaceId, verifier()), f.deliveryId, smoked)).toBeNull()
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(0)
+    expect(await deliveryOf(f)).toMatchObject({ status: 'verifying', activeRunId: null, roundRunFailures: 0 })
+    // The goal pass then smokes the new tip instead of verifying the old one.
+    await runGoalPass(depsFor(f.workspaceId, verifier()), { mayStartRuns: true })
+    await drainPumps()
+    expect(await attemptsOf(f)).toHaveLength(2)
+  }, 120_000)
+
+  it('hands the verifier the attempt it was given, on exactly that commit', async (): Promise<void> => {
+    const f = await seedWithVerifier('#!/usr/bin/env bash\necho "flow ok"\n')
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    const [attempt] = await attemptsOf(f)
+    const tip = attempt?.tip ?? ''
+    const runId = await dispatchVerification(depsFor(f.workspaceId, verifier()), f.deliveryId, { output: 'pinned output', durationMs: 1000, tip })
+    await drainPumps()
+    expect(runId).not.toBeNull()
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'verification' } })
+    expect(run.verificationTip).toBe(tip)
+    const context = await prisma.runContext.findFirstOrThrow({ where: { runId: run.id } })
+    expect(context.prompt).toContain('pinned output')
+    expect(context.prompt).toContain(`commit ${tip.slice(0, 12)}`)
   }, 120_000)
 
   it('starts nothing while the scheduler has no room', async (): Promise<void> => {

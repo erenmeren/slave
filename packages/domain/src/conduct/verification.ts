@@ -14,6 +14,7 @@ import {
 import type { WorkerLead } from './report.js'
 import { RUN_REQUIREMENT_KEY, type RequirementItem } from './requirements.js'
 import { SMOKE_SCRIPT_PATH } from './skeleton.js'
+import { renderSmokeEvidence } from './smoke.js'
 
 /** One requirement's verdict from a verification run (spec R8), as {@link parseSlaveVerification}
  *  reads it -- the `check`/`output`/`reason` fields are what a person reads back as evidence, and
@@ -228,6 +229,8 @@ export interface VerificationGoalInput {
   readonly diffCapped: boolean
   /** Skeleton spec S8: what each package's latest report said -- leads, never evidence. */
   readonly leads?: readonly WorkerLead[]
+  /** Skeleton spec S8: the passing smoke on the tip this round checks -- evidence, never a verdict. */
+  readonly smoke?: { readonly output: string; readonly durationMs: number | null; readonly tip: string } | null
 }
 
 /**
@@ -250,6 +253,7 @@ export function renderVerificationGoal(input: VerificationGoalInput): string {
     'What was built for this goal (git diff --stat from where the goal started):',
     input.diffStat.trim() === '' ? '(no changes)' : sanitisePersonText(input.diffStat),
     ...(input.diffCapped ? ['(the summary was cut; read the repository for the rest)'] : []),
+    ...(input.smoke == null ? [] : ['', renderSmokeEvidence(input.smoke)]),
     ...(leads === '' ? [] : ['', leads]),
   ].join('\n')
 }

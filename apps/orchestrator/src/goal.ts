@@ -181,11 +181,13 @@ async function smokeOrVerify(
   repoPath: string,
   delivery: { readonly id: string; readonly integrationBranch: string; readonly smokeRequired: boolean },
 ): Promise<void> {
-  if (delivery.smokeRequired && (await passedSmokeAtTip(repoPath, delivery)) === null) {
+  const smoked = delivery.smokeRequired ? await passedSmokeAtTip(repoPath, delivery) : null
+  if (delivery.smokeRequired && smoked === null) {
     await startSmoke(delivery.id)
     return
   }
-  await dispatchVerification(deps, delivery.id)
+  // The smoked attempt travels with the dispatch: it verifies that SHA or nothing (spec S8).
+  await dispatchVerification(deps, delivery.id, smoked)
 }
 
 /** Every package task of the version is `done` and on the integration branch -- and there is at
