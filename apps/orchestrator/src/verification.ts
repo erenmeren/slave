@@ -358,7 +358,9 @@ async function eligibleVerifier(
 }
 
 /**
- * Starts the verification run of a goal version, or does nothing and returns `null`.
+ * Starts the verification run of a goal version, or does nothing and returns `null`. A version
+ * that needs a smoke (`smokeRequired`) is verified only with the passing attempt handed in as
+ * `smoked`, on exactly its commit (skeleton spec S7/S8); without one nothing starts.
  *
  * A new round starts from `integrating` (every package integrated); a retry of the same round
  * (plan D7) from `verifying` with no claim. Mirrors `dispatchReview`'s shape and discipline: the
@@ -376,6 +378,9 @@ export async function dispatchVerification(
   const newRound = delivery.status === 'integrating'
   if (!newRound && !(delivery.status === 'verifying' && delivery.activeRunId === null)) return null
   const workspace = delivery.workspace
+  // Skeleton spec S7 (final review minor 3): a version that needs a smoke is verified only on a
+  // smoked commit -- refused here too, so no caller can reach the verifier past the gate.
+  if (delivery.smokeRequired && smoked == null) return null
 
   // Skeleton spec S8: verification is pinned to the SHA that was smoked. The tip moving since the
   // goal pass looked means the smoke no longer describes it -- dispatch nothing; the next pass smokes the new tip.
@@ -450,9 +455,10 @@ export async function dispatchVerification(
     const runAdapter = adapter
     const model = resolved.model
 
-    // D12: a fresh detached checkout of the integration branch, setup commands run in it. The tip
-    // it checked out and the state setup left it in go on the row at once (rulings Q5/Q6), where
-    // the verifier's shell cannot reach them and the conclusion (Task 6) reads them back.
+    // D12: a fresh detached checkout of the smoked commit when one is handed in (spec S8), else of
+    // the integration branch's tip, setup commands run in it. The commit it checked out and the
+    // state setup left it in go on the row at once (rulings Q5/Q6), where the verifier's shell
+    // cannot reach them and the conclusion (Task 6) reads them back.
     const worktree = await provisionDetachedWorktree({
       repoPath: workspace.repoPath,
       // The smoked commit itself when there is one, so a branch that moves during setup cannot unpin it.

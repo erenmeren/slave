@@ -407,6 +407,14 @@ describe('the goal pass and the smoke gate', () => {
     expect(await attemptsOf(f)).toHaveLength(2)
   }, 120_000)
 
+  it('refuses to verify a version that needs a smoke when no smoked attempt is handed in (final review minor 3)', async (): Promise<void> => {
+    const f = await seedWithVerifier('#!/usr/bin/env bash\necho ok\n')
+    expect(await dispatchVerification(depsFor(f.workspaceId, verifier()), f.deliveryId)).toBeNull()
+    expect(await dispatchVerification(depsFor(f.workspaceId, verifier()), f.deliveryId, null)).toBeNull()
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification' } })).toBe(0)
+    expect(await deliveryOf(f)).toMatchObject({ status: 'integrating', round: 0, activeRunId: null, roundRunFailures: 0 })
+  }, 60_000)
+
   it('hands the verifier the attempt it was given, on exactly that commit', async (): Promise<void> => {
     const f = await seedWithVerifier('#!/usr/bin/env bash\necho "flow ok"\n')
     await startSmoke(f.deliveryId)

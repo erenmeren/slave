@@ -264,7 +264,10 @@ export interface VerificationGoalInput {
  * the integrated diff summary it is checking against. The diff stat goes through the same defuse
  * (fix round 1, C1): its file names and hunk headers are chosen by package workers, so a path a
  * worker named `<slave-report>...` (or containing a routing literal) must not reopen or steer this
- * run's own prompt. The workers' leads (skeleton spec S8), when there are any, close the section.
+ * run's own prompt. When the round checks a smoked commit (skeleton spec S8), the passing smoke's
+ * output follows as evidence -- what the project's own script showed, never the verdict on RUN
+ * ({@link renderSmokeEvidence}). The workers' leads (skeleton spec S8), when there are any, close
+ * the section.
  */
 export function renderVerificationGoal(input: VerificationGoalInput): string {
   const leads = renderVerificationLeads(input.leads ?? [])
