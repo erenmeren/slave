@@ -70,13 +70,13 @@ export async function goalEventSaid(
  * Conductor Plan 4b: whether the workspace's log already has `type` with every one of `fields` in
  * its payload -- {@link goalEventSaid} for the events a version can see more than once (one
  * `workspace.verified` per run, one `workspace.goal_retried` per round, one `task.rework` per task
- * and round). `since` narrows it to events after a sequence number. Read in the lock's
+ * and round, one `workspace.smoke_run` per smoke attempt). `since` narrows it to events after a sequence number. Read in the lock's
  * transaction, for the same reason.
  */
 export async function goalEventWith(
   tx: Prisma.TransactionClient,
   workspaceId: string,
-  type: 'workspace_verified' | 'workspace_goal_retried' | 'workspace_goal_needs_human' | 'task_rework',
+  type: 'workspace_verified' | 'workspace_goal_retried' | 'workspace_goal_needs_human' | 'task_rework' | 'workspace_smoke_run',
   fields: Readonly<Record<string, string | number>>,
   options: { readonly taskId?: string; readonly since?: bigint } = {},
 ): Promise<boolean> {

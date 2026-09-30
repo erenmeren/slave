@@ -268,7 +268,8 @@ export async function needsHumanInLock(
   }
   const moved = await tx.goalDelivery.updateMany({
     where: { id: deliveryId, status: 'verifying', activeRunId: runId },
-    data: { status: 'needs_human', activeRunId: null, needsHumanReason: full },
+    // Skeleton spec S7: a stop also releases a smoke claim (the smoke gate's cap stops from its conclusion).
+    data: { status: 'needs_human', activeRunId: null, activeSmokeId: null, needsHumanReason: full },
   })
   return moved.count > 0
 }
