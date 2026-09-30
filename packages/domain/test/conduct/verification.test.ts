@@ -307,6 +307,9 @@ describe('the verifier\'s leads and the RUN rule (skeleton spec S8)', () => {
   })
   it('adds the RUN rule only when RUN is a key', () => {
     expect(renderVerificationProtocol(['R1', 'RUN'], '/v')).toContain('scripts/smoke.sh passing is not enough on its own')
+    // A read-only flow is not a basic user flow: create a record through the product and read it back.
+    expect(renderVerificationProtocol(['R1', 'RUN'], '/v')).toContain('a flow that only reads is not enough: create at least one record through the product\'s own interface and read it back')
+    expect(renderVerificationProtocol(['R1', 'RUN'], '/v')).toContain('using only the steps its README gives an operator')
     expect(renderVerificationProtocol(['R1'], '/v')).not.toContain('scripts/smoke.sh')
   })
   it('finds a RUN pass resting on smoke.sh alone, and nothing else', () => {

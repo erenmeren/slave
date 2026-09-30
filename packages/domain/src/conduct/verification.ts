@@ -323,6 +323,8 @@ export function renderVerificationLeads(leads: readonly WorkerLead[]): string {
 export const RUN_VERIFICATION_RULE = [
   `4. For ${RUN_REQUIREMENT_KEY}: start the product yourself through the path its README documents (Docker if it says Docker) and run a basic user flow against it; ` +
     `${SMOKE_SCRIPT_PATH} passing is not enough on its own. Your check for ${RUN_REQUIREMENT_KEY} is the commands you ran, not a call to ${SMOKE_SCRIPT_PATH}. Stop what you started.`,
+  "   A basic user flow changes something: a flow that only reads is not enough: create at least one record through the product's own interface and read it back, " +
+    `using only the steps its README gives an operator (never by writing to its database, never with a licence, sign-in or permission check switched off). If a README step cannot be done with what the repository ships, ${RUN_REQUIREMENT_KEY} fails.`,
   '   Starting it must leave this checkout as you found it: the verification is thrown away if HEAD moves, any tracked file changes, or a new file appears that git does not ignore ' +
     '(dependency installs, caches, build output and *.log files are exempt). So: install from the lockfile without rewriting it (npm ci, pnpm install --frozen-lockfile, ' +
     'yarn install --immutable, uv sync --frozen, poetry install with no lock or update, pip install -r, cargo build --locked); put databases, .env files and other data under ' +
