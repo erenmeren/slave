@@ -17,7 +17,7 @@ export const PACKAGE_WORKER_ROLE = 'implementer'
 export const INTEGRATION_PACKAGE_KEY = 'integration'
 
 /**
- * The reserved key of the package that runs first and builds the runnable empty product every
+ * The reserved key of the package that runs first and builds the runnable base every
  * other package builds on (skeleton spec S1). Every other package depends on it; it depends on nothing.
  */
 export const SKELETON_PACKAGE_KEY = 'skeleton'

@@ -307,7 +307,7 @@ export async function tripConductor(workspaceId: string, detail: string): Promis
 
 /**
  * What a package task's description says: the requirements it delivers, word for word, or -- for
- * a package with none of its own -- what it is for: the skeleton builds the runnable empty product,
+ * a package with none of its own -- what it is for: the skeleton keeps or makes the product runnable (the build and start files, the verify and smoke scripts, the manifests it owns),
  * any other package delivers its own contract. The integration package always opens with the
  * wiring line (final review M4: only it wires the others together), and then lists its
  * requirements -- RUN at least, since skeleton spec S6 gives RUN to it. The full contract (owned

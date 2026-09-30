@@ -60,8 +60,8 @@ export const SKELETON_ROOT_BUILD_FILES: readonly string[] = [
 
 /** What a validator-made skeleton's contract says it provides. */
 export const SKELETON_INTERFACE =
-  'A runnable empty product every other package builds on: the entry point and server bootstrap, every dependency manifest with its lockfile, ' +
-  'the build and start files, scripts/smoke.sh, and the loaders of the shared registration directories.'
+  `The runnable base every other package builds on: the build and start files, ${VERIFY_SCRIPT_PATH}, ${SMOKE_SCRIPT_PATH}, ` +
+  'and the dependency manifests and loaders it owns (see its contract).'
 
 /** S3/plan A D5: an ordered shared directory a package adds files to, only under its own prefix. */
 export interface PackageRegistration {
