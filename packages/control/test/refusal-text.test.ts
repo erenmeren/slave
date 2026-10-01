@@ -188,3 +188,18 @@ describe('refusalText for the goal-version verbs (Conductor Plan 4a)', () => {
     )
   })
 })
+
+describe('refusalText names who settled a question or a card, never by a raw user id (human cards Task 8 fix round 1)', () => {
+  it('says Slave, an operator or a person', () => {
+    const closed = { kind: 'question_closed', messageId: 'm1', reason: 'dismissed', at: '2026-10-02T10:00:00.000Z' } as const
+    expect(refusalText({ ...closed, by: 'system' })).toContain('by Slave at')
+    expect(refusalText({ ...closed, by: 'operator' })).toContain('by an operator at')
+    expect(refusalText({ ...closed, by: 'u-1234' })).toContain('by a person at')
+    expect(refusalText({ ...closed, by: 'u-1234' })).not.toContain('u-1234')
+    const settled = { kind: 'decision_not_pending', decisionId: 'd1', resolvedAt: '2026-10-02T10:00:00.000Z' } as const
+    expect(refusalText({ ...settled, status: 'approved', resolvedByUserId: 'u-1234' })).toContain('resolved by a person at')
+    expect(refusalText({ ...settled, status: 'approved', resolvedByUserId: 'u-1234' })).not.toContain('u-1234')
+    expect(refusalText({ ...settled, status: 'rejected', resolvedByUserId: null })).toContain('resolved by an operator at')
+    expect(refusalText({ ...settled, status: 'expired', resolvedByUserId: null })).toContain('resolved by Slave at')
+  })
+})

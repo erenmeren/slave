@@ -2,6 +2,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
+import { answerQuestion, rejectDecision } from '@slave-of-ai/control'
 import { PROFILE_MAX_CHARS } from '@slave-of-ai/domain'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -242,6 +243,23 @@ describe('the control routes', () => {
         new Request('http://x', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }),
         { params: Promise.resolve({ workspaceId, messageId }) },
       )
+
+    it('answers a question somebody else closed with a notice naming them, and never a raw user id (human cards spec §4)', async (): Promise<void> => {
+      await prisma.user.create({ data: { id: 'u-alice', username: 'alice', passwordHash: 'x' } })
+      const questionId = await askAQuestion(fixture.workspace.id)
+      await prisma.slaveMessage.update({
+        where: { id: questionId },
+        data: { closedAt: new Date('2026-10-02T10:00:00.000Z'), closedReason: 'dismissed', closedBy: 'u-alice', closedNote: 'x' },
+      })
+
+      const response = await post(fixture.workspace.id, questionId, { answer: 'payments-retry' })
+
+      expect(response.status).toBe(409)
+      const body = await response.json()
+      expect(body.notice).toBe('Already closed by alice at 2026-10-02 10:00 UTC.')
+      expect(body.error).toContain('by a person')
+      expect(JSON.stringify(body)).not.toContain('u-alice')
+    })
 
     it('writes a human answer in the question thread and returns 200', async (): Promise<void> => {
       const questionId = await askAQuestion(fixture.workspace.id)
@@ -1205,7 +1223,31 @@ describe('the control routes', () => {
       await prisma.supervisorDecision.update({ where: { id: byAlice }, data: { status: 'approved', resolvedAt: new Date('2026-10-02T09:30:00.000Z'), resolvedByUserId: 'u-alice' } })
       expect((await (await approve(fixture.workspace.id, byAlice)).json()).notice).toBe('Already closed by alice at 2026-10-02 09:30 UTC.')
       const bySlave = await proposal({ status: 'applied' })
-      expect((await (await approve(fixture.workspace.id, bySlave)).json()).notice).toBe('Already closed by the system.')
+      expect((await (await approve(fixture.workspace.id, bySlave)).json()).notice).toBe('Already closed by Slave.')
+    })
+
+    it('names the person who answered in the answer box when a card it retired is approved after (human cards spec §4, fix round 1)', async (): Promise<void> => {
+      await prisma.user.create({ data: { id: 'u-alice', username: 'alice', passwordHash: 'x' } })
+      const { decisionId, questionId } = await answerProposal()
+      const answered = await answerQuestion(questionId, { body: 'payments-retry', answeredBy: 'web operator', principal: { userId: 'u-alice' } })
+      expect(answered.ok).toBe(true)
+      // The answer retired the card: expired, with no user on it.
+      expect(await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })).toMatchObject({ status: 'expired', resolvedByUserId: null })
+      const closedAt = (await prisma.slaveMessage.findUniqueOrThrow({ where: { id: questionId } })).closedAt as Date
+
+      const body = await (await approve(fixture.workspace.id, decisionId)).json()
+
+      expect(body.notice).toBe(`Already closed by alice at ${closedAt.toISOString().slice(0, 16).replace('T', ' ')} UTC.`)
+    })
+
+    it('names an operator for a verdict given at the CLI, which has no account (human cards spec §4, fix round 1)', async (): Promise<void> => {
+      const decisionId = await proposal()
+      expect((await rejectDecision(decisionId)).ok).toBe(true)
+
+      const body = await (await approve(fixture.workspace.id, decisionId)).json()
+
+      expect(body.notice).toMatch(/^Already closed by an operator at \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\.$/u)
+      expect(body.error).toContain('resolved by an operator')
     })
 
     it('rejecting keeps the action out of the world and keeps the reason', async (): Promise<void> => {

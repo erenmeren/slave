@@ -275,7 +275,7 @@ function ConductorDetails({ conductor }: { readonly conductor: NonNullable<Draft
 /** Spec H3: where an answer or a decision taken now on a question its run continued past goes. */
 function whereItGoes(card: NonNullable<Decision['card']>): string {
   if (card.lateAnswerFate === 'next_run') return "; an answer now reaches the task's next run, if it has one."
-  if (card.lateAnswerFate === 'unread') return '; the task has finished, so no run would read an answer.'
+  if (card.lateAnswerFate === 'unread') return '; no run would read an answer.'
   return card.askerPackageKey === null ? '; an answer stays in its thread.' : `; a decision now reaches the ${card.askerPackageKey} package as a hand-off.`
 }
 

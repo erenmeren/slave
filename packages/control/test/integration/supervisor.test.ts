@@ -3204,7 +3204,9 @@ describe('a card closes its question (human cards H1)', () => {
     const late = await approveDecision(card.id, { userId: 'u2' })
     expect(!late.ok && late.error).toMatchObject({ kind: 'decision_not_pending', status: 'rejected', resolvedByUserId: 'u1' })
     expect(!late.ok && typeof late.error === 'object' && 'resolvedAt' in late.error && late.error.resolvedAt).toEqual(expect.any(String))
-    expect(!late.ok && refusalText(late.error)).toContain('by u1 at')
+    // Task 8 fix round 1: the text names a person in words, never by the raw user id.
+    expect(!late.ok && refusalText(late.error)).toContain('by a person at')
+    expect(!late.ok && refusalText(late.error)).not.toContain('u1')
   })
 
   it('writes nothing for a verdict on a card whose question closed meanwhile, and takes one on a timed-out question (spec §4)', async () => {

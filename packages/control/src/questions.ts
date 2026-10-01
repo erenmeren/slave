@@ -7,6 +7,7 @@ import {
   QUESTION_CLOSED_EVENT_NOTE_MAX_CHARS,
   QUESTION_SITUATION_KINDS,
   TERMINAL,
+  closerWords,
   storableText,
   trimToFit,
   type LateAnswerFate,
@@ -219,12 +220,10 @@ export interface QuestionCard {
   readonly lateAnswerFate: LateAnswerFate | null
 }
 
-/** A `closedBy` (or a card's `resolvedByUserId`) in the words a person reads; `names` holds the
- *  accounts already read. An account that is gone is "a person": it was one. */
+/** A `closedBy` in the words a person reads ({@link closerWords}); `names` holds the accounts
+ *  already read ({@link closerNames}). */
 export function closerName(by: string | null, names: ReadonlyMap<string, string>): string {
-  if (by === null || by === CLOSED_BY_SYSTEM) return 'the system'
-  if (by === CLOSED_BY_OPERATOR) return 'an operator'
-  return names.get(by) ?? 'a person'
+  return closerWords(by, by === null ? undefined : names.get(by))
 }
 
 /** The account names behind a set of `closedBy`/`resolvedByUserId` values, in one read. */

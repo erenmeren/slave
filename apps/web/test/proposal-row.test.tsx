@@ -481,7 +481,7 @@ describe('a drafted answer', () => {
 
 describe('a question card says how its question stands (human cards H1/H3)', () => {
   const base = { messageId: 'm-1', body: 'q', goalVersion: 1, askerPackageKey: 'integration', askerRunId: 'r1', lateAnswerNote: null, lateAnswerFate: null }
-  const timedOut = { reason: 'timed_out', at: '2026-10-02T10:00:00.000Z', by: 'system', byName: 'the system' } as const
+  const timedOut = { reason: 'timed_out', at: '2026-10-02T10:00:00.000Z', by: 'system', byName: 'Slave' } as const
 
   it('marks a card whose run continued without an answer, and one whose run cannot continue', () => {
     renderRow(answerDecision({ card: { ...base, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'hand_off' } }))

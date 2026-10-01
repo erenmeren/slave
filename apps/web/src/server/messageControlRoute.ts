@@ -2,6 +2,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { refusalText, type ControlRefusal } from '@slave-of-ai/control'
 import type { Result } from '@slave-of-ai/domain'
 import { refusalStatus } from './refusalStatus'
+import { settledNotice } from './supervisorControlRoute'
 
 /**
  * Route shell for a verb addressed at one `SlaveMessage` (M36 t3 fix round 1): 404 unless the
@@ -29,7 +30,8 @@ export async function messageControlResponse(
     return Response.json({ error: 'no such message in this workspace' }, { status: 404 })
   }
   const result = await operate()
-  return result.ok
-    ? Response.json({ ok: true })
-    : Response.json({ error: refusalText(result.error) }, { status: refusalStatus(result.error.kind) })
+  if (result.ok) return Response.json({ ok: true })
+  // Human cards spec §4: a question somebody else closed first is information, named in words.
+  const notice = await settledNotice(result.error)
+  return Response.json({ error: refusalText(result.error), ...(notice === null ? {} : { notice }) }, { status: refusalStatus(result.error.kind) })
 }

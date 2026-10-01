@@ -188,7 +188,7 @@ describe('closing a question (human cards H1)', () => {
     expect(cards.get(byPerson)?.closed).toMatchObject({ reason: 'dismissed', by: 'u1', byName: 'u1' })
     expect(cards.get(byOperator)?.closed).toMatchObject({ reason: 'decided', by: 'operator', byName: 'an operator' })
     expect(cards.get(unread)).toMatchObject({ lateAnswerNote: LATE_ANSWER_NOTE.unread, lateAnswerFate: 'unread' })
-    expect(cards.get(timedOut)).toMatchObject({ closed: { reason: 'timed_out', byName: 'the system' }, lateAnswerNote: null, lateAnswerFate: 'unread' })
+    expect(cards.get(timedOut)).toMatchObject({ closed: { reason: 'timed_out', byName: 'Slave' }, lateAnswerNote: null, lateAnswerFate: 'unread' })
     expect(cards.get(byPerson)?.lateAnswerFate).toBe(null)
     expect(cards.get(waiting.value.id)).toMatchObject({ askerWaiting: true, askerRunId: run.id, closed: null, timeoutRefusal: 'workspace halted: emergency_stop' })
   })

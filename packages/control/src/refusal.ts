@@ -12,6 +12,8 @@ import {
   BROKER_REFUSAL_LABEL,
   EXTERNAL_SOURCE_LABEL,
   WORKSPACE_LIMIT_RULE,
+  closerWords,
+  resolverWords,
   type BrokerRefusalReason,
   type ExternalSource,
   type QuestionCloseReason,
@@ -972,7 +974,7 @@ export function refusalText(refusal: ControlRefusal): string {
     case 'question_answered':
       return `question ${refusal.messageId} is no longer waiting on an answer`
     case 'question_closed':
-      return `question ${refusal.messageId} was closed (${refusal.reason.replace('_', ' ')}) by ${refusal.by === 'system' ? 'Slave' : refusal.by} at ${refusal.at}: nothing was written`
+      return `question ${refusal.messageId} was closed (${refusal.reason.replace('_', ' ')}) by ${closerWords(refusal.by)} at ${refusal.at}: nothing was written`
     case 'reassign_not_permitted':
       return `question ${refusal.messageId} cannot be re-addressed to slave ${refusal.slaveId}: ${refusal.reason}`
     case 'draft_missing':
@@ -984,7 +986,7 @@ export function refusalText(refusal: ControlRefusal): string {
     case 'decision_not_found':
       return `no supervisor decision with id ${refusal.decisionId}`
     case 'decision_not_pending':
-      return `supervisor decision ${refusal.decisionId} is ${refusal.status}, not pending${refusal.resolvedAt == null ? '' : ` (resolved ${refusal.resolvedByUserId == null ? 'by Slave' : `by ${refusal.resolvedByUserId}`} at ${refusal.resolvedAt})`}: there is nothing left to approve or reject`
+      return `supervisor decision ${refusal.decisionId} is ${refusal.status}, not pending${refusal.resolvedAt == null ? '' : ` (resolved by ${resolverWords(refusal.status, refusal.resolvedByUserId ?? null)} at ${refusal.resolvedAt})`}: there is nothing left to approve or reject`
     case 'supervisor_cooldown':
       return `the supervisor has already decided ${refusal.situationKind} for ${refusal.subjectId}; the next decision on it can be made after ${refusal.untilTs}`
     case 'supervisor_disabled':

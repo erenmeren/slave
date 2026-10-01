@@ -42,7 +42,8 @@ export function continuedWithoutAnswer(report: GoalReport): readonly (GoalReport
 }
 
 /** Where the asking task is read in the app -- its runs and the worker's own report, which names the
- *  assumption a continued run made. Ids are encoded, so the link is a link whatever they hold. */
+ *  assumption a continued run made. Ids are encoded, so the link is a link whatever they hold. The
+ *  web page links it; the Markdown export names the task instead. */
 export function questionTaskHref(workspaceId: string, taskId: string): string {
   return `/w/${encodeURIComponent(workspaceId)}/tasks?task=${encodeURIComponent(taskId)}`
 }
@@ -233,7 +234,8 @@ export function renderGoalReportMarkdown(report: GoalReport): string {
     lines.push('## Runs that continued without an answer', '')
     for (const q of continued) {
       lines.push(`- ${mdInline(q.at)} · ${askerWords(q)} waited ${formatWait(q.closed.waitedMs)}, then continued on its own assumption:`, ...mdQuote(q.question).map((line) => `  ${line}`), '')
-      lines.push(`  The assumption is in the worker's report${q.taskId === null ? '' : `: [the task](${questionTaskHref(report.workspaceId, q.taskId)})`}.`, '')
+      // No link: an exported file has no app to follow one into (fix round 1). The task id names it.
+      lines.push(`  The assumption is in the worker's report${q.taskId === null ? '' : ` on task ${mdInline(q.taskId)}`}.`, '')
     }
   }
 

@@ -456,14 +456,15 @@ export async function versionQuestions(scope: VersionScope): Promise<readonly Go
               text: trimEvidence(answer.body, GOAL_REPORT_DETAIL_MAX_CHARS),
             },
       taskId: row.taskId,
-      // Human cards H1/H3: who closed it is a person or Slave -- the report names no account.
+      // Human cards H1/H3: who closed it is a person or Slave -- the report names no account. No
+      // `closedBy` is Slave, as `closerWords` reads it (fix round 1).
       closed:
         row.closedAt === null || row.closedReason === null
           ? null
           : {
               at: row.closedAt.toISOString(),
               reason: row.closedReason,
-              by: row.closedBy === CLOSED_BY_SYSTEM ? 'system' : 'person',
+              by: row.closedBy === null || row.closedBy === CLOSED_BY_SYSTEM ? 'system' : 'person',
               note: row.closedNote === null ? null : trimEvidence(row.closedNote, GOAL_REPORT_DETAIL_MAX_CHARS),
               waitedMs: row.closedAt.getTime() - row.createdAt.getTime(),
             },

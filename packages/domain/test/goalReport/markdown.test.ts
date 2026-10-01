@@ -242,7 +242,7 @@ describe('renderGoalReportMarkdown', () => {
     expect(md.match(/Closed:/g)).toHaveLength(2)
   })
 
-  it('lists each question a run continued past without an answer: the question, the wait and a link to the task whose report names the assumption (human cards H3)', () => {
+  it('lists each question a run continued past without an answer: the question, the wait and the task whose report names the assumption (human cards H3)', () => {
     const base = { at: '2026-10-02T08:00:00.000Z', packageKey: 'integration', askedBy: 'Ivo', answer: null }
     const timedOut = { at: '2026-10-02T10:00:00.000Z', reason: 'timed_out', by: 'system', note: null, waitedMs: 7_200_000 } as const
     const md = renderGoalReportMarkdown(
@@ -258,7 +258,8 @@ describe('renderGoalReportMarkdown', () => {
     const section = md.slice(md.indexOf('## Runs that continued without an answer'), md.indexOf('## Questions'))
     expect(section).toContain('- 2026-10-02T08:00:00.000Z · integration (Ivo) waited 2 hours, then continued on its own assumption:')
     expect(section).toContain('  > May I edit \\*package.json\\*?')
-    expect(section).toContain("  The assumption is in the worker's report: [the task](/w/ws1/tasks?task=t1).")
+    expect(section).toContain("  The assumption is in the worker's report on task t1.")
+    expect(section).not.toContain('](')
     expect(section).toContain('waited 1 hour 30 minutes')
     expect(section).toContain("  The assumption is in the worker's report.")
     expect(section).not.toContain('Dismissed one')

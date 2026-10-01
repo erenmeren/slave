@@ -1,6 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { closerName, closerNames, refusalText, type ControlRefusal } from '@slave-of-ai/control'
-import type { Result } from '@slave-of-ai/domain'
+import { isQuestionSituation, resolverWords, type Result } from '@slave-of-ai/domain'
 import { refusalStatus } from './refusalStatus'
 
 /**
@@ -31,7 +31,7 @@ export async function decisionControlResponse(
   }
   const result = await operate()
   if (result.ok) return Response.json({ ok: true })
-  const notice = await settledNotice(result.error)
+  const notice = await settledNotice(result.error, decisionId)
   return Response.json({ error: refusalText(result.error), ...(notice === null ? {} : { notice }) }, { status: refusalStatus(result.error.kind) })
 }
 
@@ -39,19 +39,38 @@ export async function decisionControlResponse(
  * Human cards spec §4 (Task 4 carry): a card somebody else settled first -- its question closed, or
  * the card itself resolved -- is not an error the person made. The response carries a `notice`, in
  * words ("Already closed by alice at 2026-10-02 10:00 UTC."), which the page shows as information
- * and follows with a refresh of the queue. The account is named, never its id; Slave and an operator
- * without an account are named in words. Null for every other refusal.
+ * and follows with a refresh of the queue. Null for every other refusal. Exported: the answer box's
+ * route (`messageControlResponse`) says the same of a question closed first.
+ *
+ * Who is named (fix round 1): the question's closer when a question card's question is closed --
+ * an answer in the answer box retires the card with no user on it, and the truth is on the question
+ * row; otherwise the card's own resolver ({@link resolverWords}: a null user on a person's verdict
+ * is the CLI's operator, on an expiry or a birth-applied card Slave). An account is named by its
+ * username, never by its id.
  */
-async function settledNotice(refusal: ControlRefusal): Promise<string | null> {
-  const settled =
-    refusal.kind === 'question_closed'
-      ? { by: refusal.by, at: refusal.at }
-      : refusal.kind === 'decision_not_pending'
-        ? { by: refusal.resolvedByUserId ?? null, at: refusal.resolvedAt ?? null }
-        : null
-  if (settled === null) return null
-  const name = closerName(settled.by, await closerNames([settled.by]))
-  return `Already closed by ${name}${settled.at === null ? '' : ` at ${noticeTime(settled.at)}`}.`
+export async function settledNotice(refusal: ControlRefusal, decisionId: string | null = null): Promise<string | null> {
+  if (refusal.kind === 'question_closed') return closedBy(refusal.by, refusal.at)
+  if (refusal.kind !== 'decision_not_pending') return null
+  const card = decisionId === null
+    ? null
+    : await prisma.supervisorDecision.findUnique({ where: { id: decisionId }, select: { situationKind: true, subjectId: true } })
+  if (card !== null && isQuestionSituation(card.situationKind)) {
+    const question = await prisma.slaveMessage.findUnique({ where: { id: card.subjectId }, select: { closedAt: true, closedBy: true } })
+    if (question?.closedAt != null) return closedBy(question.closedBy, question.closedAt.toISOString())
+  }
+  const userId = refusal.resolvedByUserId ?? null
+  const names = await closerNames([userId])
+  const name = resolverWords(refusal.status, userId, userId === null ? undefined : names.get(userId))
+  return sentence(name, refusal.resolvedAt ?? null)
+}
+
+/** A question's closer and close time as the notice. */
+async function closedBy(by: string | null, at: string): Promise<string> {
+  return sentence(closerName(by, await closerNames([by])), at)
+}
+
+function sentence(name: string, at: string | null): string {
+  return `Already closed by ${name}${at === null ? '' : ` at ${noticeTime(at)}`}.`
 }
 
 /** `2026-10-02T10:00:00.000Z` → `2026-10-02 10:00 UTC`: the server renders the sentence, so it
