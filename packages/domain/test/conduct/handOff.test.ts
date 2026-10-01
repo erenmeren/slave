@@ -11,7 +11,7 @@ import {
   renderSharedDecisions,
   resolveHandOff,
 } from '../../src/conduct/handOff.js'
-import { HANDOFF_EVENT_CHANGE_MAX_CHARS } from '../../src/conduct/constants.js'
+import { HANDOFF_EVENT_CHANGE_MAX_CHARS, SHARED_DECISIONS_PROMPT_MAX_CHARS } from '../../src/conduct/constants.js'
 import { trimToFit } from '../../src/conduct/verification.js'
 
 const packages = [
@@ -149,5 +149,15 @@ describe('renderSharedDecisions (controller ruling F12)', () => {
   })
   it('lists a short set in full, with no "not shown" line', () => {
     expect(renderSharedDecisions([{ title: 'a', decision: 'b' }, { title: 'c', decision: 'd' }])).not.toContain('not shown')
+  })
+})
+
+describe('renderSharedDecisions stays within its bound (fix round 1)', () => {
+  it('40 decisions of the longest title and text, names line included, fit SHARED_DECISIONS_PROMPT_MAX_CHARS', () => {
+    const decisions = Array.from({ length: 40 }, (_, i) => ({ title: `${'t'.repeat(77)}${String(i).padStart(3, '0')}`, decision: 'd'.repeat(600) }))
+    const text = renderSharedDecisions(decisions)
+    expect(text.length).toBeLessThanOrEqual(SHARED_DECISIONS_PROMPT_MAX_CHARS)
+    expect(text).toMatch(/\d+ more shared decisions not shown: t+0\d\d/u)
+    expect(text).not.toContain('characters cut')
   })
 })

@@ -9,6 +9,7 @@ import {
   type ConductorAnswer,
 } from '../../src/supervisor/conductorAnswer.js'
 import { draftSchema } from '../../src/supervisor/answerPrompt.js'
+import { CONDUCTOR_PROMPT_DECISIONS_MAX_CHARS } from '../../src/supervisor/constants.js'
 import { conductorPlan, question } from './fixtures.js'
 
 const answer = (over: Partial<ConductorAnswer> = {}): ConductorAnswer => ({
@@ -207,5 +208,73 @@ describe('the controller rulings on the batched answer', () => {
     expect(shown.length).toBeLessThan(40)
     expect(prompt).toContain(`${String(40 - shown.length)} more shared decisions not shown: decision ${String(shown.length)},`)
     for (const d of shown) expect(prompt).toContain(`"${d.title}": ${d.decision.trim()}`)
+  })
+})
+
+describe('fix round 1 (review minors)', () => {
+  const plan = conductorPlan()
+  const raw = { messageId: 'm1', answer: 'yes', basis: { requirements: ['R1'], packages: [], decisions: [] }, changes: 'none', newDecision: null, handOff: null }
+  const wrap = (answers: unknown[]): string => JSON.stringify({ conductorAnswers: answers })
+
+  it('holds a question the reply answered more than once, with a note', () => {
+    const parsed = parseConductorAnswers(wrap([raw, { ...raw, answer: 'move it', changes: 'ownership' }]), ['m1'])
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value).toHaveLength(1)
+    expect(parsed.value[0]?.unreadable).toContain('the reply answered this question more than once')
+    const judged = judgeConductorAnswer(parsed.value[0]!, plan, { halted: false })
+    expect(judged.tier).not.toBe('applied')
+    expect(judged.tier).toBe('proposed')
+  })
+
+  it('holds a new decision that reads like an ownership change', () => {
+    const basis = { requirements: ['R1'], packages: [], decisions: [] }
+    const held = [
+      { title: 'Routes', decision: 'integration now owns routes/' },
+      { title: 'Where reports live', decision: 'everything under backend/src/report goes elsewhere' },
+      { title: 'File OWNERSHIP', decision: 'shared' },
+      { title: 'Skeleton scripts', decision: 'the skeleton keeps them' },
+    ]
+    for (const newDecision of held) {
+      const judged = judgeConductorAnswer(answer({ basis, newDecision }), plan, { halted: false })
+      expect(judged.tier, newDecision.decision).toBe('proposed')
+      expect(judged.rationale).toContain('ownership')
+    }
+    expect(judgeConductorAnswer(answer({ basis, newDecision: { title: 'API fields', decision: 'API fields are camelCase' } }), plan, { halted: false }).tier).toBe('applied')
+    expect(judgeConductorAnswer(answer({ basis, newDecision: { title: 'Ownerless', decision: 'owners-to-be' } }), plan, { halted: false }).tier).toBe('applied')
+  })
+
+  it('reads the last top-level object with the key, past a preamble or an earlier draft', () => {
+    const preamble = parseConductorAnswers(`I hit {error} once. ${wrap([raw])}`, ['m1'])
+    expect(preamble.ok && preamble.value[0]?.answer).toBe('yes')
+    const two = parseConductorAnswers(`${wrap([{ ...raw, answer: 'first' }])}\nCorrected: ${wrap([{ ...raw, answer: 'second' }])}`, ['m1'])
+    expect(two.ok && two.value[0]?.answer).toBe('second')
+    const keyless = parseConductorAnswers(`${wrap([{ ...raw, answer: 'kept' }])} and {"note": 1}`, ['m1'])
+    expect(keyless.ok && keyless.value[0]?.answer).toBe('kept')
+  })
+
+  it('lists the held reasons beside the escalation', () => {
+    const judged = judgeConductorAnswer(answer({ changes: 'budget', basis: { requirements: ['R99'], packages: [], decisions: [] } }), plan, { halted: false })
+    expect(judged.tier).toBe('escalated')
+    expect(judged.rationale).toContain('the budget')
+    expect(judged.rationale).toContain('requirement R99 does not exist')
+  })
+
+  it('bounds the stored unverified list, and keeps it within the schema', () => {
+    const many = { requirements: Array.from({ length: 20 }, (_, i) => `X${String(i)}`), packages: Array.from({ length: 20 }, (_, i) => `p${String(i)}`), decisions: Array.from({ length: 20 }, (_, i) => `t${String(i)}`) }
+    const judged = judgeConductorAnswer({ ...answer({ basis: many }), unreadable: ['the hand-off could not be read (x)', 'the reply answered this question more than once'] }, plan, { halted: false })
+    expect(judged.draft.conductor?.unverified.length).toBeLessThanOrEqual(60)
+    expect(judged.draft.conductor?.unverified[0]).toContain('hand-off')
+    expect(draftSchema.safeParse(judged.draft).success).toBe(true)
+    expect(draftSchema.safeParse({ ...judged.draft, conductor: { ...judged.draft.conductor, unverified: Array.from({ length: 61 }, () => 'x') } }).success).toBe(false)
+    expect(draftSchema.safeParse({ ...judged.draft, conductor: { ...judged.draft.conductor, unverified: ['x'.repeat(301)] } }).success).toBe(false)
+  })
+
+  it('keeps the prompt\'s decisions within their budget, names line included', () => {
+    const full = conductorPlan({ decisions: Array.from({ length: 40 }, (_, i) => ({ title: `${'t'.repeat(77)}${String(i).padStart(3, '0')}`, decision: 'd'.repeat(600), source: 'conductor_plan' as const })) })
+    const prompt = buildConductorAnswerPrompt({ goal: null, plan: full, questions: [], profile: null })
+    const section = prompt.slice(prompt.indexOf('SHARED DECISIONS'), prompt.indexOf('YOUR EARLIER ANSWERS'))
+    expect(section.length).toBeLessThanOrEqual(CONDUCTOR_PROMPT_DECISIONS_MAX_CHARS + 100)
+    expect(section).toContain('more shared decisions not shown')
   })
 })

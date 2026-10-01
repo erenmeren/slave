@@ -8,8 +8,15 @@ import { neutraliseMarkers } from '../run-context/render.js'
 import type { Tier } from './actions.js'
 import type { Draft } from './answerPrompt.js'
 import { ANSWER_MAX_CHARS, CONDUCTOR_PROMPT_DECISIONS_MAX_CHARS, GOAL_DECISIONS_MAX, THREAD_BODY_MAX_CHARS } from './constants.js'
-import { CONDUCTOR_CHANGES, conductorBasisSchema, type ConductorBasis, type ConductorChange } from './conductorDraft.js'
-import { PROFILE_HEADING, RATIONALE_MAX_CHARS, cap, firstJsonObject } from './prompt.js'
+import {
+  CONDUCTOR_CHANGES,
+  CONDUCTOR_UNVERIFIED_ITEM_MAX_CHARS,
+  CONDUCTOR_UNVERIFIED_MAX,
+  conductorBasisSchema,
+  type ConductorBasis,
+  type ConductorChange,
+} from './conductorDraft.js'
+import { PROFILE_HEADING, RATIONALE_MAX_CHARS, cap } from './prompt.js'
 import type { SupervisorConductorPlan, SupervisorQuestion } from './world.js'
 
 /** The key the batched answer is read from, and a routing literal (plan B D10). */
@@ -78,7 +85,7 @@ export function buildConductorAnswerPrompt(input: {
     'SHARED DECISIONS (binding for every package)',
     ...(plan.decisions.length === 0
       ? [NONE]
-      : fitSharedDecisions(plan.decisions, (title, decision) => `"${title}": ${decision}`, CONDUCTOR_PROMPT_DECISIONS_MAX_CHARS).map((line) => `  ${line}`)),
+      : fitSharedDecisions(plan.decisions, (title, decision) => `"${title}": ${decision}`, CONDUCTOR_PROMPT_DECISIONS_MAX_CHARS, '  ')),
     '',
     'YOUR EARLIER ANSWERS IN THIS VERSION',
     ...(plan.answers.length === 0 ? [NONE] : plan.answers.flatMap((a) => [`  Q: ${safe(a.question, 600)}`, `  A: ${safe(a.answer, 1200)}`])),
@@ -135,37 +142,100 @@ function readOptional<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, raw: unkno
   return { value: null, note: trimToFit(storableText(`the ${what} could not be read (${issues.join('; ')})`), UNREADABLE_NOTE_MAX_CHARS) }
 }
 
+/** Fix round 1: the note that holds a question the reply answered twice -- which answer is meant is a person's call. */
+export const ANSWERED_TWICE_NOTE = 'the reply answered this question more than once'
+
 /**
- * The batched reply (plan B D3/D4): the FIRST JSON object, under {@link CONDUCTOR_ANSWERS_KEY}. An
- * entry of the wrong shape, one naming a question that was not asked, or a second one for the same
- * question is skipped -- its question is simply not answered this tick. A `newDecision` or `handOff`
- * that does not read keeps its entry, as null with a note that holds it for a person (F16). No
- * usable entry at all, or an envelope that is not a list, is a failed call. Strings are made
- * storable (NUL and C0 controls) by the shared reviver before anything reads them (F6).
+ * Every top-level `{...}` in `text`, in order, brace-matched with string awareness (as
+ * `firstJsonObject` is). A `{` whose object never closes is skipped, so a stray brace in the prose
+ * does not swallow the reply after it.
+ */
+function topLevelJsonObjects(text: string): readonly string[] {
+  const objects: string[] = []
+  let start = text.indexOf('{')
+  while (start !== -1) {
+    let end = -1
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let index = start; index < text.length; index += 1) {
+      const character = text[index]!
+      if (inString) {
+        if (escaped) escaped = false
+        else if (character === '\\') escaped = true
+        else if (character === '"') inString = false
+        continue
+      }
+      if (character === '"') inString = true
+      else if (character === '{') depth += 1
+      else if (character === '}') {
+        depth -= 1
+        if (depth === 0) {
+          end = index
+          break
+        }
+      }
+    }
+    if (end === -1) {
+      start = text.indexOf('{', start + 1)
+      continue
+    }
+    objects.push(text.slice(start, end + 1))
+    start = text.indexOf('{', end + 1)
+  }
+  return objects
+}
+
+/**
+ * The batched reply (plan B D3/D4): the LAST top-level JSON object that parses and carries
+ * {@link CONDUCTOR_ANSWERS_KEY} (fix round 1) -- a model that quotes `{error}` in a preamble, or
+ * corrects a first draft, is read by its final block. Unlike the decision call, a second block gives
+ * the model no second go at an authority: every answer is still basis-checked and tiered. An entry
+ * of the wrong shape or one naming a question that was not asked is skipped -- its question is
+ * simply not answered this tick. A question answered more than once keeps its first answer, held for
+ * a person with {@link ANSWERED_TWICE_NOTE}. A `newDecision` or `handOff` that does not read keeps
+ * its entry, as null with a note that holds it for a person (F16). No usable entry at all, or an
+ * envelope that is not a list, is a failed call. Strings are made storable (NUL and C0 controls) by
+ * the shared reviver before anything reads them (F6).
  */
 export function parseConductorAnswers(text: string, asked: readonly string[]): Result<readonly ConductorAnswer[], string> {
-  const json = firstJsonObject(text)
-  if (json === null) return err('the answer carried no JSON object')
-  let value: unknown
-  try {
-    value = JSON.parse(json, storableJsonReviver)
-  } catch {
-    return err("the answer's JSON did not parse")
+  const objects = topLevelJsonObjects(text)
+  if (objects.length === 0) return err('the answer carried no JSON object')
+  let parsedAny = false
+  let list: unknown
+  for (const json of objects.toReversed()) {
+    let value: unknown
+    try {
+      value = JSON.parse(json, storableJsonReviver)
+    } catch {
+      continue
+    }
+    parsedAny = true
+    if (typeof value === 'object' && value !== null && CONDUCTOR_ANSWERS_KEY in value) {
+      list = (value as Record<string, unknown>)[CONDUCTOR_ANSWERS_KEY]
+      break
+    }
   }
-  const list = typeof value === 'object' && value !== null ? (value as Record<string, unknown>)[CONDUCTOR_ANSWERS_KEY] : undefined
+  if (!parsedAny) return err("the answer's JSON did not parse")
   if (!Array.isArray(list)) return err(`the answer must be {"${CONDUCTOR_ANSWERS_KEY}": [...]}`)
   const answers: ConductorAnswer[] = []
+  const answeredTwice = new Set<string>()
   for (const raw of list) {
     const parsed = answerSchema.safeParse(raw)
     if (!parsed.success) continue
     const { messageId, answer, basis, changes } = parsed.data
-    if (!asked.includes(messageId) || answers.some((a) => a.messageId === messageId)) continue
+    if (!asked.includes(messageId)) continue
+    if (answers.some((a) => a.messageId === messageId)) {
+      answeredTwice.add(messageId)
+      continue
+    }
     const newDecision = readOptional(sharedDecisionSchema, parsed.data.newDecision, 'new decision')
     const handOff = readOptional(handOffItemSchema, parsed.data.handOff, 'hand-off')
     const unreadable = [newDecision.note, handOff.note].filter((note): note is string => note !== null)
     answers.push({ messageId, answer, basis, changes, newDecision: newDecision.value, handOff: handOff.value, ...(unreadable.length === 0 ? {} : { unreadable }) })
   }
-  return answers.length === 0 ? err('no entry answered a question that was asked, in the shape asked for') : ok(answers)
+  if (answers.length === 0) return err('no entry answered a question that was asked, in the shape asked for')
+  return ok(answers.map((a) => (answeredTwice.has(a.messageId) ? { ...a, unreadable: [...(a.unreadable ?? []), ANSWERED_TWICE_NOTE] } : a)))
 }
 
 /** Plan B D5: the basis items that are not in this version's plan; the empty basis is itself one. */
@@ -194,6 +264,32 @@ export function conductorAnswerTier(input: { readonly changes: ConductorChange; 
  */
 const UNREACHABLE_TASK_STATUSES: readonly (string | null)[] = [null, 'failed', 'cancelled']
 
+/** Fix round 1: the words that make a new decision read like an ownership change. */
+const OWNERSHIP_WORDS = /\b(?:own|owns|owner|ownership)\b/iu
+
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+
+/**
+ * Fix round 1 (spec C3, "a decision never moves ownership"; ownedPaths alone does): what in a new
+ * decision makes it read like an ownership change -- a package key of this version as a whole word,
+ * one of its owned-path globs or their literal prefix, or own/owns/owner/ownership. Null when nothing
+ * does. Some harmless decisions are held by this; a person approves them (controller ruling).
+ */
+function ownershipSignal(decision: SharedDecision, plan: SupervisorConductorPlan): string | null {
+  const text = `${decision.title}\n${decision.decision}`
+  const lower = text.toLowerCase()
+  const word = OWNERSHIP_WORDS.exec(text)
+  if (word !== null) return `the word "${word[0]}"`
+  for (const pkg of plan.packages) {
+    if (new RegExp(`(?<![\\w-])${escapeRegExp(pkg.key)}(?![\\w-])`, 'iu').test(text)) return `the package ${pkg.key}`
+  }
+  for (const glob of plan.packages.flatMap((p) => p.ownedPaths)) {
+    const prefix = glob.split(/[*?[{]/u)[0]!.replace(/\/+$/u, '')
+    if (lower.includes(glob.toLowerCase()) || (prefix.length >= 3 && lower.includes(prefix.toLowerCase()))) return `the owned path ${glob}`
+  }
+  return null
+}
+
 /**
  * Plan B D5/D6: the tier an answer earns, the draft its decision row stores, and the rationale a
  * person reads. Held (`proposed`) for: an unverified basis, an unreadable decision or hand-off (F16),
@@ -206,12 +302,17 @@ export function judgeConductorAnswer(
   plan: SupervisorConductorPlan,
   input: { readonly halted: boolean },
 ): { readonly tier: Tier; readonly draft: Draft; readonly rationale: string } {
-  const unverified = [...checkBasis(answer.basis, plan), ...(answer.unreadable ?? [])]
+  // The reply's own notes first, so a bound never drops them for a basis failure (fix round 1).
+  const unverified = [...(answer.unreadable ?? []), ...checkBasis(answer.basis, plan)]
+    .slice(0, CONDUCTOR_UNVERIFIED_MAX)
+    .map((note) => trimToFit(note, CONDUCTOR_UNVERIFIED_ITEM_MAX_CHARS))
   const held: string[] = [...unverified]
   if (answer.newDecision !== null) {
     const title = decisionTitleKey(answer.newDecision.title)
     if (plan.decisions.some((d) => decisionTitleKey(d.title) === title)) held.push(`it would rewrite the shared decision "${answer.newDecision.title}"`)
     else if (plan.decisions.length >= GOAL_DECISIONS_MAX) held.push(`the version already has ${String(GOAL_DECISIONS_MAX)} shared decisions`)
+    const signal = ownershipSignal(answer.newDecision, plan)
+    if (signal !== null) held.push(`its new decision reads like an ownership change (it names ${signal}), and a decision never moves ownership`)
   }
   if (answer.handOff !== null) {
     const target = resolveHandOff(answer.handOff, null, plan.packages)
@@ -227,7 +328,7 @@ export function judgeConductorAnswer(
     tier === 'applied'
       ? `The conductor answered from the plan (${cited}).`
       : tier === 'escalated'
-        ? `Held for a person: following this answer would change ${answer.changes === 'requirement' ? 'a requirement' : answer.changes === 'ownership' ? 'who owns a file' : 'the budget'}.`
+        ? `Held for a person: following this answer would change ${answer.changes === 'requirement' ? 'a requirement' : answer.changes === 'ownership' ? 'who owns a file' : 'the budget'}${held.length === 0 ? '' : `; also ${held.join('; ')}`}.`
         : `Held for a person: ${[...(input.halted ? ['the workspace is halted'] : []), ...held].join('; ')}.`
   return {
     tier,

@@ -222,45 +222,67 @@ export function renderHandOffQuestion(input: { readonly view: HandOffView; reado
   ].join('\n')
 }
 
-/** Bounds the "N more shared decisions not shown" line: titles are short, but a hand-edited version could hold many. */
-const DECISIONS_NOT_SHOWN_MAX_CHARS = 4000
+/**
+ * Bounds the "N more shared decisions not shown" line, which the fitting reserves room for once a
+ * decision does not fit: titles are short, but a hand-edited version could hold many.
+ */
+const DECISIONS_NOT_SHOWN_MAX_CHARS = 1000
 
 /**
  * Controller ruling F12 (spec C3, "every contract lists them"): shared decisions go in WHOLE, in
  * order, while they fit `budget`; the ones that do not are named by title in a trusted line. Never a
  * cut mid-decision: a head/tail trim of 40 decisions silently dropped the middle ones, and a package
- * that never saw a binding decision guesses against it. The first decision always goes in (each is
- * bounded on its own), as `fitItems` does. Every title and decision is stored text, sanitised and
- * bounded here where it enters a prompt; `line` only arranges the two.
+ * that never saw a binding decision guesses against it. The returned lines, joined by newlines and
+ * each prefixed with `indent`, stay within `budget`, names line included (fix round 1): when not
+ * every decision fits, they are fitted again into `budget` less that line's room. The first decision
+ * always goes in (each is bounded on its own), as `fitItems` does. Every title and decision is stored
+ * text, sanitised and bounded here where it enters a prompt; `line` only arranges the two.
  */
 export function fitSharedDecisions(
   decisions: readonly { readonly title: string; readonly decision: string }[],
   line: (title: string, decision: string) => string,
   budget: number,
+  indent = '',
 ): readonly string[] {
   const clean = (text: string, max: number): string => sanitisePersonText(trimToFit(storableText(text).replace(/\s+/gu, ' ').trim(), max))
-  const lines: string[] = []
-  let used = 0
-  for (const d of decisions) {
-    const next = line(clean(d.title, SHARED_DECISION_TITLE_MAX_CHARS), clean(d.decision, SHARED_DECISION_TEXT_MAX_CHARS))
-    if (lines.length > 0 && used + next.length + 1 > budget) break
-    lines.push(next)
-    used += next.length + 1
+  const items = decisions.map((d) => ({ title: clean(d.title, SHARED_DECISION_TITLE_MAX_CHARS), decision: clean(d.decision, SHARED_DECISION_TEXT_MAX_CHARS) }))
+  const fit = (room: number): string[] => {
+    const lines: string[] = []
+    let used = 0
+    for (const item of items) {
+      const next = `${indent}${line(item.title, item.decision)}`
+      if (lines.length > 0 && used + next.length + 1 > room) break
+      lines.push(next)
+      used += next.length + 1
+    }
+    return lines
   }
-  const rest = decisions.slice(lines.length)
-  if (rest.length > 0) {
-    const titles = rest.map((d) => clean(d.title, SHARED_DECISION_TITLE_MAX_CHARS)).join(', ')
-    lines.push(trimToFit(`${String(rest.length)} more shared decisions not shown: ${titles}`, DECISIONS_NOT_SHOWN_MAX_CHARS))
+  const all = fit(budget)
+  if (all.length === items.length) return all
+  const lines = fit(budget - DECISIONS_NOT_SHOWN_MAX_CHARS - 1)
+  const rest = items.slice(lines.length)
+  const prefix = `${indent}${String(rest.length)} more shared decisions not shown: `
+  const unnamed = (count: number): string => (count === 0 ? '' : ` and ${String(count)} more`)
+  const named: string[] = []
+  for (const item of rest) {
+    const candidate = `${prefix}${[...named, item.title].join(', ')}${unnamed(rest.length - named.length - 1)}`
+    if (candidate.length > DECISIONS_NOT_SHOWN_MAX_CHARS) break
+    named.push(item.title)
   }
+  const names = `${prefix}${named.join(', ')}${unnamed(rest.length - named.length)}`
+  lines.push(names)
   return lines
 }
+
+const SHARED_DECISIONS_HEADING =
+  'Shared decisions (every package follows these; if one is wrong for your work, ask the conductor instead of working around it):'
 
 /** Spec C3: the "Shared decisions" block of a contract; empty when the version has none. Whole decisions only (F12). */
 export function renderSharedDecisions(decisions: readonly { readonly title: string; readonly decision: string }[]): string {
   if (decisions.length === 0) return ''
   return [
-    'Shared decisions (every package follows these; if one is wrong for your work, ask the conductor instead of working around it):',
-    ...fitSharedDecisions(decisions, (title, decision) => `- ${title}: ${decision}`, SHARED_DECISIONS_PROMPT_MAX_CHARS),
+    SHARED_DECISIONS_HEADING,
+    ...fitSharedDecisions(decisions, (title, decision) => `- ${title}: ${decision}`, SHARED_DECISIONS_PROMPT_MAX_CHARS - SHARED_DECISIONS_HEADING.length - 1),
   ].join('\n')
 }
 
