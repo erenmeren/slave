@@ -231,9 +231,11 @@ describe('fix round 1 (review minors)', () => {
     const basis = { requirements: ['R1'], packages: [], decisions: [] }
     const held = [
       { title: 'Routes', decision: 'integration now owns routes/' },
-      { title: 'Where reports live', decision: 'everything under backend/src/report goes elsewhere' },
+      { title: 'Migrations', decision: 'move backend/migrations to the core package' },
       { title: 'File OWNERSHIP', decision: 'shared' },
-      { title: 'Skeleton scripts', decision: 'the skeleton keeps them' },
+      { title: 'Reports', decision: 'backend/src/report/** belongs to the integration package' },
+      { title: 'Scripts', decision: 'transfer the verify scripts' },
+      { title: 'Report code', decision: 'every change under backend/src/report/** is reviewed twice' },
     ]
     for (const newDecision of held) {
       const judged = judgeConductorAnswer(answer({ basis, newDecision }), plan, { halted: false })
@@ -242,6 +244,19 @@ describe('fix round 1 (review minors)', () => {
     }
     expect(judgeConductorAnswer(answer({ basis, newDecision: { title: 'API fields', decision: 'API fields are camelCase' } }), plan, { halted: false }).tier).toBe('applied')
     expect(judgeConductorAnswer(answer({ basis, newDecision: { title: 'Ownerless', decision: 'owners-to-be' } }), plan, { halted: false }).tier).toBe('applied')
+  })
+
+  it('final wave I3: applies a design decision that names a package or a path, and holds only an ownership verb or an exact owned glob', () => {
+    const basis = { requirements: ['R1'], packages: [], decisions: [] }
+    const applied = [
+      { title: 'Route registration', decision: 'HTTP routes register in backend/src/routes/<package>.ts, loaded by the skeleton' },
+      { title: 'API fields', decision: 'API fields are camelCase' },
+      { title: 'Report output', decision: 'the report package renders rows; files under backend/src/report use camelCase' },
+      { title: 'Integration', decision: 'the integration package runs the smoke flow' },
+    ]
+    for (const newDecision of applied) {
+      expect(judgeConductorAnswer(answer({ basis, newDecision }), plan, { halted: false }).tier, newDecision.decision).toBe('applied')
+    }
   })
 
   it('reads the last top-level object with the key, past a preamble or an earlier draft', () => {

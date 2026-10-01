@@ -278,30 +278,27 @@ export function conductorAnswerTier(input: { readonly changes: ConductorChange; 
  */
 const UNREACHABLE_TASK_STATUSES: readonly (string | null)[] = [null, 'failed', 'cancelled']
 
-/** Fix round 1: the words that make a new decision read like an ownership change. */
-const OWNERSHIP_WORDS = /\b(?:own|owns|owner|ownership)\b/iu
-
-const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+/**
+ * Final wave I3 (amends ruling F2): the verb phrases that make a new decision read like an ownership
+ * change -- own/owns/owner/ownership, "belongs to", "move ... to" and "transfer". A design decision
+ * naming a package or a path ("routes register in backend/src/routes/<package>.ts, loaded by the
+ * skeleton") moves nothing and is applied; only these words, or an exact owned glob, hold one.
+ */
+const OWNERSHIP_PHRASES = /\b(?:own|owns|owner|ownership|belongs?\s+to|transfer(?:s|red|ring)?)\b|\bmov(?:e|es|ed|ing)\b[^.;\n]*?\bto\b/iu
 
 /**
- * Fix round 1 (spec C3, "a decision never moves ownership"; ownedPaths alone does): what in a new
- * decision makes it read like an ownership change -- a package key of this version as a whole word,
- * one of its owned-path globs or their literal prefix, or own/owns/owner/ownership. Null when nothing
- * does. Some harmless decisions are held by this; a person approves them (controller ruling).
+ * Fix round 1 (spec C3, "a decision never moves ownership"; ownedPaths alone does), narrowed by the
+ * final wave (I3): what in a new decision makes it read like an ownership change -- an ownership
+ * verb phrase ({@link OWNERSHIP_PHRASES}), or one of this version's owned-path globs written out
+ * exactly. Null when neither is there. A bare package key or a path prefix is ordinary design talk.
  */
 function ownershipSignal(decision: SharedDecision, plan: SupervisorConductorPlan): string | null {
   const text = `${decision.title}\n${decision.decision}`
+  const phrase = OWNERSHIP_PHRASES.exec(text)
+  if (phrase !== null) return `the words "${phrase[0]}"`
   const lower = text.toLowerCase()
-  const word = OWNERSHIP_WORDS.exec(text)
-  if (word !== null) return `the word "${word[0]}"`
-  for (const pkg of plan.packages) {
-    if (new RegExp(`(?<![\\w-])${escapeRegExp(pkg.key)}(?![\\w-])`, 'iu').test(text)) return `the package ${pkg.key}`
-  }
-  for (const glob of plan.packages.flatMap((p) => p.ownedPaths)) {
-    const prefix = glob.split(/[*?[{]/u)[0]!.replace(/\/+$/u, '')
-    if (lower.includes(glob.toLowerCase()) || (prefix.length >= 3 && lower.includes(prefix.toLowerCase()))) return `the owned path ${glob}`
-  }
-  return null
+  const glob = plan.packages.flatMap((p) => p.ownedPaths).find((owned) => lower.includes(owned.toLowerCase()))
+  return glob === undefined ? null : `the owned path ${glob}`
 }
 
 /**
