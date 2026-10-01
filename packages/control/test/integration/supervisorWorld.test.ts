@@ -2391,6 +2391,11 @@ describe('loadSupervisorWorld -- goal versions and their verification (Conductor
     const open = await ask(done, 'never decided')
     const live = await ask(await task('rework'), 'task live, open')
     await prisma.slaveMessage.update({ where: { id: closed }, data: { closedAt: new Date(), closedReason: 'dismissed', closedBy: 'u1' } })
+    // C5's own mechanics on the open question of a done task -- a settled (rejected) card and a
+    // pending one -- no longer hide it: only a close does (Task 3 carry).
+    for (const status of ['rejected', 'pending'] as const) {
+      await prisma.supervisorDecision.create({ data: { workspaceId: fixture.workspaceId, situationKind: 'conductor_question', subjectId: open, situation: {}, candidates: [], chosenIndex: 0, action: { kind: 'escalate_to_human', summary: 'x' }, rationale: 'x', tier: 'escalated', status, decidedBy: 'rules' } })
+    }
     const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
     expect(world.questions.map((q) => q.messageId).sort()).toEqual([open, live].sort())
     // A report question's run has finished: it is never parked on it.

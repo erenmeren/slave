@@ -8,6 +8,7 @@ import {
   isQuestionSituation,
   lateAnswerChange,
   personText,
+  questionCloseOnVerdict,
   timeoutResumeMessage,
 } from '../../src/supervisor/cards.js'
 
@@ -53,5 +54,44 @@ describe('question cards (human cards H1)', () => {
     expect(change).toContain('Which error shape?')
     expect(change).toContain('Use {error:{code,message}}.')
     expect(lateAnswerChange('q'.repeat(5000), 'a'.repeat(5000)).length).toBeLessThanOrEqual(2000)
+  })
+
+  describe('what a verdict on a card does to its question (plan A D4, ruling F18 amended, F6)', () => {
+    const base = { situationKind: 'unanswerable_question' as const, actionKind: 'reassign_question' as const, verdict: 'approved' as const, askerTaskLive: true, askerParked: false }
+
+    it('leaves a question no question kind raised alone', () => {
+      expect(questionCloseOnVerdict({ ...base, situationKind: 'task_failed', actionKind: 'escalate_to_human', verdict: 'rejected' })).toBeNull()
+    })
+
+    it('leaves an approved answer to the answer, which closes it answered', () => {
+      expect(questionCloseOnVerdict({ ...base, situationKind: 'conductor_question', actionKind: 'answer_question' })).toBeNull()
+    })
+
+    it('keeps a question open while an approved re-address moves it for a live asker, and only then', () => {
+      for (const actionKind of ['hire_from_catalog', 'materialise_company_worker', 'assign_capability', 'set_runtime_roles', 'reassign_question'] as const) {
+        for (const situationKind of ['unanswerable_question', 'waiting_stale'] as const) {
+          expect(questionCloseOnVerdict({ ...base, situationKind, actionKind })).toBeNull()
+          // The asking task is done, failed or cancelled: nobody is left to answer for.
+          expect(questionCloseOnVerdict({ ...base, situationKind, actionKind, askerTaskLive: false })).toBe('decided')
+          expect(questionCloseOnVerdict({ ...base, situationKind, actionKind, verdict: 'rejected' })).toBe('dismissed')
+        }
+        // A conductor question is the conductor's to answer: a re-address does not re-address it.
+        expect(questionCloseOnVerdict({ ...base, situationKind: 'conductor_question', actionKind })).toBe('decided')
+      }
+    })
+
+    it('decides on any other approval and dismisses on any rejection', () => {
+      expect(questionCloseOnVerdict({ ...base, situationKind: 'conductor_question', actionKind: 'escalate_to_human' })).toBe('decided')
+      expect(questionCloseOnVerdict({ ...base, situationKind: 'waiting_stale', actionKind: 'mark_task_failed' })).toBe('decided')
+      expect(questionCloseOnVerdict({ ...base, situationKind: 'conductor_question', actionKind: 'answer_question', verdict: 'rejected' })).toBe('dismissed')
+    })
+
+    it('times a question out with its expired card, unless its asker is parked on it (the timeout pass owns that)', () => {
+      expect(questionCloseOnVerdict({ ...base, situationKind: 'conductor_question', actionKind: 'escalate_to_human', verdict: 'expired' })).toBe('timed_out')
+      expect(questionCloseOnVerdict({ ...base, verdict: 'expired' })).toBe('timed_out')
+      expect(questionCloseOnVerdict({ ...base, situationKind: 'waiting_stale', actionKind: 'escalate_to_human', verdict: 'expired', askerParked: true })).toBeNull()
+      // A person's verdict closes even a parked asker's question: that is what continues the run.
+      expect(questionCloseOnVerdict({ ...base, situationKind: 'waiting_stale', actionKind: 'escalate_to_human', verdict: 'rejected', askerParked: true })).toBe('dismissed')
+    })
   })
 })

@@ -535,7 +535,15 @@ export type ControlRefusal =
   /** M38 t2: the decision exists but has already left `pending` -- approved, rejected, expired,
    *  applied at birth, or failed. `status` is what it is NOW, which is the whole answer to "why
    *  can I not approve this": someone (or `expirePendingDecisions`) got there first. */
-  | { readonly kind: 'decision_not_pending'; readonly decisionId: string; readonly status: string }
+  | {
+      readonly kind: 'decision_not_pending'
+      readonly decisionId: string
+      readonly status: string
+      /** Human cards spec §4: when, and by whom (null: by Slave), the card was taken first. Optional,
+       *  so every other writer of the kind keeps compiling. */
+      readonly resolvedAt?: string | null
+      readonly resolvedByUserId?: string | null
+    }
   /**
    * M38 t2: the Supervisor is already on this situation key (spec §1, "idempotent and quiet").
    * Either an open `pending` proposal is waiting on a human, or the last decision for the key
@@ -970,7 +978,7 @@ export function refusalText(refusal: ControlRefusal): string {
     case 'decision_not_found':
       return `no supervisor decision with id ${refusal.decisionId}`
     case 'decision_not_pending':
-      return `supervisor decision ${refusal.decisionId} is ${refusal.status}, not pending: there is nothing left to approve or reject`
+      return `supervisor decision ${refusal.decisionId} is ${refusal.status}, not pending${refusal.resolvedAt == null ? '' : ` (resolved ${refusal.resolvedByUserId == null ? 'by Slave' : `by ${refusal.resolvedByUserId}`} at ${refusal.resolvedAt})`}: there is nothing left to approve or reject`
     case 'supervisor_cooldown':
       return `the supervisor has already decided ${refusal.situationKind} for ${refusal.subjectId}; the next decision on it can be made after ${refusal.untilTs}`
     case 'supervisor_disabled':

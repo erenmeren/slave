@@ -291,22 +291,25 @@ describe('answerConductorQuestions (spec C4)', () => {
   })
 
   // Final wave M1: a conductor pass that throws must not lose the rest of the supervision pass.
+  // Human cards plan A D3: a run parked on the conductor no longer raises a waiting_stale, so "the
+  // rest" is a question to a role nobody holds, which the rules see as unanswerable_question.
   it('still supervises everything else when the conductor pass throws (final wave M1)', async () => {
     const f = await seed()
-    const late = new Date(f.now.getTime() + WAITING_STALE_MS + 60_000)
+    const reportRun = await prisma.slaveRun.findFirstOrThrow({ where: { slaveId: f.seatId, status: 'succeeded' } })
+    const unheld = await sendMessage(reportRun.id, { kind: 'question', body: 'Who reviews the token handling?', recipientRole: 'security', expectsReply: true, taskId: reportRun.taskId, idempotencyKey: reportQuestionKey(reportRun.id, 7) })
+    if (!unheld.ok) throw new Error(`send failed: ${JSON.stringify(unheld.error)}`)
     const model = scripted((prompt) => answerJson(idsIn(prompt).map((id) => ok(id))))
     const original = prisma.conductorCall.findMany
     ;(prisma.conductorCall as { findMany: unknown }).findMany = async (): Promise<never> => {
       throw new Error('the ledger is unreadable')
     }
     try {
-      const report = await supervise({ workspaceId: f.workspaceId, decider: model.decider, model: 'm', now: () => late })
+      const report = await supervise({ workspaceId: f.workspaceId, decider: model.decider, model: 'm', now: () => f.now })
       expect(report.conductorCalls).toBe(0)
     } finally {
       ;(prisma.conductorCall as { findMany: unknown }).findMany = original
     }
-    const stale = await prisma.supervisorDecision.findFirstOrThrow({ where: { subjectId: f.qPaused, situationKind: 'waiting_stale' } })
-    expect(stale).toMatchObject({ decidedBy: 'rules', tier: 'escalated' })
+    expect(await prisma.supervisorDecision.count({ where: { subjectId: unheld.value.id, situationKind: 'unanswerable_question' } })).toBe(1)
   })
 
   it('escalates a question the critical lexicon stops, without asking the model about it', async () => {
@@ -328,27 +331,26 @@ describe('answerConductorQuestions (spec C4)', () => {
     expect(first[0]).toBe(f.qPaused)
   })
 
-  it('escalates by the rules a run parked on the conductor for more than 30 minutes, beside the batch (spec C5)', async () => {
+  it('raises no waiting_stale for a run parked on the conductor: one card per question (human cards plan A D3)', async () => {
     const f = await seed()
     const late = new Date(f.now.getTime() + WAITING_STALE_MS + 60_000)
     const model = scripted(() => ({ kind: 'failed', reason: 'down', costUsd: null, tokens: null }))
     await supervise({ workspaceId: f.workspaceId, decider: model.decider, model: 'm', now: () => late })
-    const stale = await prisma.supervisorDecision.findFirstOrThrow({ where: { subjectId: f.qPaused, situationKind: 'waiting_stale' } })
-    expect(stale).toMatchObject({ decidedBy: 'rules', tier: 'escalated' })
-    expect(model.prompts).toHaveLength(1)
+    expect(await prisma.supervisorDecision.count({ where: { subjectId: f.qPaused, situationKind: 'waiting_stale' } })).toBe(0)
   })
 
-  it('retires the escalated waiting_stale of a question the batch then answers (Task 2 carry)', async () => {
+  it('holds a question while an old waiting_stale card is open, and never asks it again once a person rejects that card (spec §4 compatibility)', async () => {
     const f = await seed()
-    const late = new Date(f.now.getTime() + WAITING_STALE_MS + 60_000)
-    const down = scripted(() => ({ kind: 'failed', reason: 'down', costUsd: null, tokens: null }))
-    await supervise({ workspaceId: f.workspaceId, decider: down.decider, model: 'm', now: () => late })
+    const stale = await prisma.supervisorDecision.create({ data: { workspaceId: f.workspaceId, situationKind: 'waiting_stale', subjectId: f.qPaused, situation: { kind: 'waiting_stale', subjectId: f.qPaused, summary: 'x', facts: {} }, candidates: [{ action: { kind: 'escalate_to_human', summary: 'x' }, tier: 'escalated', why: 'x' }], chosenIndex: 0, action: { kind: 'escalate_to_human', summary: 'x' }, rationale: 'x', tier: 'escalated', status: 'pending', decidedBy: 'rules' } })
     const up = scripted((prompt) => answerJson(idsIn(prompt).map((id) => ok(id))))
-    await supervise({ workspaceId: f.workspaceId, decider: up.decider, model: 'm', now: () => new Date(late.getTime() + 1000) })
-    expect(idsIn(up.prompts[0] ?? '')).toContain(f.qPaused)
-    const stale = await prisma.supervisorDecision.findFirstOrThrow({ where: { subjectId: f.qPaused, situationKind: 'waiting_stale' } })
-    expect(stale.status).toBe('expired')
-    expect(stale.resolvedAt).not.toBeNull()
+    await supervise({ workspaceId: f.workspaceId, decider: up.decider, model: 'm', now: () => f.now })
+    // The open card holds the question (one card per question): the batch does not take it.
+    expect(up.prompts.flatMap((prompt) => idsIn(prompt))).not.toContain(f.qPaused)
+    expect((await rejectDecision(stale.id)).ok).toBe(true)
+    expect((await prisma.slaveMessage.findUniqueOrThrow({ where: { id: f.qPaused } })).closedReason).toBe('dismissed')
+    await supervise({ workspaceId: f.workspaceId, decider: up.decider, model: 'm', now: () => new Date(f.now.getTime() + COOLDOWN_MS + 60_000) })
+    expect(up.prompts.flatMap((prompt) => idsIn(prompt))).not.toContain(f.qPaused)
+    expect(await prisma.supervisorDecision.count({ where: { subjectId: f.qPaused } })).toBe(1)
   })
 
   it('gives a question of a version with no plan to a person, never skipping it (Task 4 carry)', async () => {
@@ -365,8 +367,9 @@ describe('answerConductorQuestions (spec C4)', () => {
   })
 
   // Review I1: the attempts are counted over the question's whole history, so a person resolving
-  // the cap's card does not buy three more paid batches.
-  it('re-escalates a capped question by the rules after a person rejects its card, without asking again', async () => {
+  // the cap's card does not buy three more paid batches. Human cards H1: the rejection now closes the
+  // question (`dismissed`), so it is neither asked nor escalated again.
+  it('never asks or escalates a capped question again after a person rejects its card: the rejection closes it', async () => {
     const f = await seed()
     const model = scripted(() => ({ kind: 'failed', reason: 'model overloaded', costUsd: null, tokens: null }))
     for (let i = 0; i < 4; i += 1) await supervise({ workspaceId: f.workspaceId, decider: model.decider, model: 'm', now: () => new Date(f.now.getTime() + i * 1000) })
@@ -377,8 +380,9 @@ describe('answerConductorQuestions (spec C4)', () => {
     await supervise({ workspaceId: f.workspaceId, decider: model.decider, model: 'm', now: () => later })
     expect(model.prompts).toHaveLength(3)
     const rows = await prisma.supervisorDecision.findMany({ where: { subjectId: f.qPaused, situationKind: 'conductor_question' }, orderBy: { createdAt: 'asc' } })
-    expect(rows).toHaveLength(2)
-    expect(rows[1]).toMatchObject({ tier: 'escalated', decidedBy: 'rules', status: 'pending' })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ status: 'rejected' })
+    expect((await prisma.slaveMessage.findUniqueOrThrow({ where: { id: f.qPaused } })).closedReason).toBe('dismissed')
   })
 
   // Review M3: one call per version, but at most the two oldest versions a pass.

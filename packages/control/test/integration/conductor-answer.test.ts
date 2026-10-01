@@ -196,10 +196,12 @@ describe('applyConductorOutcome (plan B D7)', () => {
   // Final wave T6: a person approving the conductor's card later ends the wait the waiting_stale card is about.
   it('retires the pending waiting_stale card of a question when a person approves its conductor answer (final wave T6)', async () => {
     const f = await seed('parked')
+    // The conductor card first: a question has one open card (human cards plan A D2), so the legacy
+    // waiting_stale row -- a card stored before that rule -- is written beside it by hand.
+    const id = await decide(f, draft(conductorWith({})), 'proposed')
     const stale = await prisma.supervisorDecision.create({
       data: { workspaceId: f.workspaceId, situationKind: 'waiting_stale', subjectId: f.questionId, situation: {}, candidates: [], chosenIndex: 0, action: { kind: 'escalate_to_human', summary: 'x' }, rationale: 'x', tier: 'escalated', status: 'pending', decidedBy: 'rules' },
     })
-    const id = await decide(f, draft(conductorWith({})), 'proposed')
     expect((await approveDecision(id)).ok).toBe(true)
     expect(await answers(f)).toHaveLength(1)
     const retired = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: stale.id } })

@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto'
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   ANSWER_MAX_CHARS,
+  CLOSED_BY_SYSTEM,
+  COOLDOWN_BY_KIND,
   COOLDOWN_MS,
+  DECIDED_WITHOUT_ANSWER,
   DECISION_RETENTION_MS,
   HALT_CLEAR_INTERVAL_MS,
   MANAGER_ROLE,
@@ -10,20 +13,29 @@ import {
   PERMISSION_KINDS,
   PROFILE_MAX_CHARS,
   PRUNE_BATCH,
+  QUESTION_SITUATION_KINDS,
+  TERMINAL,
   actionSchema,
   candidateSchema,
+  dismissResumeMessage,
   draftSchema,
+  isQuestionSituation,
   neutraliseMarkers,
   promotionFor,
+  questionCloseOnVerdict,
   readsAsPlatform,
   sanitisePersonText,
   situationSchema,
+  timeoutResumeMessage,
   type Action,
+  type ActionKind,
   type Candidate,
+  type CardVerdict,
   type Decider,
   type DecisionStatus,
   type Draft,
   type PermissionKind,
+  type QuestionCloseReason,
   type Result,
   type Situation,
   type SituationKind,
@@ -41,6 +53,7 @@ import { requestChange } from './goal.js'
 import { releasePerson } from './persons.js'
 import { discardStaleCandidates, recordMemory } from './memory.js'
 import { answerQuestion, reassignQuestion } from './messaging.js'
+import { announceQuestionClosed, closeQuestionIn, closedByOf, retireQuestionCards, type CloseQuestionInput } from './questions.js'
 import { isProviderKind } from './org.js'
 import { setRuntimeRoles } from './profile.js'
 import { setSlavePermission } from './permission.js'
@@ -138,11 +151,16 @@ export interface RecordDecisionInput {
  * Idempotent and quiet (spec §1) by the same predicate `filterFresh` uses on the domain side, so
  * the two can never disagree about which keys are free: an open `pending` row for the key blocks a
  * new decision outright, and a decision that has stopped being open cools its key for
- * `COOLDOWN_MS` from `resolvedAt ?? createdAt` -- the `createdAt` fallback is what stops an
+ * its kind's cooldown (`COOLDOWN_BY_KIND`, else `COOLDOWN_MS`), as `filterFresh` does, from
+ * `resolvedAt ?? createdAt` -- the `createdAt` fallback is what stops an
  * auto-applied row (which never gets a `resolvedAt`) from being re-decided on the very next tick.
- * Exactly `COOLDOWN_MS` old is STILL cooling, closed at that end, so a fixed clock cannot straddle
+ * Exactly the cooldown old is STILL cooling, closed at that end, so a fixed clock cannot straddle
  * the boundary. `filterFresh` is the cheap first pass over a world already in memory; this is the
  * one that actually holds, because it reads and writes in the same transaction.
+ *
+ * Human cards H1 (plan A D2): a card on a question -- any of `QUESTION_SITUATION_KINDS` -- is a
+ * card on that question, so an open card of ANY question kind about the same message blocks a new
+ * one, and a closed question (`question_closed`) is never decided again.
  */
 export async function recordDecision(
   input: RecordDecisionInput,
@@ -203,15 +221,27 @@ export async function recordDecision(
     }
 
     const key = { workspaceId: input.workspaceId, situationKind: situation.kind, subjectId: situation.subjectId }
+    const onQuestion = isQuestionSituation(situation.kind)
+    if (onQuestion) {
+      // Human cards H1: a closed question is never decided again. Refused before any write.
+      const message = await tx.slaveMessage.findUnique({ where: { id: situation.subjectId }, select: { closedAt: true, closedReason: true, closedBy: true } })
+      if (message?.closedAt != null && message.closedReason !== null) {
+        return { ok: false as const, error: { kind: 'question_closed', messageId: situation.subjectId, reason: message.closedReason, by: message.closedBy ?? CLOSED_BY_SYSTEM, at: message.closedAt.toISOString() } as ControlRefusal }
+      }
+    }
+    // Plan A D2: one open card per question, whatever kind raised it; per situation key otherwise.
+    const cooldownMs = COOLDOWN_BY_KIND[situation.kind] ?? COOLDOWN_MS
     const open = await tx.supervisorDecision.findFirst({
-      where: { ...key, status: 'pending' },
+      where: onQuestion
+        ? { workspaceId: input.workspaceId, subjectId: situation.subjectId, situationKind: { in: [...QUESTION_SITUATION_KINDS] }, status: 'pending' }
+        : { ...key, status: 'pending' },
       orderBy: { createdAt: 'desc' },
       select: { createdAt: true, expiresAt: true },
     })
     if (open !== null) {
       // A human is already looking at this key. "Free again" is when the proposal stops being
       // open -- its own deadline -- rather than a cooldown that has not started counting yet.
-      const until = open.expiresAt ?? new Date(open.createdAt.getTime() + COOLDOWN_MS)
+      const until = open.expiresAt ?? new Date(open.createdAt.getTime() + cooldownMs)
       return { ok: false as const, error: cooldown(situation, until) }
     }
     const last = await tx.supervisorDecision.findFirst({
@@ -221,8 +251,8 @@ export async function recordDecision(
     })
     if (last !== null) {
       const anchor = last.resolvedAt ?? last.createdAt
-      if (now.getTime() - anchor.getTime() <= COOLDOWN_MS) {
-        return { ok: false as const, error: cooldown(situation, new Date(anchor.getTime() + COOLDOWN_MS)) }
+      if (now.getTime() - anchor.getTime() <= cooldownMs) {
+        return { ok: false as const, error: cooldown(situation, new Date(anchor.getTime() + cooldownMs)) }
       }
     }
 
@@ -477,15 +507,15 @@ async function carryOut(
           console.error(`[supervisor] decision ${decision.id}: the conductor answer's decision or hand-off was not recorded:`, error)
         }
       }
-      // Final wave T6: a conductor answer a person approved later ends the wait as surely as a tick's
-      // does, so a pending `waiting_stale` card about it is retired here too (the tick's own path
-      // calls the same verb after it applies; a second call finds nothing). Said and swallowed: the
-      // answer is out, and the card expires by its own deadline.
-      if (sent.ok && conductor !== undefined) {
+      // Human cards H1 (plan A D5): any answer that went out closed its question (`answerQuestion`),
+      // and a closed question has no open card -- every other card about it is retired here (the
+      // tick's conductor path calls the same verb after it applies; a second call finds nothing).
+      // Said and swallowed: the answer is out, and the tick's backstop retires what this missed.
+      if (sent.ok) {
         try {
-          await retireAnsweredWaitingStale(decision.workspaceId, action.messageId, new Date())
+          await retireQuestionCards(decision.workspaceId, action.messageId, 'The question was answered.', new Date(), decision.id)
         } catch (error) {
-          console.error(`[supervisor] decision ${decision.id}: the waiting_stale card of its question was not retired:`, error)
+          console.error(`[supervisor] decision ${decision.id}: the other cards of its question were not retired:`, error)
         }
       }
       return reached(sent)
@@ -986,11 +1016,11 @@ export async function approveDecision(
     return err({ kind: 'draft_missing', decisionId })
   }
 
-  const claim = await claimPending(decisionId, {
-    status: 'approved',
-    resolvedAt: new Date(),
-    resolvedByUserId: principal?.userId ?? null,
-  })
+  const claim = await claimPending(
+    decisionId,
+    { status: 'approved', resolvedAt: new Date(), resolvedByUserId: principal?.userId ?? null },
+    { verdict: 'approved', reason: null, principal },
+  )
   if (!claim.ok) return claim
 
   if (edited !== null) {
@@ -1020,6 +1050,12 @@ export async function approveDecision(
     userId: principal?.userId ?? null,
   })
 
+  // Human cards H1: the approval closes the card's question. An escalation was closed inside the
+  // claim (ruling F8); an action carried out by a verb is closed right after it went through, with
+  // the claim as the guard -- the verbs own their transactions, so the close cannot join them.
+  if (claim.value.closedInClaim) await afterCardClose(claim.value.workspaceId, decisionId, claim.value.close, new Date())
+  else await closeAfterApply(decisionId, principal, new Date())
+
   // M49 R2(c): a person decided something, and what they decided is knowledge this project keeps.
   // AFTER the apply and after the event, and never inside them: a memory that could not be written
   // must not undo an approval that already reached the world (plan decision D9).
@@ -1039,11 +1075,14 @@ export async function rejectDecision(
   reason?: string,
 ): Promise<Result<void, ControlRefusal>> {
   const trimmed = reason?.trim()
-  const claim = await claimPending(decisionId, {
-    status: 'rejected',
-    resolvedAt: new Date(),
-    resolvedByUserId: principal?.userId ?? null,
-  })
+  const said = trimmed === undefined || trimmed === '' ? null : trimmed
+  // Human cards H1: a rejection dismisses the card's question with the person's reason, inside the
+  // claim (ruling F8).
+  const claim = await claimPending(
+    decisionId,
+    { status: 'rejected', resolvedAt: new Date(), resolvedByUserId: principal?.userId ?? null },
+    { verdict: 'rejected', reason: said, principal },
+  )
   if (!claim.ok) return claim
 
   await appendEvent({
@@ -1053,9 +1092,10 @@ export async function rejectDecision(
     // departs from the `system` actor the other `supervisor.*` events carry, and for why `userId`
     // may honestly be null (fix round 2).
     actor: 'human',
-    payload: { decisionId, outcome: 'rejected', reason: trimmed === undefined || trimmed === '' ? null : trimmed },
+    payload: { decisionId, outcome: 'rejected', reason: said },
     userId: principal?.userId ?? null,
   })
+  await afterCardClose(claim.value.workspaceId, decisionId, claim.value.close, new Date())
 
   // M49 R2(c), the same hook as an approval's: a rejection is a decision too, and the reason a
   // person gave for it is the part a later plan most needs to read.
@@ -1127,29 +1167,217 @@ async function answerDraft(decisionId: string): Promise<Result<Draft | null | 'n
   return ok(storedDraft(row.draft, `SupervisorDecision ${decisionId}.draft`))
 }
 
-/** The one atomic "take this pending decision" both {@link approveDecision} and
- *  {@link rejectDecision} open with: the read is only for the refusal's wording, the `updateMany`
- *  conditional on `status: 'pending'` is what actually decides who won. */
+/**
+ * The one atomic "take this pending decision" both {@link approveDecision} and
+ * {@link rejectDecision} open with: the `updateMany` conditional on `status: 'pending'` is what
+ * actually decides who won.
+ *
+ * Human cards H1, ruling F8: for a rejection, and for an approved escalation (which carries nothing
+ * out), the card's question is locked -- the Workspace row first, then the question row, the order
+ * every closer keeps -- and closed in this same transaction. A question closed meanwhile (other than
+ * `timed_out`, whose card stays open, spec H3) refuses the verdict with who closed it and when
+ * (spec §4). Every refusal here is returned before the first write, so returning commits nothing.
+ */
 async function claimPending(
   decisionId: string,
   data: { readonly status: DecisionStatus; readonly resolvedAt: Date; readonly resolvedByUserId: string | null },
-): Promise<Result<{ readonly workspaceId: string }, ControlRefusal>> {
-  const row = await prisma.supervisorDecision.findUnique({
-    where: { id: decisionId },
-    select: { workspaceId: true, status: true },
-  })
-  if (row === null) return err({ kind: 'decision_not_found', decisionId })
-  if (row.status !== 'pending') return err({ kind: 'decision_not_pending', decisionId, status: row.status })
+  verdict: { readonly verdict: 'approved' | 'rejected'; readonly reason: string | null; readonly principal: Principal | undefined },
+): Promise<Result<{ readonly workspaceId: string; readonly closedInClaim: boolean; readonly close: CardClose | null }, ControlRefusal>> {
+  return prisma.$transaction(async (tx) => {
+    const row = await tx.supervisorDecision.findUnique({
+      where: { id: decisionId },
+      select: { workspaceId: true, status: true, situationKind: true, subjectId: true, action: true, resolvedAt: true, resolvedByUserId: true },
+    })
+    if (row === null) return err({ kind: 'decision_not_found', decisionId })
+    if (row.status !== 'pending') return err(notPending(decisionId, row))
 
-  const claimed = await prisma.supervisorDecision.updateMany({ where: { id: decisionId, status: 'pending' }, data })
-  if (claimed.count === 0) {
-    // Lost the race to another approve, another reject, or the expiry sweep. Re-read rather than
-    // guess which, the way `unblockTask` re-reads its own lost claim.
-    const current = await prisma.supervisorDecision.findUnique({ where: { id: decisionId }, select: { status: true } })
-    if (current === null) return err({ kind: 'decision_not_found', decisionId })
-    return err({ kind: 'decision_not_pending', decisionId, status: current.status })
+    const action = parsedOrThrow(actionSchema.safeParse(row.action), `SupervisorDecision ${decisionId}.action`)
+    const closedInClaim = isQuestionSituation(row.situationKind) && (verdict.verdict === 'rejected' || action.kind === 'escalate_to_human')
+    const question = closedInClaim ? await lockCardQuestion(tx, row.workspaceId, row.subjectId) : null
+    if (question?.closedAt != null && question.closedReason !== null && question.closedReason !== 'timed_out') {
+      return err({ kind: 'question_closed', messageId: question.id, reason: question.closedReason, by: question.closedBy ?? CLOSED_BY_SYSTEM, at: question.closedAt.toISOString() })
+    }
+
+    const claimed = await tx.supervisorDecision.updateMany({ where: { id: decisionId, status: 'pending' }, data })
+    if (claimed.count === 0) {
+      // Lost the race to another approve, another reject, or the expiry sweep. Re-read rather than
+      // guess which, the way `unblockTask` re-reads its own lost claim. Nothing was written.
+      const current = await tx.supervisorDecision.findUnique({ where: { id: decisionId }, select: { status: true, resolvedAt: true, resolvedByUserId: true } })
+      if (current === null) return err({ kind: 'decision_not_found', decisionId })
+      return err(notPending(decisionId, current))
+    }
+    const close =
+      question === null
+        ? null
+        : await closeForVerdict(tx, question, { id: decisionId, situationKind: row.situationKind, actionKind: action.kind }, verdict.verdict, verdict.reason, verdict.principal, data.resolvedAt)
+    return ok({ workspaceId: row.workspaceId, closedInClaim, close })
+  })
+}
+
+/** Spec §4: a card somebody else took first says who and when. */
+const notPending = (
+  decisionId: string,
+  row: { readonly status: DecisionStatus; readonly resolvedAt: Date | null; readonly resolvedByUserId: string | null },
+): ControlRefusal => ({
+  kind: 'decision_not_pending',
+  decisionId,
+  status: row.status,
+  resolvedAt: row.resolvedAt?.toISOString() ?? null,
+  resolvedByUserId: row.resolvedByUserId,
+})
+
+/** The question a card is about, as a verdict reads it under the lock. */
+interface CardQuestion {
+  readonly id: string
+  readonly workspaceId: string
+  readonly taskId: string | null
+  readonly slaveId: string
+  readonly body: string
+  readonly createdAt: Date
+  readonly closedAt: Date | null
+  readonly closedReason: QuestionCloseReason | null
+  readonly closedBy: string | null
+  /** The asking task is not done, failed or cancelled (a question with no task counts as live). */
+  readonly askerTaskLive: boolean
+  /** The asking run is paused `waiting_for_answer`. */
+  readonly askerParked: boolean
+}
+
+/**
+ * Locks a card's question for a verdict: the Workspace row first (`recordDecision`'s and
+ * `answerQuestion`'s lock, so no card is recorded and no answer lands between the read and the
+ * close), then the question row (`closeQuestion`'s and `claimTheAnswer`'s). Never the reverse.
+ * Null when the message is gone or is not a question.
+ */
+async function lockCardQuestion(tx: Prisma.TransactionClient, workspaceId: string, messageId: string): Promise<CardQuestion | null> {
+  await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
+  await tx.$queryRaw`SELECT 1 FROM "SlaveMessage" WHERE id = ${messageId} FOR UPDATE`
+  const message = await tx.slaveMessage.findUnique({
+    where: { id: messageId },
+    select: {
+      id: true,
+      kind: true,
+      workspaceId: true,
+      taskId: true,
+      slaveId: true,
+      senderRunId: true,
+      body: true,
+      createdAt: true,
+      closedAt: true,
+      closedReason: true,
+      closedBy: true,
+      task: { select: { status: true } },
+    },
+  })
+  if (message === null || message.kind !== 'question') return null
+  const asker = message.senderRunId === null ? null : await tx.slaveRun.findUnique({ where: { id: message.senderRunId }, select: { status: true, pauseReason: true } })
+  return {
+    id: message.id,
+    workspaceId: message.workspaceId,
+    taskId: message.taskId,
+    slaveId: message.slaveId,
+    body: message.body,
+    createdAt: message.createdAt,
+    closedAt: message.closedAt,
+    closedReason: message.closedReason,
+    closedBy: message.closedBy,
+    askerTaskLive: message.task === null || !TERMINAL.includes(message.task.status),
+    askerParked: asker?.status === 'paused' && asker.pauseReason === 'waiting_for_answer',
   }
-  return ok({ workspaceId: row.workspaceId })
+}
+
+/** A close a verdict made, to be announced and followed by its retirements after the commit. */
+interface CardClose {
+  readonly question: CardQuestion
+  readonly input: CloseQuestionInput
+  /** This verdict closed it (false: it was closed already, first close wins). */
+  readonly closed: boolean
+  readonly actor: 'human' | 'system'
+  readonly userId: string | null
+}
+
+/**
+ * Human cards H1 (plan A D4): closes a locked question for a card's verdict, inside `tx`, as
+ * {@link questionCloseOnVerdict} says -- `decided`, `dismissed` with the person's reason, or
+ * `timed_out` -- with the turn the asker continues with. Null when the verdict leaves it open.
+ */
+async function closeForVerdict(
+  tx: Prisma.TransactionClient,
+  question: CardQuestion,
+  card: { readonly id: string; readonly situationKind: SituationKind; readonly actionKind: ActionKind },
+  verdict: CardVerdict,
+  reason: string | null,
+  principal: Principal | undefined,
+  now: Date,
+): Promise<CardClose | null> {
+  const closeReason = questionCloseOnVerdict({
+    situationKind: card.situationKind,
+    actionKind: card.actionKind,
+    verdict,
+    askerTaskLive: question.askerTaskLive,
+    askerParked: question.askerParked,
+  })
+  if (closeReason === null) return null
+  const human = verdict !== 'expired'
+  const input: CloseQuestionInput = {
+    messageId: question.id,
+    reason: closeReason,
+    by: human ? closedByOf(principal) : CLOSED_BY_SYSTEM,
+    decisionId: card.id,
+    note:
+      closeReason === 'decided'
+        ? DECIDED_WITHOUT_ANSWER
+        : closeReason === 'dismissed'
+          ? dismissResumeMessage(reason)
+          : timeoutResumeMessage(now.getTime() - question.createdAt.getTime(), question.body),
+  }
+  const closed = await closeQuestionIn(tx, input, now)
+  return { question, input, closed, actor: human ? 'human' : 'system', userId: human ? (principal?.userId ?? null) : null }
+}
+
+/** The words a card retired by another card's verdict gives, by how the question closed. */
+const RETIRED_BY_VERDICT: Readonly<Partial<Record<QuestionCloseReason, string>>> = {
+  decided: 'A person decided the question on another card.',
+  dismissed: 'A person closed the question without an answer.',
+  timed_out: 'The question timed out with its card.',
+}
+
+/**
+ * After the commit that closed a card's question: its one `slave.question_closed` event (only when
+ * this verdict closed it), and every other open card about it retired (plan A D5). Said and
+ * swallowed: the verdict already committed, and the tick's backstop retires what this missed.
+ */
+async function afterCardClose(workspaceId: string, decisionId: string, close: CardClose | null, now: Date): Promise<void> {
+  if (close === null) return
+  try {
+    if (close.closed) await announceQuestionClosed(close.question, close.input, close.actor, close.userId)
+    await retireQuestionCards(workspaceId, close.input.messageId, RETIRED_BY_VERDICT[close.input.reason] ?? 'The question was closed.', now, decisionId)
+  } catch (error) {
+    console.error(`[supervisor] decision ${decisionId}: its question's close was not announced or its other cards not retired:`, error)
+  }
+}
+
+/**
+ * Human cards H1, ruling F8: an approved action a verb carried out closes the card's question right
+ * after the verb went through -- the claim is the guard, since the verbs own their transactions.
+ * The close is conditional, so a question the verb (an answer) or anybody else closed meanwhile is
+ * left as it is. Said and swallowed, like {@link afterCardClose}.
+ */
+async function closeAfterApply(decisionId: string, principal: Principal | undefined, now: Date): Promise<void> {
+  try {
+    const row = await prisma.supervisorDecision.findUnique({ where: { id: decisionId }, select: { workspaceId: true, situationKind: true, subjectId: true, action: true } })
+    if (row === null || !isQuestionSituation(row.situationKind)) return
+    const action = parsedOrThrow(actionSchema.safeParse(row.action), `SupervisorDecision ${decisionId}.action`)
+    const close = await prisma.$transaction(async (tx) => {
+      const question = await lockCardQuestion(tx, row.workspaceId, row.subjectId)
+      return question === null
+        ? null
+        : closeForVerdict(tx, question, { id: decisionId, situationKind: row.situationKind, actionKind: action.kind }, 'approved', null, principal, now)
+    })
+    await afterCardClose(row.workspaceId, decisionId, close, now)
+  } catch (error) {
+    console.error(`[supervisor] decision ${decisionId}: its question was not closed:`, error)
+  }
 }
 
 /**
@@ -1227,16 +1455,25 @@ export async function expirePendingDecisions(workspaceId: string, now: Date): Pr
   const due = await prisma.supervisorDecision.findMany({
     where: { workspaceId, status: 'pending', expiresAt: { lte: now } },
     orderBy: { createdAt: 'asc' },
-    select: { id: true },
+    select: { id: true, situationKind: true, subjectId: true, action: true },
   })
 
   let expired = 0
   for (const row of due) {
-    const claimed = await prisma.supervisorDecision.updateMany({
-      where: { id: row.id, status: 'pending' },
-      data: { status: 'expired', resolvedAt: now },
+    const claimed = await prisma.$transaction(async (tx) => {
+      // Human cards H1 (plan A D4): a question card's expiry times its question out in the same
+      // transaction -- unless its asker is parked on it, whose wait the timeout pass owns (F6).
+      const question = isQuestionSituation(row.situationKind) ? await lockCardQuestion(tx, workspaceId, row.subjectId) : null
+      const taken = await tx.supervisorDecision.updateMany({
+        where: { id: row.id, status: 'pending' },
+        data: { status: 'expired', resolvedAt: now },
+      })
+      if (taken.count === 0) return { taken: false as const }
+      if (question === null) return { taken: true as const, close: null }
+      const action = parsedOrThrow(actionSchema.safeParse(row.action), `SupervisorDecision ${row.id}.action`)
+      return { taken: true as const, close: await closeForVerdict(tx, question, { id: row.id, situationKind: row.situationKind, actionKind: action.kind }, 'expired', null, undefined, now) }
     })
-    if (claimed.count === 0) continue
+    if (!claimed.taken) continue
     expired += 1
     await appendEvent({
       type: 'supervisor.resolved',
@@ -1246,41 +1483,9 @@ export async function expirePendingDecisions(workspaceId: string, now: Date): Pr
       // an expiry records.
       payload: { decisionId: row.id, outcome: 'expired', reason: null },
     })
+    await afterCardClose(workspaceId, row.id, claimed.close, now)
   }
   return expired
-}
-
-/**
- * Supervisor-as-conductor plan B (Task 2 carry): retires the pending `waiting_stale` escalations
- * about a question the conductor has just answered.
- *
- * A run parked on the conductor for 30 minutes is escalated by the rules (spec C5) so a person can
- * see it; once the batched answer goes out, that card describes a wait that is over, and left alone
- * it would sit for `PENDING_TTL_MS` asking a person about nothing. Expired, not rejected: nobody
- * decided against it, the situation simply ended. Each row is claimed conditionally, as
- * {@link expirePendingDecisions} does, so a person approving in the same instant wins it.
- */
-export async function retireAnsweredWaitingStale(workspaceId: string, messageId: string, now: Date): Promise<number> {
-  const open = await prisma.supervisorDecision.findMany({
-    where: { workspaceId, subjectId: messageId, situationKind: 'waiting_stale', status: 'pending' },
-    select: { id: true },
-  })
-  let retired = 0
-  for (const row of open) {
-    const claimed = await prisma.supervisorDecision.updateMany({
-      where: { id: row.id, status: 'pending' },
-      data: { status: 'expired', resolvedAt: now },
-    })
-    if (claimed.count === 0) continue
-    retired += 1
-    await appendEvent({
-      type: 'supervisor.resolved',
-      workspaceId,
-      actor: 'system',
-      payload: { decisionId: row.id, outcome: 'expired', reason: 'The conductor answered the question the run was waiting on.' },
-    })
-  }
-  return retired
 }
 
 /**

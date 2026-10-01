@@ -5,6 +5,7 @@ import {
   pruneDecisions,
   recordDecision,
   refusalText,
+  retireClosedQuestionCards,
   supervisorSettings,
   type LoadedSupervisorWorld,
   type ModelDecider,
@@ -207,6 +208,9 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
   // stops it deciding; it does not freeze the questions it already asked. One indexed `findMany`
   // and, almost always, nothing to do.
   await expirePendingDecisions(deps.workspaceId, now)
+  // Human cards plan A D5: a question closed anywhere -- the answer box, the CLI, an applied answer --
+  // retires its open cards before the world is read, so no card asks about a closed question.
+  await retireClosedQuestionCards(deps.workspaceId, now)
 
   // And the retention sweep right behind it (M39 §2), for the same reason it runs before the
   // switch: `SupervisorDecision` grows by one row per stuck situation per cooldown, forever, and a
