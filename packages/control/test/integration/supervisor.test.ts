@@ -41,6 +41,7 @@ import {
   recordDecision,
   rejectDecision,
   resolveSettledDecisions,
+  HEAL_APPROVED_CLOSE_AFTER_MS,
   setSupervisorSettings,
 } from '../../src/supervisor.js'
 
@@ -3235,8 +3236,8 @@ describe('a card closes its question (human cards H1)', () => {
   })
 
   /** A card on the question proposing `action`, pending a person. */
-  const proposal = (f: QuestionFixture, kind: 'conductor_question' | 'waiting_stale', action: Action, over: { readonly status?: 'pending' | 'approved'; readonly draft?: Draft } = {}) =>
-    prisma.supervisorDecision.create({ data: { workspaceId: f.workspaceId, situationKind: kind, subjectId: f.questionId, situation: situation(kind, f.questionId), candidates: [{ action, tier: 'proposed', why: 'x' }], chosenIndex: 0, action, rationale: 'x', tier: 'proposed', status: over.status ?? 'pending', decidedBy: 'rules', ...(over.draft === undefined ? {} : { draft: over.draft as never }) } })
+  const proposal = (f: QuestionFixture, kind: 'conductor_question' | 'waiting_stale', action: Action, over: { readonly status?: 'pending' | 'approved'; readonly draft?: Draft; readonly resolvedAt?: Date } = {}) =>
+    prisma.supervisorDecision.create({ data: { workspaceId: f.workspaceId, situationKind: kind, subjectId: f.questionId, situation: situation(kind, f.questionId), candidates: [{ action, tier: 'proposed', why: 'x' }], chosenIndex: 0, action, rationale: 'x', tier: 'proposed', status: over.status ?? 'pending', decidedBy: 'rules', ...(over.draft === undefined ? {} : { draft: over.draft as never }), ...(over.resolvedAt === undefined ? {} : { resolvedAt: over.resolvedAt }) } })
 
   it('refuses a verb-carried approval on a question answered meanwhile: nothing acts on the world (fix round 1, I1)', async () => {
     const f = await seedQuestion({ status: 'blocked' })
@@ -3262,8 +3263,9 @@ describe('a card closes its question (human cards H1)', () => {
 
   it('closes, on the next card it would record, a question whose approved card a crash left open (fix round 1, M2)', async () => {
     const f = await seedQuestion({ status: 'blocked' })
-    await proposal(f, 'waiting_stale', { kind: 'mark_task_failed', taskId: f.taskId, reason: 'stuck' }, { status: 'approved' })
-    const refused = await record(f.workspaceId, 'waiting_stale', f.questionId)
+    const now = new Date()
+    await proposal(f, 'conductor_question', { kind: 'mark_task_failed', taskId: f.taskId, reason: 'stuck' }, { status: 'approved', resolvedAt: new Date(now.getTime() - HEAL_APPROVED_CLOSE_AFTER_MS - 60_000) })
+    const refused = await record(f.workspaceId, 'waiting_stale', f.questionId, now)
     expect(!refused.ok && refused.error).toMatchObject({ kind: 'question_closed', reason: 'decided', by: 'operator' })
     expect(await question(f.questionId)).toMatchObject({ closedReason: 'decided', closedBy: 'operator' })
     expect(await prisma.supervisorDecision.count({ where: { subjectId: f.questionId } })).toBe(1)
@@ -3299,5 +3301,23 @@ describe('a card closes its question (human cards H1)', () => {
     expect((await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })).status).toBe('failed')
     expect(await question(f.questionId)).toMatchObject({ closedReason: 'decided', closedBy: 'u1' })
     expect((await question(f.questionId)).closedNote).toContain('without an answer')
+  })
+
+  it('heals no approval younger than its window: the verb may still be running or be refused (fix round 2, a)', async () => {
+    const f = await seedQuestion({ status: 'blocked' })
+    const now = new Date()
+    await proposal(f, 'conductor_question', { kind: 'mark_task_failed', taskId: f.taskId, reason: 'stuck' }, { status: 'approved', resolvedAt: new Date(now.getTime() - 60_000) })
+    expect((await record(f.workspaceId, 'waiting_stale', f.questionId, now)).ok).toBe(true)
+    expect((await question(f.questionId)).closedAt).toBeNull()
+  })
+
+  it('never heals a re-address approved while the task was live, after the task finishes (fix round 2, b)', async () => {
+    const f = await seedQuestion({ answerer: true, live: true })
+    const move = await reassignCard(f)
+    expect((await approveDecision(move.id)).ok).toBe(true)
+    await prisma.task.update({ where: { id: f.taskId }, data: { status: 'done' } })
+    const later = new Date(Date.now() + HEAL_APPROVED_CLOSE_AFTER_MS + 60_000)
+    expect((await record(f.workspaceId, 'waiting_stale', f.questionId, later)).ok).toBe(true)
+    expect((await question(f.questionId)).closedAt).toBeNull()
   })
 })

@@ -14,6 +14,7 @@ import {
   PROFILE_MAX_CHARS,
   PRUNE_BATCH,
   QUESTION_SITUATION_KINDS,
+  READDRESSING_ACTION_KINDS,
   TERMINAL,
   actionSchema,
   candidateSchema,
@@ -329,19 +330,31 @@ export async function recordDecision(
 }
 
 /**
+ * How long an approval must have been resolved before {@link healApprovedClose} treats its open
+ * question as a crashed close rather than a verb still running (or about to be refused, which must
+ * close nothing). Far past any verb's run time; a crash heals on the first record after it.
+ */
+export const HEAL_APPROVED_CLOSE_AFTER_MS = 5 * 60_000
+
+/**
  * Inside `recordDecision`'s transaction: closes a question its latest card's approval should have
- * closed (a crash between a verb and {@link closeAfterApply}). Null when there is nothing to heal.
+ * closed (a crash between a verb and {@link closeAfterApply}). Null when there is nothing to heal:
+ * the approval is younger than {@link HEAL_APPROVED_CLOSE_AFTER_MS} on the tick's clock, or it
+ * re-addressed the question -- left open on purpose while its task was live (ruling F18, amended),
+ * so a later record must not close it over the new holder.
  */
 async function healApprovedClose(tx: Prisma.TransactionClient, workspaceId: string, messageId: string, now: Date): Promise<CardClose | null> {
   const latest = await tx.supervisorDecision.findFirst({
     where: { workspaceId, subjectId: messageId, situationKind: { in: [...QUESTION_SITUATION_KINDS] } },
     orderBy: { createdAt: 'desc' },
-    select: { id: true, status: true, situationKind: true, action: true, resolvedByUserId: true },
+    select: { id: true, status: true, situationKind: true, action: true, resolvedAt: true, resolvedByUserId: true },
   })
-  if (latest?.status !== 'approved') return null
+  if (latest?.status !== 'approved' || latest.resolvedAt === null) return null
+  if (latest.resolvedAt.getTime() > now.getTime() - HEAL_APPROVED_CLOSE_AFTER_MS) return null
+  const action = parsedOrThrow(actionSchema.safeParse(latest.action), `SupervisorDecision ${latest.id}.action`)
+  if (READDRESSING_ACTION_KINDS.includes(action.kind)) return null
   const question = await lockCardQuestion(tx, workspaceId, messageId)
   if (question === null || question.closedAt !== null) return null
-  const action = parsedOrThrow(actionSchema.safeParse(latest.action), `SupervisorDecision ${latest.id}.action`)
   const principal = latest.resolvedByUserId === null ? undefined : { userId: latest.resolvedByUserId }
   const close = await closeForVerdict(tx, question, { id: latest.id, situationKind: latest.situationKind, actionKind: action.kind }, 'approved', null, principal, now)
   return close?.closed === true ? close : null
