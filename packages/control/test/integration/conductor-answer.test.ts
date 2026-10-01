@@ -220,6 +220,44 @@ describe('routeStoredHandOffs: conductor answers (F4, spec C2 "never dropped")',
     expect(await handOffs()).toEqual([{ source: 'answer', sourceKey: `answer:${id}:0`, toPackageKey: 'integration', fromPackageKey: null, status: 'pending' }])
   })
 
+  // Final wave T5: one row that throws is logged, and the sweeps go on to the rest.
+  it('routes the other answers and reports when one row throws (final wave T5)', async () => {
+    const f = await seed()
+    const pkg = await prisma.workPackage.findFirstOrThrow({ where: { workspaceId: f.workspaceId, key: 'report' } })
+    const seatId = (await prisma.slaveRun.findUniqueOrThrow({ where: { id: f.runId } })).slaveId
+    const finishedRun = async (): Promise<string> => (await prisma.slaveRun.create({ data: { taskId: f.reportTaskId, slaveId: seatId, status: 'succeeded', terminalAt: new Date() } })).id
+    // Two reports with hand-offs never routed; the first throws while its routing asks its run.
+    const badReport = await finishedRun()
+    const goodReport = await finishedRun()
+    await prisma.runReport.create({ data: { runId: badReport, taskId: f.reportTaskId, workPackageId: pkg.id, report: { handOffs: [{ path: '../outside', change: 'nobody owns this' }] }, createdAt: new Date(Date.now() - 2000) } })
+    await prisma.runReport.create({ data: { runId: goodReport, taskId: f.reportTaskId, workPackageId: pkg.id, report: { handOffs: [{ package: 'integration', change: 'from the report' }] }, createdAt: new Date(Date.now() - 1000) } })
+    // Two applied answers whose hand-offs never landed; the first throws while it reads its asker.
+    const second = await sendMessage(await finishedRun(), { kind: 'question', body: 'and the second?', recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId: f.reportTaskId })
+    if (!second.ok) throw new Error('send failed')
+    const firstId = await decide(f, draft(conductorWith({ handOff: { package: 'integration', change: 'first answer' } })), 'applied')
+    expect((await applyDecision(firstId, 'system')).ok).toBe(true)
+    const secondId = await decide({ ...f, questionId: second.value.id }, draft(conductorWith({ handOff: { package: 'integration', change: 'second answer' } })), 'applied')
+    expect((await applyDecision(secondId, 'system')).ok).toBe(true)
+    await prisma.packageHandOff.deleteMany()
+
+    const original = prisma.slaveRun.findUnique
+    // Each throws ONCE: its own routing fails, and a later read of the same run (another row's pass) works.
+    const bad = new Set([badReport, f.runId])
+    ;(prisma.slaveRun as { findUnique: unknown }).findUnique = ((args: { where: { id?: string } }) =>
+      args.where.id !== undefined && bad.delete(args.where.id) ? Promise.reject(new Error('this row throws')) : original.call(prisma.slaveRun, args as never)) as unknown
+    try {
+      await routeStoredHandOffs(f.deliveryId)
+    } finally {
+      ;(prisma.slaveRun as { findUnique: unknown }).findUnique = original
+    }
+    expect(bad.size).toBe(0)
+    const routed = (await prisma.packageHandOff.findMany({ select: { sourceKey: true, change: true } })).map((row) => row.change).sort()
+    expect(routed).toEqual(['from the report', 'nobody owns this', 'second answer'])
+    // The answer that threw is routed by the next pass.
+    await routeStoredHandOffs(f.deliveryId)
+    expect(await prisma.packageHandOff.count({ where: { sourceKey: `answer:${firstId}:0` } })).toBe(1)
+  })
+
   it('leaves an edited approval, a pending proposal and a failed answer alone', async () => {
     const conductor = conductorWith({ handOff: { package: 'integration', change: 'y' } })
     const edited = await seed()

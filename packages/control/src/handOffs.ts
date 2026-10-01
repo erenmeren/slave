@@ -274,15 +274,20 @@ export async function routeStoredHandOffs(deliveryId: string): Promise<void> {
       console.error(`[hand-off] run ${report.runId}: its stored report's hand-offs cannot be read -- not routed`)
       continue
     }
-    await routeHandOffs({
-      workspaceId: report.workspaceId,
-      goalVersion: report.goalVersion,
-      source: 'report',
-      sourceKey: `report:${report.runId}`,
-      fromRunId: report.runId,
-      fromPackageKey: report.packageKey,
-      items: items.flatMap((item) => (item.success ? [item.data] : [])),
-    })
+    // Final wave T5: one report that throws is said and skipped; the next pass retries it (no row at `:0`).
+    try {
+      await routeHandOffs({
+        workspaceId: report.workspaceId,
+        goalVersion: report.goalVersion,
+        source: 'report',
+        sourceKey: `report:${report.runId}`,
+        fromRunId: report.runId,
+        fromPackageKey: report.packageKey,
+        items: items.flatMap((item) => (item.success ? [item.data] : [])),
+      })
+    } catch (error) {
+      console.error(`[hand-off] run ${report.runId}: its stored report's hand-offs were not routed this pass:`, error)
+    }
   }
   await routeStoredAnswerHandOffs(deliveryId)
 }
@@ -355,14 +360,19 @@ async function routeStoredAnswerHandOffs(deliveryId: string): Promise<void> {
       console.error(`[hand-off] decision ${row.id}: its conductor answer's hand-off cannot be read -- not routed`)
       continue
     }
-    await routeAnswerHandOff({
-      workspaceId: row.workspaceId,
-      goalVersion: row.goalVersion,
-      decisionId: row.id,
-      fromRunId: row.senderRunId,
-      askerPackageKey: row.packageKey,
-      handOff: handOff.data,
-    })
+    // Final wave T5: one answer that throws is said and skipped; the next pass retries it.
+    try {
+      await routeAnswerHandOff({
+        workspaceId: row.workspaceId,
+        goalVersion: row.goalVersion,
+        decisionId: row.id,
+        fromRunId: row.senderRunId,
+        askerPackageKey: row.packageKey,
+        handOff: handOff.data,
+      })
+    } catch (error) {
+      console.error(`[hand-off] decision ${row.id}: its conductor answer's hand-off was not routed this pass:`, error)
+    }
   }
 }
 
