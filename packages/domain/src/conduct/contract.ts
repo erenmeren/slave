@@ -1,6 +1,6 @@
 import { sanitisePersonText } from '../handoff/contract.js'
 import type { RequirementItem } from './requirements.js'
-import { SKELETON_PACKAGE_KEY } from './constants.js'
+import { HANDOFF_CHANGE_MAX_CHARS, HANDOFFS_PER_REPORT_MAX, SKELETON_PACKAGE_KEY } from './constants.js'
 import { globToRegExp } from './glob.js'
 import {
   gateRunsVerifyScript,
@@ -48,7 +48,7 @@ export function renderSkeletonJobLines(ownedPaths: readonly string[], existingPr
     'Your package is the skeleton: it runs before every other package, and they all build on it.',
     product,
     dependencies,
-    'If starting it needs a file you do not own, ask the conductor for it (see the ask protocol) instead of creating it.',
+    'If starting it needs a change in a file you do not own, list it in your report\'s "handOffs" with its path instead of making it.',
     'If you own the loader of a shared registration directory, make it load every file there: each package adds its own file; you own the loader, not the entries.',
     owns('README.md')
       ? 'Update README.md so it says how to start the product.'
@@ -79,6 +79,16 @@ export const SMOKE_CONTRACT_LINES: readonly string[] = [
   '- Print what it does, step by step. Only the stub exits 2 with "smoke not written yet".',
 ]
 
+/**
+ * Supervisor-as-conductor spec C1 (plan A D11): what a worker does with a change it may not make.
+ * Replaces "ask the conductor (see the ask protocol)", which sent every hand-off to a person (OBS-3/4).
+ */
+export const HAND_OFF_RULE_LINES: readonly string[] = [
+  'Do not create or change any other file: other workers own them. If your work needs a change in a file',
+  'you do not own, or work another package must do, list it in your report\'s "handOffs" (with the path',
+  'when there is one); it is delivered to the package that owns it. Never make the change yourself.',
+]
+
 /** What {@link renderPackageContract} reads off a `WorkPackage` row -- only the fields it shows. */
 export interface PackageContractInput {
   readonly pkg: {
@@ -98,6 +108,9 @@ export interface PackageContractInput {
   /** The skeleton only: whether its base already holds a product ({@link hasProductFiles});
    *  absent when that could not be read, and the job line then covers both. */
   readonly existingProduct?: boolean
+  /** Plan A D9: blocks the caller rendered (shared decisions, what other packages asked of this one,
+   *  what the packages before it reported), appended in order after a blank line; '' is skipped. */
+  readonly notes?: readonly string[]
 }
 
 /**
@@ -156,8 +169,7 @@ export function renderPackageContract(input: PackageContractInput): string {
     'Files you own:',
     ...input.pkg.ownedPaths.map((g) => `- ${g}`),
     ...(input.pkg.isIntegration ? ['- every file no other package owns'] : []),
-    'Do not create or change any other file: other workers own them. If your work needs a change',
-    'outside your files, ask the conductor (see the ask protocol) instead of making it.',
+    ...HAND_OFF_RULE_LINES,
   ]
   const single = input.pkg.ownedPaths.includes('**')
   if (input.pkg.key === SKELETON_PACKAGE_KEY) lines.push('', ...renderSkeletonJobLines(input.pkg.ownedPaths, input.existingProduct))
@@ -182,6 +194,7 @@ export function renderPackageContract(input: PackageContractInput): string {
       ...input.dependencies.map((d) => `- ${d.key}: ${sanitisePersonText(d.interface)}`),
     )
   }
+  for (const note of input.notes ?? []) if (note !== '') lines.push('', note)
   return lines.join('\n')
 }
 
@@ -200,6 +213,7 @@ export function renderReportProtocol(requirementKeys: readonly string[], workflo
     filesTouched: ['path/you/changed'],
     workflow: workflowSteps > 0 ? [{ step: 1, done: true, note: '' }] : [],
     questions: [],
+    handOffs: [],
   }
   return [
     'When you finish, end your final message with this report, exactly once:',
@@ -208,7 +222,11 @@ export function renderReportProtocol(requirementKeys: readonly string[], workflo
     workflowSteps > 0
       ? `- "workflow": one entry per workflow step (${workflowSteps}), by its number.`
       : '- "workflow": [] (you were given no workflow).',
-    '- "questions": anything you need the conductor to decide; each is sent to it when you finish.',
+    '- "handOffs": a change in a file you do not own ({"path": "...", "change": "..."}) or work another package must do',
+    '  ({"package": "<key>", "change": "..."}); each is delivered to the package that owns it.',
+    `  At most ${String(HANDOFFS_PER_REPORT_MAX)}; each "change" at most ${String(HANDOFF_CHANGE_MAX_CHARS)} characters, with exactly one of "path" or "package".`,
+    '  An item that breaks these is not delivered: it goes to the conductor as a question.',
+    '- "questions": a choice nobody has made (a design decision, an ambiguous requirement) for the conductor to decide; never a hand-off.',
     'A missing or malformed report sends this task back to you.',
   ].join('\n')
 }

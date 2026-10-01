@@ -99,6 +99,7 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'workspace.goal_needs_human': { version: 1, reason: 'the verification round cap (3) was reached' },
   'workspace.goal_retried': { version: 1, round: 3 },
   'workspace.smoke_run': { version: 1, round: 2, attemptId: 'a1', outcome: 'failed', exitCode: 1, durationMs: 1200, output: 'npm error Missing script: "start"', reworkedPackage: 'integration' },
+  'workspace.package_handed_off': { version: 1, handOffId: 'h1', source: 'report', fromPackage: 'report', toPackage: 'integration', path: null, package: 'integration', delivery: 'prompt', change: 'expose GET /api/v1/reports' },
   'workspace.smoke_handed_off': { version: 1, round: 1, attemptId: 'a1', fromPackage: 'integration', toPackage: 'skeleton', path: 'backend/package.json', change: 'add a "start" script' },
   'workspace.plan_created': {
     goal: 'Ship the checkout flow',

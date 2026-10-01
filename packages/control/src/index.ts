@@ -88,6 +88,8 @@ export * from './collect.js'
 export * from './integration.js'
 export * from './evidence.js'
 export * from './goalDelivery.js'
+export * from './handOffs.js'
+export * from './conductorAnswer.js'
 export * from './staffing.js'
 export * from './unblock.js'
 export * from './password.js'
@@ -117,3 +119,6 @@ export * from './goalReport.js'
 /** Conductor Plan 2: the orchestrator's conductor reads a racing `RequirementSet` create as
  *  success, and this is the one P2002 predicate (`prisma-errors.ts`'s M17 census rule). */
 export { isUniqueConstraintViolation } from './prisma-errors.js'
+/** Supervisor-as-conductor plan A, Task 6: filing tries a hand-off routing again when the delivery's
+ *  lock was busy (P2028), and reads that with the same shape predicate `handOffs.ts` does. */
+export { isTransactionTimeout } from './prisma-errors.js'

@@ -452,6 +452,26 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
   }
 
   for (const question of world.questions) {
+    // Supervisor-as-conductor spec C4 (plan B D1): the conductor's role is held by nobody by design,
+    // so a question to it is not "unanswerable" -- it is the conductor's to answer from the plan, at
+    // once. A parked asker that has waited past the threshold is ALSO made visible (spec C5, D2).
+    if (question.recipientRole === CONDUCTOR_ROLE) {
+      add({
+        kind: 'conductor_question',
+        subjectId: question.messageId,
+        summary: `A question to the conductor${question.goalVersion === null ? '' : ` about goal v${String(question.goalVersion)}`} waits for an answer from the plan.`,
+        facts: { ...questionFacts(question, world), goalVersion: question.goalVersion, askerWaiting: question.askerWaiting },
+      })
+      if (question.askerWaiting && world.now - question.createdAt > WAITING_STALE_MS) {
+        add({
+          kind: 'waiting_stale',
+          subjectId: question.messageId,
+          summary: `A run has waited ${String(Math.floor((world.now - question.createdAt) / 60_000))} minutes for the conductor's answer.`,
+          facts: questionFacts(question, world),
+        })
+      }
+      continue
+    }
     if (!questionHasRecipient(world, question)) {
       // unanswerable_question: however fresh it is, nobody can answer it -- waiting longer will
       // not help, so this fires without a staleness threshold.

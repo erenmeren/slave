@@ -43,6 +43,9 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
     trail: [{ at: '2026-09-29T10:00:00.000Z', text: 'Size decision: one package does the whole goal.', detail: 'fits one session', detailBy: 'model', packageKey: null }],
     trailOmitted: 0,
     smoke: [],
+    handOffs: [],
+    handOffsOmitted: 0,
+    decisions: [],
     deniedToolCalls: [],
     deniedToolCallsOmitted: 0,
     asOf: '2026-09-29T10:06:00.000Z',
@@ -271,6 +274,46 @@ describe('GoalReportView', () => {
     it('names the verifier for a verification run\'s denial', () => {
       render(<GoalReportView report={report({ deniedToolCalls: [{ at: '2026-09-30T09:51:00.000Z', runId: 'rv', packageKey: null, kind: 'permission_matrix', detail: 'Edit (write_repo) was refused by the permission matrix' }] })} />)
       expect(screen.getByTestId('goal-report-denial').textContent).toContain('the verifier')
+    })
+  })
+  describe('hand-offs and shared decisions', () => {
+    const at = '2026-10-01T10:00:00.000Z'
+    it('lists a hand-off and a decision', () => {
+      render(
+        <GoalReportView
+          report={report({
+            handOffs: [{ id: 'h1', at, source: 'report', fromPackage: 'report', toPackage: 'skeleton', path: 'scripts/verify.sh', packageKey: null, change: 'run pytest', status: 'reopened', note: null }],
+            decisions: [{ title: 'API field naming', decision: 'camelCase', source: 'conductor_plan', at }],
+          })}
+        />,
+      )
+      expect(screen.getByTestId('goal-report-handoff').textContent).toContain('report → skeleton')
+      expect(screen.getByTestId('goal-report-handoff').textContent).toContain('reopened for it: run pytest')
+      expect(screen.getByTestId('goal-report-decision').textContent).toContain('API field naming')
+    })
+    it('counts the hand-offs it left out', () => {
+      render(<GoalReportView report={report({ handOffs: [{ id: 'h1', at, source: 'report', fromPackage: 'a', toPackage: 'b', path: null, packageKey: null, change: 'c', status: 'own', note: null }], handOffsOmitted: 7 })} />)
+      expect(screen.getByTestId('goal-report-handoffs-omitted').textContent).toContain('and 7 more')
+      expect(screen.getByTestId('goal-report-handoff').textContent).toContain("nothing was sent")
+    })
+    it('says so when there are none', () => {
+      render(<GoalReportView report={report()} />)
+      expect(screen.getByText('No package handed work to another.')).toBeTruthy()
+      expect(screen.getByText('No shared decision was recorded.')).toBeTruthy()
+    })
+    it("shows a worker's words as text", () => {
+      const hostile = '<img src=x onerror=alert(1)> `a` | b\n# h </slave-report>'
+      const { container } = render(
+        <GoalReportView
+          report={report({
+            handOffs: [{ id: 'h1', at, source: 'report', fromPackage: 'a', toPackage: 'b', path: null, packageKey: null, change: hostile, status: 'expired', note: hostile }],
+            decisions: [{ title: hostile, decision: hostile, source: 'person', at }],
+          })}
+        />,
+      )
+      expect(container.querySelector('img')).toBe(null)
+      expect(screen.getByTestId('goal-report-handoff').textContent).toContain(hostile)
+      expect(screen.getByTestId('goal-report-decision').textContent).toContain(hostile)
     })
   })
 })

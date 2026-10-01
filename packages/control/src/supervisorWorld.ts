@@ -1,6 +1,10 @@
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   ACTION_KINDS,
+  CONDUCTOR_EARLIER_ANSWERS_MAX,
+  CONDUCTOR_PLAN_HANDOFFS_MAX,
+  CONDUCTOR_ROLE,
+  GOAL_DECISIONS_MAX,
   NON_TERMINAL_RUN_STATUSES,
   PENDING_TTL_MS,
   PERMISSION_DENIAL_WINDOW_MS,
@@ -11,9 +15,11 @@ import {
   capabilityLabel,
   evaluateGuardrails,
   isStaffableTask,
+  leadFromReport,
   parseHandoffContract,
   parseRunbookStages,
   profileKeyOf,
+  requirementItemsSchema,
   runbookSourceOf,
   type ActionKind,
   type CapabilityRecord,
@@ -23,6 +29,7 @@ import {
   type Runbook,
   type SituationKind,
   type SupervisorCatalogEntry,
+  type SupervisorConductorPlan,
   type SupervisorPoolPerson,
   type SupervisorDenial,
   type SupervisorGoalDelivery,
@@ -43,8 +50,9 @@ import {
 } from '@slave-of-ai/domain'
 import { evidenceForProfiles } from './evidence.js'
 import { latestVerifications } from './goalDelivery.js'
+import { recordedHandOffStatus } from './handOffs.js'
 import { staleCandidateCount } from './memory.js'
-import { STORED_REPORT_QUESTION_KEY_PREFIX, stillPendingQuestion, waitingSenderRunIds } from './messaging.js'
+import { STORED_REPORT_QUESTION_KEY_PREFIX, isStoredHandOffQuestionKey, stillPendingQuestion, waitingSenderRunIds } from './messaging.js'
 import { planningCountSince } from './planningCount.js'
 import { workspaceDefaultProvider } from './runtime.js'
 import { breakerCountedFailures, workspaceStats, type WorkspaceStatsSnapshot } from './stats.js'
@@ -778,12 +786,16 @@ async function loadRunPrompts(
  * Conductor Plan 4b (D13, deferred Plan 2 item): a report question to the conductor is answered
  * into the seat's next run ON THAT TASK (`inbox.ts`). A task that is over, or whose goal version is
  * accepted or abandoned, has no next run, so the question is no longer pending for anybody -- and
- * `unanswerable_question` stops firing for it. Only report questions (the stored
+ * `conductor_question` stops firing for it. Only report questions (the stored
  * `send:report:` key, the marker `stillPendingQuestion` reads): a parked `<slave-ask>` question is
- * pending while its run waits, whatever its task. Two bounded reads, and none on a mailbox with no
- * report question in it.
+ * pending while its run waits, whatever its task. Supervisor-as-conductor plan B D8 (spec C5,
+ * OBS-9): a conductor report question of a `done` task that a decision already settled -- answered,
+ * or sent to a person -- is not pending either, so it is not re-escalated every tick. At most three
+ * bounded reads, and none on a mailbox with no report question in it.
  */
-async function dropUnusableReportQuestions<T extends { readonly taskId: string | null; readonly idempotencyKey: string | null }>(
+async function dropUnusableReportQuestions<
+  T extends { readonly id: string; readonly taskId: string | null; readonly idempotencyKey: string | null; readonly recipientRole: string | null },
+>(
   tx: Prisma.TransactionClient,
   workspaceId: string,
   rows: readonly T[],
@@ -807,11 +819,38 @@ async function dropUnusableReportQuestions<T extends { readonly taskId: string |
       })
     ).map((row) => [row.id, row] as const),
   )
+  // Plan B D8 (spec C5, OBS-9): a done task's report question that was decided about -- answered
+  // and applied, or sent to a person who then resolved the card, whatever they did -- is not pending
+  // for the conductor path any more. A `failed` row (its verb refused), a `noop`, and a card still
+  // `pending` (final wave I2) leave it pending.
+  // Conductor questions only: a report question to any other role keeps its exact behaviour.
+  const doneReportIds = rows
+    .filter((row) => isReport(row) && row.recipientRole === CONDUCTOR_ROLE && row.taskId !== null && tasks.get(row.taskId)?.status === 'done')
+    .map((row) => row.id)
+  const decided = new Set(
+    doneReportIds.length === 0
+      ? []
+      : (
+          await tx.supervisorDecision.findMany({
+            where: {
+              workspaceId,
+              subjectId: { in: doneReportIds },
+              situationKind: { in: ['conductor_question', 'unanswerable_question', 'waiting_stale'] },
+              // Final wave I2: a `pending` card is not settled yet -- its question stays, so the
+              // card a person approves still shows what it answers.
+              status: { notIn: ['failed', 'pending'] },
+              tier: { not: 'noop' },
+            },
+            select: { subjectId: true },
+          })
+        ).map((row) => row.subjectId),
+  )
   const stillUseful = (row: T): boolean => {
     if (!isReport(row)) return true
     const task = row.taskId === null ? undefined : tasks.get(row.taskId)
     if (task === undefined) return true
     if (task.status === 'failed' || task.status === 'cancelled') return false
+    if (task.status === 'done' && decided.has(row.id)) return false
     return task.workPackage === null || !closedVersions.has(task.workPackage.goalVersion)
   }
   return rows.filter(stillUseful)
@@ -866,8 +905,121 @@ async function loadGoalDeliveries(tx: Prisma.TransactionClient, workspaceId: str
   )
 }
 
+/**
+ * Plan B D9 (spec C4, R11): what the conductor answers from, per goal version -- sequential reads
+ * inside the world's snapshot, bounded by the version (a handful of packages, one latest report
+ * each, so one lead each) and by the caps on decisions, earlier answers and hand-offs. A version
+ * with no packages (planned delivery, or not conducted yet) has no plan and is left out.
+ */
+async function loadConductorPlans(tx: Prisma.TransactionClient, workspaceId: string, versions: readonly number[]): Promise<SupervisorConductorPlan[]> {
+  const plans: SupervisorConductorPlan[] = []
+  for (const goalVersion of versions) {
+    const packages = await tx.workPackage.findMany({
+      where: { workspaceId, goalVersion },
+      orderBy: { key: 'asc' },
+      select: {
+        key: true,
+        title: true,
+        requirementKeys: true,
+        ownedPaths: true,
+        isIntegration: true,
+        interface: true,
+        dependsOn: true,
+        handOffReopens: true,
+        // Plan A D2: a package's task is its oldest one.
+        tasks: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: 1, select: { status: true } },
+        reports: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1, select: { report: true } },
+      },
+    })
+    if (packages.length === 0) continue
+    const set = await tx.requirementSet.findUnique({ where: { workspaceId_goalVersion: { workspaceId, goalVersion } }, select: { items: true } })
+    const items = set === null ? null : requirementItemsSchema.safeParse(set.items)
+    const decisions = await tx.goalDecision.findMany({
+      where: { workspaceId, goalVersion },
+      orderBy: [{ createdAt: 'asc' }, { titleKey: 'asc' }],
+      take: GOAL_DECISIONS_MAX,
+      select: { title: true, decision: true, source: true },
+    })
+    // A package's task's own version is null on some rows, so the version is read through the
+    // package as well -- the same rule `loadQuestionTasks` applies to the asker.
+    const answers = await tx.slaveMessage.findMany({
+      where: {
+        workspaceId,
+        kind: 'answer',
+        replyTo: {
+          is: {
+            recipientRole: CONDUCTOR_ROLE,
+            task: { is: { OR: [{ workPackage: { is: { goalVersion } } }, { workPackageId: null, goalVersion }] } },
+          },
+        },
+      },
+      orderBy: { seq: 'desc' },
+      take: CONDUCTOR_EARLIER_ANSWERS_MAX,
+      select: { body: true, actor: true, replyToId: true, replyTo: { select: { body: true } } },
+    })
+    // Final wave M5: whose words each answer is. A tick sends the conductor's (`system`); a `human`
+    // answer is a person's unless it is a conductor answer a person approved without editing it.
+    const approvedUnedited = new Set(
+      (
+        await tx.supervisorDecision.findMany({
+          where: {
+            workspaceId,
+            situationKind: 'conductor_question',
+            status: 'approved',
+            subjectId: { in: answers.flatMap((row) => (row.actor === 'human' && row.replyToId !== null ? [row.replyToId] : [])) },
+          },
+          select: { subjectId: true, draft: true },
+        })
+      )
+        .filter((row) => {
+          const draft = row.draft as { readonly conductor?: unknown; readonly editedBody?: unknown } | null
+          return draft !== null && typeof draft === 'object' && draft.conductor != null && typeof draft.editedBody !== 'string'
+        })
+        .map((row) => row.subjectId),
+    )
+    const handOffs = await tx.packageHandOff.findMany({
+      where: { workspaceId, goalVersion },
+      orderBy: [{ createdAt: 'desc' }, { sourceKey: 'desc' }],
+      take: CONDUCTOR_PLAN_HANDOFFS_MAX,
+      select: { fromPackageKey: true, toPackageKey: true, change: true, status: true, reopenedAt: true },
+    })
+    plans.push({
+      goalVersion,
+      requirements: items?.success === true ? items.data.map((item) => ({ key: item.key, text: item.text })) : [],
+      packages: packages.map((p) => ({
+        key: p.key,
+        title: p.title,
+        requirementKeys: p.requirementKeys,
+        ownedPaths: p.ownedPaths,
+        isIntegration: p.isIntegration,
+        interface: p.interface,
+        dependsOn: p.dependsOn,
+        taskStatus: p.tasks[0]?.status ?? null,
+        handOffReopens: p.handOffReopens,
+      })),
+      decisions,
+      answers: answers.toReversed().map((row) => ({
+        question: row.replyTo?.body ?? '',
+        answer: row.body,
+        by: row.actor === 'system' || (row.replyToId !== null && approvedUnedited.has(row.replyToId)) ? ('conductor' as const) : ('person' as const),
+      })),
+      leads: packages.flatMap((p) => {
+        const stored = p.reports[0]
+        const lead = stored === undefined ? null : leadFromReport(p.key, stored.report)
+        return lead === null ? [] : [lead]
+      }),
+      // Ruling F7: the RECORDED status -- a settled reopen is stored `delivered` with `reopenedAt`.
+      handOffs: handOffs
+        .toReversed()
+        .map((row) => ({ from: row.fromPackageKey, to: row.toPackageKey, change: row.change, status: recordedHandOffStatus(row) })),
+    })
+  }
+  return plans
+}
+
 /** The title, description and required role of each asking task -- the `task` source, plus the
- *  role {@link holdersOf} reads for a slave-addressed question. Read separately from
+ *  role {@link holdersOf} reads for a slave-addressed question -- and (plan B D9) the goal version
+ *  and package it belongs to, which pick the conductor's plan a conductor question is answered from. Read separately from
  *  {@link loadTaskRows} because that one carries no description and DROPS a task with no required
  *  role, and a question asked from such a task still has a task text worth quoting. */
 async function loadQuestionTasks(
@@ -882,18 +1034,36 @@ async function loadQuestionTasks(
       readonly description: string
       readonly requiredRole: string | null
       readonly handoff: HandoffContract | null
+      /** The package's version when the task has a package (it is authoritative), else the task's own. */
+      readonly goalVersion: number | null
+      readonly packageKey: string | null
     }
   >
 > {
   if (taskIds.length === 0) return new Map()
   const rows = await tx.task.findMany({
     where: { workspaceId, id: { in: [...taskIds] } },
-    select: { id: true, title: true, description: true, requiredRole: true, handoff: true },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      requiredRole: true,
+      handoff: true,
+      goalVersion: true,
+      workPackage: { select: { key: true, goalVersion: true } },
+    },
   })
   return new Map(
     rows.map((row) => [
       row.id,
-      { title: row.title, description: row.description, requiredRole: row.requiredRole, handoff: handoffOf(row.handoff) },
+      {
+        title: row.title,
+        description: row.description,
+        requiredRole: row.requiredRole,
+        handoff: handoffOf(row.handoff),
+        goalVersion: row.workPackage?.goalVersion ?? row.goalVersion,
+        packageKey: row.workPackage?.key ?? null,
+      },
     ]),
   )
 }
@@ -1334,6 +1504,18 @@ export async function loadSupervisorWorld(
         tx,
         [...new Set(questionRows.flatMap((row) => (row.senderRunId === null ? [] : [row.senderRunId])))],
       )
+      // Plan B D9 (R11): the conductor's plan, for each goal version a pending conductor question
+      // belongs to -- and nothing at all on a project with none, so a world without one pays nothing.
+      const conductorVersions = [
+        ...new Set(
+          questionRows.flatMap((row) => {
+            if (row.recipientRole !== CONDUCTOR_ROLE || row.taskId === null) return []
+            const version = questionTasks.get(row.taskId)?.goalVersion
+            return version === null || version === undefined ? [] : [version]
+          }),
+        ),
+      ].sort((a, b) => a - b)
+      const conductorPlans = await loadConductorPlans(tx, workspaceId, conductorVersions)
 
       // M49 R2: how many OBSERVATION candidates nothing has verified in over a day. A COUNT and
       // never the rows (plan erratum E11): the only predicate that reads it asks "how many", and
@@ -1537,6 +1719,13 @@ export async function loadSupervisorWorld(
             // handoff must not take the Supervisor's mailbox down.
             taskHandoff: task?.handoff ?? null,
             holders: holdersOf(row, task?.requiredRole ?? null, slaves),
+            // Plan B D9: which goal version and package asked, and whether its run is parked on it --
+            // the same `waitingRunIds` the pending filter was built from, so one snapshot answers both.
+            goalVersion: task?.goalVersion ?? null,
+            askerPackageKey: task?.packageKey ?? null,
+            askerWaiting: row.senderRunId !== null && waitingRunIds.includes(row.senderRunId),
+            // Final wave I1: a hand-off routing question -- a hand-off in its answer is held.
+            fromHandOffRouting: isStoredHandOffQuestionKey(row.idempotencyKey),
           }
         }),
         decisions: decisionRows.map((row) => ({
@@ -1564,6 +1753,9 @@ export async function loadSupervisorWorld(
         staffingPreferences,
         evidence,
         goalDeliveries: await loadGoalDeliveries(tx, workspaceId),
+        // Plan B D9: the plan of every version a pending conductor question belongs to, with each
+        // hand-off's recorded status (ruling F7). Empty when no conductor question is pending.
+        conductorPlans,
       }
 
       return {

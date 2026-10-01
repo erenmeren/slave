@@ -1,5 +1,5 @@
 import { CONDUCT_PER_CALL_CAP_USD } from '../conduct/constants.js'
-import { GOAL_REPORT_STATE_LABEL, acceptedCommitText, noPackagesLabel, reportCaveats, smokeOutcomeLabel, unverifiedRequirementLabel } from './caveats.js'
+import { DECISION_SOURCE_LABEL, GOAL_REPORT_STATE_LABEL, HAND_OFF_STATUS_LABEL, acceptedCommitText, handOffNote, noPackagesLabel, reportCaveats, smokeOutcomeLabel, unverifiedRequirementLabel } from './caveats.js'
 import { evidenceAnchor, evidenceCut, formatReportUsd, mdFence, mdInline, mdQuote, shortCommit } from './escape.js'
 import type { GoalReport, GoalReportAuthor } from './types.js'
 
@@ -20,7 +20,7 @@ export const GOAL_REPORT_ANSWERED_BY = { person: 'a person', supervisor: 'the Su
  * The goal version's report as Markdown (spec R10, plan D7): deterministic (a pure function of
  * `report`, no clock read, no sorting of its own) and inert (every value another party wrote goes
  * through `mdInline`, `mdFence` or `mdQuote`). Sections, in order: state, what to know, why it
- * stopped, a refused merge, goal, requirements, rounds, smoke checks, evidence, packages, denied
+ * stopped, a refused merge, goal, requirements, rounds, smoke checks, shared decisions, hand-offs, evidence, packages, denied
  * tool calls, spend, decision trail, questions.
  */
 export function renderGoalReportMarkdown(report: GoalReport): string {
@@ -93,6 +93,31 @@ export function renderGoalReportMarkdown(report: GoalReport): string {
     }
     const latest = report.smoke.at(-1)
     if (latest !== undefined && latest.output !== '') lines.push('', `Output of the latest smoke check (round ${String(latest.round)}):`, '', mdFence(latest.output))
+    lines.push('')
+  }
+
+  // Supervisor-as-conductor spec C3: the version's shared decisions, as every contract listed them.
+  lines.push('## Shared decisions', '')
+  if (report.decisions.length === 0) lines.push('No shared decision was recorded.', '')
+  else {
+    for (const d of report.decisions) lines.push(`- ${mdInline(d.title)}: ${mdInline(d.decision)} (${DECISION_SOURCE_LABEL[d.source]})`)
+    lines.push('')
+  }
+
+  // Spec C2: every hand-off, where it went and what became of it. The change and the note are words
+  // a worker or the conductor wrote, so they are escaped; the parentheses around the note are literal.
+  lines.push('## Hand-offs', '')
+  if (report.handOffs.length === 0) lines.push('No package handed work to another.', '')
+  else {
+    for (const h of report.handOffs) {
+      const what = h.path ?? h.packageKey
+      const note = handOffNote(h)
+      lines.push(
+        `- ${mdInline(h.fromPackage ?? 'the conductor')} → ${mdInline(h.toPackage ?? 'no package')}${what === null ? '' : ` (${mdInline(what)})`}, ` +
+          `${mdInline(HAND_OFF_STATUS_LABEL[h.status])}${note === null ? '' : ` (${mdInline(note)})`}: ${mdInline(h.change)}`,
+      )
+    }
+    if (report.handOffsOmitted > 0) lines.push(`- … and ${String(report.handOffsOmitted)} more, not listed.`)
     lines.push('')
   }
 

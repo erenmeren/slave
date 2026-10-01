@@ -193,6 +193,10 @@ model Workspace {
   verificationResults VerificationResult[]
   /// Skeleton spec S7: the project's own smoke check, one row per attempt.
   smokeAttempts SmokeAttempt[]
+  /// Supervisor-as-conductor spec C2: every hand-off one package made of another.
+  packageHandOffs PackageHandOff[]
+  /// Supervisor-as-conductor spec C3: the shared decisions of each goal version.
+  goalDecisions   GoalDecision[]
   /// Skeleton spec S7: how long one smoke attempt may run before its process group is killed
   /// (15 minutes -- a Docker image build fits).
   smokeTimeoutMs Int @default(900000)
@@ -1422,6 +1426,8 @@ enum Delivery {
 enum ConductorStage {
   requirements
   conduct
+  /// Supervisor-as-conductor spec C4: the batched answer to a version's conductor questions.
+  answer
 }
 
 enum ConductorCallOutcome {
@@ -1458,6 +1464,9 @@ model WorkPackage {
   /// Skeleton spec S3 (plan A D5): the shared directories this package adds files to, each under its
   /// own prefix (`[{ "directory", "prefix" }]`); their globs are already in `ownedPaths`.
   registrations   Json     @default("[]")
+  /// Supervisor-as-conductor spec C2 (plan A D5): how often other packages' hand-offs reopened this
+  /// package's finished task in its goal version -- the loop guard stops at two.
+  handOffReopens  Int      @default(0)
   interface       String
   dependsOn       String[] @default([])
   isIntegration   Boolean  @default(false)
@@ -1487,6 +1496,86 @@ model RunReport {
   @@index([workPackageId])
 }
 
+/// Supervisor-as-conductor spec C2 (plan A D1): where a hand-off came from.
+enum PackageHandOffSource {
+  report
+  answer
+}
+
+/// Supervisor-as-conductor spec C2 (plan A D3-D7): what became of one hand-off. `pending` until a
+/// run of the target saw it and finished (`delivered`), or the finished target was reopened for it
+/// (`reopened`); `duplicate` and `own` are recorded and never delivered; `to_conductor` became a
+/// conductor question (no target, a target that cannot take work, or the loop guard); `expired` when
+/// the version was accepted or abandoned first.
+enum PackageHandOffStatus {
+  pending
+  delivered
+  reopened
+  duplicate
+  own
+  to_conductor
+  expired
+}
+
+/// Supervisor-as-conductor spec C2 (plan A D1): one request one package made of another in a goal
+/// version, routed by the ownership rule. `sourceKey` (`report:<runId>:<index>`, Plan B's
+/// `answer:<decisionId>:<index>`) is the replay guard.
+model PackageHandOff {
+  id                String               @id @default(uuid())
+  workspaceId       String
+  goalVersion       Int
+  source            PackageHandOffSource
+  sourceKey         String
+  fromRunId         String
+  fromPackageKey    String?
+  toPackageKey      String?
+  path              String?
+  /// The package key the item named (`{ package, change }`), as written.
+  packageKey        String?
+  change            String
+  fingerprint       String
+  status            PackageHandOffStatus
+  note              String?
+  /// The latest run of the target whose prompt listed this hand-off (plan A D3).
+  shownInRunId      String?
+  reopenedAt        DateTime?
+  questionMessageId String?
+  createdAt         DateTime             @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, sourceKey])
+  @@index([workspaceId, goalVersion, toPackageKey])
+}
+
+/// Supervisor-as-conductor spec C3: who made a shared decision.
+enum GoalDecisionSource {
+  conductor_plan
+  conductor_answer
+  person
+}
+
+/// Supervisor-as-conductor spec C3 (plan A D10): one shared decision of a goal version, listed in
+/// every package's contract. `titleKey` (`decisionTitleKey`) is unique per version.
+model GoalDecision {
+  id          String             @id @default(uuid())
+  workspaceId String
+  goalVersion Int
+  title       String
+  titleKey    String
+  decision    String
+  source      GoalDecisionSource
+  /// The conductor question it answered (Plan B), when it came from one.
+  questionId  String?
+  /// The `SupervisorDecision` that applied it (Plan B), when it came from one.
+  decisionId  String?
+  createdAt   DateTime           @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, goalVersion, titleKey])
+}
+
 /// Conductor D4/D6: every model call the conductor made, ok or failed. The retry cap counts the
 /// failed rows per (goal version, stage); `workspaceSpend` sums the cost. `plan` is the validated
 /// `ConductPlan` of an ok `conduct` call: staffing can fail after the answer was bought, and the
@@ -1501,6 +1590,9 @@ model ConductorCall {
   modelCostUsd Float?
   unmeasured   Boolean              @default(false)
   plan         Json?
+  /// Supervisor-as-conductor plan B D4: the conductor questions an `answer` call carried; empty for
+  /// every other stage.
+  questionIds  String[]             @default([])
   createdAt    DateTime             @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -2092,6 +2184,9 @@ enum SupervisorSituationKind {
   /// Conductor Plan 4b (spec R11, R9): a goal version's loop ended without acceptance, or its final
   /// merge into the base branch failed. Subject is `<workspaceId>:v<n>`.
   goal_needs_human
+  /// Supervisor-as-conductor spec C4: a question to the conductor, answered from the goal version's
+  /// plan by one batched call per version and tick (plan B D1). Subject is the message id.
+  conductor_question
 }
 
 /// What happens to a chosen action -- fixed in code by `tierOf`, never chosen by the model.
@@ -2478,6 +2573,8 @@ enum EventType {
   workspace_smoke_run            @map("workspace.smoke_run")
   /// User ruling 2026-09-30: the integration package handed a failed smoke's fix to the skeleton.
   workspace_smoke_handed_off     @map("workspace.smoke_handed_off")
+  /// Supervisor-as-conductor spec C2: a package's hand-off routed to the package that owns it.
+  workspace_package_handed_off   @map("workspace.package_handed_off")
   workspace_plan_created      @map("workspace.plan_created")
   /// M40 §2: the goal moved on a board that already had tasks, so the tick started a DELTA re-plan
   /// run (`workspace.replan_started`, whose `version` is the dedup key for "one re-plan per goal

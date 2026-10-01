@@ -3,7 +3,7 @@
  * D2, D4), read from seeded rows -- no git, no model.
  */
 import { prisma } from '@slave-of-ai/db/client'
-import { GOAL_REPORT_DENIALS_MAX, reportCaveats } from '@slave-of-ai/domain'
+import { GOAL_REPORT_DENIALS_MAX, GOAL_REPORT_HANDOFFS_MAX, reportCaveats } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { latestReportVersion, loadGoalReport, reportVersions } from '../../src/goalReport.js'
@@ -389,6 +389,50 @@ describe('loadGoalReport', () => {
     expect(result.value.questions.map((q) => q.id)).toEqual([question.id])
     expect(result.value.spend.supervisorMeasuredUsd).toBe(0.25)
     expect(result.value.trail.some((e) => e.detail === 'the goal says CSV')).toBe(true)
+  })
+
+  it("lists the version's hand-offs and shared decisions, oldest first, expired ones too (Plan A Task 8)", async (): Promise<void> => {
+    const w = await world()
+    await conduct(w, { status: 'verifying', round: 1 })
+    const early = new Date('2026-09-29T10:00:00Z')
+    const late = new Date('2026-09-29T11:30:00Z')
+    const base = { workspaceId: w.workspaceId, goalVersion: 1, source: 'report' as const, fromRunId: 'run1', fromPackageKey: 'report', path: 'scripts/verify.sh', toPackageKey: 'skeleton' }
+    await prisma.packageHandOff.create({ data: { ...base, sourceKey: 'k2', change: 'later one', fingerprint: 'f2', status: 'expired', note: 'the version ended first', createdAt: late } })
+    await prisma.packageHandOff.create({ data: { ...base, sourceKey: 'k1', change: 'run pytest', fingerprint: 'f1', status: 'pending', createdAt: early } })
+    // Final review I2: a reopen whose run finished is `delivered` with `reopenedAt`; the report still says reopened.
+    await prisma.packageHandOff.create({ data: { ...base, sourceKey: 'k4', change: 'reopened one', fingerprint: 'f4', status: 'delivered', reopenedAt: late, shownInRunId: 'run2', createdAt: new Date('2026-09-29T12:00:00Z') } })
+    await prisma.packageHandOff.create({ data: { ...base, goalVersion: 2, sourceKey: 'k3', change: 'other version', fingerprint: 'f3', status: 'pending' } })
+    await prisma.goalDecision.create({ data: { workspaceId: w.workspaceId, goalVersion: 1, title: 'API field naming', titleKey: 'api field naming', decision: 'camelCase', source: 'conductor_plan', createdAt: late } })
+    await prisma.goalDecision.create({ data: { workspaceId: w.workspaceId, goalVersion: 2, title: 'Other', titleKey: 'other', decision: 'x', source: 'person' } })
+    const result = await loadGoalReport(w.workspaceId, 1)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.handOffs.map((h) => [h.change, h.status, h.toPackage, h.fromPackage, h.path, h.note])).toEqual([
+      ['run pytest', 'pending', 'skeleton', 'report', 'scripts/verify.sh', null],
+      ['later one', 'expired', 'skeleton', 'report', 'scripts/verify.sh', 'the version ended first'],
+      ['reopened one', 'reopened', 'skeleton', 'report', 'scripts/verify.sh', null],
+    ])
+    expect(result.value.handOffs[0]?.at).toBe(early.toISOString())
+    expect(result.value.decisions).toEqual([{ title: 'API field naming', decision: 'camelCase', source: 'conductor_plan', at: late.toISOString() }])
+    expect(result.value.asOf !== null && result.value.asOf >= late.toISOString()).toBe(true)
+  })
+
+  it('keeps the oldest GOAL_REPORT_HANDOFFS_MAX hand-offs and counts the rest', async (): Promise<void> => {
+    const w = await world()
+    await conduct(w, { status: 'verifying', round: 1 })
+    const total = GOAL_REPORT_HANDOFFS_MAX + 3
+    await prisma.packageHandOff.createMany({
+      data: Array.from({ length: total }, (_, i) => ({
+        workspaceId: w.workspaceId, goalVersion: 1, source: 'report' as const, sourceKey: `k${String(i).padStart(4, '0')}`, fromRunId: 'r', toPackageKey: 'skeleton',
+        change: `c${String(i)}`, fingerprint: `f${String(i)}`, status: 'pending' as const, createdAt: new Date(Date.UTC(2026, 8, 29, 10, 0, i)),
+      })),
+    })
+    const result = await loadGoalReport(w.workspaceId, 1)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.handOffs).toHaveLength(GOAL_REPORT_HANDOFFS_MAX)
+    expect(result.value.handOffs[0]?.change).toBe('c0')
+    expect(result.value.handOffsOmitted).toBe(3)
   })
 
   describe('smoke checks and denied tool calls (skeleton spec S7/S9, plan B Task 7)', () => {

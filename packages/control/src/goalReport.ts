@@ -1,6 +1,7 @@
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   GOAL_REPORT_DENIALS_MAX,
+  GOAL_REPORT_HANDOFFS_MAX,
   actionSchema,
   err,
   ok,
@@ -11,6 +12,8 @@ import {
   type GoalReportPackage,
   type GoalReportRequirement,
   type GoalReportRound,
+  type GoalReportHandOff,
+  type GoalReportSharedDecision,
   type GoalReportSmoke,
   type GoalReportState,
   type GoalReportVerdictStatus,
@@ -19,6 +22,7 @@ import {
 } from '@slave-of-ai/domain'
 import { loadVersionScope, seatNames, versionQuestions, versionSubject, versionTrail } from './goalReportTrail.js'
 import { versionSpend } from './goalReportSpend.js'
+import { recordedHandOffStatus } from './handOffs.js'
 import type { ControlRefusal } from './refusal.js'
 
 /** Plain `<` ordering (plan D7): the same on every machine, unlike `localeCompare`. */
@@ -151,6 +155,27 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
       ),
     }),
   )
+  // Supervisor-as-conductor spec C2/C3: the version's hand-offs and shared decisions, oldest first.
+  // Every hand-off row is listed, so an expired one (which has no event) shows too.
+  const [handOffRows, decisionRows] = await Promise.all([
+    prisma.packageHandOff.findMany({ where: { workspaceId, goalVersion }, orderBy: [{ createdAt: 'asc' }, { sourceKey: 'asc' }] }),
+    prisma.goalDecision.findMany({ where: { workspaceId, goalVersion }, orderBy: [{ createdAt: 'asc' }, { titleKey: 'asc' }] }),
+  ])
+  const handOffs = handOffRows.slice(0, GOAL_REPORT_HANDOFFS_MAX).map(
+    (row): GoalReportHandOff => ({
+      id: row.id,
+      at: row.createdAt.toISOString(),
+      source: row.source,
+      fromPackage: row.fromPackageKey,
+      toPackage: row.toPackageKey,
+      path: row.path,
+      packageKey: row.packageKey,
+      change: row.change,
+      status: recordedHandOffStatus(row),
+      note: row.note,
+    }),
+  )
+  const decisions = decisionRows.map((row): GoalReportSharedDecision => ({ title: row.title, decision: row.decision, source: row.source, at: row.createdAt.toISOString() }))
   // Skeleton spec S9 (plan B D10): the denials of the version's runs -- its package tasks' and its verification runs'.
   const versionRuns = await prisma.slaveRun.findMany({
     where: { OR: [{ taskId: { in: scope.tasks.map((task) => task.taskId) } }, ...(delivery === null ? [] : [{ goalDeliveryId: delivery.id }])] },
@@ -286,6 +311,8 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
     ...trail.entries.map((entry) => entry.at),
     ...rounds.map((r) => r.at),
     ...smoke.map((attempt) => attempt.at),
+    ...handOffs.map((h) => h.at),
+    ...decisions.map((d) => d.at),
     ...questions.flatMap((q) => [q.at, ...(q.answer === null ? [] : [q.answer.at])]),
     ...[delivery?.acceptedAt, delivery?.mergedAt].flatMap((at) => (at == null ? [] : [at.toISOString()])),
   ].sort(byText)
@@ -326,6 +353,9 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
     verifier: scope.verifier,
     questions,
     smoke,
+    handOffs,
+    handOffsOmitted: Math.max(0, handOffRows.length - GOAL_REPORT_HANDOFFS_MAX),
+    decisions,
     deniedToolCalls: denials.slice(0, GOAL_REPORT_DENIALS_MAX),
     deniedToolCallsOmitted: Math.max(0, denials.length - GOAL_REPORT_DENIALS_MAX),
     spend,

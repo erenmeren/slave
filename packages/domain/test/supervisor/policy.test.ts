@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ACTION_KINDS, type Action, type Candidate, type Tier } from '../../src/supervisor/actions.js'
-import { answerBar, answerTier, chooseByRules, mayAnswer, tierOf } from '../../src/supervisor/policy.js'
-import { SITUATION_KINDS } from '../../src/supervisor/situations.js'
+import { answerBar, answerTier, chooseByRules, decidedByRulesOnly, mayAnswer, tierOf } from '../../src/supervisor/policy.js'
+import { SITUATION_KINDS, type Situation } from '../../src/supervisor/situations.js'
 import { question, slave, task, world } from './fixtures.js'
 
 const RUNNING = world()
@@ -620,5 +620,15 @@ describe('assign_capability is still applied, and that is not a grant (M52 R5)',
     } as const
     expect(tierOf(action, world({ slaves: [slave({ id: 'slave-1', busy: false })] }), 'capability_unstaffed'))
       .toBe('applied')
+  })
+})
+
+describe('decidedByRulesOnly (plan B D2)', () => {
+  const situation = (kind: Situation['kind'], facts: Situation['facts'] = {}): Situation => ({ kind, subjectId: 's', summary: 'x', facts })
+  it('is true for the rules-only kinds and for a waiting_stale about the conductor, false otherwise', () => {
+    expect(decidedByRulesOnly(situation('goal_needs_human'))).toBe(true)
+    expect(decidedByRulesOnly(situation('waiting_stale', { recipientRole: 'conductor' }))).toBe(true)
+    expect(decidedByRulesOnly(situation('waiting_stale', { recipientRole: 'backend' }))).toBe(false)
+    expect(decidedByRulesOnly(situation('conductor_question'))).toBe(false)
   })
 })

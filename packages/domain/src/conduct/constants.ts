@@ -1,9 +1,10 @@
 import { SUPERVISOR_PER_CALL_CAP_USD } from '../supervisor/constants.js'
 
 /**
- * The role a question to the conductor is addressed to (spec R7). No seat ever holds it, so a
- * question to it is `unanswerable_question` the moment it is written, and the Supervisor's sourced
- * answer path -- the conductor's own voice -- answers it.
+ * The role a question to the conductor is addressed to (spec R7). No seat ever holds it, by design,
+ * so a question to it is a `conductor_question` the moment it is written (supervisor-as-conductor
+ * spec C4) -- never `unanswerable_question` -- and the conductor answers it from the goal version's
+ * plan, in one batched call per version.
  */
 export const CONDUCTOR_ROLE = 'conductor'
 
@@ -118,3 +119,25 @@ export const SMOKE_OUTPUT_MAX_CHARS = 4000
  *  the owner's post-timeout path up to its record -- the kill grace and the pipes' drain; the owner
  *  records before its Docker cleanup, so that cleanup's bound need not fit in here. */
 export const SMOKE_STRANDED_GRACE_MS = 60_000
+
+/** Supervisor-as-conductor spec C1: the most hand-offs one report may carry, and one's change. */
+export const HANDOFFS_PER_REPORT_MAX = 10
+export const HANDOFF_CHANGE_MAX_CHARS = 2000
+
+/** A hand-off's change as `workspace.package_handed_off` carries it (head and tail kept). */
+export const HANDOFF_EVENT_CHANGE_MAX_CHARS = 500
+
+/** Spec C2's loop guard: other packages' hand-offs reopen one package at most this often per version. */
+export const HANDOFF_REOPENS_MAX = 2
+
+/** Plan A D9: one hand-off in a prompt, and the whole "Asked of your package" block. */
+export const HANDOFF_PROMPT_ITEM_MAX_CHARS = 1200
+export const ASKED_OF_YOU_MAX_CHARS = 6000
+
+/** Spec C3: the conductor's shared decisions -- how many, and each one's title and text. */
+export const SHARED_DECISIONS_MAX = 15
+export const SHARED_DECISION_TITLE_MAX_CHARS = 80
+export const SHARED_DECISION_TEXT_MAX_CHARS = 600
+
+/** Plan A D9: the "Shared decisions" block in a contract (Plan B's answers may add to the plan's 15). */
+export const SHARED_DECISIONS_PROMPT_MAX_CHARS = 6000

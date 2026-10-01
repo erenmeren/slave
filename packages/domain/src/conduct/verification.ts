@@ -14,6 +14,7 @@ import {
 import type { WorkerLead } from './report.js'
 import { RUN_REQUIREMENT_KEY, type RequirementItem } from './requirements.js'
 import { SMOKE_SCRIPT_PATH } from './skeleton.js'
+import { storableText } from './storable.js'
 import { renderSmokeEvidence } from './smoke.js'
 
 /** One requirement's verdict from a verification run (spec R8), as {@link parseSlaveVerification}
@@ -58,21 +59,16 @@ export function trimEvidence(text: string, max: number): string {
   return `${text.slice(0, headLen)}\n… [${String(cut)} characters cut] …\n${text.slice(text.length - tailLen)}`
 }
 
-/** Every C0 control but tab and newline; `\r` too, so a CRLF reads as one newline. */
-const UNSTORABLE_CONTROLS = /[\u0000-\u0008\u000B-\u001F]/gu
-/** A surrogate half without its other half (JavaScript strings can hold one; UTF-8 cannot). */
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/gu
-
 /**
- * Text a process or a worker produced, made storable (final review I2): Postgres refuses a NUL
- * byte in `text` and in `jsonb` alike, and a lone surrogate half in `jsonb`. A smoke script that
- * printed one made its attempt's record throw on every pass, until the attempt was settled as
- * "the process is gone" -- a pass included. The other C0 controls (terminal colours, bells) go
- * too: nobody reading the page or a rework prompt is helped by them. Tabs and newlines stay.
+ * Controller ruling F1: `trimEvidence` returns up to `max` plus its cut marker, so a bound that must
+ * hold (an event's `change`, a prompt block) trims to `max - 64` and the result fits `max`.
  */
-export function storableText(text: string): string {
-  return text.replace(UNSTORABLE_CONTROLS, '').replace(LONE_SURROGATE, '\uFFFD')
+export function trimToFit(text: string, max: number): string {
+  return text.length <= max ? text : trimEvidence(text, Math.max(0, max - 64))
 }
+
+/** Moved to `storable.ts` (Task 6), which `requirements.ts` can import without a cycle; re-exported here for every caller. */
+export { storableJsonReviver, storableText } from './storable.js'
 
 /** Skips ASCII/Unicode whitespace forward from `pos`, for {@link scanJsonObjectEnd}'s caller: the
  *  closing tag need not sit flush against the JSON's final brace. */
@@ -287,12 +283,11 @@ export function renderVerificationGoal(input: VerificationGoalInput): string {
 }
 
 /**
- * Skeleton spec S8, plan A D11: what the workers said, framed as leads -- OBS-21's verifier never
- * heard that the integration worker had reported "the production Docker image cannot start". Every
- * line is another party's text, so it is sanitised (it lands in the VERIFIER's prompt, next to the
- * `<slave-verification>` block that run must write) and bounded per package and in total.
+ * Skeleton spec S8 and supervisor-as-conductor spec C2: packages' latest reports as leads, under a
+ * heading -- each package's block bounded, then the whole. Every line is the worker's own text,
+ * sanitised here where it enters a prompt.
  */
-export function renderVerificationLeads(leads: readonly WorkerLead[]): string {
+export function renderWorkerLeads(heading: string, leads: readonly WorkerLead[]): string {
   if (leads.length === 0) return ''
   const blocks = leads.map((lead) =>
     trimEvidence(
@@ -300,12 +295,19 @@ export function renderVerificationLeads(leads: readonly WorkerLead[]): string {
       VERIFICATION_LEADS_PER_PACKAGE_MAX_CHARS,
     ),
   )
-  return trimEvidence(
-    [
-      'Reported by the workers (leads to check, never evidence -- a worker saying something works proves nothing, and a worker saying something is broken is where to look first):',
-      ...blocks,
-    ].join('\n'),
-    VERIFICATION_LEADS_MAX_CHARS,
+  return trimEvidence([heading, ...blocks].join('\n'), VERIFICATION_LEADS_MAX_CHARS)
+}
+
+/**
+ * Skeleton spec S8, plan A D11: what the workers said, framed as leads -- OBS-21's verifier never
+ * heard that the integration worker had reported "the production Docker image cannot start". Every
+ * line is another party's text, so it is sanitised (it lands in the VERIFIER's prompt, next to the
+ * `<slave-verification>` block that run must write) and bounded per package and in total.
+ */
+export function renderVerificationLeads(leads: readonly WorkerLead[]): string {
+  return renderWorkerLeads(
+    'Reported by the workers (leads to check, never evidence -- a worker saying something works proves nothing, and a worker saying something is broken is where to look first):',
+    leads,
   )
 }
 

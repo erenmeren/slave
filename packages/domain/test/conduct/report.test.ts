@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { hasSlaveReportBlock, leadFromReport, parseSlaveReport } from '../../src/conduct/report.js'
+import { HANDOFF_CHANGE_MAX_CHARS } from '../../src/conduct/constants.js'
 
 const wrap = (value: unknown): string => `Done.\n<slave-report>${JSON.stringify(value)}</slave-report>`
 const good = {
@@ -95,5 +96,44 @@ describe('leadFromReport', () => {
   it('is null for a clean report or a row it cannot read', () => {
     expect(leadFromReport('a', { requirements: [{ key: 'R1', status: 'done', evidence: 'x' }], filesTouched: [], workflow: [], questions: [] })).toBeNull()
     expect(leadFromReport('a', 'not a report')).toBeNull()
+  })
+
+  it('reads handOffs (spec C1) and keeps reading a report without them (spec §4)', () => {
+    const base = { requirements: [], filesTouched: [], workflow: [], questions: [] }
+    const text = (value: object): string => `<slave-report>${JSON.stringify(value)}</slave-report>`
+    const read = parseSlaveReport(text({ ...base, handOffs: [{ path: 'scripts/verify.sh', change: 'run pytest' }, { package: 'integration', change: 'expose GET /x' }] }), [])
+    expect(read.ok && read.value.handOffs).toEqual([{ path: 'scripts/verify.sh', change: 'run pytest' }, { package: 'integration', change: 'expose GET /x' }])
+    const old = parseSlaveReport(text(base), [])
+    expect(old.ok && old.value.handOffs).toEqual([])
+    expect(parseSlaveReport(text({ ...base, handOffs: Array.from({ length: 11 }, () => ({ package: 'a', change: 'x' })) }), []).ok).toBe(false)
+    expect(parseSlaveReport(text({ ...base, handOffs: 'scripts/verify.sh' }), []).ok).toBe(false)
+  })
+
+  /** Final review M4: one item that does not read degrades to a conductor question; the report still files. */
+  it('keeps an unreadable hand-off item in its place, with its raw text and why, and reads the rest', () => {
+    const base = { requirements: [], filesTouched: [], workflow: [], questions: [] }
+    const text = (value: object): string => `<slave-report>${JSON.stringify(value)}</slave-report>`
+    const read = parseSlaveReport(text({ ...base, handOffs: [{ path: 'a', package: 'b', change: 'x' }, { package: 'integration', change: 'expose GET /x' }, { package: 'c', change: `  ${'z'.repeat(2500)}` }, 'just words'] }), [])
+    expect(read.ok).toBe(true)
+    if (!read.ok) return
+    const [both, valid, long, words] = read.value.handOffs
+    expect(both).toEqual({ unreadable: '{"path":"a","package":"b","change":"x"}', reason: expect.stringContaining('exactly one of "path" or "package"') })
+    expect(valid).toEqual({ package: 'integration', change: 'expose GET /x' })
+    expect(long && 'unreadable' in long && long.unreadable.length).toBeLessThanOrEqual(HANDOFF_CHANGE_MAX_CHARS)
+    expect(long && 'unreadable' in long && long.reason).toContain('change')
+    expect(words).toEqual({ unreadable: 'just words', reason: expect.any(String) })
+  })
+
+  it('keeps the smoke handOff and the handOffs apart (plan A D12)', () => {
+    const base = { requirements: [], filesTouched: [], workflow: [], questions: [] }
+    const read = parseSlaveReport(`<slave-report>${JSON.stringify({ ...base, handOff: { path: 'Dockerfile', change: 'x' }, handOffs: [{ package: 'skeleton', change: 'y' }] })}</slave-report>`, [])
+    expect(read.ok && read.value.handOff).toEqual({ path: 'Dockerfile', change: 'x' })
+    expect(read.ok && read.value.handOffs).toEqual([{ package: 'skeleton', change: 'y' }])
+  })
+
+  it('strips a NUL from a hand-off change (F8)', () => {
+    const base = { requirements: [], filesTouched: [], workflow: [], questions: [] }
+    const read = parseSlaveReport(`<slave-report>${JSON.stringify({ ...base, handOffs: [{ path: 'a\u0000b', change: 'x\u0000y' }] })}</slave-report>`, [])
+    expect(read.ok && read.value.handOffs).toEqual([{ path: 'ab', change: 'xy' }])
   })
 })

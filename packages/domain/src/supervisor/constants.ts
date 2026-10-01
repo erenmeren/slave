@@ -274,3 +274,26 @@ export const ATTACHMENT_KIND_BY_EXTENSION: Readonly<Record<string, AttachmentKin
   svg: 'image',
   pdf: 'binary',
 }
+
+/** Supervisor-as-conductor spec C4: the most conductor questions one batched call answers; the rest wait a tick. */
+export const CONDUCTOR_ANSWER_BATCH_MAX = 10
+
+/** Spec C4: calls a question may be in without being answered before a person gets it, with the reason. */
+export const CONDUCTOR_ANSWER_RETRY_CAP = 3
+
+/** Plan B D3 (review M3): goal versions whose conductor questions one pass batches -- the oldest
+ *  first; the rest wait a tick. One call per version would otherwise be unbounded per tick. */
+export const CONDUCTOR_ANSWER_VERSIONS_PER_TICK = 2
+
+/** Plan B D5: a goal version's shared decisions, the plan's and the answers' together; past it an answer's new one waits for a person. */
+export const GOAL_DECISIONS_MAX = 40
+
+/** Plan B D9: how much of a version's history the batched prompt carries. */
+export const CONDUCTOR_EARLIER_ANSWERS_MAX = 20
+export const CONDUCTOR_PLAN_HANDOFFS_MAX = 30
+
+/** Controller ruling F12: the shared decisions' share of the batched answer prompt; the rest are named, never cut. */
+export const CONDUCTOR_PROMPT_DECISIONS_MAX_CHARS = 12_000
+
+/** Fix round 2: the longest batched-answer reply the parser reads; ten answers of ANSWER_MAX_CHARS fit with room to spare. */
+export const CONDUCTOR_ANSWER_OUTPUT_MAX_CHARS = 200_000

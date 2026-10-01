@@ -95,7 +95,7 @@ export function renderSmokeRework(input: { readonly round: number; readonly outc
  * prefix too), an empty segment (`a//b`, a trailing `/`). Only surrounding whitespace is trimmed.
  * What passes is one literal path the ownership rule can be asked about.
  */
-function handOffPath(path: string): string | null {
+export function handOffPath(path: string): string | null {
   const trimmed = path.trim()
   if (trimmed === '' || /[*?]/u.test(trimmed) || !isValidOwnedGlob(trimmed)) return null
   const segments = trimmed.split('/')

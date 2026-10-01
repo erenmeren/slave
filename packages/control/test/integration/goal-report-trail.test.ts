@@ -212,6 +212,56 @@ describe('versionTrail', () => {
     expect(entries.map((e) => e.text)).toEqual(['pkg1: merged into trunk.'])
   })
 
+  it("says a hand-off and the reopen it caused, and words each rework event from its row's status (Plan A Task 8)", async (): Promise<void> => {
+    const s = await seed()
+    const handed = (handOffId: string, delivery: 'rework' | 'prompt') =>
+      appendEvent({
+        type: 'workspace.package_handed_off',
+        workspaceId: s.workspaceId,
+        actor: 'system',
+        payload: { version: 1, handOffId, source: 'report', fromPackage: 'report', toPackage: 'skeleton', path: 'scripts/verify.sh', package: null, delivery, change: 'run pytest -k report' },
+      })
+    await handed('h-reopened', 'rework')
+    await handed('h-unknown', 'rework')
+    await handed('h-conductor', 'rework')
+    await handed('h-delivered', 'rework')
+    await handed('h-pending', 'rework')
+    await handed('h-expired', 'rework')
+    await handed('h-prompt', 'prompt')
+    await handed('h-reopen-done', 'rework')
+    // Final review I2: a reopen whose run has finished is `delivered`; its `reopenedAt` still says it was reopened.
+    await prisma.packageHandOff.create({
+      data: { id: 'h-reopen-done', workspaceId: s.workspaceId, goalVersion: 1, source: 'report', sourceKey: 'z', fromRunId: 'r', toPackageKey: 'skeleton', change: 'c', fingerprint: 'f-z', status: 'delivered', reopenedAt: new Date(), shownInRunId: 'r2' },
+    })
+    await prisma.packageHandOff.create({
+      data: { id: 'h-pending', workspaceId: s.workspaceId, goalVersion: 1, source: 'report', sourceKey: 'a', fromRunId: 'r', toPackageKey: 'skeleton', change: 'c', fingerprint: 'f1', status: 'pending' },
+    })
+    for (const [id, status, n] of [['h-reopened', 'reopened', 'c'], ['h-conductor', 'to_conductor', 'd'], ['h-delivered', 'delivered', 'e']] as const) {
+      await prisma.packageHandOff.create({
+        data: { id, workspaceId: s.workspaceId, goalVersion: 1, source: 'report', sourceKey: n, fromRunId: 'r', toPackageKey: 'skeleton', change: 'c', fingerprint: `f-${n}`, status },
+      })
+    }
+    await prisma.packageHandOff.create({
+      data: { id: 'h-expired', workspaceId: s.workspaceId, goalVersion: 1, source: 'report', sourceKey: 'b', fromRunId: 'r', toPackageKey: 'skeleton', change: 'c', fingerprint: 'f2', status: 'expired' },
+    })
+    await appendEvent({ type: 'task.rework', workspaceId: s.workspaceId, taskId: s.taskOf[1], actor: 'system', payload: { reason: 'skeleton: run pytest', attempt: 0, handOffReopen: 1 } })
+
+    const { entries } = await versionTrail(await loadVersionScope(s.workspaceId, 1), [])
+
+    expect(entries.map((e) => e.text)).toEqual([
+      'report handed work to skeleton (scripts/verify.sh); its finished task is reopened for it.',
+      'report handed work to skeleton (scripts/verify.sh); routed to its finished task.',
+      'report handed work to skeleton (scripts/verify.sh); its finished task was not reopened, so the conductor was asked.',
+      'report handed work to skeleton (scripts/verify.sh); shown in its prompt.',
+      'report handed work to skeleton (scripts/verify.sh); it waits to be reopened.',
+      'report handed work to skeleton (scripts/verify.sh); it was not reopened.',
+      'report handed work to skeleton (scripts/verify.sh); it waits in its next prompt.',
+      'report handed work to skeleton (scripts/verify.sh); its finished task is reopened for it.',
+      "pkg1: sent back for rework by other packages' hand-offs (reopen 1).",
+    ])
+    expect(entries[0]).toEqual(expect.objectContaining({ detail: 'run pytest -k report', detailBy: 'model' }))
+  })
+
   it('keeps the newest entries and counts the rest', async (): Promise<void> => {
     const s = await seed()
     for (let round = 1; round <= 4; round += 1) {

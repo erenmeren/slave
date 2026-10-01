@@ -909,6 +909,44 @@ function WorkspaceSmokeHandedOffCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+/** What routing did with a hand-off (supervisor-as-conductor plan A D8), in words. */
+const HAND_OFF_DELIVERY: Readonly<Record<string, string>> = {
+  prompt: 'waits in its next prompt',
+  rework: 'reopened for it',
+  duplicate: 'already asked, not sent again',
+  own: "the reporter's own package, recorded only",
+  question: 'no package could take it; asked the conductor',
+}
+
+/**
+ * Supervisor-as-conductor spec C2: one package's hand-off to another, routed by the ownership rule.
+ * `change` is the worker's own words, rendered as a JSX child like every other quote.
+ */
+function WorkspacePackageHandedOffCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    version: number
+    fromPackage: string | null
+    toPackage: string | null
+    path: string | null
+    package: string | null
+    delivery: string
+    change: string
+  }
+  const from = payload.fromPackage ?? 'the conductor'
+  const to = payload.toPackage ?? 'no package'
+  const what = payload.path ?? payload.package
+  return (
+    <ActivityCard {...props}>
+      <Transition
+        tone={payload.delivery === 'question' ? 'warn' : 'working'}
+        label={`goal v${String(payload.version)}: ${from} handed work to ${to}${what === null ? '' : ` (${what})`}, ${HAND_OFF_DELIVERY[payload.delivery] ?? payload.delivery}`}
+      >
+        {payload.change !== '' && <span data-testid="package-handoff-change">{payload.change}</span>}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 /**
  * A task taken off the board (M40 §4) -- by a human, or by a human approving the Supervisor's
  * `cancel_task` proposal.
@@ -1778,6 +1816,7 @@ export const ACTIVITY_CARDS = {
   'workspace.goal_retried': WorkspaceGoalRetriedCard,
   'workspace.smoke_run': WorkspaceSmokeRunCard,
   'workspace.smoke_handed_off': WorkspaceSmokeHandedOffCard,
+  'workspace.package_handed_off': WorkspacePackageHandedOffCard,
   'workspace.plan_created': WorkspacePlanCreatedCard,
   'workspace.replan_started': WorkspaceReplanStartedCard,
   'workspace.replanned': WorkspaceReplannedCard,

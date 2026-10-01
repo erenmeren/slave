@@ -42,7 +42,7 @@ export async function setDelivery(
 /** One `ConductorCall` row, as `conductorView` reports it -- the ledger's own columns, unparsed:
  *  a CLI report of what the conductor did is not the place to re-derive spend, only to show it. */
 export interface ConductorCallView {
-  readonly stage: 'requirements' | 'conduct'
+  readonly stage: 'requirements' | 'conduct' | 'answer'
   readonly outcome: 'ok' | 'failed'
   readonly reason: string | null
   readonly modelCostUsd: number | null

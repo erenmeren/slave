@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   ANSWER_MAX_CHARS,
+  CONDUCTOR_ANSWER_BATCH_MAX,
+  CONDUCTOR_ANSWER_RETRY_CAP,
   COOLDOWN_BY_KIND,
   COOLDOWN_MS,
   DECISION_RETENTION_MS,
   FAILURE_REASON_MAX_CHARS,
+  GOAL_DECISIONS_MAX,
   HALT_CLEAR_INTERVAL_MS,
   INTEGRATED_STALE_MS,
   OPERATOR_REQUEST_MAX_CHARS,
@@ -95,5 +98,13 @@ describe('verification_failed is decided once per round, by the rules', () => {
   it('cools for the whole decision window and never goes to the model', () => {
     expect(COOLDOWN_BY_KIND.verification_failed).toBe(PENDING_TTL_MS)
     expect(RULES_ONLY_SITUATION_KINDS).toEqual(['verification_failed', 'goal_needs_human'])
+  })
+})
+
+describe('the conductor answer batch', () => {
+  it('bounds the conductor batch (spec C4)', () => {
+    expect(CONDUCTOR_ANSWER_BATCH_MAX).toBe(10)
+    expect(CONDUCTOR_ANSWER_RETRY_CAP).toBe(3)
+    expect(GOAL_DECISIONS_MAX).toBe(40)
   })
 })

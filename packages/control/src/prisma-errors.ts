@@ -70,3 +70,12 @@ function readDriverAdapterConstraintFields(meta: object): string[] {
   if (!Array.isArray(fields)) return []
   return fields.filter((field): field is string => typeof field === 'string').map((field) => field.replaceAll('"', ''))
 }
+
+/**
+ * `true` for Prisma's interactive-transaction error (P2028): no pooled connection within `maxWait`,
+ * or the transaction ran past its `timeout` -- which is how a waiter on a delivery's advisory lock
+ * fails while a final merge holds it. Checked by shape, for {@link isUniqueConstraintViolation}'s reason.
+ */
+export function isTransactionTimeout(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2028'
+}

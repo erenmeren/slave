@@ -186,6 +186,13 @@ export const SITUATION_KINDS = [
    * for a failed merge.
    */
   'goal_needs_human',
+  /**
+   * Supervisor-as-conductor spec C4: a pending question to the conductor role -- no seat holds it by
+   * design, so it is not `unanswerable_question`; the Supervisor answers it from the goal version's
+   * plan in one batched call per version and tick (`answerConductorQuestions`), never through the
+   * per-question answer path. `subjectId` is the message id.
+   */
+  'conductor_question',
 ] as const
 
 export type SituationKind = (typeof SITUATION_KINDS)[number]
@@ -233,7 +240,7 @@ export const situationSchema: z.ZodType<Situation> = z.object({
  * `no_reviewer · proposed · pending · by model`.
  *
  * `Record<SituationKind, string>` is load-bearing: a new kind fails the build here rather than
- * turning up on the page as an identifier (twenty-four as of Conductor Plan 4b's `goal_needs_human`).
+ * turning up on the page as an identifier (twenty-five as of supervisor-as-conductor Plan B's `conductor_question`).
  * Each label says what is STUCK, in the words the report already uses; the decision's own
  * `situation.summary` carries the specifics beside it.
  */
@@ -267,4 +274,5 @@ export const SITUATION_LABEL: Record<SituationKind, string> = {
   conduct: 'How a goal is delivered',
   verification_failed: 'A verification round failed',
   goal_needs_human: 'A goal needs you',
+  conductor_question: 'A question for the conductor',
 }

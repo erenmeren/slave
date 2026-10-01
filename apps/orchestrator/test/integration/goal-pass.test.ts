@@ -35,6 +35,23 @@ vi.mock('../../src/gitMerge.js', async (importOriginal) => {
   }
 })
 
+/** Final review M3: makes one of the pass's hand-off steps throw, to show the pass goes on without it. */
+const handOffStep = vi.hoisted(() => ({ throwing: null as 'routeStoredHandOffs' | 'reopenForHandOffs' | null }))
+vi.mock('@slave-of-ai/control', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@slave-of-ai/control')>()
+  return {
+    ...original,
+    routeStoredHandOffs: async (deliveryId: string): Promise<void> => {
+      if (handOffStep.throwing === 'routeStoredHandOffs') throw new Error('routeStoredHandOffs failed')
+      return original.routeStoredHandOffs(deliveryId)
+    },
+    reopenForHandOffs: async (deliveryId: string): Promise<void> => {
+      if (handOffStep.throwing === 'reopenForHandOffs') throw new Error('reopenForHandOffs failed')
+      return original.reopenForHandOffs(deliveryId)
+    },
+  }
+})
+
 const repos: string[] = []
 
 function git(args: readonly string[], cwd: string): string {
@@ -207,7 +224,7 @@ const delivery = async (f: Fixture) => prisma.goalDelivery.findUniqueOrThrow({ w
 describe('runGoalPass', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "WorkPackage", "GoalDelivery", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "PackageHandOff", "SlaveRun", "TaskDependency", "Task", "WorkPackage", "GoalDelivery", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -576,6 +593,40 @@ describe('runGoalPass', () => {
     expect(git(['rev-parse', 'main'], f.repoPath)).not.toBe(git(['rev-parse', f.branch], f.repoPath))
   })
 
+  it('reopens a finished package for a hand-off it never saw before starting a smoke (plan A D4)', async (): Promise<void> => {
+    const f = await seed()
+    await integrateAll(f)
+    await prisma.packageHandOff.create({
+      data: { workspaceId: f.workspaceId, goalVersion: 1, source: 'report', sourceKey: `report:${f.runIds[1]}:0`, fromRunId: f.runIds[1], fromPackageKey: 'json', toPackageKey: 'csv', packageKey: 'csv', change: 'emit a header row', fingerprint: 'f', status: 'pending' },
+    })
+
+    await pass(f)
+
+    expect(await prisma.task.findUniqueOrThrow({ where: { id: f.taskIds[0] } })).toMatchObject({ status: 'rework', integratedAt: null })
+    expect((await delivery(f)).status).toBe('integrating')
+    expect(await prisma.smokeAttempt.count()).toBe(0)
+  })
+
+  for (const step of ['routeStoredHandOffs', 'reopenForHandOffs'] as const) {
+    it(`still merges an accepted version on a pass whose ${step} throws (final review M3)`, async (): Promise<void> => {
+      const f = await seed()
+      await integrateAll(f)
+      await acceptVerified(f)
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      handOffStep.throwing = step
+      let lines: string[] = []
+      try {
+        await pass(f)
+        lines = logged.mock.calls.map((call) => String(call[0]))
+      } finally {
+        handOffStep.throwing = null
+        logged.mockRestore()
+      }
+      expect((await delivery(f)).mergedAt).not.toBeNull()
+      expect(lines.some((line) => line.includes(`${step} failed on this pass`))).toBe(true)
+    })
+  }
+
   it('does not merge a tip nothing verified: an integration branch that moved after acceptance is verified again', async (): Promise<void> => {
     const f = await seed()
     await integrateAll(f)
@@ -693,6 +744,26 @@ describe('acceptGoal', () => {
 
     expect(await goalEvents(f.workspaceId)).toEqual([{ type: 'workspace.goal_accepted', payload: { version: 1, rounds: 1 } }])
     expect((await delivery(f)).status).toBe('accepted')
+  })
+
+  it('expires the version\'s undelivered hand-offs in the acceptance itself (plan A D4, ruling F3)', async (): Promise<void> => {
+    const f = await seed()
+    const verdict = await verifying(f)
+    const handOff = { workspaceId: f.workspaceId, goalVersion: 1, source: 'report' as const, fromRunId: f.runIds[0], fromPackageKey: 'csv', toPackageKey: 'json', packageKey: 'json', change: 'x', fingerprint: 'f' }
+    await prisma.packageHandOff.createMany({
+      data: [
+        { ...handOff, sourceKey: 'report:a:0', status: 'pending' },
+        { ...handOff, sourceKey: 'report:a:1', status: 'reopened' },
+      ],
+    })
+
+    expect(await acceptGoal(f.deliveryId, verdict)).toBe(true)
+
+    const rows = await prisma.packageHandOff.findMany({ where: { workspaceId: f.workspaceId }, orderBy: { sourceKey: 'asc' } })
+    expect(rows.map((row) => [row.status, row.note])).toEqual([
+      ['expired', 'the version was accepted before it could be delivered'],
+      ['reopened', null],
+    ])
   })
 
   it('never accepts an integrating version, nor for a run that does not hold the claim', async (): Promise<void> => {

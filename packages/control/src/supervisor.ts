@@ -16,6 +16,7 @@ import {
   neutraliseMarkers,
   promotionFor,
   readsAsPlatform,
+  sanitisePersonText,
   situationSchema,
   type Action,
   type Candidate,
@@ -34,6 +35,7 @@ import { appendEvent } from '@slave-of-ai/events'
 import type { ProviderKind } from '@slave-of-ai/providers'
 import { steerRun } from './breaker.js'
 import { hireFromTemplate, seatMember, mergeRuntimeRoles } from './capability.js'
+import { applyConductorOutcome } from './conductorAnswer.js'
 import { clearHalt } from './emergency.js'
 import { requestChange } from './goal.js'
 import { releasePerson } from './persons.js'
@@ -460,8 +462,34 @@ async function carryOut(
       )
     case 'mark_task_failed':
       return reached(await failTask(action.taskId, action.reason, origin, principal))
-    case 'answer_question':
-      return reached(await sendDraftedAnswer(action.messageId, decision, origin, principal))
+    case 'answer_question': {
+      const sent = await sendDraftedAnswer(action.messageId, decision, origin, principal)
+      // Supervisor-as-conductor plan B D7: a conductor answer's decision and hand-off follow the
+      // answer out -- unless a person replaced the model's words (an edit), which applies neither
+      // (plan-writer ruling). Outside any lock: the routing takes the delivery's, which is not
+      // re-entrant. A failure here is said and swallowed: the answer is already out, and the goal
+      // pass routes a hand-off that never landed (`routeStoredHandOffs`, F4).
+      const conductor = decision.draft?.conductor
+      if (sent.ok && conductor !== undefined && decision.draft?.editedBody === undefined) {
+        try {
+          await applyConductorOutcome({ workspaceId: decision.workspaceId, decisionId: decision.id, messageId: action.messageId, conductor })
+        } catch (error) {
+          console.error(`[supervisor] decision ${decision.id}: the conductor answer's decision or hand-off was not recorded:`, error)
+        }
+      }
+      // Final wave T6: a conductor answer a person approved later ends the wait as surely as a tick's
+      // does, so a pending `waiting_stale` card about it is retired here too (the tick's own path
+      // calls the same verb after it applies; a second call finds nothing). Said and swallowed: the
+      // answer is out, and the card expires by its own deadline.
+      if (sent.ok && conductor !== undefined) {
+        try {
+          await retireAnsweredWaitingStale(decision.workspaceId, action.messageId, new Date())
+        } catch (error) {
+          console.error(`[supervisor] decision ${decision.id}: the waiting_stale card of its question was not retired:`, error)
+        }
+      }
+      return reached(sent)
+    }
     case 'reassign_question':
       return reached(
         await reassignQuestion(action.messageId, action.toSlaveId, SUPERVISOR_ACTOR, origin, principal, decision.id),
@@ -802,7 +830,10 @@ async function sendDraftedAnswer(
 ): Promise<Result<unknown, ControlRefusal>> {
   const written = sendableBody(decision.draft)
   if (written === null) return err({ kind: 'draft_missing', decisionId: decision.id })
-  const body = neutraliseMarkers(written)
+  // Controller ruling F8: the conductor's own words are defused whole -- markers and routing
+  // literals -- whatever wrote the stored draft (the judging already did; both defuses are
+  // idempotent, so nothing is escaped twice). A person's edit is a person's, as on every answer.
+  const body = decision.draft?.conductor !== undefined && decision.draft.editedBody === undefined ? sanitisePersonText(written) : neutraliseMarkers(written)
   if (body.length > ANSWER_MAX_CHARS) return err({ kind: 'invalid_message_body' })
   return answerQuestion(
     messageId,
@@ -1217,6 +1248,39 @@ export async function expirePendingDecisions(workspaceId: string, now: Date): Pr
     })
   }
   return expired
+}
+
+/**
+ * Supervisor-as-conductor plan B (Task 2 carry): retires the pending `waiting_stale` escalations
+ * about a question the conductor has just answered.
+ *
+ * A run parked on the conductor for 30 minutes is escalated by the rules (spec C5) so a person can
+ * see it; once the batched answer goes out, that card describes a wait that is over, and left alone
+ * it would sit for `PENDING_TTL_MS` asking a person about nothing. Expired, not rejected: nobody
+ * decided against it, the situation simply ended. Each row is claimed conditionally, as
+ * {@link expirePendingDecisions} does, so a person approving in the same instant wins it.
+ */
+export async function retireAnsweredWaitingStale(workspaceId: string, messageId: string, now: Date): Promise<number> {
+  const open = await prisma.supervisorDecision.findMany({
+    where: { workspaceId, subjectId: messageId, situationKind: 'waiting_stale', status: 'pending' },
+    select: { id: true },
+  })
+  let retired = 0
+  for (const row of open) {
+    const claimed = await prisma.supervisorDecision.updateMany({
+      where: { id: row.id, status: 'pending' },
+      data: { status: 'expired', resolvedAt: now },
+    })
+    if (claimed.count === 0) continue
+    retired += 1
+    await appendEvent({
+      type: 'supervisor.resolved',
+      workspaceId,
+      actor: 'system',
+      payload: { decisionId: row.id, outcome: 'expired', reason: 'The conductor answered the question the run was waiting on.' },
+    })
+  }
+  return retired
 }
 
 /**

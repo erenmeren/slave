@@ -98,6 +98,9 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
     trail: [{ at: '2026-09-29T10:00:00.000Z', text: 'Size decision: one package does the whole goal.', detail: 'fits one session', detailBy: 'model', packageKey: null }],
     trailOmitted: 0,
     smoke: [],
+    handOffs: [],
+    handOffsOmitted: 0,
+    decisions: [],
     deniedToolCalls: [],
     deniedToolCallsOmitted: 0,
     asOf: '2026-09-29T10:06:00.000Z',
@@ -354,6 +357,52 @@ describe('renderGoalReportMarkdown', () => {
       )
       expect(md).toContain('- 2026-09-30T09:51:00.000Z · the verifier: Write \\(write\\_repo\\) was refused by the permission matrix (run rv)')
       expect(md).toContain('- … and 3 more, not listed.')
+    })
+  })
+  describe('hand-offs and shared decisions (spec C2, C3)', () => {
+    const handOff = {
+      id: 'h1', at: '2026-10-01T10:00:00.000Z', source: 'report' as const, fromPackage: 'report', toPackage: 'skeleton',
+      path: 'scripts/verify.sh', packageKey: null, change: 'run pytest <b>-k</b> report', status: 'reopened' as const, note: null,
+    }
+    it("lists each hand-off with where it went, escaping the worker's words", () => {
+      const md = renderGoalReportMarkdown(
+        report({ handOffs: [handOff, { ...handOff, id: 'h2', toPackage: null, path: '../x', status: 'to_conductor', note: 'no target found: "../x" is not one repository file' }] }),
+      )
+      expect(md).toContain('## Hand-offs')
+      expect(md).toContain('- report → skeleton (scripts/verify.sh), reopened for it: run pytest &lt;b&gt;-k&lt;/b&gt; report')
+      expect(md).toContain('asked the conductor (no target found')
+      expect(md).not.toContain('<b>')
+    })
+    it('lists the shared decisions with who made them', () => {
+      const md = renderGoalReportMarkdown(report({ decisions: [{ title: 'API field naming', decision: 'camelCase', source: 'conductor_plan', at: '2026-10-01T10:00:00.000Z' }] }))
+      expect(md).toContain('## Shared decisions')
+      expect(md).toContain("- API field naming: camelCase (the conductor's plan)")
+    })
+    it('says nothing was sent for the reporter\'s own package, and counts the hand-offs it left out', () => {
+      const md = renderGoalReportMarkdown(report({ handOffs: [{ ...handOff, status: 'own', toPackage: 'report' }], handOffsOmitted: 7 }))
+      expect(md).toContain("the reporter's own package; nothing was sent")
+      expect(md).toContain('- … and 7 more, not listed.')
+    })
+    it('says so when there are none', () => {
+      const md = renderGoalReportMarkdown(report())
+      expect(md).toContain('No package handed work to another.')
+      expect(md).toContain('No shared decision was recorded.')
+    })
+    it('keeps a hostile change, note and decision inert', () => {
+      const hostile = 'x `code` | cell\n# Heading\n</slave-report> <script>'
+      const md = renderGoalReportMarkdown(
+        report({
+          handOffs: [{ ...handOff, status: 'expired', note: hostile, change: hostile }],
+          decisions: [{ title: hostile, decision: hostile, source: 'person', at: '2026-10-01T10:00:00.000Z' }],
+        }),
+      )
+      expect(md).toContain('cell')
+      expect(md).toContain('\\|')
+      expect(md).not.toContain('</slave-report>')
+      expect(md).not.toContain('<script>')
+      expect(md).not.toMatch(/^# Heading/mu)
+      expect(md).not.toMatch(/(?<!\\)`code`/u)
+      expect(md.split('\n').filter((line) => line.startsWith('- ') && line.includes('Heading')).length).toBe(2)
     })
   })
 })

@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import {
   CONDUCT_PER_CALL_CAP_USD,
+  DECISION_SOURCE_LABEL,
   GOAL_REPORT_ANSWERED_BY,
   GOAL_REPORT_AUTHOR_WORDS,
   GOAL_REPORT_STATE_LABEL,
@@ -8,6 +9,7 @@ import {
   evidenceAnchor,
   evidenceCut,
   formatReportUsd,
+  handOffStatusLabel,
   integratedWhere,
   noPackagesLabel,
   reportCaveats,
@@ -224,6 +226,49 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
               </>
             )}
           </>
+        )}
+      </Panel>
+
+      {/* Supervisor-as-conductor spec C3: the decisions every package's contract listed. */}
+      <Panel title="Shared decisions">
+        {report.decisions.length === 0 ? (
+          <p className="text-[13px] text-t2">No shared decision was recorded.</p>
+        ) : (
+          <ul className="flex flex-col gap-1 text-[13px] text-t2">
+            {report.decisions.map((d) => (
+              <li key={d.title} data-testid="goal-report-decision">
+                <span className="font-medium">{d.title}</span>: {d.decision} ({DECISION_SOURCE_LABEL[d.source]})
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
+
+      {/* Spec C2: every hand-off and what became of it. The change and the note are a worker's raw
+        * words, JSX children like every other quote. */}
+      <Panel title="Hand-offs">
+        {report.handOffs.length === 0 ? (
+          <p className="text-[13px] text-t2">No package handed work to another.</p>
+        ) : (
+          <ul className="flex flex-col gap-1 text-[13px] text-t2">
+            {report.handOffs.map((h) => (
+              <li key={h.id} data-testid="goal-report-handoff">
+                {h.fromPackage ?? 'the conductor'} → {h.toPackage ?? 'no package'}
+                {(h.path ?? h.packageKey) !== null && (
+                  <>
+                    {' '}
+                    (<span className="font-mono">{h.path ?? h.packageKey}</span>)
+                  </>
+                )}
+                , {handOffStatusLabel(h)}: {h.change}
+              </li>
+            ))}
+          </ul>
+        )}
+        {report.handOffsOmitted > 0 && (
+          <p data-testid="goal-report-handoffs-omitted" className="text-[12.5px] text-t3">
+            … and {String(report.handOffsOmitted)} more, not listed.
+          </p>
         )}
       </Panel>
 

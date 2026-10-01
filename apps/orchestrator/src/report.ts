@@ -1,4 +1,4 @@
-import { isUniqueConstraintViolation, refusalText, reportQuestionKey, sendMessage } from '@slave-of-ai/control'
+import { isTransactionTimeout, isUniqueConstraintViolation, refusalText, reportQuestionKey, routeHandOffs, sendMessage, type RouteHandOffsInput } from '@slave-of-ai/control'
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import { CONDUCTOR_ROLE, parseSlaveReport } from '@slave-of-ai/domain'
 import { joinRunOutput } from './runOutput.js'
@@ -68,5 +68,46 @@ export async function fileRunReport(
   // Plan B D11 (user ruling 2026-09-30): a smoke rework's hand-off, checked against package
   // ownership inside -- a claim that does not hold changes nothing, and never fails this run.
   if (parsed.value.handOff !== undefined) await handOffSmokeRework(run, task, parsed.value.handOff)
+  // Supervisor-as-conductor spec C2 (plan A D1-D8): each hand-off to the package that owns it, by the
+  // ownership rule. Idempotent per run and position, like the questions above, so a replayed
+  // conclusion routes nothing twice. An old-shape report carries none and routes nothing.
+  if (parsed.value.handOffs.length > 0) {
+    await routeThroughBusyLock({
+      workspaceId: task.workspaceId,
+      goalVersion: pkg.goalVersion,
+      source: 'report',
+      sourceKey: `report:${run.id}`,
+      fromRunId: run.id,
+      fromPackageKey: pkg.key,
+      items: parsed.value.handOffs,
+    })
+  }
   return true
+}
+
+/** How many times filing tries a routing that a busy lock or a starved pool refused (P2028). */
+const HAND_OFF_ROUTE_ATTEMPTS = 3
+
+/**
+ * Task 6: `routeHandOffs` takes the version's delivery lock, and a waiter fails with P2028 when the
+ * lock or a pooled connection is not had in time. That is contention, not a verdict on the run, so
+ * filing tries again -- safe because routing is idempotent per `<sourceKey>:<i>` and a replay
+ * announces what an interrupted pass stored. A lock still busy after the last try never fails the
+ * filing (Task 6 ruling, review I1): the report is stored, so the goal pass's `routeStoredHandOffs`
+ * routes it, and the run's finished work goes on to verify. Any other error propagates.
+ */
+async function routeThroughBusyLock(input: RouteHandOffsInput): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await routeHandOffs(input)
+      return
+    } catch (error) {
+      if (!isTransactionTimeout(error)) throw error
+      if (attempt >= HAND_OFF_ROUTE_ATTEMPTS) {
+        console.error(`[report] run ${input.fromRunId}: its hand-offs wait for the next goal pass -- the lock stayed busy through ${String(HAND_OFF_ROUTE_ATTEMPTS)} tries`)
+        return
+      }
+      console.error(`[report] run ${input.fromRunId}: routing its hand-offs waited on a busy lock -- trying again (${String(attempt)}/${String(HAND_OFF_ROUTE_ATTEMPTS)})`)
+    }
+  }
 }

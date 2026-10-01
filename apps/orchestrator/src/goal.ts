@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { goalEventSaid, goalEventWith, settleGoalEvidence, withDeliveryLock } from '@slave-of-ai/control'
+import { everyPackageIntegrated, expirePendingHandOffs, goalEventSaid, goalEventWith, reopenForHandOffs, routeStoredHandOffs, settleGoalEvidence, withDeliveryLock } from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import { VERIFICATION_REASON_MAX_CHARS, VERIFICATION_RUN_RETRY_CAP, handMergeInstruction, type GuardrailKind } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
@@ -103,6 +103,24 @@ async function advanceDelivery(
   id: string,
 ): Promise<void> {
   const workspaceId = deps.workspaceId
+  // Supervisor-as-conductor plan A D4: a hand-off to a finished package reopens it before this pass
+  // can start a smoke on a tip that lacks it; under the delivery's lock, and only while `integrating`
+  // with no claim. An accepted version's undelivered hand-offs expire here. It is also where a
+  // reopen that a filing could not do (the lock was busy) is done. A version with nothing pending
+  // takes no lock (ruling F12). First, a report whose filing could not route its hand-offs (a lock
+  // busy past every retry) is routed here (Task 6 ruling), with no lock held.
+  // Final review M3: each is its own step. One that throws (on every pass, for one stored report or
+  // row) must not skip this version's smoke, verification or merge: logged, and the pass goes on.
+  try {
+    await routeStoredHandOffs(id)
+  } catch (error) {
+    console.error(`[goal] goal delivery ${id}: routeStoredHandOffs failed on this pass --`, error)
+  }
+  try {
+    await reopenForHandOffs(id)
+  } catch (error) {
+    console.error(`[goal] goal delivery ${id}: reopenForHandOffs failed on this pass --`, error)
+  }
   let delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { id } })
   if (delivery.activeSmokeId !== null) {
     // Plan B D8: a smoke claim nothing will conclude is settled here; a live one is waited for.
@@ -194,16 +212,6 @@ async function smokeOrVerify(
   await dispatchVerification(deps, delivery.id, smoked)
 }
 
-/** Every package task of the version is `done` and on the integration branch -- and there is at
- *  least one (a version whose tasks were all cancelled is not "delivered"; it is abandoned). */
-async function everyPackageIntegrated(workspaceId: string, goalVersion: number): Promise<boolean> {
-  const tasks = await prisma.task.findMany({
-    where: { workspaceId, workPackage: { goalVersion } },
-    select: { status: true, integratedAt: true },
-  })
-  return tasks.length > 0 && tasks.every((task) => task.status === 'done' && task.integratedAt !== null)
-}
-
 /** The verdict a goal version is accepted on (plan 4b, ruling Q6): the verification run that
  *  passed every requirement, and the integration commit it checked. */
 export interface AcceptedVerdict {
@@ -242,7 +250,10 @@ export async function acceptInLock(tx: Prisma.TransactionClient, deliveryId: str
     where: { id: deliveryId, status: 'verifying', activeRunId: verdict.runId },
     data: { status: 'accepted', acceptedAt: new Date(), activeRunId: null, verifiedCommit: verdict.verifiedCommit },
   })
-  return moved.count > 0
+  if (moved.count === 0) return false
+  // Plan A D4, ruling F3: what this version was asked but never delivered expires with the move.
+  await expirePendingHandOffs(tx, delivery.workspaceId, delivery.goalVersion, 'accepted')
+  return true
 }
 
 /**

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   CONDUCT_ANSWER_KEY,
   conductPlanSchema,
+  decisionTitleKey,
   ownerOf,
   parseConductAnswer,
   singlePlan,
@@ -245,6 +246,11 @@ describe('parseConductAnswer', () => {
     })
   })
 
+  it('reads every string without the NUL bytes and controls Postgres refuses (Task 6, ruling F8)', () => {
+    const parsed = parseConductAnswer(JSON.stringify({ [CONDUCT_ANSWER_KEY]: { mode: 'single', reason: 'fits\u0000 one', decisions: [{ title: 'A\u0007PI', decision: 'x\u0000y' }] } }))
+    expect(parsed).toEqual({ ok: true, value: { mode: 'single', reason: 'fits one', decisions: [{ title: 'API', decision: 'xy' }] } })
+  })
+
   it('reads the raw conductAnswer object on the happy path', () => {
     const inner = { mode: 'single', reason: 'fits one session', templateId: 't-backend' }
     const parsed = parseConductAnswer(`Here you go.\n${JSON.stringify({ [CONDUCT_ANSWER_KEY]: inner })}`)
@@ -273,5 +279,37 @@ describe('conductPlanSchema', () => {
 
   it('refuses a stored plan with no packages', () => {
     expect(conductPlanSchema.safeParse({ mode: 'single', reason: 'x', packages: [] }).success).toBe(false)
+  })
+})
+
+describe('shared decisions (spec C3)', () => {
+  const partitioned = partition(twoPackages) as Record<string, unknown>
+  const decisions = [{ title: 'API field naming', decision: 'camelCase JSON fields' }, { title: 'Where routes register', decision: 'one file per package under backend/src/routes/' }]
+
+  it('keeps the conductor decisions on the plan, in both modes', () => {
+    const single = validateConduct({ mode: 'single', reason: 'fits', templateId: 't-backend', decisions }, context)
+    expect(single.ok && single.value.decisions).toEqual(decisions)
+    const parted = validateConduct({ ...partitioned, decisions }, context)
+    expect(parted.ok && parted.value.decisions).toEqual(decisions)
+  })
+
+  it('reads an answer without decisions, and a stored plan from before them, as none (spec 4)', () => {
+    const plan = validateConduct(partitioned, context)
+    expect(plan.ok && plan.value.decisions).toEqual([])
+    const stored = conductPlanSchema.parse({ mode: 'single', reason: 'r', packages: [{ key: 'main', title: 'M', requirementKeys: [], ownedPaths: ['**'], newPaths: [], interface: '', dependsOn: [], isIntegration: false, templateId: 't' }] })
+    expect(stored.decisions).toEqual([])
+  })
+
+  it('refuses a sixteenth decision, a title over 80, a decision over 600, and two titles that differ only by case', () => {
+    const many = Array.from({ length: 16 }, (_, i) => ({ title: `t${String(i)}`, decision: 'd' }))
+    expect(validateConduct({ ...partitioned, decisions: many }, context).ok).toBe(false)
+    expect(validateConduct({ ...partitioned, decisions: [{ title: 'x'.repeat(81), decision: 'd' }] }, context).ok).toBe(false)
+    expect(validateConduct({ ...partitioned, decisions: [{ title: 'x', decision: 'd'.repeat(601) }] }, context).ok).toBe(false)
+    const twice = validateConduct({ ...partitioned, decisions: [{ title: 'API naming', decision: 'a' }, { title: ' api  NAMING', decision: 'b' }] }, context)
+    expect(!twice.ok && twice.error).toContain('decision titles must be unique: "api naming"')
+  })
+
+  it('folds a title to its key', () => {
+    expect(decisionTitleKey('  API   Field Naming ')).toBe('api field naming')
   })
 })

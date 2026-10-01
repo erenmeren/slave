@@ -218,6 +218,7 @@ describe('the self-running project, end to end under act', () => {
       proposed: 0,
       skippedCooldown: 0,
       modelCalls: 0,
+      conductorCalls: 0,
       rulesOnly: true,
       answered: 0,
       drafted: 0,

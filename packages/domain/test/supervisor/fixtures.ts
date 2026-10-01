@@ -9,6 +9,7 @@
 import type { CapabilityRecord } from '../../src/capability/taxonomy.js'
 import type { Runbook } from '../../src/runbook/spec.js'
 import type {
+  SupervisorConductorPlan,
   SupervisorDecisionRecord,
   SupervisorGoalDelivery,
   SupervisorQuestion,
@@ -191,6 +192,12 @@ export function question(overrides: Partial<SupervisorQuestion> = {}): Superviso
     thread: [],
     askerRunPrompt: null,
     holders: [],
+    // Plan B: no goal version, no package, and an asker that is not parked -- a report question's
+    // shape -- so a conductor case says which of the three it is about.
+    goalVersion: null,
+    askerPackageKey: null,
+    askerWaiting: false,
+    fromHandOffRouting: false,
     ...overrides,
   }
 }
@@ -268,6 +275,27 @@ export function world(overrides: Partial<SupervisorWorld> = {}): SupervisorWorld
     // Conductor Plan 4b: no goal version open, so the two verification situations only ever fire
     // in a test that hands the world a delivery.
     goalDeliveries: [],
+    // Supervisor-as-conductor plan B: no conductor question pending, so no plan is loaded.
+    conductorPlans: [],
+    ...overrides,
+  }
+}
+
+/** Plan B: a conducted v1 with a done skeleton, a done `report` package owning R1/R2, and a ready
+ *  integration package -- the plan a conductor question is answered from. */
+export function conductorPlan(overrides: Partial<SupervisorConductorPlan> = {}): SupervisorConductorPlan {
+  return {
+    goalVersion: 1,
+    requirements: [{ key: 'R1', text: 'csv mode' }, { key: 'R2', text: 'json mode' }],
+    packages: [
+      { key: 'skeleton', title: 'The runnable skeleton', requirementKeys: [], ownedPaths: ['scripts/verify.sh', 'backend/package.json'], isIntegration: false, interface: '', dependsOn: [], taskStatus: 'done', handOffReopens: 0 },
+      { key: 'report', title: 'Report modes', requirementKeys: ['R1', 'R2'], ownedPaths: ['backend/src/report/**'], isIntegration: false, interface: 'render(rows, mode)', dependsOn: ['skeleton'], taskStatus: 'done', handOffReopens: 0 },
+      { key: 'integration', title: 'Integrate the packages', requirementKeys: [], ownedPaths: ['scripts/verify.d/integration.sh'], isIntegration: true, interface: '', dependsOn: ['skeleton', 'report'], taskStatus: 'ready', handOffReopens: 0 },
+    ],
+    decisions: [{ title: 'API field naming', decision: 'camelCase JSON fields', source: 'conductor_plan' }],
+    answers: [],
+    leads: [],
+    handOffs: [],
     ...overrides,
   }
 }

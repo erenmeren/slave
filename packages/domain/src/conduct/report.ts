@@ -1,7 +1,9 @@
 import { z } from 'zod'
 import { err, ok, type Result } from '../result.js'
+import { HANDOFFS_PER_REPORT_MAX } from './constants.js'
 import { SLAVE_REPORT_TAG } from './contract.js'
-import { storableText } from './verification.js'
+import { readHandOffItem, type ReportedHandOff } from './handOff.js'
+import { storableJsonReviver } from './storable.js'
 
 /** A package worker's report on its run (spec R7), as {@link parseSlaveReport} reads it. */
 export interface SlaveReport {
@@ -13,6 +15,10 @@ export interface SlaveReport {
   readonly filesTouched: readonly string[]
   readonly workflow: readonly { readonly step: number | string; readonly done: boolean; readonly note: string }[]
   readonly questions: readonly string[]
+  /** Supervisor-as-conductor spec C1: changes in files this package does not own, or work another
+   *  package must do. Routed by ownership when the report is filed (`routeHandOffs`). An item that
+   *  does not read is kept in its place as an `UnreadableHandOff` (final review M4). */
+  readonly handOffs: readonly ReportedHandOff[]
   /** User ruling 2026-09-30 (plan B D11): a smoke rework's claim that its fix is in a file another
    *  package owns -- a path and what must change there. A claim only: `handOffSmokeRework` checks it. */
   readonly handOff?: { readonly path: string; readonly change: string } | undefined
@@ -38,6 +44,10 @@ const reportSchema = z.object({
     .max(100)
     .default([]),
   questions: z.array(z.string().trim().min(1).max(4000)).max(10).default([]),
+  // Spec C1: absent in a report written before this plan, which reads as none (spec §4).
+  // Final review M4: the list is the report's; each item is read on its own (`readHandOffItem`), so
+  // one malformed item becomes a conductor question instead of refusing the whole report.
+  handOffs: z.array(z.unknown()).max(HANDOFFS_PER_REPORT_MAX).default([]).transform((items) => items.map(readHandOffItem)),
   // User ruling 2026-09-30 (skeleton-and-smoke plan B D11): a smoke rework's structured hand-off --
   // the file another package owns that the fix needs, and what must change in it. The bounds are
   // `workspace.smoke_handed_off`'s, so a filed claim always fits its event.
@@ -99,7 +109,7 @@ export function parseSlaveReport(text: string, requirementKeys: readonly string[
   try {
     // Final review I2: a `\u0000` escape parses to a NUL byte, which the stored report's jsonb
     // refuses -- the filing then threw, and a hand-off's change never reached its attempt row.
-    value = JSON.parse(text.slice(start + open.length, end), (_key, v: unknown) => (typeof v === 'string' ? storableText(v) : v))
+    value = JSON.parse(text.slice(start + open.length, end), storableJsonReviver)
   } catch {
     return err(`the ${open} block is not valid JSON`)
   }

@@ -192,6 +192,32 @@ export interface GoalReportSmoke {
   readonly stoppedByAbandon: boolean
 }
 
+/** Supervisor-as-conductor spec C2 (plan A Task 8): one request a package made of another, or the
+ *  conductor made of a package, as `PackageHandOff` stores it. */
+export interface GoalReportHandOff {
+  readonly id: string
+  readonly at: string
+  readonly source: 'report' | 'answer'
+  readonly fromPackage: string | null
+  readonly toPackage: string | null
+  readonly path: string | null
+  readonly packageKey: string | null
+  /** The worker's (or the conductor's) own words, raw: renderers escape them. */
+  readonly change: string
+  readonly status: 'pending' | 'delivered' | 'reopened' | 'duplicate' | 'own' | 'to_conductor' | 'expired'
+  /** Why it was routed so, when Slave recorded a reason. */
+  readonly note: string | null
+}
+
+/** Supervisor-as-conductor spec C3: one decision every package's contract listed. The words are
+ *  the conductor's or a person's, raw: renderers escape them. */
+export interface GoalReportSharedDecision {
+  readonly title: string
+  readonly decision: string
+  readonly source: 'conductor_plan' | 'conductor_answer' | 'person'
+  readonly at: string
+}
+
 /** Skeleton spec S9 (plan B D10): one tool call the version's runs were refused. */
 export interface GoalReportDenial {
   readonly at: string
@@ -223,6 +249,12 @@ export interface GoalReport {
   readonly questions: readonly GoalReportQuestion[]
   /** Every smoke attempt of the version, oldest first. */
   readonly smoke: readonly GoalReportSmoke[]
+  /** The oldest `GOAL_REPORT_HANDOFFS_MAX` hand-offs of the version, oldest first (expired ones too: they have no event). */
+  readonly handOffs: readonly GoalReportHandOff[]
+  /** Hand-offs past `GOAL_REPORT_HANDOFFS_MAX`, left out. */
+  readonly handOffsOmitted: number
+  /** The version's shared decisions, oldest first. */
+  readonly decisions: readonly GoalReportSharedDecision[]
   /** The oldest `GOAL_REPORT_DENIALS_MAX` denials of the version's runs, oldest first. */
   readonly deniedToolCalls: readonly GoalReportDenial[]
   /** Denials past `GOAL_REPORT_DENIALS_MAX`, left out. */

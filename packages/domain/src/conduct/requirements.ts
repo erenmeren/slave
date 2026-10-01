@@ -3,6 +3,7 @@ import { sanitisePersonText } from '../handoff/contract.js'
 import { err, ok, type Result } from '../result.js'
 import { firstJsonObject } from '../supervisor/prompt.js'
 import { REQUIREMENT_TEXT_MAX_CHARS, REQUIREMENTS_MAX_ITEMS } from './constants.js'
+import { storableJsonReviver } from './storable.js'
 
 /**
  * The key the requirements answer is read back by (spec R1). Also a fake-CLI routing literal
@@ -74,7 +75,8 @@ export function parseRequirementsAnswer(text: string): Result<readonly Requireme
   if (json === null) return err('the answer carried no JSON object')
   let value: unknown
   try {
-    value = JSON.parse(json)
+    // Task 6: stored as jsonb on the `ConductorCall` and the set, which refuses a `\u0000` escape.
+    value = JSON.parse(json, storableJsonReviver)
   } catch {
     return err('the answer\'s JSON did not parse')
   }
