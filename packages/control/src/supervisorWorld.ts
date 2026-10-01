@@ -52,7 +52,7 @@ import { evidenceForProfiles } from './evidence.js'
 import { latestVerifications } from './goalDelivery.js'
 import { recordedHandOffStatus } from './handOffs.js'
 import { staleCandidateCount } from './memory.js'
-import { STORED_REPORT_QUESTION_KEY_PREFIX, stillPendingQuestion, waitingSenderRunIds } from './messaging.js'
+import { STORED_REPORT_QUESTION_KEY_PREFIX, isStoredHandOffQuestionKey, stillPendingQuestion, waitingSenderRunIds } from './messaging.js'
 import { planningCountSince } from './planningCount.js'
 import { workspaceDefaultProvider } from './runtime.js'
 import { breakerCountedFailures, workspaceStats, type WorkspaceStatsSnapshot } from './stats.js'
@@ -922,6 +922,7 @@ async function loadConductorPlans(tx: Prisma.TransactionClient, workspaceId: str
         isIntegration: true,
         interface: true,
         dependsOn: true,
+        handOffReopens: true,
         // Plan A D2: a package's task is its oldest one.
         tasks: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: 1, select: { status: true } },
         reports: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1, select: { report: true } },
@@ -971,6 +972,7 @@ async function loadConductorPlans(tx: Prisma.TransactionClient, workspaceId: str
         interface: p.interface,
         dependsOn: p.dependsOn,
         taskStatus: p.tasks[0]?.status ?? null,
+        handOffReopens: p.handOffReopens,
       })),
       decisions,
       answers: answers.toReversed().map((row) => ({ question: row.replyTo?.body ?? '', answer: row.body })),
@@ -1695,6 +1697,8 @@ export async function loadSupervisorWorld(
             goalVersion: task?.goalVersion ?? null,
             askerPackageKey: task?.packageKey ?? null,
             askerWaiting: row.senderRunId !== null && waitingRunIds.includes(row.senderRunId),
+            // Final wave I1: a hand-off routing question -- a hand-off in its answer is held.
+            fromHandOffRouting: isStoredHandOffQuestionKey(row.idempotencyKey),
           }
         }),
         decisions: decisionRows.map((row) => ({

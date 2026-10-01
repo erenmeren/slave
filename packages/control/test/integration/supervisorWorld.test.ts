@@ -16,7 +16,7 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { recordMemory } from '../../src/memory.js'
-import { reportQuestionKey, sendMessage } from '../../src/messaging.js'
+import { handOffQuestionKey, reportQuestionKey, sendMessage } from '../../src/messaging.js'
 import { adoptRunbook, syncRunbooks } from '../../src/runbook.js'
 import { workspaceSpend } from '../../src/spend.js'
 import { workspaceStats } from '../../src/stats.js'
@@ -2439,6 +2439,25 @@ describe('loadSupervisorWorld -- goal versions and their verification (Conductor
         ],
       }),
     ])
+  })
+
+  // Final wave I1: what the judge needs to hold a hand-off that could loop -- the package's reopen
+  // count, and whether hand-off routing sent the question.
+  it('loads each package\'s reopen count and marks a hand-off routing question (final wave I1)', async (): Promise<void> => {
+    const fixture = await seed()
+    const worker = await seat(fixture, 'Wes', ['implementer'])
+    await delivery(fixture, 1, { status: 'integrating' })
+    const pkg = await prisma.workPackage.create({ data: { workspaceId: fixture.workspaceId, goalVersion: 1, key: 'report', title: 'Report', requirementKeys: ['R1'], ownedPaths: ['r/**'], interface: '', templateId: 't-backend', handOffReopens: 2 } })
+    const taskId = (await prisma.task.create({ data: { workspaceId: fixture.workspaceId, title: 'Report', description: 'x', status: 'rework', requiredRole: 'implementer', maxAttempts: 3, assigneeId: worker, workPackageId: pkg.id, goalVersion: 1 } })).id
+    const run = await prisma.slaveRun.create({ data: { slaveId: worker, taskId, status: 'succeeded', kind: 'implementation' } })
+    const routed = await sendMessage(run.id, { kind: 'question', body: 'nobody can take this', recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId, idempotencyKey: handOffQuestionKey(run.id, 'h1') })
+    const reported = await sendMessage(run.id, { kind: 'question', body: 'which delimiter?', recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId, idempotencyKey: reportQuestionKey(run.id, 0) })
+    if (!routed.ok || !reported.ok) throw new Error('send failed')
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.questions.find((q) => q.messageId === routed.value.id)?.fromHandOffRouting).toBe(true)
+    expect(world.questions.find((q) => q.messageId === reported.value.id)?.fromHandOffRouting).toBe(false)
+    expect(world.conductorPlans[0]?.packages).toEqual([expect.objectContaining({ key: 'report', handOffReopens: 2 })])
   })
 
   it('loads no plan when no conductor question is pending (conductor D9)', async (): Promise<void> => {

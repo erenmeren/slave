@@ -389,6 +389,12 @@ export interface SupervisorQuestion {
    * conductor's `waiting_stale`: nobody is waiting on a report question, so its age means nothing.
    */
   readonly askerWaiting: boolean
+  /**
+   * Final wave I1: hand-off routing sent this question (its stored key carries `:handoff:`,
+   * `handOffQuestionKey`) -- a request nobody could take. A hand-off in its answer is held for a
+   * person: routed, it could come straight back as another such question, a paid loop.
+   */
+  readonly fromHandOffRouting: boolean
 }
 
 /** A recent `SupervisorDecision`, as much of it as {@link filterFresh} and {@link summarise} need. */
@@ -537,6 +543,10 @@ export interface SupervisorPlanPackage {
   /** The package task's status (plan A D2: its oldest task), or null when it has none. A hand-off
    *  to a package whose task is gone or failed would only come back as a new question (ruling F5). */
   readonly taskStatus: string | null
+  /** Final wave I1: how many times other packages' hand-offs have reopened this package in the
+   *  version. A done package at `HANDOFF_REOPENS_MAX` cannot be reopened again: a hand-off to it
+   *  would come back as a new conductor question, so an answer carrying one is held. */
+  readonly handOffReopens: number
 }
 
 /**

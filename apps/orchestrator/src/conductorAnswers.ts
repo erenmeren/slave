@@ -142,7 +142,8 @@ export async function answerConductorQuestions(input: ConductorPassInput): Promi
       const catalogue = candidates(situation, input.world)
       const index = catalogue.findIndex((c) => c.action.kind === 'answer_question')
       if (index === -1) continue
-      const judged = judgeConductorAnswer(answer, plan, { halted: input.world.halted !== null })
+      const asked = batch.find((q) => q.messageId === answer.messageId)
+      const judged = judgeConductorAnswer(answer, plan, { halted: input.world.halted !== null, fromHandOffRouting: asked?.fromHandOffRouting ?? true })
       await record(input, tally, situation, catalogue, { chosenIndex: index, rationale: judged.rationale, decidedBy: 'model', draft: judged.draft, tier: judged.tier })
     }
   }

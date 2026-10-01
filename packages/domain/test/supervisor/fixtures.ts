@@ -197,6 +197,7 @@ export function question(overrides: Partial<SupervisorQuestion> = {}): Superviso
     goalVersion: null,
     askerPackageKey: null,
     askerWaiting: false,
+    fromHandOffRouting: false,
     ...overrides,
   }
 }
@@ -287,9 +288,9 @@ export function conductorPlan(overrides: Partial<SupervisorConductorPlan> = {}):
     goalVersion: 1,
     requirements: [{ key: 'R1', text: 'csv mode' }, { key: 'R2', text: 'json mode' }],
     packages: [
-      { key: 'skeleton', title: 'The runnable skeleton', requirementKeys: [], ownedPaths: ['scripts/verify.sh', 'backend/package.json'], isIntegration: false, interface: '', dependsOn: [], taskStatus: 'done' },
-      { key: 'report', title: 'Report modes', requirementKeys: ['R1', 'R2'], ownedPaths: ['backend/src/report/**'], isIntegration: false, interface: 'render(rows, mode)', dependsOn: ['skeleton'], taskStatus: 'done' },
-      { key: 'integration', title: 'Integrate the packages', requirementKeys: [], ownedPaths: ['scripts/verify.d/integration.sh'], isIntegration: true, interface: '', dependsOn: ['skeleton', 'report'], taskStatus: 'ready' },
+      { key: 'skeleton', title: 'The runnable skeleton', requirementKeys: [], ownedPaths: ['scripts/verify.sh', 'backend/package.json'], isIntegration: false, interface: '', dependsOn: [], taskStatus: 'done', handOffReopens: 0 },
+      { key: 'report', title: 'Report modes', requirementKeys: ['R1', 'R2'], ownedPaths: ['backend/src/report/**'], isIntegration: false, interface: 'render(rows, mode)', dependsOn: ['skeleton'], taskStatus: 'done', handOffReopens: 0 },
+      { key: 'integration', title: 'Integrate the packages', requirementKeys: [], ownedPaths: ['scripts/verify.d/integration.sh'], isIntegration: true, interface: '', dependsOn: ['skeleton', 'report'], taskStatus: 'ready', handOffReopens: 0 },
     ],
     decisions: [{ title: 'API field naming', decision: 'camelCase JSON fields', source: 'conductor_plan' }],
     answers: [],

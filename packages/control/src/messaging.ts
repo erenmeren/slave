@@ -285,6 +285,15 @@ export function handOffQuestionKey(runId: string, handOffId: string): string {
   return `${REPORT_QUESTION_KEY_PREFIX}${runId}:handoff:${handOffId}`
 }
 
+/**
+ * Final wave I1: whether a STORED key (as the column holds it, `send:` included) is a hand-off
+ * routing question's -- {@link handOffQuestionKey}'s shape. A run id is a uuid, so `:handoff:`
+ * after the report prefix is this key and nothing else.
+ */
+export function isStoredHandOffQuestionKey(stored: string | null): boolean {
+  return stored !== null && stored.startsWith(STORED_REPORT_QUESTION_KEY_PREFIX) && stored.includes(':handoff:')
+}
+
 const REPORT_QUESTION_KEY_PREFIX = 'report:'
 
 /** The stored form of {@link reportQuestionKey}'s prefix: `sendMessage` namespaces every key it

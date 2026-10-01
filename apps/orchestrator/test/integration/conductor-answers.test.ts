@@ -5,9 +5,9 @@
  * reason; the critical lexicon, a missing model and a missing plan all hand the question to a person
  * by the rules.
  */
-import { rejectDecision, reportQuestionKey, sendMessage, type ModelDecider, type ModelOutcome } from '@slave-of-ai/control'
+import { handOffQuestionKey, rejectDecision, reportQuestionKey, sendMessage, type ModelDecider, type ModelOutcome } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import { CONDUCTOR_ROLE, COOLDOWN_MS, WAITING_STALE_MS } from '@slave-of-ai/domain'
+import { CONDUCTOR_ROLE, COOLDOWN_MS, HANDOFF_REOPENS_MAX, WAITING_STALE_MS } from '@slave-of-ai/domain'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -382,6 +382,33 @@ describe('answerConductorQuestions (spec C4)', () => {
       rmSync(worktreePath, { recursive: true, force: true })
     }
     expect(built.prompt).toContain('- Error shape:')
+  })
+
+  // Final wave I1: a hand-off to a done package at the reopen cap would be routed `to_conductor`,
+  // a new question with no attempts, answered again next batch -- an unbounded paid loop.
+  it('holds an answer whose hand-off targets a done package at the reopen cap, and routes nothing (final wave I1)', async () => {
+    const f = await seed()
+    await prisma.workPackage.updateMany({ where: { workspaceId: f.workspaceId, key: 'report' }, data: { handOffReopens: HANDOFF_REOPENS_MAX } })
+    const model = scripted((prompt) => answerJson(idsIn(prompt).map((id) => ok(id, id === f.qPaused ? { handOff: { package: 'report', change: 'add a port field' } } : {}))))
+    await supervise({ workspaceId: f.workspaceId, decider: model.decider, model: 'm', now: () => f.now })
+    const decision = await prisma.supervisorDecision.findFirstOrThrow({ where: { subjectId: f.qPaused, situationKind: 'conductor_question' } })
+    expect([decision.tier, decision.status]).toEqual(['proposed', 'pending'])
+    expect(decision.rationale).toContain(`reopened ${String(HANDOFF_REOPENS_MAX)} times`)
+    expect(await prisma.packageHandOff.count({ where: { workspaceId: f.workspaceId } })).toBe(0)
+  })
+
+  it('holds any hand-off in an answer to a question hand-off routing sent (final wave I1)', async () => {
+    const f = await seed()
+    const reportTask = await prisma.task.findFirstOrThrow({ where: { workspaceId: f.workspaceId, title: 'report' } })
+    const run = await prisma.slaveRun.create({ data: { taskId: reportTask.id, slaveId: f.seatId, status: 'succeeded', terminalAt: new Date() } })
+    const routed = await sendMessage(run.id, { kind: 'question', body: 'Nobody can take: add a health check', recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId: reportTask.id, idempotencyKey: handOffQuestionKey(run.id, 'h-1') })
+    if (!routed.ok) throw new Error('send failed')
+    const model = scripted((prompt) => answerJson(idsIn(prompt).map((id) => ok(id, id === routed.value.id ? { handOff: { package: 'integration', change: 'add a health check' } } : {}))))
+    await supervise({ workspaceId: f.workspaceId, decider: model.decider, model: 'm', now: () => f.now })
+    const decision = await prisma.supervisorDecision.findFirstOrThrow({ where: { subjectId: routed.value.id, situationKind: 'conductor_question' } })
+    expect([decision.tier, decision.status]).toEqual(['proposed', 'pending'])
+    expect(decision.rationale).toContain('hand-off routing')
+    expect(await prisma.packageHandOff.count({ where: { workspaceId: f.workspaceId } })).toBe(0)
   })
 
   it('routes an answer\'s hand-off for a finished task to the package that owns the change, and never delivers that answer (spec C4)', async () => {

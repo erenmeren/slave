@@ -7,6 +7,7 @@ import { err, ok, type Result } from '../result.js'
 import { neutraliseMarkers } from '../run-context/render.js'
 import type { Tier } from './actions.js'
 import type { Draft } from './answerPrompt.js'
+import { HANDOFF_REOPENS_MAX } from '../conduct/constants.js'
 import { ANSWER_MAX_CHARS, CONDUCTOR_ANSWER_OUTPUT_MAX_CHARS, CONDUCTOR_PROMPT_DECISIONS_MAX_CHARS, GOAL_DECISIONS_MAX, THREAD_BODY_MAX_CHARS } from './constants.js'
 import {
   CONDUCTOR_CHANGES,
@@ -311,13 +312,18 @@ function ownershipSignal(decision: SharedDecision, plan: SupervisorConductorPlan
  * Plan B D5/D6: the tier an answer earns, the draft its decision row stores, and the rationale a
  * person reads. Held (`proposed`) for: an unverified basis, an unreadable decision or hand-off (F16),
  * a new decision reusing a title or past `GOAL_DECISIONS_MAX`, a hand-off with no target or one to a
- * package that cannot run (F5), or a halted workspace. The body is sanitised (F8): the answer may
+ * package that cannot run (F5), one to a done package at the reopen cap or in an answer to a
+ * hand-off routing question (final wave I1), or a halted workspace. The body is sanitised (F8): the answer may
  * quote the worker's question, and it reaches the resumed run as it is stored.
  */
 export function judgeConductorAnswer(
   answer: ConductorAnswer,
   plan: SupervisorConductorPlan,
-  input: { readonly halted: boolean },
+  input: {
+    readonly halted: boolean
+    /** Final wave I1: the question was sent by hand-off routing (`SupervisorQuestion.fromHandOffRouting`). */
+    readonly fromHandOffRouting: boolean
+  },
 ): { readonly tier: Tier; readonly draft: Draft; readonly rationale: string } {
   // The reply's own notes first, so a bound never drops them for a basis failure (fix round 1).
   const unverified = [...(answer.unreadable ?? []), ...checkBasis(answer.basis, plan)]
@@ -332,11 +338,18 @@ export function judgeConductorAnswer(
     if (signal !== null) held.push(`its new decision reads like an ownership change (it names ${signal}), and a decision never moves ownership`)
   }
   if (answer.handOff !== null) {
+    // Final wave I1: a hand-off answering a routing question could be routed straight back into one.
+    if (input.fromHandOffRouting) held.push('it answers a question hand-off routing sent, and a hand-off from it could come back as another such question')
     const target = resolveHandOff(answer.handOff, null, plan.packages)
     if (target.kind === 'none') held.push(`its hand-off has no target: ${target.reason}`)
     else if (target.kind === 'package') {
-      const status = plan.packages.find((p) => p.key === target.key)?.taskStatus ?? null
+      const pkg = plan.packages.find((p) => p.key === target.key)
+      const status = pkg?.taskStatus ?? null
       if (UNREACHABLE_TASK_STATUSES.includes(status)) held.push(`its hand-off goes to the ${target.key} package, whose task is ${status ?? 'gone'}`)
+      // Final wave I1: past the reopen cap a done package's hand-off becomes a conductor question again.
+      else if (status === 'done' && pkg !== undefined && pkg.handOffReopens >= HANDOFF_REOPENS_MAX) {
+        held.push(`its hand-off goes to the ${target.key} package, which is done and has already been reopened ${String(HANDOFF_REOPENS_MAX)} times in this version`)
+      }
     }
   }
   const tier = conductorAnswerTier({ changes: answer.changes, halted: input.halted, held: held.length > 0 })
