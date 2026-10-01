@@ -3100,7 +3100,7 @@ describe('a card closes its question (human cards H1)', () => {
    * `answerer` addresses it to role `security` instead, held by a second seat -- the reassign case's
    * target; `live` leaves the task running; `parked` asks from a run paused `waiting_for_answer`.
    */
-  async function seedQuestion(options: { readonly answerer?: boolean; readonly live?: boolean; readonly parked?: boolean } = {}): Promise<QuestionFixture> {
+  async function seedQuestion(options: { readonly answerer?: boolean; readonly live?: boolean; readonly parked?: boolean; readonly status?: 'blocked' | 'running' } = {}): Promise<QuestionFixture> {
     // The events of a person's verdict name them by account (`ExecutionEvent.userId` is a foreign key).
     await prisma.user.createMany({ data: [{ id: 'u1', username: 'u1', passwordHash: 'x' }, { id: 'u2', username: 'u2', passwordHash: 'x' }], skipDuplicates: true })
     const ws = await prisma.workspace.create({ data: { name: `Cards ${String(Math.random())}`, repoPath: '/nonexistent', verifyCommands: ['true'], setupCommands: [], delivery: 'conducted' } })
@@ -3109,7 +3109,7 @@ describe('a card closes its question (human cards H1)', () => {
       (await prisma.slave.create({ data: { teamId: team.id, role: 'Implementer', runtimeRoles: roles, personId: (await prisma.person.create({ data: { name: `${name} ${ws.id}` } })).id } })).id
     const asker = await seatOf('Ivo', ['implementer'])
     const answererId = options.answerer === true ? await seatOf('Sam', ['security']) : ''
-    const task = await prisma.task.create({ data: { workspaceId: ws.id, title: 'report', description: 'x', status: options.live === true || options.parked === true ? 'running' : 'done', requiredRole: 'implementer', maxAttempts: 3, goalVersion: 1, assigneeId: asker } })
+    const task = await prisma.task.create({ data: { workspaceId: ws.id, title: 'report', description: 'x', status: options.status ?? (options.live === true || options.parked === true ? 'running' : 'done'), requiredRole: 'implementer', maxAttempts: 3, goalVersion: 1, assigneeId: asker } })
     const run = await prisma.slaveRun.create({ data: { slaveId: asker, taskId: task.id, status: options.parked === true ? 'working' : 'succeeded' } })
     const sent = await sendMessage(run.id, {
       kind: 'question',
@@ -3210,6 +3210,8 @@ describe('a card closes its question (human cards H1)', () => {
     const f = await seedQuestion()
     const card = await escalation(f.workspaceId, 'conductor_question', f.questionId)
     expect((await answerQuestion(f.questionId, { body: 'camelCase', answeredBy: 'cli' })).ok).toBe(true)
+    // The direct answer retired the card; put it back as if a person still had it open.
+    await prisma.supervisorDecision.update({ where: { id: card.id }, data: { status: 'pending', resolvedAt: null } })
     const refused = await rejectDecision(card.id, { userId: 'u1' }, 'too late')
     expect(!refused.ok && refused.error).toMatchObject({ kind: 'question_closed', reason: 'answered' })
     expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: card.id } })).status).toBe('pending')
@@ -3230,5 +3232,72 @@ describe('a card closes its question (human cards H1)', () => {
     expect((await at(t0)).ok).toBe(true)
     expect((await at(new Date(t0.getTime() + BREAKER_COOLDOWN_MS))).ok).toBe(false)
     expect((await at(new Date(t0.getTime() + BREAKER_COOLDOWN_MS + 1000))).ok).toBe(true)
+  })
+
+  /** A card on the question proposing `action`, pending a person. */
+  const proposal = (f: QuestionFixture, kind: 'conductor_question' | 'waiting_stale', action: Action, over: { readonly status?: 'pending' | 'approved'; readonly draft?: Draft } = {}) =>
+    prisma.supervisorDecision.create({ data: { workspaceId: f.workspaceId, situationKind: kind, subjectId: f.questionId, situation: situation(kind, f.questionId), candidates: [{ action, tier: 'proposed', why: 'x' }], chosenIndex: 0, action, rationale: 'x', tier: 'proposed', status: over.status ?? 'pending', decidedBy: 'rules', ...(over.draft === undefined ? {} : { draft: over.draft as never }) } })
+
+  it('refuses a verb-carried approval on a question answered meanwhile: nothing acts on the world (fix round 1, I1)', async () => {
+    const f = await seedQuestion({ status: 'blocked' })
+    const card = await proposal(f, 'waiting_stale', { kind: 'mark_task_failed', taskId: f.taskId, reason: 'stuck' })
+    expect((await answerQuestion(f.questionId, { body: 'camelCase', answeredBy: 'cli' })).ok).toBe(true)
+    // The direct answer retired the card; put it back as if it were still open to a person.
+    await prisma.supervisorDecision.update({ where: { id: card.id }, data: { status: 'pending', resolvedAt: null } })
+    const refused = await approveDecision(card.id, { userId: 'u1' })
+    expect(!refused.ok && refused.error).toMatchObject({ kind: 'question_closed', reason: 'answered' })
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: card.id } })).status).toBe('pending')
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })).status).toBe('blocked')
+  })
+
+  it('refuses an answer approval on a dismissed question, and leaves the card pending (fix round 1, I1)', async () => {
+    const f = await seedQuestion()
+    const card = await proposal(f, 'conductor_question', { kind: 'answer_question', messageId: f.questionId }, { draft: draftOf() })
+    await prisma.slaveMessage.update({ where: { id: f.questionId }, data: { closedAt: new Date(), closedReason: 'dismissed', closedBy: 'u1' } })
+    const refused = await approveDecision(card.id)
+    expect(!refused.ok && refused.error).toMatchObject({ kind: 'question_closed', reason: 'dismissed' })
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: card.id } })).status).toBe('pending')
+    expect(await answerTo(f.questionId)).toBeNull()
+  })
+
+  it('closes, on the next card it would record, a question whose approved card a crash left open (fix round 1, M2)', async () => {
+    const f = await seedQuestion({ status: 'blocked' })
+    await proposal(f, 'waiting_stale', { kind: 'mark_task_failed', taskId: f.taskId, reason: 'stuck' }, { status: 'approved' })
+    const refused = await record(f.workspaceId, 'waiting_stale', f.questionId)
+    expect(!refused.ok && refused.error).toMatchObject({ kind: 'question_closed', reason: 'decided', by: 'operator' })
+    expect(await question(f.questionId)).toMatchObject({ closedReason: 'decided', closedBy: 'operator' })
+    expect(await prisma.supervisorDecision.count({ where: { subjectId: f.questionId } })).toBe(1)
+    expect(await prisma.executionEvent.count({ where: { workspaceId: f.workspaceId, type: 'slave_question_closed' } })).toBe(1)
+  })
+
+  it('closes the question decided on an approved no_action, inside the claim (fix round 1, M3)', async () => {
+    const f = await seedQuestion()
+    const card = await proposal(f, 'conductor_question', { kind: 'no_action' })
+    expect((await approveDecision(card.id, { userId: 'u1' })).ok).toBe(true)
+    expect(await question(f.questionId)).toMatchObject({ closedReason: 'decided', closedBy: 'u1' })
+  })
+
+  it('retires every open card of a question answered directly (fix round 1, M4)', async () => {
+    const f = await seedQuestion()
+    const card = await escalation(f.workspaceId, 'conductor_question', f.questionId)
+    expect((await answerQuestion(f.questionId, { body: 'camelCase', answeredBy: 'web operator', principal: { userId: 'u1' } })).ok).toBe(true)
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: card.id } })).status).toBe('expired')
+  })
+
+  it('closes nothing when the approved action is refused by its verb (spec §4, fix round 1, M6)', async () => {
+    const f = await seedQuestion({ status: 'running' })
+    const card = await proposal(f, 'waiting_stale', { kind: 'mark_task_failed', taskId: f.taskId, reason: 'stuck' })
+    expect((await approveDecision(card.id)).ok).toBe(false)
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: card.id } })).status).toBe('failed')
+    expect((await question(f.questionId)).closedAt).toBeNull()
+  })
+
+  it('closes the question decided when a machine action it was approved for goes through (fix round 1, M6)', async () => {
+    const f = await seedQuestion({ status: 'blocked' })
+    const card = await proposal(f, 'waiting_stale', { kind: 'mark_task_failed', taskId: f.taskId, reason: 'stuck' })
+    expect((await approveDecision(card.id, { userId: 'u1' })).ok).toBe(true)
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })).status).toBe('failed')
+    expect(await question(f.questionId)).toMatchObject({ closedReason: 'decided', closedBy: 'u1' })
+    expect((await question(f.questionId)).closedNote).toContain('without an answer')
   })
 })

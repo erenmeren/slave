@@ -263,7 +263,8 @@ async function record(input: ConductorPassInput, tally: Tally, situation: Situat
     now: input.now,
   })
   if (!recorded.ok) {
-    if (recorded.error.kind === 'supervisor_cooldown') tally.skippedCooldown += 1
+    // Human cards H1: a question closed meanwhile is as quiet as a cooling key.
+    if (recorded.error.kind === 'supervisor_cooldown' || recorded.error.kind === 'question_closed') tally.skippedCooldown += 1
     else console.warn(`[conductor-answer] ${situation.subjectId} was not recorded: ${refusalText(recorded.error)}`)
     return
   }

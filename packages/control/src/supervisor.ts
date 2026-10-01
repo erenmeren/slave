@@ -228,6 +228,12 @@ export async function recordDecision(
       if (message?.closedAt != null && message.closedReason !== null) {
         return { ok: false as const, error: { kind: 'question_closed', messageId: situation.subjectId, reason: message.closedReason, by: message.closedBy ?? CLOSED_BY_SYSTEM, at: message.closedAt.toISOString() } as ControlRefusal }
       }
+      // Self-heal of the crash window (ruling F8): a verb-carried approval closes its question after
+      // the verb, outside the claim. A question whose latest card a person approved, and which that
+      // verdict closes, is closed here -- under the Workspace lock already held -- and refused. This
+      // return deliberately COMMITS the close; it writes nothing else.
+      const healed = await healApprovedClose(tx, input.workspaceId, situation.subjectId, now)
+      if (healed !== null) return { ok: false as const, healed, error: questionClosedOf(healed) }
     }
     // Plan A D2: one open card per question, whatever kind raised it; per situation key otherwise.
     const cooldownMs = COOLDOWN_BY_KIND[situation.kind] ?? COOLDOWN_MS
@@ -282,7 +288,10 @@ export async function recordDecision(
     })
     return { ok: true as const, id: row.id }
   })
-  if (!outcome.ok) return err(outcome.error)
+  if (!outcome.ok) {
+    if ('healed' in outcome && outcome.healed !== undefined) await afterCardClose(input.workspaceId, outcome.healed.input.decisionId ?? '', outcome.healed, now)
+    return err(outcome.error)
+  }
 
   // After the commit, not inside it: `appendEvent` owns its own transaction on the shared client
   // (it has to -- it serialises every append in the process onto one chain and NOTIFYs on commit),
@@ -318,6 +327,33 @@ export async function recordDecision(
   }
   return ok({ id: outcome.id, tier, status })
 }
+
+/**
+ * Inside `recordDecision`'s transaction: closes a question its latest card's approval should have
+ * closed (a crash between a verb and {@link closeAfterApply}). Null when there is nothing to heal.
+ */
+async function healApprovedClose(tx: Prisma.TransactionClient, workspaceId: string, messageId: string, now: Date): Promise<CardClose | null> {
+  const latest = await tx.supervisorDecision.findFirst({
+    where: { workspaceId, subjectId: messageId, situationKind: { in: [...QUESTION_SITUATION_KINDS] } },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true, status: true, situationKind: true, action: true, resolvedByUserId: true },
+  })
+  if (latest?.status !== 'approved') return null
+  const question = await lockCardQuestion(tx, workspaceId, messageId)
+  if (question === null || question.closedAt !== null) return null
+  const action = parsedOrThrow(actionSchema.safeParse(latest.action), `SupervisorDecision ${latest.id}.action`)
+  const principal = latest.resolvedByUserId === null ? undefined : { userId: latest.resolvedByUserId }
+  const close = await closeForVerdict(tx, question, { id: latest.id, situationKind: latest.situationKind, actionKind: action.kind }, 'approved', null, principal, now)
+  return close?.closed === true ? close : null
+}
+
+const questionClosedOf = (close: CardClose): ControlRefusal => ({
+  kind: 'question_closed',
+  messageId: close.input.messageId,
+  reason: close.input.reason,
+  by: close.input.by,
+  at: close.at.toISOString(),
+})
 
 const cooldown = (situation: Situation, until: Date): ControlRefusal => ({
   kind: 'supervisor_cooldown',
@@ -1172,11 +1208,13 @@ async function answerDraft(decisionId: string): Promise<Result<Draft | null | 'n
  * {@link rejectDecision} open with: the `updateMany` conditional on `status: 'pending'` is what
  * actually decides who won.
  *
- * Human cards H1, ruling F8: for a rejection, and for an approved escalation (which carries nothing
- * out), the card's question is locked -- the Workspace row first, then the question row, the order
- * every closer keeps -- and closed in this same transaction. A question closed meanwhile (other than
- * `timed_out`, whose card stays open, spec H3) refuses the verdict with who closed it and when
- * (spec §4). Every refusal here is returned before the first write, so returning commits nothing.
+ * Human cards H1, ruling F8: for every verdict on a question card the question is locked -- the
+ * Workspace row first, then the question row, the order every closer keeps -- and a question closed
+ * meanwhile (other than `timed_out`, whose card stays open, spec H3) refuses the verdict with who
+ * closed it and when, before anything is written (spec §4): no verb acts on a closed question. For a
+ * rejection, and for an approval that carries nothing out (`escalate_to_human`, `no_action`), the
+ * question is also closed in this same transaction (`closedInClaim`). Every refusal here is
+ * returned before the first write, so returning commits nothing.
  */
 async function claimPending(
   decisionId: string,
@@ -1192,8 +1230,9 @@ async function claimPending(
     if (row.status !== 'pending') return err(notPending(decisionId, row))
 
     const action = parsedOrThrow(actionSchema.safeParse(row.action), `SupervisorDecision ${decisionId}.action`)
-    const closedInClaim = isQuestionSituation(row.situationKind) && (verdict.verdict === 'rejected' || action.kind === 'escalate_to_human')
-    const question = closedInClaim ? await lockCardQuestion(tx, row.workspaceId, row.subjectId) : null
+    const onQuestion = isQuestionSituation(row.situationKind)
+    const closedInClaim = onQuestion && (verdict.verdict === 'rejected' || action.kind === 'escalate_to_human' || action.kind === 'no_action')
+    const question = onQuestion ? await lockCardQuestion(tx, row.workspaceId, row.subjectId) : null
     if (question?.closedAt != null && question.closedReason !== null && question.closedReason !== 'timed_out') {
       return err({ kind: 'question_closed', messageId: question.id, reason: question.closedReason, by: question.closedBy ?? CLOSED_BY_SYSTEM, at: question.closedAt.toISOString() })
     }
@@ -1207,7 +1246,7 @@ async function claimPending(
       return err(notPending(decisionId, current))
     }
     const close =
-      question === null
+      question === null || !closedInClaim
         ? null
         : await closeForVerdict(tx, question, { id: decisionId, situationKind: row.situationKind, actionKind: action.kind }, verdict.verdict, verdict.reason, verdict.principal, data.resolvedAt)
     return ok({ workspaceId: row.workspaceId, closedInClaim, close })
@@ -1294,6 +1333,8 @@ interface CardClose {
   readonly closed: boolean
   readonly actor: 'human' | 'system'
   readonly userId: string | null
+  /** When it was closed. */
+  readonly at: Date
 }
 
 /**
@@ -1332,7 +1373,7 @@ async function closeForVerdict(
           : timeoutResumeMessage(now.getTime() - question.createdAt.getTime(), question.body),
   }
   const closed = await closeQuestionIn(tx, input, now)
-  return { question, input, closed, actor: human ? 'human' : 'system', userId: human ? (principal?.userId ?? null) : null }
+  return { question, input, closed, actor: human ? 'human' : 'system', userId: human ? (principal?.userId ?? null) : null, at: now }
 }
 
 /** The words a card retired by another card's verdict gives, by how the question closed. */

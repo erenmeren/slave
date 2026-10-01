@@ -5,7 +5,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { Principal } from './principal.js'
-import { announceQuestionClosed, closedByOf, closeQuestionIn } from './questions.js'
+import { announceQuestionClosed, closedByOf, closeQuestionIn, retireQuestionCards } from './questions.js'
 import type { ControlRefusal } from './refusal.js'
 
 const SEND_TIMEOUT_MS = 5_000
@@ -556,6 +556,14 @@ export async function answerQuestion(
     })
     if (outcome.closed !== null) {
       await announceQuestionClosed(question, outcome.closed, origin, input.principal?.userId ?? null)
+    }
+    // Human cards H1 (plan A D5): an answer given directly -- the answer box, the CLI -- retires every
+    // open card about its question, as an approved answer card does. Said and swallowed: the answer
+    // is out, and the tick's backstop retires what this missed.
+    try {
+      await retireQuestionCards(workspaceId, questionId, 'The question was answered.', new Date())
+    } catch (error) {
+      console.error(`[messaging] question ${questionId}: its open cards were not retired:`, error)
     }
   }
 

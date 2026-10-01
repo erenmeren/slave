@@ -355,7 +355,8 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
       now,
     })
     if (!recorded.ok) {
-      if (recorded.error.kind === 'supervisor_cooldown') {
+      // Human cards H1: a question closed meanwhile is as quiet as a cooling key -- nothing to decide.
+      if (recorded.error.kind === 'supervisor_cooldown' || recorded.error.kind === 'question_closed') {
         skippedCooldown += 1
         continue
       }
