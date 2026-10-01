@@ -1,7 +1,7 @@
 import { CONDUCT_PER_CALL_CAP_USD } from '../conduct/constants.js'
 import { DECISION_SOURCE_LABEL, GOAL_REPORT_STATE_LABEL, HAND_OFF_STATUS_LABEL, acceptedCommitText, handOffNote, noPackagesLabel, reportCaveats, smokeOutcomeLabel, unverifiedRequirementLabel } from './caveats.js'
 import { evidenceAnchor, evidenceCut, formatReportUsd, mdFence, mdInline, mdQuote, shortCommit } from './escape.js'
-import type { QuestionCloseReason } from '../messaging/close.js'
+import { runContinuedPast, type QuestionCloseReason } from '../messaging/close.js'
 import { formatWait } from '../supervisor/cards.js'
 import type { GoalReport, GoalReportAuthor, GoalReportQuestion } from './types.js'
 
@@ -30,15 +30,21 @@ export const GOAL_REPORT_CLOSE_WORDS = {
 /** Who closed a question, in words (shared with the web page): the report never names a user id. */
 export const GOAL_REPORT_CLOSED_BY = { system: 'Slave', person: 'a person' } as const
 
-/** A closed question's line, after "Closed: " -- a timeout says how long the run waited. Shared
- *  with the web page, so the two say the same. */
+/** Final wave, finding 7: a `timed_out` close a card's expiry made, in words -- no run continued. */
+export const GOAL_REPORT_CARD_EXPIRED_WORDS = 'the card expired with no decision'
+
+/** A closed question's line, after "Closed: " -- a timeout says how long the run waited; a card's
+ *  expiry says only that (no run continued past it). Shared with the web page, so the two say the
+ *  same. */
 export function questionClosedWords(closed: NonNullable<GoalReportQuestion['closed']>): string {
-  return closed.reason === 'timed_out' ? `${GOAL_REPORT_CLOSE_WORDS.timed_out} after ${formatWait(closed.waitedMs)}` : GOAL_REPORT_CLOSE_WORDS[closed.reason]
+  if (closed.reason !== 'timed_out') return GOAL_REPORT_CLOSE_WORDS[closed.reason]
+  return runContinuedPast(closed) ? `${GOAL_REPORT_CLOSE_WORDS.timed_out} after ${formatWait(closed.waitedMs)}` : GOAL_REPORT_CARD_EXPIRED_WORDS
 }
 
-/** Human cards H3: the questions a run continued past without an answer, in report order. */
+/** Human cards H3: the questions a run continued past without an answer, in report order -- only
+ *  the timeout pass's closes, whose run did continue (final wave, finding 7: never a card's expiry). */
 export function continuedWithoutAnswer(report: GoalReport): readonly (GoalReportQuestion & { readonly closed: NonNullable<GoalReportQuestion['closed']> })[] {
-  return report.questions.flatMap((q) => (q.closed !== null && q.closed.reason === 'timed_out' ? [{ ...q, closed: q.closed }] : []))
+  return report.questions.flatMap((q) => (q.closed !== null && runContinuedPast(q.closed) ? [{ ...q, closed: q.closed }] : []))
 }
 
 /** Where the asking task is read in the app -- its runs and the worker's own report, which names the

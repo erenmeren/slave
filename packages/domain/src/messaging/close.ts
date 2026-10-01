@@ -40,3 +40,20 @@ export function resolverWords(status: string, resolvedByUserId: string | null, n
   if (resolvedByUserId !== null) return name ?? 'a person'
   return status === 'approved' || status === 'rejected' || status === 'failed' ? 'an operator' : 'Slave'
 }
+
+/**
+ * Final wave, finding 7: the `closedNote` a card's expiry leaves on the question it times out. An
+ * expiry closes `timed_out` only when nobody is parked on the question, so no run continued past it
+ * -- this marker is what tells that close apart from the timeout pass's, whose note is the turn
+ * the resumed run was given.
+ */
+export const CARD_EXPIRED_NOTE = 'The card expired with no decision.'
+
+/**
+ * Whether a close means the asking run continued without an answer: a `timed_out` close the
+ * timeout pass made (its run resumed), never a card's expiry ({@link CARD_EXPIRED_NOTE}). The one
+ * rule the report's "continued without an answer" list, the card and the activity log read.
+ */
+export function runContinuedPast(closed: { readonly reason: QuestionCloseReason; readonly note: string | null }): boolean {
+  return closed.reason === 'timed_out' && closed.note !== CARD_EXPIRED_NOTE
+}

@@ -2,6 +2,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import type { DomainEventType } from '@slave-of-ai/db'
+import { CARD_EXPIRED_NOTE } from '@slave-of-ai/domain'
 import { ActivityCard } from '../src/components/activity/ActivityCard.js'
 import { ACTIVITY_CARDS } from '../src/components/activity/cards.js'
 import type { ActivityEventRow } from '../src/server/activity.js'
@@ -419,6 +420,16 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('permission-changed-text').textContent).toBe(
       'Alex \u00b7 Fetch over the network \u00b7 revoked',
     )
+  })
+
+  it('slave.question_closed says a card expired with no decision, not that a run continued (final wave, finding 7)', () => {
+    const Card = ACTIVITY_CARDS['slave.question_closed']
+    const { container, unmount } = render(<Card event={baseEvent('slave.question_closed', { messageId: 'm1', reason: 'timed_out', by: 'system', decisionId: 'd1', note: CARD_EXPIRED_NOTE })} {...CARD_PROPS} />)
+    expect(container.textContent).toContain('its card expired with no decision')
+    expect(container.textContent).not.toContain('continued without an answer')
+    unmount()
+    render(<Card event={fixtureFor('slave.question_closed')} {...CARD_PROPS} />)
+    expect(document.body.textContent).toContain('continued without an answer')
   })
 
   it('run.failed shows the reason', () => {

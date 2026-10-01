@@ -5,6 +5,7 @@ import {
   BREAKER_TRIP_LABEL,
   BROKER_OP_LABEL,
   BROKER_REFUSAL_LABEL,
+  CARD_EXPIRED_NOTE,
   GUARDRAIL_LABEL,
   MEMORY_SOURCE_KIND_LABEL,
   MEMORY_STATUS_LABEL,
@@ -960,9 +961,11 @@ const QUESTION_CLOSED_WORDS: Readonly<Record<string, string>> = {
 function SlaveQuestionClosedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as { reason: string; by: string; note: string | null }
   const who = payload.by === 'system' ? 'Slave' : 'a person'
+  // Final wave, finding 7: a card's expiry closes `timed_out` too, but no run continued past it.
+  const words = payload.reason === 'timed_out' && payload.note === CARD_EXPIRED_NOTE ? 'timed out: its card expired with no decision' : (QUESTION_CLOSED_WORDS[payload.reason] ?? payload.reason)
   return (
     <ActivityCard {...props}>
-      <Transition tone={payload.reason === 'timed_out' ? 'warn' : 'working'} label={`question ${QUESTION_CLOSED_WORDS[payload.reason] ?? payload.reason} (${who})`}>
+      <Transition tone={payload.reason === 'timed_out' ? 'warn' : 'working'} label={`question ${words} (${who})`}>
         {payload.note !== null && <span data-testid="question-closed-note">{payload.note}</span>}
       </Transition>
     </ActivityCard>

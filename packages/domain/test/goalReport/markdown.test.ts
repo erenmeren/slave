@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { renderGoalReportMarkdown } from '../../src/goalReport/markdown.js'
+import { continuedWithoutAnswer, renderGoalReportMarkdown } from '../../src/goalReport/markdown.js'
+import { CARD_EXPIRED_NOTE } from '../../src/messaging/close.js'
 import type { GoalReport, GoalReportPackage, GoalReportRequirement, GoalReportSmoke } from '../../src/goalReport/types.js'
 
 function requirement(over: Partial<GoalReportRequirement> = {}): GoalReportRequirement {
@@ -264,6 +265,24 @@ describe('renderGoalReportMarkdown', () => {
     expect(section).toContain("  The assumption is in the worker's report.")
     expect(section).not.toContain('Dismissed one')
     expect(renderGoalReportMarkdown(report())).not.toContain('## Runs that continued without an answer')
+  })
+
+  it('words a card\'s expiry truthfully and never lists it under the runs that continued (final wave, finding 7)', () => {
+    const q = { at: '2026-10-02T08:00:00.000Z', packageKey: 'integration', askedBy: 'Ivo', taskId: 't1', answer: null }
+    const md = renderGoalReportMarkdown(
+      report({
+        questions: [
+          { ...q, id: 'm1', question: 'Expired card', closed: { at: '2026-10-03T08:00:00.000Z', reason: 'timed_out', by: 'system', note: CARD_EXPIRED_NOTE, waitedMs: 86_400_000 } },
+          { ...q, id: 'm2', question: 'Timed out', closed: { at: '2026-10-02T10:00:00.000Z', reason: 'timed_out', by: 'system', note: 'No answer came in 2 hours.', waitedMs: 7_200_000 } },
+        ],
+      }),
+    )
+    expect(md).toContain('  Closed: the card expired with no decision (Slave, 2026-10-03T08:00:00.000Z).')
+    const section = md.slice(md.indexOf('## Runs that continued without an answer'), md.indexOf('## Questions'))
+    expect(section).toContain('waited 2 hours')
+    expect(section).not.toContain('waited 1 day')
+    expect(section).not.toContain('24 hours')
+    expect(continuedWithoutAnswer(report({ questions: [{ ...q, id: 'm1', question: 'x', closed: { at: 'x', reason: 'timed_out', by: 'system', note: CARD_EXPIRED_NOTE, waitedMs: 1 } }] }))).toEqual([])
   })
 
   it('puts a blank line between the quoted question and its attribution line, so a lazy blockquote continuation cannot swallow it', () => {

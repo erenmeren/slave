@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   ANSWER_MAX_CHARS,
+  CARD_EXPIRED_NOTE,
   CLOSED_BY_SYSTEM,
   COOLDOWN_BY_KIND,
   COOLDOWN_MS,
@@ -26,7 +27,6 @@ import {
   readsAsPlatform,
   sanitisePersonText,
   situationSchema,
-  timeoutResumeMessage,
   type Action,
   type ActionKind,
   type Candidate,
@@ -1322,7 +1322,9 @@ async function closeForVerdict(
         ? DECIDED_WITHOUT_ANSWER
         : closeReason === 'dismissed'
           ? dismissResumeMessage(reason)
-          : timeoutResumeMessage(now.getTime() - question.createdAt.getTime(), question.body),
+          : // Only an expiry times a question out here, and never while its asker is parked: no run
+            // continues past it, and the marker says so to the report and the card (finding 7).
+            CARD_EXPIRED_NOTE,
   }
   const closed = await closeQuestionIn(tx, input, now)
   return { question, input, closed, actor: human ? 'human' : 'system', userId: human ? (principal?.userId ?? null) : null, at: now }

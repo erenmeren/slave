@@ -8,6 +8,7 @@ import {
   QUESTION_SITUATION_KINDS,
   TERMINAL,
   closerWords,
+  runContinuedPast,
   storableText,
   trimToFit,
   type LateAnswerFate,
@@ -340,7 +341,15 @@ export interface QuestionCard {
   readonly askerWaiting: boolean
   /** `by` is the stored `closedBy`; `byName` is what a person reads -- a user's name, "the system"
    *  or "an operator" (Task 4 carry: a card never shows a raw user id). */
-  readonly closed: { readonly reason: QuestionCloseReason; readonly at: string; readonly by: string; readonly byName: string } | null
+  readonly closed: {
+    readonly reason: QuestionCloseReason
+    readonly at: string
+    readonly by: string
+    readonly byName: string
+    /** The asking run continued past it without an answer -- the timeout pass's close, never a
+     *  card's expiry ({@link runContinuedPast}; final wave, finding 7). */
+    readonly runContinued: boolean
+  } | null
   /** Why the timeout pass could not resume the parked asker (spec H3: "the card says why"). */
   readonly timeoutRefusal: string | null
   /** Task 7 carry: a late answer no run will read keeps its card open, and the card says so --
@@ -383,6 +392,7 @@ export async function loadQuestionCards(workspaceId: string, messageIds: readonl
       closedAt: true,
       closedReason: true,
       closedBy: true,
+      closedNote: true,
       timeoutRefusal: true,
       replies: { where: { kind: 'answer' }, take: 1, select: { id: true } },
       task: { select: { goalVersion: true, status: true, workPackageId: true, workPackage: { select: { key: true, goalVersion: true } } } },
@@ -425,7 +435,13 @@ export async function loadQuestionCards(workspaceId: string, messageIds: readonl
         closed:
           row.closedAt === null || row.closedReason === null
             ? null
-            : { reason: row.closedReason, at: row.closedAt.toISOString(), by: row.closedBy ?? CLOSED_BY_SYSTEM, byName: closerName(row.closedBy, names) },
+            : {
+                reason: row.closedReason,
+                at: row.closedAt.toISOString(),
+                by: row.closedBy ?? CLOSED_BY_SYSTEM,
+                byName: closerName(row.closedBy, names),
+                runContinued: runContinuedPast({ reason: row.closedReason, note: row.closedNote }),
+              },
         timeoutRefusal: row.timeoutRefusal,
         lateAnswerNote: fate === 'unread' && row.replies.length > 0 ? LATE_ANSWER_NOTE.unread : null,
         lateAnswerFate: fate,

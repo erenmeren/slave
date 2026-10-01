@@ -6,6 +6,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import {
   ANSWER_MAX_CHARS,
   BREAKER_COOLDOWN_MS,
+  CARD_EXPIRED_NOTE,
   CONDUCTOR_ROLE,
   COOLDOWN_MS,
   DECISION_RETENTION_MS,
@@ -27,6 +28,7 @@ import { syncCapabilityTaxonomy } from '../../src/capability.js'
 import { gitIn } from '../../src/git.js'
 import { STALE_CANDIDATE_REASON, recordMemory } from '../../src/memory.js'
 import { answerQuestion, reportQuestionKey, sendMessage } from '../../src/messaging.js'
+import { loadQuestionCards } from '../../src/questions.js'
 import { workspaceSpend } from '../../src/spend.js'
 import { releasePerson } from '../../src/persons.js'
 import { refusalText } from '../../src/refusal.js'
@@ -3172,6 +3174,9 @@ describe('a card closes its question (human cards H1)', () => {
     await escalation(f.workspaceId, 'conductor_question', f.questionId, { expiresAt: new Date(now.getTime() - 1000) })
     expect(await expirePendingDecisions(f.workspaceId, now)).toBe(1)
     expect(await question(f.questionId)).toMatchObject({ closedReason: 'timed_out', closedBy: 'system' })
+    // Final wave, finding 7: an expiry's close says so, and no card or report says a run continued.
+    expect((await question(f.questionId)).closedNote).toBe(CARD_EXPIRED_NOTE)
+    expect((await loadQuestionCards(f.workspaceId, [f.questionId])).get(f.questionId)?.closed?.runContinued).toBe(false)
   })
 
   it('leaves a parked asker\'s question open when its card expires: the timeout pass owns that wait (ruling F6)', async () => {

@@ -296,6 +296,15 @@ function QuestionState({ card }: { readonly card: NonNullable<Decision['card']> 
   }
   const closed = card.closed
   if (closed === null) return null
+  if (closed.reason === 'timed_out' && !closed.runContinued) {
+    // Final wave, finding 7: an expired card timed its question out with nobody parked on it.
+    return (
+      <span data-testid="card-question-state" className="text-[11px] text-text-2">
+        The card expired with no decision at {closed.at}
+        {card.lateAnswerNote !== null ? `. ${card.lateAnswerNote}` : whereItGoes(card)}
+      </span>
+    )
+  }
   if (closed.reason === 'timed_out') {
     return (
       <span data-testid="card-question-state" className="text-[11px] text-tone-waiting">

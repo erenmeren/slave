@@ -481,12 +481,18 @@ describe('a drafted answer', () => {
 
 describe('a question card says how its question stands (human cards H1/H3)', () => {
   const base = { messageId: 'm-1', body: 'q', goalVersion: 1, askerPackageKey: 'integration', askerRunId: 'r1', lateAnswerNote: null, lateAnswerFate: null }
-  const timedOut = { reason: 'timed_out', at: '2026-10-02T10:00:00.000Z', by: 'system', byName: 'Slave' } as const
+  const timedOut = { reason: 'timed_out', at: '2026-10-02T10:00:00.000Z', by: 'system', byName: 'Slave', runContinued: true } as const
 
   it('marks a card whose run continued without an answer, and one whose run cannot continue', () => {
     renderRow(answerDecision({ card: { ...base, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'hand_off' } }))
     expect(screen.getByTestId('card-question-state').textContent).toContain('continued without an answer')
     expect(screen.getByTestId('card-question-state').textContent).toContain('integration package as a hand-off')
+  })
+
+  it('says a card expired with no decision, never that its run continued (final wave, finding 7)', () => {
+    renderRow(answerDecision({ card: { ...base, askerWaiting: false, closed: { ...timedOut, runContinued: false }, timeoutRefusal: null, lateAnswerFate: 'hand_off' } }))
+    expect(screen.getByTestId('card-question-state').textContent).toContain('The card expired with no decision')
+    expect(screen.getByTestId('card-question-state').textContent).not.toContain('continued')
   })
 
   it('says a parked run still waits, and why it cannot continue', () => {
@@ -496,7 +502,7 @@ describe('a question card says how its question stands (human cards H1/H3)', () 
   })
 
   it('names how, by whom and when a closed question closed', () => {
-    renderRow(answerDecision({ card: { ...base, askerWaiting: false, closed: { reason: 'dismissed', at: '2026-10-02T09:00:00.000Z', by: 'u1', byName: 'alice' }, timeoutRefusal: null } }))
+    renderRow(answerDecision({ card: { ...base, askerWaiting: false, closed: { reason: 'dismissed', at: '2026-10-02T09:00:00.000Z', by: 'u1', byName: 'alice', runContinued: false }, timeoutRefusal: null } }))
     expect(screen.getByTestId('card-question-state').textContent).toBe('Closed without an answer by alice at 2026-10-02T09:00:00.000Z.')
   })
 
