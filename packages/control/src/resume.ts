@@ -62,6 +62,10 @@ export async function requestResume(
    * passes `'human'`, because it is one.
    */
   actor: 'human' | 'system' = 'human',
+  /** Human cards plan A D7: claim only when no intent stands (`resumeRequestedAt IS NULL`), so the
+   *  timeout pass and `deliverAnswers` write one resume between them; the loser is refused
+   *  `resume_already_requested`. Off by default: a person's Resume button still overwrites. */
+  options: { readonly onlyIfNotRequested?: boolean } = {},
 ): Promise<Result<void, ControlRefusal>> {
   // An empty or whitespace-only message is the "say nothing" case, not a literal instruction: the
   // adapter would otherwise spawn the child with `-p ''` (see `updateQueuedMessage`'s doc comment
@@ -140,10 +144,16 @@ export async function requestResume(
   // a single overwritable slot, and `null` here means "say nothing", not "say nothing instead of
   // what was already queued".
   const claimed = await prisma.slaveRun.updateMany({
-    where: { id: run.id, status: 'paused' },
+    where: { id: run.id, status: 'paused', ...(options.onlyIfNotRequested === true ? { resumeRequestedAt: null } : {}) },
     data: { resumeRequestedAt: new Date(), ...(message === null ? {} : { queuedMessage: message }) },
   })
   if (claimed.count === 0) {
+    // The claim lost on the intent, not the status: someone else's resume already stands. Told
+    // apart from `wrong_status` so the loser knows the run IS continuing, just not with its message.
+    if (options.onlyIfNotRequested === true) {
+      const now = await prisma.slaveRun.findUnique({ where: { id: run.id }, select: { status: true, resumeRequestedAt: true } })
+      if (now?.status === 'paused' && now.resumeRequestedAt !== null) return err({ kind: 'resume_already_requested', runId: run.id })
+    }
     return err({ kind: 'wrong_status', runId: run.id, status: run.status, needed: RESUMABLE_STATUSES })
   }
 

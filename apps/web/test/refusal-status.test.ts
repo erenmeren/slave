@@ -12,6 +12,9 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   run_not_found: true,
   wrong_status: true,
   workspace_halted: true,
+  // Human cards plan A D7: a second resume intent where the first stands. 409 -- the run is there
+  // and already continuing.
+  resume_already_requested: true,
   workspace_archived: true,
   already_archived: true,
   not_archived: true,

@@ -45,6 +45,7 @@ import { permissionOwnership } from './ownership.js'
 import { dispatchPlanning } from './planning.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
+import { continueWaitingRuns } from './questionTimeout.js'
 import { executeResume } from './resume.js'
 import { buildRunContext } from './runContext.js'
 import { createRunUnlessArchived } from './runs.js'
@@ -349,10 +350,14 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
     // not be it. The answer delivery rides under the same rule (fix round 1, M3): a run waiting
     // for an answer is `paused`, and under a breaker halt the answer that would wake it must still
     // be delivered.
-    if (breachRefusingResume(breaches) === null) {
-      await deliverAnswers(deps.workspaceId)
-      await resumeRequestedRuns(deps)
-    }
+    const resumesCarriedOut = breachRefusingResume(breaches) === null
+    if (resumesCarriedOut) await deliverAnswers(deps.workspaceId)
+    // Human cards H3 (plan A F5): the timeout pass runs under EVERY halt, the two that refuse a
+    // resume included. There `requestResume` refuses before writing anything, so the run keeps
+    // waiting and the question stores why (`timeoutRefusal`) for its card to say. Between the
+    // delivery and the resume pass, as on the ordinary branch below.
+    await continueWaitingRuns(deps.workspaceId)
+    if (resumesCarriedOut) await resumeRequestedRuns(deps)
     // The Supervisor still runs on this branch (spec §5, clarified in fix round 1). A halted
     // workspace is precisely the one an operator most needs a decision about -- `workspace_halted`
     // is a situation in its own right -- and returning before the pass meant the daemon could never
@@ -420,6 +425,11 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   // intent, and the very next line claims and spawns it, so a waiting slave is continued in the
   // same tick rather than one period later.
   await deliverAnswers(deps.workspaceId)
+
+  // Human cards H3 (plan A D7): a run whose question nobody answered within the question timeout,
+  // or whose question a person closed without an answer, continues -- after delivery, so a real
+  // answer always goes first, and before the resume pass, so it continues in this tick.
+  await continueWaitingRuns(deps.workspaceId)
 
   await resumeRequestedRuns(deps)
 

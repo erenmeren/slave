@@ -338,6 +338,19 @@ describe('the resume intent', () => {
     expect(event?.payload).toEqual({ requestedBy: 'meren', message: null })
   })
 
+  it('refuses a second intent when asked only if none stands (human cards plan A D7)', async (): Promise<void> => {
+    const { run } = fixture
+    expect((await requestResume(run.id, 'first', 'a', undefined, 'system', { onlyIfNotRequested: true })).ok).toBe(true)
+    const second = await requestResume(run.id, 'second', 'b', undefined, 'system', { onlyIfNotRequested: true })
+    expect(!second.ok && second.error.kind).toBe('resume_already_requested')
+    expect(!second.ok && refusalText(second.error)).toContain('the first one stands')
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).queuedMessage).toBe('first')
+    expect(await prisma.executionEvent.count({ where: { runId: run.id, type: 'run_resume_requested' } })).toBe(1)
+    // Off by default: a person's Resume still overwrites the standing intent.
+    expect((await requestResume(run.id, 'third', 'meren')).ok).toBe(true)
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).queuedMessage).toBe('third')
+  })
+
   describe('requestResume liveness', () => {
     async function pausedRunWithCheckpoint(pid: number | null): Promise<string> {
       await prisma.slaveRun.update({ where: { id: fixture.run.id }, data: { status: 'paused', pid } })

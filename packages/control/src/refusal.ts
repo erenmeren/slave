@@ -29,6 +29,10 @@ export type ControlRefusal =
       readonly needed: readonly string[]
     }
   | { readonly kind: 'workspace_halted'; readonly workspaceId: string; readonly reason: string }
+  /** Human cards plan A D7: `requestResume(…, { onlyIfNotRequested })` found an intent already
+   *  standing -- the timeout pass and `deliverAnswers` race to one resume, and this is the loser.
+   *  409 by `refusalStatus`'s suffix rule. */
+  | { readonly kind: 'resume_already_requested'; readonly runId: string }
   /** `admitRun` on an archived project (M27 §3.3): nothing dispatches for it until `restore-workspace`. */
   | { readonly kind: 'workspace_archived'; readonly workspaceId: string }
   /** `archiveWorkspace` on a project that is already archived (M27 §3.2). */
@@ -650,6 +654,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return `no run with id ${refusal.runId}`
     case 'wrong_status':
       return `run ${refusal.runId} is ${refusal.status}; this needs one of: ${refusal.needed.join(', ')}`
+    case 'resume_already_requested':
+      return `run ${refusal.runId} already has a resume waiting: the first one stands`
     case 'workspace_halted':
       return (
         `this workspace is halted (${refusal.reason}). Nothing will run until an operator retracts ` +
