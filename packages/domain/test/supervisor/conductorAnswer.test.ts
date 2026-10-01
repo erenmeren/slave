@@ -9,7 +9,7 @@ import {
   type ConductorAnswer,
 } from '../../src/supervisor/conductorAnswer.js'
 import { draftSchema } from '../../src/supervisor/answerPrompt.js'
-import { CONDUCTOR_PROMPT_DECISIONS_MAX_CHARS } from '../../src/supervisor/constants.js'
+import { CONDUCTOR_ANSWER_OUTPUT_MAX_CHARS, CONDUCTOR_PROMPT_DECISIONS_MAX_CHARS } from '../../src/supervisor/constants.js'
 import { conductorPlan, question } from './fixtures.js'
 
 const answer = (over: Partial<ConductorAnswer> = {}): ConductorAnswer => ({
@@ -276,5 +276,32 @@ describe('fix round 1 (review minors)', () => {
     const section = prompt.slice(prompt.indexOf('SHARED DECISIONS'), prompt.indexOf('YOUR EARLIER ANSWERS'))
     expect(section.length).toBeLessThanOrEqual(CONDUCTOR_PROMPT_DECISIONS_MAX_CHARS + 100)
     expect(section).toContain('more shared decisions not shown')
+  })
+})
+
+describe('fix round 2: the reply scanner', () => {
+  const raw = { messageId: 'm1', answer: 'yes', basis: { requirements: ['R1'], packages: [], decisions: [] }, changes: 'none', newDecision: null, handOff: null }
+  const block = JSON.stringify({ conductorAnswers: [raw] })
+
+  it('scans 50,000 unclosed braces, or quoted ones, in linear time', () => {
+    for (const text of ['{'.repeat(50_000), '{"'.repeat(50_000), `${'{'.repeat(50_000)}${block}`]) {
+      const started = performance.now()
+      parseConductorAnswers(text, ['m1'])
+      expect(performance.now() - started).toBeLessThan(200)
+    }
+    expect(parseConductorAnswers('{'.repeat(50_000), ['m1']).ok).toBe(false)
+  })
+
+  it('finds the real block inside an unclosed brace that a stray one closes', () => {
+    const parsed = parseConductorAnswers(`{ oops, let me think ... ${block} }`, ['m1'])
+    expect(parsed.ok && parsed.value[0]?.answer).toBe('yes')
+    const unclosed = parseConductorAnswers(`{ oops ${block}`, ['m1'])
+    expect(unclosed.ok && unclosed.value[0]?.answer).toBe('yes')
+  })
+
+  it('fails a reply over the output cap with the reason', () => {
+    const parsed = parseConductorAnswers(`${'x'.repeat(CONDUCTOR_ANSWER_OUTPUT_MAX_CHARS)}${block}`, ['m1'])
+    expect(parsed.ok).toBe(false)
+    expect(!parsed.ok && parsed.error).toContain(String(CONDUCTOR_ANSWER_OUTPUT_MAX_CHARS))
   })
 })

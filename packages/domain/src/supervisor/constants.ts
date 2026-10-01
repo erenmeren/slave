@@ -290,3 +290,6 @@ export const CONDUCTOR_PLAN_HANDOFFS_MAX = 30
 
 /** Controller ruling F12: the shared decisions' share of the batched answer prompt; the rest are named, never cut. */
 export const CONDUCTOR_PROMPT_DECISIONS_MAX_CHARS = 12_000
+
+/** Fix round 2: the longest batched-answer reply the parser reads; ten answers of ANSWER_MAX_CHARS fit with room to spare. */
+export const CONDUCTOR_ANSWER_OUTPUT_MAX_CHARS = 200_000

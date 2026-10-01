@@ -7,7 +7,7 @@ import { err, ok, type Result } from '../result.js'
 import { neutraliseMarkers } from '../run-context/render.js'
 import type { Tier } from './actions.js'
 import type { Draft } from './answerPrompt.js'
-import { ANSWER_MAX_CHARS, CONDUCTOR_PROMPT_DECISIONS_MAX_CHARS, GOAL_DECISIONS_MAX, THREAD_BODY_MAX_CHARS } from './constants.js'
+import { ANSWER_MAX_CHARS, CONDUCTOR_ANSWER_OUTPUT_MAX_CHARS, CONDUCTOR_PROMPT_DECISIONS_MAX_CHARS, GOAL_DECISIONS_MAX, THREAD_BODY_MAX_CHARS } from './constants.js'
 import {
   CONDUCTOR_CHANGES,
   CONDUCTOR_UNVERIFIED_ITEM_MAX_CHARS,
@@ -145,50 +145,60 @@ function readOptional<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, raw: unkno
 /** Fix round 1: the note that holds a question the reply answered twice -- which answer is meant is a person's call. */
 export const ANSWERED_TWICE_NOTE = 'the reply answered this question more than once'
 
+/** Fix round 2: how many key-carrying objects the parser tries, last first, before giving up. */
+const CONDUCTOR_ANSWER_CANDIDATES_MAX = 20
+
 /**
- * Every top-level `{...}` in `text`, in order, brace-matched with string awareness (as
- * `firstJsonObject` is). A `{` whose object never closes is skipped, so a stray brace in the prose
- * does not swallow the reply after it.
+ * Fix round 2: the balanced `{...}` spans of `text` that carry {@link CONDUCTOR_ANSWERS_KEY} as a
+ * string directly inside them, at ANY nesting depth, latest start first. One linear pass: a stack of
+ * open braces, with string and escape state while one is open. An unclosed brace is dropped at the
+ * end and never rescanned (no `{{{{...` blow-up), and an inner object is a candidate in its own right,
+ * so a stray `}` that closes around the real block -- `{ oops ... {"conductorAnswers": ...} }` --
+ * cannot hide it. Only spans holding the key's own string are kept, and at most
+ * {@link CONDUCTOR_ANSWER_CANDIDATES_MAX} of them, so parsing them stays bounded too.
  */
-function topLevelJsonObjects(text: string): readonly string[] {
-  const objects: string[] = []
-  let start = text.indexOf('{')
-  while (start !== -1) {
-    let end = -1
-    let depth = 0
-    let inString = false
-    let escaped = false
-    for (let index = start; index < text.length; index += 1) {
-      const character = text[index]!
-      if (inString) {
-        if (escaped) escaped = false
-        else if (character === '\\') escaped = true
-        else if (character === '"') inString = false
-        continue
+function answerCandidates(text: string): { readonly balanced: boolean; readonly spans: readonly string[] } {
+  const stack: { start: number; hasKey: boolean }[] = []
+  const found: { start: number; end: number }[] = []
+  let balanced = false
+  let inString = false
+  let escaped = false
+  let stringStart = 0
+  const key = CONDUCTOR_ANSWERS_KEY
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]!
+    if (inString) {
+      if (escaped) escaped = false
+      else if (character === '\\') escaped = true
+      else if (character === '"') {
+        inString = false
+        const top = stack.at(-1)
+        if (top !== undefined && index - stringStart - 1 === key.length && text.startsWith(key, stringStart + 1)) top.hasKey = true
       }
-      if (character === '"') inString = true
-      else if (character === '{') depth += 1
-      else if (character === '}') {
-        depth -= 1
-        if (depth === 0) {
-          end = index
-          break
-        }
-      }
-    }
-    if (end === -1) {
-      start = text.indexOf('{', start + 1)
       continue
     }
-    objects.push(text.slice(start, end + 1))
-    start = text.indexOf('{', end + 1)
+    if (character === '"' && stack.length > 0) {
+      inString = true
+      stringStart = index
+    } else if (character === '{') stack.push({ start: index, hasKey: false })
+    else if (character === '}') {
+      const frame = stack.pop()
+      if (frame === undefined) continue
+      balanced = true
+      if (frame.hasKey) found.push({ start: frame.start, end: index })
+    }
   }
-  return objects
+  const spans = found
+    .sort((x, y) => y.start - x.start)
+    .slice(0, CONDUCTOR_ANSWER_CANDIDATES_MAX)
+    .map((span) => text.slice(span.start, span.end + 1))
+  return { balanced, spans }
 }
 
 /**
- * The batched reply (plan B D3/D4): the LAST top-level JSON object that parses and carries
- * {@link CONDUCTOR_ANSWERS_KEY} (fix round 1) -- a model that quotes `{error}` in a preamble, or
+ * The batched reply (plan B D3/D4): the latest-starting JSON object, at any depth, that parses and
+ * carries {@link CONDUCTOR_ANSWERS_KEY} (fix rounds 1-2), from a reply of at most
+ * `CONDUCTOR_ANSWER_OUTPUT_MAX_CHARS` -- a model that quotes `{error}` in a preamble, or
  * corrects a first draft, is read by its final block. Unlike the decision call, a second block gives
  * the model no second go at an authority: every answer is still basis-checked and tiered. An entry
  * of the wrong shape or one naming a question that was not asked is skipped -- its question is
@@ -199,11 +209,15 @@ function topLevelJsonObjects(text: string): readonly string[] {
  * the shared reviver before anything reads them (F6).
  */
 export function parseConductorAnswers(text: string, asked: readonly string[]): Result<readonly ConductorAnswer[], string> {
-  const objects = topLevelJsonObjects(text)
-  if (objects.length === 0) return err('the answer carried no JSON object')
+  if (text.length > CONDUCTOR_ANSWER_OUTPUT_MAX_CHARS) {
+    return err(`the answer was ${String(text.length)} characters, over the ${String(CONDUCTOR_ANSWER_OUTPUT_MAX_CHARS)} a batched answer may be`)
+  }
+  const { balanced, spans } = answerCandidates(text)
+  if (!balanced) return err('the answer carried no JSON object')
+  if (spans.length === 0) return err(`the answer must be {"${CONDUCTOR_ANSWERS_KEY}": [...]}`)
   let parsedAny = false
   let list: unknown
-  for (const json of objects.toReversed()) {
+  for (const json of spans) {
     let value: unknown
     try {
       value = JSON.parse(json, storableJsonReviver)
