@@ -37,7 +37,7 @@ const reset = async (): Promise<void> => {
   // and a `CompanySlave`, both name-unique, so a second run of this file would collide on rows the
   // first left behind. `Capability` stays out -- it is the seeded taxonomy other files read.
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SupervisorMessage", "SlaveMessage", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "User", "CollaborationHint", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SupervisorMessage", "SlaveMessage", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "User", "CollaborationHint", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate", "PackageHandOff", "GoalDecision" RESTART IDENTITY CASCADE',
   )
 }
 
@@ -2368,5 +2368,90 @@ describe('loadSupervisorWorld -- goal versions and their verification (Conductor
 
     const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
     expect(world.questions.map((q) => q.messageId).sort()).toEqual([asked.get('live'), ask.value.id].sort())
+  })
+
+  // Supervisor-as-conductor plan B D8 (spec C5, OBS-9): a finished task's report question that was
+  // decided about -- answered, or sent to a person -- is not pending for the conductor path any more.
+  it('drops a done task\'s report question once it was decided about, and keeps an undecided one and a live task\'s (conductor C5)', async (): Promise<void> => {
+    const fixture = await seed()
+    const worker = await seat(fixture, 'Wes', ['implementer'])
+    await delivery(fixture, 1, { status: 'integrating' })
+    const pkg = await prisma.workPackage.create({ data: { workspaceId: fixture.workspaceId, goalVersion: 1, key: 'report', title: 'r', requirementKeys: ['R1'], ownedPaths: ['r/**'], interface: '', templateId: 't-backend' } })
+    const task = async (status: 'done' | 'rework'): Promise<string> =>
+      (await prisma.task.create({ data: { workspaceId: fixture.workspaceId, title: status, description: 'x', status, requiredRole: 'implementer', maxAttempts: 3, assigneeId: worker, workPackageId: pkg.id, goalVersion: 1 } })).id
+    const ask = async (taskId: string, body: string): Promise<string> => {
+      const run = await prisma.slaveRun.create({ data: { slaveId: worker, taskId, status: 'succeeded', kind: 'implementation' } })
+      const sent = await sendMessage(run.id, { kind: 'question', body, recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId, idempotencyKey: reportQuestionKey(run.id, 0) })
+      if (!sent.ok) throw new Error('send failed')
+      return sent.value.id
+    }
+    const done = await task('done')
+    const rejected = await ask(done, 'rejected once')
+    const undecided = await ask(done, 'never decided')
+    const refused = await ask(done, 'its verb refused')
+    const live = await ask(await task('rework'), 'decided, task live')
+    for (const [subjectId, status] of [[rejected, 'rejected'], [live, 'rejected'], [refused, 'failed']] as const) {
+      await prisma.supervisorDecision.create({
+        data: { workspaceId: fixture.workspaceId, situationKind: 'conductor_question', subjectId, situation: {}, candidates: [], chosenIndex: 0, action: { kind: 'escalate_to_human', summary: 'x' }, rationale: 'x', tier: 'escalated', status, decidedBy: 'rules' },
+      })
+    }
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.questions.map((q) => q.messageId).sort()).toEqual([undecided, refused, live].sort())
+    // A report question's run has finished: it is never parked on it.
+    expect(world.questions.every((q) => !q.askerWaiting)).toBe(true)
+  })
+
+  // Plan B D9: the conductor's plan, loaded only when a conductor question is pending.
+  it('loads the plan of the goal version a conductor question belongs to (conductor D9)', async (): Promise<void> => {
+    const fixture = await seed()
+    const worker = await seat(fixture, 'Wes', ['implementer'])
+    await prisma.requirementSet.create({ data: { workspaceId: fixture.workspaceId, goalVersion: 1, items: [{ key: 'R1', text: 'csv', source: 's' }] } })
+    const pkg = await prisma.workPackage.create({ data: { workspaceId: fixture.workspaceId, goalVersion: 1, key: 'report', title: 'Report', requirementKeys: ['R1'], ownedPaths: ['r/**'], interface: 'render()', templateId: 't-backend' } })
+    const taskId = (await prisma.task.create({ data: { workspaceId: fixture.workspaceId, title: 'Report', description: 'x', status: 'waiting', requiredRole: 'implementer', maxAttempts: 3, assigneeId: worker, workPackageId: pkg.id, goalVersion: 1 } })).id
+    await prisma.goalDecision.create({ data: { workspaceId: fixture.workspaceId, goalVersion: 1, title: 'API field naming', titleKey: 'api field naming', decision: 'camelCase', source: 'conductor_plan' } })
+    // Ruling F7: a settled reopen is stored `delivered` with `reopenedAt`, and the plan reads it as `reopened`.
+    const handOff = { workspaceId: fixture.workspaceId, goalVersion: 1, source: 'report' as const, fromRunId: 'r0', fromPackageKey: 'api', toPackageKey: 'report', fingerprint: 'f' }
+    await prisma.packageHandOff.create({ data: { ...handOff, sourceKey: 'k1', change: 'add a total row', status: 'delivered', reopenedAt: ago(60_000), createdAt: ago(120_000) } })
+    await prisma.packageHandOff.create({ data: { ...handOff, sourceKey: 'k2', change: 'rename the column', status: 'delivered', createdAt: ago(60_000) } })
+    // An earlier conductor question of this version, answered.
+    const earlierRun = await prisma.slaveRun.create({ data: { slaveId: worker, taskId, status: 'succeeded', kind: 'implementation' } })
+    const earlier = await sendMessage(earlierRun.id, { kind: 'question', body: 'which delimiter?', recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId })
+    if (!earlier.ok) throw new Error('send failed')
+    await prisma.slaveMessage.create({
+      data: { workspaceId: fixture.workspaceId, slaveId: worker, taskId, threadId: earlier.value.threadId, replyToId: earlier.value.id, kind: 'answer', body: 'a comma', actor: 'system' },
+    })
+    const parked = await prisma.slaveRun.create({ data: { slaveId: worker, taskId, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' } })
+    const sent = await sendMessage(parked.id, { kind: 'question', body: 'which port?', recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId })
+    if (!sent.ok) throw new Error('send failed')
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.questions.find((q) => q.messageId === sent.value.id)).toMatchObject({ goalVersion: 1, askerPackageKey: 'report', askerWaiting: true })
+    expect(world.conductorPlans).toEqual([
+      expect.objectContaining({
+        goalVersion: 1,
+        requirements: [{ key: 'R1', text: 'csv' }],
+        packages: [expect.objectContaining({ key: 'report', ownedPaths: ['r/**'], taskStatus: 'waiting', interface: 'render()' })],
+        decisions: [{ title: 'API field naming', decision: 'camelCase', source: 'conductor_plan' }],
+        answers: [{ question: 'which delimiter?', answer: 'a comma' }],
+        handOffs: [
+          { from: 'api', to: 'report', change: 'add a total row', status: 'reopened' },
+          { from: 'api', to: 'report', change: 'rename the column', status: 'delivered' },
+        ],
+      }),
+    ])
+  })
+
+  it('loads no plan when no conductor question is pending (conductor D9)', async (): Promise<void> => {
+    const fixture = await seed()
+    const worker = await seat(fixture, 'Wes', ['implementer'])
+    await prisma.workPackage.create({ data: { workspaceId: fixture.workspaceId, goalVersion: 1, key: 'report', title: 'Report', requirementKeys: ['R1'], ownedPaths: ['r/**'], interface: '', templateId: 't-backend' } })
+    // A question to another role of a packaged version loads no plan either.
+    const taskId = (await prisma.task.create({ data: { workspaceId: fixture.workspaceId, title: 'r', description: 'x', status: 'waiting', requiredRole: 'implementer', maxAttempts: 3, assigneeId: worker, goalVersion: 1 } })).id
+    const parked = await prisma.slaveRun.create({ data: { slaveId: worker, taskId, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' } })
+    const sent = await sendMessage(parked.id, { kind: 'question', body: 'which port?', recipientRole: 'implementer', expectsReply: true, taskId })
+    if (!sent.ok) throw new Error('send failed')
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.questions).toEqual([expect.objectContaining({ goalVersion: 1, askerPackageKey: null, askerWaiting: true })])
+    expect(world.conductorPlans).toEqual([])
   })
 })
