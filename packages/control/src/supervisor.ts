@@ -1464,6 +1464,14 @@ export async function expirePendingDecisions(workspaceId: string, now: Date): Pr
       // Human cards H1 (plan A D4): a question card's expiry times its question out in the same
       // transaction -- unless its asker is parked on it, whose wait the timeout pass owns (F6).
       const question = isQuestionSituation(row.situationKind) ? await lockCardQuestion(tx, workspaceId, row.subjectId) : null
+      // Final wave, finding 3: nor does the card expire while its asker is parked on the open
+      // question. The question timeout can run to 72 hours (and a halt holds the wait longer), so a
+      // card that expired at 24 hours would be raised again and expire again every day of one wait.
+      // Its deadline moves on instead; the timeout pass, an answer or a person ends the wait.
+      if (question !== null && question.askerParked && question.closedAt === null) {
+        await tx.supervisorDecision.updateMany({ where: { id: row.id, status: 'pending' }, data: { expiresAt: new Date(now.getTime() + PENDING_TTL_MS) } })
+        return { taken: false as const }
+      }
       const taken = await tx.supervisorDecision.updateMany({
         where: { id: row.id, status: 'pending' },
         data: { status: 'expired', resolvedAt: now },

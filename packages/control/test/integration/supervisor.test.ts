@@ -3188,12 +3188,32 @@ describe('a card closes its question (human cards H1)', () => {
     expect((await loadQuestionCards(f.workspaceId, [f.questionId])).get(f.questionId)?.closed?.runContinued).toBe(false)
   })
 
-  it('leaves a parked asker\'s question open when its card expires: the timeout pass owns that wait (ruling F6)', async () => {
+  it('neither expires a parked asker\'s card nor closes its question: the timeout pass owns that wait (ruling F6, final wave finding 3)', async () => {
     const f = await seedQuestion({ parked: true })
     const now = new Date()
-    await escalation(f.workspaceId, 'waiting_stale', f.questionId, { expiresAt: new Date(now.getTime() - 1000) })
-    expect(await expirePendingDecisions(f.workspaceId, now)).toBe(1)
+    const card = await escalation(f.workspaceId, 'waiting_stale', f.questionId, { expiresAt: new Date(now.getTime() - 1000) })
+    expect(await expirePendingDecisions(f.workspaceId, now)).toBe(0)
     expect((await question(f.questionId)).closedAt).toBeNull()
+    expect(await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: card.id } })).toMatchObject({ status: 'pending', expiresAt: new Date(now.getTime() + PENDING_TTL_MS) })
+  })
+
+  it('keeps one card across a 72-hour question timeout while its asker is parked (final wave, finding 3)', async () => {
+    const f = await seedQuestion({ parked: true })
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { questionTimeoutMs: 72 * 3_600_000 } })
+    const start = new Date()
+    expect((await record(f.workspaceId, 'waiting_stale', f.questionId, start)).ok).toBe(true)
+    for (const hours of [12, 24, 36, 48]) {
+      const at = new Date(start.getTime() + hours * 3_600_000 + 1000)
+      expect(await expirePendingDecisions(f.workspaceId, at)).toBe(0)
+      const again = await record(f.workspaceId, 'waiting_stale', f.questionId, at)
+      expect(!again.ok && again.error.kind).toBe('supervisor_cooldown')
+    }
+    const cards = await prisma.supervisorDecision.findMany({ where: { workspaceId: f.workspaceId } })
+    expect(cards.map((c) => c.status)).toEqual(['pending'])
+    expect((await question(f.questionId)).closedAt).toBeNull()
+    // Once the asker is no longer parked, the card expires as any other.
+    await prisma.slaveRun.update({ where: { id: f.runId }, data: { status: 'working', pauseReason: null } })
+    expect(await expirePendingDecisions(f.workspaceId, new Date(start.getTime() + 80 * 3_600_000))).toBe(1)
   })
 
   it('leaves the question open when an approved card moves it to somebody who can answer', async () => {
