@@ -735,7 +735,9 @@ describe('candidates -- questions', () => {
 
   it('offers no answer on a waiting_stale about the conductor: the batch owns the answer (plan B D2)', () => {
     const w = world({ questions: [question({ createdAt: STALE, recipientRole: 'conductor', askerWaiting: true })] })
-    const stale = observe(w).find((s) => s.kind === 'waiting_stale')!
+    // Human cards plan A D3: observe no longer raises it, but a stored card of that kind can still be re-decided.
+    expect(observe(w).some((s) => s.kind === 'waiting_stale')).toBe(false)
+    const stale: Situation = { kind: 'waiting_stale', subjectId: 'm1', summary: 'A run has waited for the conductor.', facts: {} }
     expect(kinds(candidates(stale, w))).toEqual(['escalate_to_human', 'no_action'])
   })
 

@@ -365,12 +365,10 @@ describe('observe -- unanswerable_question', () => {
     expect(situations[0]?.facts).toMatchObject({ goalVersion: 1, askerWaiting: false })
   })
 
-  it('also raises waiting_stale for a run parked on the conductor for more than 30 minutes, never for a report question (spec C5)', () => {
+  it('never raises waiting_stale for a question to the conductor: one card per question (human cards H1, plan A D3)', () => {
     const old = NOW - WAITING_STALE_MS - 60_000
     const parked = observe(world({ questions: [question({ createdAt: old, recipientRole: 'conductor', askerWaiting: true })] }))
-    expect(keys(parked)).toEqual([['waiting_stale', 'm1'], ['conductor_question', 'm1']])
-    const reported = observe(world({ questions: [question({ createdAt: old, recipientRole: 'conductor', askerWaiting: false })] }))
-    expect(keys(reported)).toEqual([['conductor_question', 'm1']])
+    expect(keys(parked)).toEqual([['conductor_question', 'm1']])
   })
 
   it('reports a question addressed to a slave that is not in the workspace', () => {
@@ -784,6 +782,15 @@ describe('observe -- goal_needs_human and verification_failed (Conductor Plan 4b
       decisions: [decision({ situationKind: 'verification_failed', subjectId: 'ws-1:v1:r1', tier: 'noop', createdAt: NOW - 20 * 60_000 })],
     })
     expect(observe(w)).toHaveLength(1)
+    expect(filterFresh(observe(w), w)).toEqual([])
+  })
+
+  it('holds every question kind of a question that has an open card (human cards H1)', () => {
+    const w = world({
+      questions: [question({ createdAt: NOW - WAITING_STALE_MS - 60_000, recipientRole: 'security' })],
+      decisions: [decision({ situationKind: 'waiting_stale', subjectId: 'm1', status: 'pending', tier: 'escalated', createdAt: NOW - 60 * 60_000 })],
+    })
+    expect(keys(observe(w))).toEqual([['unanswerable_question', 'm1']])
     expect(filterFresh(observe(w), w)).toEqual([])
   })
 

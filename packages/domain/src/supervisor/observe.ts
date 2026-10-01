@@ -11,6 +11,7 @@ import { recommendRunbooks } from '../runbook/recommend.js'
 import { holdsRole } from '../scheduler/assign.js'
 import { hasStartableWork } from '../scheduler/decide.js'
 import { TERMINAL } from '../task/state.js'
+import { isQuestionSituation } from './cards.js'
 import { isStaffableTask } from './candidates.js'
 import { readsAsPlatform } from './diagnosis.js'
 import {
@@ -454,7 +455,7 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
   for (const question of world.questions) {
     // Supervisor-as-conductor spec C4 (plan B D1): the conductor's role is held by nobody by design,
     // so a question to it is not "unanswerable" -- it is the conductor's to answer from the plan, at
-    // once. A parked asker that has waited past the threshold is ALSO made visible (spec C5, D2).
+    // once. Human cards plan A D3: a parked asker is not raised again as `waiting_stale`. The question has one card, and its wait ends at the project's question timeout.
     if (question.recipientRole === CONDUCTOR_ROLE) {
       add({
         kind: 'conductor_question',
@@ -462,14 +463,6 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
         summary: `A question to the conductor${question.goalVersion === null ? '' : ` about goal v${String(question.goalVersion)}`} waits for an answer from the plan.`,
         facts: { ...questionFacts(question, world), goalVersion: question.goalVersion, askerWaiting: question.askerWaiting },
       })
-      if (question.askerWaiting && world.now - question.createdAt > WAITING_STALE_MS) {
-        add({
-          kind: 'waiting_stale',
-          subjectId: question.messageId,
-          summary: `A run has waited ${String(Math.floor((world.now - question.createdAt) / 60_000))} minutes for the conductor's answer.`,
-          facts: questionFacts(question, world),
-        })
-      }
       continue
     }
     if (!questionHasRecipient(world, question)) {
@@ -843,6 +836,8 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
 export function filterFresh(situations: readonly Situation[], world: SupervisorWorld): readonly Situation[] {
   const key = (kind: SituationKind, subjectId: string): string => `${kind} ${subjectId}`
   const blocked = new Set<string>()
+  // Human cards H1 (plan A D2): a question has at most one open card, whatever kind raised it.
+  const openQuestions = new Set<string>()
   for (const decision of world.decisions) {
     const anchor = decision.resolvedAt ?? decision.createdAt
     // M51 R3: the per-kind override, defaulting to the standing fifteen minutes. The `pending`
@@ -852,8 +847,11 @@ export function filterFresh(situations: readonly Situation[], world: SupervisorW
     const cooldownMs = COOLDOWN_BY_KIND[decision.situationKind] ?? COOLDOWN_MS
     const cooling = decision.status === 'pending' || world.now - anchor <= cooldownMs
     if (cooling) blocked.add(key(decision.situationKind, decision.subjectId))
+    if (decision.status === 'pending' && isQuestionSituation(decision.situationKind)) openQuestions.add(decision.subjectId)
   }
-  return situations.filter((situation) => !blocked.has(key(situation.kind, situation.subjectId)))
+  return situations.filter(
+    (situation) => !blocked.has(key(situation.kind, situation.subjectId)) && !(isQuestionSituation(situation.kind) && openQuestions.has(situation.subjectId)),
+  )
 }
 
 /**
