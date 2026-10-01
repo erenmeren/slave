@@ -96,6 +96,12 @@ describe('every union a person reads has a label (M44 R5)', () => {
     expect(SITUATION_LABEL.goal_needs_human).toBe('A goal needs you')
   })
 
+  // Supervisor-as-conductor Plan B: the twenty-fifth situation, by name.
+  it('names the twenty-fifth situation the way a person says it', () => {
+    expect(SITUATION_KINDS).toHaveLength(25)
+    expect(SITUATION_LABEL.conductor_question).toBe('A question for the conductor')
+  })
+
   it('covers every tier, decision status and decider', () => {
     expect(Object.keys(TIER_LABEL).sort()).toEqual([...TIERS].sort())
     expect(Object.keys(DECISION_STATUS_LABEL).sort()).toEqual([...DECISION_STATUSES].sort())

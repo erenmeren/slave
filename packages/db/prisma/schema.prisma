@@ -1426,6 +1426,8 @@ enum Delivery {
 enum ConductorStage {
   requirements
   conduct
+  /// Supervisor-as-conductor spec C4: the batched answer to a version's conductor questions.
+  answer
 }
 
 enum ConductorCallOutcome {
@@ -1588,6 +1590,9 @@ model ConductorCall {
   modelCostUsd Float?
   unmeasured   Boolean              @default(false)
   plan         Json?
+  /// Supervisor-as-conductor plan B D4: the conductor questions an `answer` call carried; empty for
+  /// every other stage.
+  questionIds  String[]             @default([])
   createdAt    DateTime             @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -2179,6 +2184,9 @@ enum SupervisorSituationKind {
   /// Conductor Plan 4b (spec R11, R9): a goal version's loop ended without acceptance, or its final
   /// merge into the base branch failed. Subject is `<workspaceId>:v<n>`.
   goal_needs_human
+  /// Supervisor-as-conductor spec C4: a question to the conductor, answered from the goal version's
+  /// plan by one batched call per version and tick (plan B D1). Subject is the message id.
+  conductor_question
 }
 
 /// What happens to a chosen action -- fixed in code by `tierOf`, never chosen by the model.

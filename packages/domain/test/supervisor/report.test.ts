@@ -183,6 +183,13 @@ describe('summarise -- mailbox', () => {
     expect(summarise(w).mailbox.answeredBySupervisor24h).toBe(1)
   })
 
+  it('counts a conductor answer as the Supervisor answering a question (plan B)', () => {
+    const w = world({
+      decisions: [answerDecision({ situationKind: 'conductor_question', subjectId: 'm1', status: 'applied', tier: 'applied', createdAt: NOW - 1000 })],
+    })
+    expect(summarise(w).mailbox.answeredBySupervisor24h).toBe(1)
+  })
+
   it('does not count an answer decision on a situation that is not a question', () => {
     // Belt and braces: the action names an answer, but the situation is a blocked task. Both
     // halves have to agree before the mailbox claims a question was answered.

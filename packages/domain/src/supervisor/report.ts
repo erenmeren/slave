@@ -3,9 +3,9 @@ import { observe } from './observe.js'
 import type { Situation, SituationKind } from './situations.js'
 import type { SupervisorWorld } from './world.js'
 
-/** The two situation kinds that are about the mailbox -- a question waiting, or one nobody can
- *  take. Every mailbox count below is over decisions on these. */
-const QUESTION_KINDS: readonly SituationKind[] = ['waiting_stale', 'unanswerable_question']
+/** The situation kinds that are about the mailbox -- a question waiting, one nobody can take, and
+ *  (supervisor-as-conductor Plan B) one to the conductor. Every mailbox count below is over decisions on these. */
+const QUESTION_KINDS: readonly SituationKind[] = ['waiting_stale', 'unanswerable_question', 'conductor_question']
 
 /** The window `answeredBySupervisor24h` counts over, closed at both ends. */
 const DAY_MS = 24 * 3_600_000
