@@ -1365,6 +1365,7 @@ describe('tick', () => {
         proposed: 0,
         skippedCooldown: 0,
         modelCalls: 0,
+        conductorCalls: 0,
         rulesOnly: true,
         answered: 0,
         drafted: 0,

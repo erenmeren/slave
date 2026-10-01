@@ -11,7 +11,6 @@ import {
   type WorkspaceStatsSnapshot,
 } from '@slave-of-ai/control'
 import {
-  RULES_ONLY_SITUATION_KINDS,
   SUPERVISOR_MAX_MODEL_DECISIONS_PER_TICK,
   SUPERVISOR_PER_CALL_CAP_USD,
   answerTier,
@@ -20,6 +19,7 @@ import {
   candidates,
   chooseByRules,
   criticalMatches,
+  decidedByRulesOnly,
   filterFresh,
   isSourced,
   neutraliseMarkers,
@@ -36,6 +36,7 @@ import {
   type SupervisorWorld,
   type Tier,
 } from '@slave-of-ai/domain'
+import { answerConductorQuestions } from './conductorAnswers.js'
 
 export interface SuperviseDeps {
   readonly workspaceId: string
@@ -97,6 +98,9 @@ export interface SuperviseReport {
   /** Model calls made, whatever came back. Never more than
    *  `SUPERVISOR_MAX_MODEL_DECISIONS_PER_TICK`. */
   readonly modelCalls: number
+  /** Supervisor-as-conductor plan B D3: batched conductor calls this pass made -- one per goal version
+   *  with conductor questions, outside {@link SuperviseReport.modelCalls}' cap. */
+  readonly conductorCalls: number
   /** True when this pass could not have called a model at all -- no decider or no model wired, the
    *  budget exhausted, the workspace halted, or the Supervisor switched off. It is NOT
    *  `modelCalls === 0`: a pass with a model available and nothing stuck also makes no calls, and
@@ -132,6 +136,7 @@ export const NO_SUPERVISION: SuperviseReport = {
   proposed: 0,
   skippedCooldown: 0,
   modelCalls: 0,
+  conductorCalls: 0,
   rulesOnly: true,
   answered: 0,
   drafted: 0,
@@ -230,15 +235,28 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
   // situation so the two halves cannot be checked in one place and read in another.
   const seam = !world.budgetExhausted && world.halted === null ? modelSeam(deps.decider, deps.model) : null
 
-  let decided = 0
-  let applied = 0
-  let proposed = 0
-  let skippedCooldown = 0
+  // Supervisor-as-conductor spec C4 (plan B D1/D3): conductor questions first, in one call per goal
+  // version, outside the per-tick cap; the loop below never sees them.
+  const conducted = await answerConductorQuestions({
+    workspaceId: deps.workspaceId,
+    world,
+    situations: situations.filter((situation) => situation.kind === 'conductor_question'),
+    seam,
+    profile: settings.profile,
+    now,
+  })
+
+  let decided = conducted.decided
+  let applied = conducted.applied
+  let proposed = conducted.proposed
+  let skippedCooldown = conducted.skippedCooldown
   let modelCalls = 0
-  let answered = 0
-  let drafted = 0
+  let answered = conducted.answered
+  let drafted = conducted.drafted
 
   for (const situation of situations) {
+    if (situation.kind === 'conductor_question') continue
+
     // E R4 ("a `retry_task` applied in the same pass or the previous one"), Task 8 erratum E12.
     //
     // `workspace_halted` is the LAST kind in `SITUATION_KINDS`, so by the time this pass reaches it
@@ -259,8 +277,9 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
     let choice: Choice | null = null
 
     // Conductor Plan 4b (fix round 1, I2): news the loop is already acting on is recorded by the
-    // rules; a model call could only spend money on it, or escalate what needs nobody.
-    const rulesOnlyKind = RULES_ONLY_SITUATION_KINDS.includes(situation.kind)
+    // rules; a model call could only spend money on it, or escalate what needs nobody. Plan B D2: so
+    // is a run parked on the conductor past its wait -- the batch above is what answers it.
+    const rulesOnlyKind = decidedByRulesOnly(situation)
     if (seam !== null && !rulesOnlyKind && modelCalls < SUPERVISOR_MAX_MODEL_DECISIONS_PER_TICK) {
       modelCalls += 1
       choice = await askTheModel({
@@ -367,6 +386,7 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
     proposed,
     skippedCooldown,
     modelCalls,
+    conductorCalls: conducted.calls,
     rulesOnly: seam === null,
     answered,
     drafted,

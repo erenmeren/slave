@@ -1240,6 +1240,39 @@ export async function expirePendingDecisions(workspaceId: string, now: Date): Pr
 }
 
 /**
+ * Supervisor-as-conductor plan B (Task 2 carry): retires the pending `waiting_stale` escalations
+ * about a question the conductor has just answered.
+ *
+ * A run parked on the conductor for 30 minutes is escalated by the rules (spec C5) so a person can
+ * see it; once the batched answer goes out, that card describes a wait that is over, and left alone
+ * it would sit for `PENDING_TTL_MS` asking a person about nothing. Expired, not rejected: nobody
+ * decided against it, the situation simply ended. Each row is claimed conditionally, as
+ * {@link expirePendingDecisions} does, so a person approving in the same instant wins it.
+ */
+export async function retireAnsweredWaitingStale(workspaceId: string, messageId: string, now: Date): Promise<number> {
+  const open = await prisma.supervisorDecision.findMany({
+    where: { workspaceId, subjectId: messageId, situationKind: 'waiting_stale', status: 'pending' },
+    select: { id: true },
+  })
+  let retired = 0
+  for (const row of open) {
+    const claimed = await prisma.supervisorDecision.updateMany({
+      where: { id: row.id, status: 'pending' },
+      data: { status: 'expired', resolvedAt: now },
+    })
+    if (claimed.count === 0) continue
+    retired += 1
+    await appendEvent({
+      type: 'supervisor.resolved',
+      workspaceId,
+      actor: 'system',
+      payload: { decisionId: row.id, outcome: 'expired', reason: 'The conductor answered the question the run was waiting on.' },
+    })
+  }
+  return retired
+}
+
+/**
  * Deletes the decisions nobody will read again (M39 §2), on every supervised tick.
  *
  * A `SupervisorDecision` is an audit record, and a FREE audit record that is older than
