@@ -314,6 +314,13 @@ describe('fix round 2: the reply scanner', () => {
     expect(unclosed.ok && unclosed.value[0]?.answer).toBe('yes')
   })
 
+  it('final wave T3: an odd quote in prose on an earlier line no longer hides a later real block', () => {
+    const parsed = parseConductorAnswers(`{ thinking: the worker said "it's fine\nso here it is:\n${block}`, ['m1'])
+    expect(parsed.ok && parsed.value[0]?.answer).toBe('yes')
+    const closed = parseConductorAnswers(`{ a "stray quote }\n${block}`, ['m1'])
+    expect(closed.ok && closed.value[0]?.answer).toBe('yes')
+  })
+
   it('fails a reply over the output cap with the reason', () => {
     const parsed = parseConductorAnswers(`${'x'.repeat(CONDUCTOR_ANSWER_OUTPUT_MAX_CHARS)}${block}`, ['m1'])
     expect(parsed.ok).toBe(false)

@@ -151,7 +151,8 @@ const CONDUCTOR_ANSWER_CANDIDATES_MAX = 20
 /**
  * Fix round 2: the balanced `{...}` spans of `text` that carry {@link CONDUCTOR_ANSWERS_KEY} as a
  * string directly inside them, at ANY nesting depth, latest start first. One linear pass: a stack of
- * open braces, with string and escape state while one is open. An unclosed brace is dropped at the
+ * open braces, with string and escape state while one is open (reset at a raw newline, final wave
+ * T3). An unclosed brace is dropped at the
  * end and never rescanned (no `{{{{...` blow-up), and an inner object is a candidate in its own right,
  * so a stray `}` that closes around the real block -- `{ oops ... {"conductorAnswers": ...} }` --
  * cannot hide it. Only spans holding the key's own string are kept, and at most
@@ -168,7 +169,12 @@ function answerCandidates(text: string): { readonly balanced: boolean; readonly 
   for (let index = 0; index < text.length; index += 1) {
     const character = text[index]!
     if (inString) {
-      if (escaped) escaped = false
+      // Final wave T3: a JSON string never holds a raw newline, so one ends the "string" -- an odd
+      // `"` in prose cannot carry string state onto a later line and hide the real block there.
+      if (character === '\n') {
+        inString = false
+        escaped = false
+      } else if (escaped) escaped = false
       else if (character === '\\') escaped = true
       else if (character === '"') {
         inString = false
