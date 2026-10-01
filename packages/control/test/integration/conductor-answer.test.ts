@@ -193,6 +193,20 @@ describe('applyConductorOutcome (plan B D7)', () => {
     expect(await handOffs()).toEqual([{ source: 'answer', sourceKey: `answer:${id}:0`, toPackageKey: 'integration', fromPackageKey: null, status: 'pending' }])
   })
 
+  // Final wave T6: a person approving the conductor's card later ends the wait the waiting_stale card is about.
+  it('retires the pending waiting_stale card of a question when a person approves its conductor answer (final wave T6)', async () => {
+    const f = await seed('parked')
+    const stale = await prisma.supervisorDecision.create({
+      data: { workspaceId: f.workspaceId, situationKind: 'waiting_stale', subjectId: f.questionId, situation: {}, candidates: [], chosenIndex: 0, action: { kind: 'escalate_to_human', summary: 'x' }, rationale: 'x', tier: 'escalated', status: 'pending', decidedBy: 'rules' },
+    })
+    const id = await decide(f, draft(conductorWith({})), 'proposed')
+    expect((await approveDecision(id)).ok).toBe(true)
+    expect(await answers(f)).toHaveLength(1)
+    const retired = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: stale.id } })
+    expect(retired.status).toBe('expired')
+    expect(retired.resolvedAt).not.toBeNull()
+  })
+
   it('applies nothing beyond the text when the answer could not be sent', async () => {
     const f = await seed()
     const id = await decide(f, draft(conductorWith({ newDecision: { title: 'Error shape', decision: 'x' }, handOff: { package: 'integration', change: 'y' } })), 'applied')

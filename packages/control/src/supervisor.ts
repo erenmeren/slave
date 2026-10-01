@@ -477,6 +477,17 @@ async function carryOut(
           console.error(`[supervisor] decision ${decision.id}: the conductor answer's decision or hand-off was not recorded:`, error)
         }
       }
+      // Final wave T6: a conductor answer a person approved later ends the wait as surely as a tick's
+      // does, so a pending `waiting_stale` card about it is retired here too (the tick's own path
+      // calls the same verb after it applies; a second call finds nothing). Said and swallowed: the
+      // answer is out, and the card expires by its own deadline.
+      if (sent.ok && conductor !== undefined) {
+        try {
+          await retireAnsweredWaitingStale(decision.workspaceId, action.messageId, new Date())
+        } catch (error) {
+          console.error(`[supervisor] decision ${decision.id}: the waiting_stale card of its question was not retired:`, error)
+        }
+      }
       return reached(sent)
     }
     case 'reassign_question':
