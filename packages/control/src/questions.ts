@@ -3,10 +3,13 @@ import {
   CLOSED_BY_OPERATOR,
   CLOSED_BY_SYSTEM,
   CLOSED_NOTE_MAX_CHARS,
+  LATE_ANSWER_NOTE,
   QUESTION_CLOSED_EVENT_NOTE_MAX_CHARS,
   QUESTION_SITUATION_KINDS,
+  TERMINAL,
   storableText,
   trimToFit,
+  type LateAnswerFate,
   type QuestionCloseReason,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
@@ -130,16 +133,41 @@ const RETIRED_BECAUSE: Readonly<Record<QuestionCloseReason, string>> = {
 }
 
 /**
+ * Task 7 fix round 1: where a late answer to this question goes ({@link LateAnswerFate}), read from
+ * the asking task -- on `tx` when the caller holds the question's lock. A package task: a hand-off.
+ * A task outside any package that has not finished: its next run's inbox. A finished one, or no
+ * task at all (a task-less planning run has no next run on anything): nobody reads it.
+ */
+export async function lateAnswerFate(client: Prisma.TransactionClient, questionId: string): Promise<LateAnswerFate> {
+  const question = await client.slaveMessage.findUnique({ where: { id: questionId }, select: { task: { select: { workPackageId: true, status: true } } } })
+  const task = question?.task ?? null
+  if (task === null) return 'unread'
+  if (task.workPackageId !== null) return 'hand_off'
+  return TERMINAL.includes(task.status) ? 'unread' : 'next_run'
+}
+
+/**
+ * The reason an answered question's cards are retired with, or null when they must stay open. An
+ * answer on time: answered. A late one (the question closed `timed_out`): where it goes, by
+ * {@link lateAnswerFate} -- and nowhere means the card stays open, saying so (Task 7 fix round 1:
+ * "answered" there would tell the person it was acted on).
+ */
+export async function answeredRetireReason(client: Prisma.TransactionClient, questionId: string, closedReason: QuestionCloseReason | null): Promise<string | null> {
+  if (closedReason !== 'timed_out') return RETIRED_BECAUSE.answered
+  const fate = await lateAnswerFate(client, questionId)
+  return fate === 'unread' ? null : LATE_ANSWER_NOTE[fate]
+}
+
+/**
  * Plan A D5, the tick's backstop: every pending question card whose question is closed for any
  * reason but `timed_out` (whose card stays open, spec H3) is retired. Ruling F7: a `timed_out`
- * question that has since taken a late answer is settled too -- the answer goes to the asking package
- * as a hand-off (`routeLateAnswers`), so its card has nothing left to decide; it is retired as
- * answered. One query, and nothing else when there is nothing to retire.
+ * question that has since taken a late answer is settled too, with the reason
+ * {@link answeredRetireReason} gives -- unless no run will ever read that answer, when the card stays
+ * open (Task 7 fix round 1). One query, and nothing else when there is nothing to retire.
  */
 export async function retireClosedQuestionCards(workspaceId: string, now: Date): Promise<number> {
   const rows = await prisma.$queryRaw<{ messageId: string; reason: QuestionCloseReason }[]>`
-    SELECT DISTINCT d."subjectId" AS "messageId",
-      CASE WHEN m."closedReason" = 'timed_out' THEN 'answered' ELSE m."closedReason"::text END AS reason
+    SELECT DISTINCT d."subjectId" AS "messageId", m."closedReason"::text AS reason
     FROM "SupervisorDecision" d
     JOIN "SlaveMessage" m ON m.id = d."subjectId"
     WHERE d."workspaceId" = ${workspaceId}
@@ -151,7 +179,10 @@ export async function retireClosedQuestionCards(workspaceId: string, now: Date):
         OR EXISTS (SELECT 1 FROM "SlaveMessage" a WHERE a."replyToId" = m.id AND a.kind = 'answer')
       )`
   let retired = 0
-  for (const row of rows) retired += await retireQuestionCards(workspaceId, row.messageId, RETIRED_BECAUSE[row.reason], now)
+  for (const row of rows) {
+    const reason = row.reason === 'timed_out' ? await answeredRetireReason(prisma, row.messageId, row.reason) : RETIRED_BECAUSE[row.reason]
+    if (reason !== null) retired += await retireQuestionCards(workspaceId, row.messageId, reason, now)
+  }
   return retired
 }
 

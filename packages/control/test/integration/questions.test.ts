@@ -3,10 +3,10 @@
  * closes its question, and the cards of a closed question are retired.
  */
 import { prisma } from '@slave-of-ai/db/client'
-import { CONDUCTOR_ROLE, QUESTION_SITUATION_KINDS } from '@slave-of-ai/domain'
+import { CONDUCTOR_ROLE, LATE_ANSWER_NOTE, QUESTION_SITUATION_KINDS } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { answerQuestion, listPendingQuestions, reportQuestionKey, sendMessage } from '../../src/messaging.js'
-import { closeQuestion, retireClosedQuestionCards, retireQuestionCards } from '../../src/questions.js'
+import { closeQuestion, lateAnswerFate, retireClosedQuestionCards, retireQuestionCards } from '../../src/questions.js'
 import { loadSupervisorWorld } from '../../src/supervisorWorld.js'
 
 const TRUNCATE =
@@ -109,8 +109,10 @@ describe('closing a question (human cards H1)', () => {
     expect(QUESTION_SITUATION_KINDS).toEqual(['waiting_stale', 'unanswerable_question', 'conductor_question'])
   })
 
-  it('retires a timed-out question\'s open card once a late answer is on record (ruling F7)', async () => {
+  it('retires a timed-out question\'s open card once a late answer is on record, saying where it goes (ruling F7, fix round 1)', async () => {
     const f = await seed()
+    const pkg = await prisma.workPackage.create({ data: { workspaceId: f.workspaceId, goalVersion: 1, key: 'report', title: 'report', requirementKeys: [], ownedPaths: ['src/**'], interface: '', isIntegration: false, templateId: 'tpl' } })
+    await prisma.task.update({ where: { id: f.taskId }, data: { workPackageId: pkg.id } })
     const q = await reportQuestion(f)
     const open = await card(f, q, 'conductor_question')
     await closeQuestion({ messageId: q, reason: 'timed_out', by: 'system', decisionId: null, note: () => null }, 'system', null)
@@ -121,6 +123,45 @@ describe('closing a question (human cards H1)', () => {
     expect(await retireClosedQuestionCards(f.workspaceId, new Date())).toBe(1)
     expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: open.id } })).status).toBe('expired')
     const said = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'supervisor_resolved' } })
-    expect(said.map((e) => (e.payload as { reason: string }).reason)).toEqual(['The question was answered.'])
+    expect(said.map((e) => (e.payload as { reason: string }).reason)).toEqual([LATE_ANSWER_NOTE.hand_off])
+  })
+
+  it('keeps the card of a late answer no run will read open: a finished task outside any package (fix round 1)', async () => {
+    const f = await seed() // its task is done and has no package
+    const q = await reportQuestion(f)
+    const open = await card(f, q, 'conductor_question')
+    await closeQuestion({ messageId: q, reason: 'timed_out', by: 'system', decisionId: null, note: () => null }, 'system', null)
+    expect((await answerQuestion(q, { body: 'late', answeredBy: 'web operator' })).ok).toBe(true)
+    expect(await retireClosedQuestionCards(f.workspaceId, new Date())).toBe(0)
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: open.id } })).status).toBe('pending')
+    expect(await lateAnswerFate(prisma, q)).toBe('unread')
+    expect(LATE_ANSWER_NOTE.unread).toBe('The answer came after the task finished; no run will read it.')
+  })
+
+  it('retires a late answer\'s cards from the answer path with where it goes, and an on-time answer\'s as answered (fix round 1)', async () => {
+    const f = await seed()
+    await prisma.task.update({ where: { id: f.taskId }, data: { status: 'running' } })
+    const late = await reportQuestion(f, 'late one')
+    const lateCard = await card(f, late, 'conductor_question')
+    await closeQuestion({ messageId: late, reason: 'timed_out', by: 'system', decisionId: null, note: () => null }, 'system', null)
+    expect((await answerQuestion(late, { body: 'late', answeredBy: 'web operator' })).ok).toBe(true)
+    const onTime = await reportQuestion(f, 'on time')
+    const onTimeCard = await card(f, onTime, 'waiting_stale')
+    expect((await answerQuestion(onTime, { body: 'now', answeredBy: 'web operator' })).ok).toBe(true)
+    const reasons = async (decisionId: string) =>
+      (await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'supervisor_resolved' } }))
+        .map((e) => e.payload as { decisionId: string; reason: string })
+        .filter((p) => p.decisionId === decisionId)
+        .map((p) => p.reason)
+    expect(await reasons(lateCard.id)).toEqual([LATE_ANSWER_NOTE.next_run])
+    expect(await reasons(onTimeCard.id)).toEqual(['The question was answered.'])
+  })
+
+  it('stores an answer with a NUL byte stripped instead of refusing it (fix round 1)', async () => {
+    const f = await seed()
+    const q = await reportQuestion(f)
+    const sent = await answerQuestion(q, { body: 'camel\u0000Case', answeredBy: 'web operator' })
+    expect(sent.ok && sent.value.body).toBe('camelCase')
+    expect((await answerQuestion(q, { body: '\u0000 ', answeredBy: 'web operator' })).ok).toBe(false)
   })
 })

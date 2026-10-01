@@ -132,3 +132,19 @@ export function lateAnswerChange(question: string, answer: string): string {
     HANDOFF_CHANGE_MAX_CHARS,
   )
 }
+
+/**
+ * Human cards plan A, Task 7 fix round 1: where a late answer (one on a `timed_out` question) goes,
+ * by the asking task. A package task's goes to the package as a hand-off (`routeLateAnswers`); a task
+ * outside any package that can still run reads it in its next run (the inbox); a finished one -- or
+ * a question with no task -- has no run left to read it, and its card stays open saying so.
+ */
+export type LateAnswerFate = 'hand_off' | 'next_run' | 'unread'
+
+/** What a late answer's card says, by {@link LateAnswerFate}: the truthful reason it was retired,
+ *  or (`unread`) why it stays open. */
+export const LATE_ANSWER_NOTE: Readonly<Record<LateAnswerFate, string>> = {
+  hand_off: 'The answer came after the run continued; it goes to the package as a hand-off.',
+  next_run: "The answer came after the run continued; the task's next run reads it, if it has one.",
+  unread: 'The answer came after the task finished; no run will read it.',
+}

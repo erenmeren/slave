@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
-  CLOSED_BY_SYSTEM, type MessageKind, type Result, type SlaveMessageView, answerBar, err, isValidRecipient, ok,
+  CLOSED_BY_SYSTEM, storableText, type MessageKind, type Result, type SlaveMessageView, answerBar, err, isValidRecipient, ok,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { Principal } from './principal.js'
-import { announceQuestionClosed, closedByOf, closeQuestionIn, retireQuestionCards } from './questions.js'
+import { announceQuestionClosed, answeredRetireReason, closedByOf, closeQuestionIn, retireQuestionCards } from './questions.js'
 import type { ControlRefusal } from './refusal.js'
 
 const SEND_TIMEOUT_MS = 5_000
@@ -467,7 +467,10 @@ export async function answerQuestion(
   input: AnswerQuestionInput,
   origin: 'human' | 'system' = 'human',
 ): Promise<Result<SlaveMessageView, ControlRefusal>> {
-  if (input.body.trim() === '') return err({ kind: 'invalid_message_body' })
+  // Task 7 fix round 1: stored text never carries a NUL byte or a lone surrogate (Postgres refuses
+  // a NUL in `body`, 22021); checked for emptiness after, so an answer of NULs alone is empty.
+  const body = storableText(input.body)
+  if (body.trim() === '') return err({ kind: 'invalid_message_body' })
 
   const question = await prisma.slaveMessage.findUnique({ where: { id: questionId } })
   if (question === null) return err({ kind: 'message_not_found', messageId: questionId })
@@ -479,7 +482,7 @@ export async function answerQuestion(
   const generatedId = randomUUID()
   const key = namespacedKey(
     'answer',
-    input.idempotencyKey ?? `human:${questionId}:${createHash('sha256').update(input.body).digest('hex').slice(0, 16)}`,
+    input.idempotencyKey ?? `human:${questionId}:${createHash('sha256').update(body).digest('hex').slice(0, 16)}`,
   )
 
   const outcome = await prisma.$transaction(
@@ -492,7 +495,7 @@ export async function answerQuestion(
       const seen = await tx.slaveMessage.findUnique({
         where: { workspaceId_idempotencyKey: { workspaceId, idempotencyKey: key } },
       })
-      if (seen !== null) return { replayed: true as const, row: seen, closed: null }
+      if (seen !== null) return { replayed: true as const, row: seen, closed: null, retireReason: null }
 
       // Human cards plan A D6: a question a person decided, dismissed or superseded takes no answer.
       // Refused before anything is written, so returning is safe here (nothing to roll back). An
@@ -520,7 +523,7 @@ export async function answerQuestion(
           threadId: question.threadId,
           replyToId: question.id,
           kind: 'answer',
-          body: input.body,
+          body,
           actor: origin,
           expectsReply: false,
           idempotencyKey: key,
@@ -528,7 +531,9 @@ export async function answerQuestion(
       })
       const close = { messageId: question.id, reason: 'answered' as const, by: origin === 'human' ? closedByOf(input.principal) : CLOSED_BY_SYSTEM, note: null, decisionId: null }
       const closed = await closeQuestionIn(tx, close, new Date())
-      return { replayed: false as const, row, closed: closed ? close : null }
+      // Task 7 fix round 1: read under the question's lock, so the reason matches the close it saw.
+      const retireReason = await answeredRetireReason(tx, question.id, state.closedReason)
+      return { replayed: false as const, row, closed: closed ? close : null, retireReason }
     },
     { timeout: SEND_TIMEOUT_MS, maxWait: SEND_MAX_WAIT_MS },
   )
@@ -559,9 +564,10 @@ export async function answerQuestion(
     }
     // Human cards H1 (plan A D5): an answer given directly -- the answer box, the CLI -- retires every
     // open card about its question, as an approved answer card does. Said and swallowed: the answer
-    // is out, and the tick's backstop retires what this missed.
+    // is out, and the tick's backstop retires what this missed. A late answer says where it goes,
+    // and one no run will read leaves the card open (Task 7 fix round 1, `answeredRetireReason`).
     try {
-      await retireQuestionCards(workspaceId, questionId, 'The question was answered.', new Date())
+      if (outcome.retireReason !== null) await retireQuestionCards(workspaceId, questionId, outcome.retireReason, new Date())
     } catch (error) {
       console.error(`[messaging] question ${questionId}: its open cards were not retired:`, error)
     }
