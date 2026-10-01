@@ -355,8 +355,11 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
     // Human cards H3 (plan A F5): the timeout pass runs under EVERY halt, the two that refuse a
     // resume included. There `requestResume` refuses before writing anything, so the run keeps
     // waiting and the question stores why (`timeoutRefusal`) for its card to say. Between the
-    // delivery and the resume pass, as on the ordinary branch below.
-    await continueWaitingRuns(deps.workspaceId)
+    // delivery and the resume pass, as on the ordinary branch below. Wrapped like the goal pass: a
+    // throw here must not skip the rest of the halted tick (the Supervisor above all).
+    await continueWaitingRuns(deps.workspaceId).catch((error: unknown) => {
+      console.error(`[tick] the question timeout pass for workspace ${deps.workspaceId} failed:`, error)
+    })
     if (resumesCarriedOut) await resumeRequestedRuns(deps)
     // The Supervisor still runs on this branch (spec §5, clarified in fix round 1). A halted
     // workspace is precisely the one an operator most needs a decision about -- `workspace_halted`

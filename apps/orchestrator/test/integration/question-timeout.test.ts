@@ -7,7 +7,7 @@ import { answerQuestion } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { deliverAnswers } from '../../src/deliver.js'
-import { continueWaitingRuns } from '../../src/questionTimeout.js'
+import { continueWaitingRuns, questionTimeoutDeps } from '../../src/questionTimeout.js'
 
 const TRUNCATE =
   'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SlaveMessage", "Checkpoint", "SlaveRun", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE'
@@ -172,6 +172,38 @@ describe('the question timeout (human cards H3)', () => {
     await answerQuestion(f.questionId, { body: 'Yes.', answeredBy: 'web operator' })
     expect(await deliverAnswers(f.workspaceId)).toHaveLength(1)
     expect(await continueWaitingRuns(f.workspaceId, new Date(T0.getTime() + 3 * HOUR))).toEqual([])
+    expect(await resumeEvents(f)).toBe(1)
+  })
+  it('an answer sent while the pass holds its locks waits, then lands as a late answer on the timed-out question (fix round 1)', async () => {
+    const f = await seed()
+    const real = questionTimeoutDeps.requestResume
+    let answering: Promise<Awaited<ReturnType<typeof answerQuestion>>> | null = null
+    let settledInsideTheWindow = false
+    questionTimeoutDeps.requestResume = async (...args) => {
+      // A person answers from another connection while the pass holds the Workspace and question rows.
+      answering = answerQuestion(f.questionId, { body: 'Yes, add it.', answeredBy: 'web operator' })
+      void answering.then(() => {
+        settledInsideTheWindow = true
+      })
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      // Still waiting on the lock: no answer row is visible yet, and the call has not settled.
+      expect(settledInsideTheWindow).toBe(false)
+      expect(await prisma.slaveMessage.count({ where: { replyToId: f.questionId, kind: 'answer' } })).toBe(0)
+      return real(...args)
+    }
+    try {
+      expect(await continueWaitingRuns(f.workspaceId, new Date(T0.getTime() + 3 * HOUR))).toHaveLength(1)
+    } finally {
+      questionTimeoutDeps.requestResume = real
+    }
+    expect(answering).not.toBeNull()
+    expect((await (answering as unknown as Promise<{ readonly ok: boolean }>)).ok).toBe(true)
+    // The timeout closed it; the answer did not relabel it, and waits undelivered for the goal pass.
+    expect(await questionOf(f)).toMatchObject({ closedReason: 'timed_out', closedBy: 'system' })
+    const answer = await prisma.slaveMessage.findFirstOrThrow({ where: { replyToId: f.questionId, kind: 'answer' } })
+    expect(answer).toMatchObject({ deliveredAt: null, supersededAt: null })
+    expect((await runOf(f)).queuedMessage?.startsWith('No answer came in')).toBe(true)
+    expect(await deliverAnswers(f.workspaceId)).toEqual([])
     expect(await resumeEvents(f)).toBe(1)
   })
 })
