@@ -16,17 +16,24 @@
  * shorter than any real run and three hours longer than any this product has seen finish; one run
  * at a time is the smallest project that runs at all, and ten is past what one host's CLIs carry;
  * one attempt is "never retry", and ten is past the point where a retry is still news.
+ *
+ * Human cards H3 adds the question timeout: fifteen minutes is shorter than a person's lunch,
+ * seventy-two hours spans a weekend.
  */
 
-export type WorkspaceLimitField = 'runTimeoutMs' | 'maxConcurrentRuns' | 'maxAttempts'
+export type WorkspaceLimitField = 'runTimeoutMs' | 'maxConcurrentRuns' | 'maxAttempts' | 'questionTimeoutMs'
 
 const MINUTE_MS = 60_000
+
+/** Human cards H3: a run waits this long on an unanswered question before it continues on its own judgement. */
+export const QUESTION_TIMEOUT_DEFAULT_MS = 2 * 60 * MINUTE_MS
 
 /** Inclusive bounds, in the column's own unit -- milliseconds for the timeout. */
 export const WORKSPACE_LIMIT_BOUNDS: Readonly<Record<WorkspaceLimitField, { readonly min: number; readonly max: number }>> = {
   runTimeoutMs: { min: 5 * MINUTE_MS, max: 180 * MINUTE_MS },
   maxConcurrentRuns: { min: 1, max: 10 },
   maxAttempts: { min: 1, max: 10 },
+  questionTimeoutMs: { min: 15 * MINUTE_MS, max: 72 * 60 * MINUTE_MS },
 }
 
 /**
@@ -38,6 +45,7 @@ export const WORKSPACE_LIMIT_RULE: Readonly<Record<WorkspaceLimitField, string>>
   runTimeoutMs: `a run timeout must be a whole number of minutes from ${String(WORKSPACE_LIMIT_BOUNDS.runTimeoutMs.min / MINUTE_MS)} to ${String(WORKSPACE_LIMIT_BOUNDS.runTimeoutMs.max / MINUTE_MS)}`,
   maxConcurrentRuns: `runs at once must be a whole number from ${String(WORKSPACE_LIMIT_BOUNDS.maxConcurrentRuns.min)} to ${String(WORKSPACE_LIMIT_BOUNDS.maxConcurrentRuns.max)}`,
   maxAttempts: `attempts per task must be a whole number from ${String(WORKSPACE_LIMIT_BOUNDS.maxAttempts.min)} to ${String(WORKSPACE_LIMIT_BOUNDS.maxAttempts.max)}`,
+  questionTimeoutMs: `a question timeout must be a whole number of minutes from ${String(WORKSPACE_LIMIT_BOUNDS.questionTimeoutMs.min / MINUTE_MS)} to ${String(WORKSPACE_LIMIT_BOUNDS.questionTimeoutMs.max / MINUTE_MS)}`,
 }
 
 /**
@@ -48,5 +56,5 @@ export const WORKSPACE_LIMIT_RULE: Readonly<Record<WorkspaceLimitField, string>>
 export function isWorkspaceLimitAllowed(field: WorkspaceLimitField, value: number): boolean {
   const { min, max } = WORKSPACE_LIMIT_BOUNDS[field]
   if (!Number.isInteger(value) || value < min || value > max) return false
-  return field !== 'runTimeoutMs' || value % MINUTE_MS === 0
+  return (field !== 'runTimeoutMs' && field !== 'questionTimeoutMs') || value % MINUTE_MS === 0
 }

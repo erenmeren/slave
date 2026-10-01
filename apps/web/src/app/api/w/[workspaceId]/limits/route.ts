@@ -15,9 +15,10 @@ const bodySchema = z.object({
   runTimeoutMs: z.number().optional(),
   maxConcurrentRuns: z.number().optional(),
   maxAttempts: z.number().optional(),
+  questionTimeoutMs: z.number().optional(),
 })
 
-const BODY_ERROR = 'the body must be { "runTimeoutMs"?: number, "maxConcurrentRuns"?: number, "maxAttempts"?: number }'
+const BODY_ERROR = 'the body must be { "runTimeoutMs"?: number, "maxConcurrentRuns"?: number, "maxAttempts"?: number, "questionTimeoutMs"?: number }'
 
 /**
  * The project's three dispatch limits (H9 F8): how long a run may work, how many runs at once, and
@@ -46,6 +47,7 @@ export async function PATCH(
     ...(body.data.runTimeoutMs === undefined ? {} : { runTimeoutMs: body.data.runTimeoutMs }),
     ...(body.data.maxConcurrentRuns === undefined ? {} : { maxConcurrentRuns: body.data.maxConcurrentRuns }),
     ...(body.data.maxAttempts === undefined ? {} : { maxAttempts: body.data.maxAttempts }),
+    ...(body.data.questionTimeoutMs === undefined ? {} : { questionTimeoutMs: body.data.questionTimeoutMs }),
   }
   return workspaceControlResponse(workspaceId, () => setWorkspaceLimits(workspaceId, patch, gate.principal ?? undefined))
 }

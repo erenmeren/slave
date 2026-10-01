@@ -36,7 +36,7 @@ afterEach(() => {
 // shares this file's `postControl` mock with the other Settings panels.
 
 describe('RuntimePanel', () => {
-  const limits = { maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 5 }
+  const limits = { maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 5, questionTimeoutMs: 7_200_000 }
 
   it('PUTs the chosen provider', async (): Promise<void> => {
     render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} autoMerge={false} autonomy="propose" />)
@@ -193,7 +193,7 @@ describe('RuntimePanel', () => {
 
     expect(sendControl).toHaveBeenCalledWith('/api/w/w1/limits', {
       method: 'PATCH',
-      body: { runTimeoutMs: 3_600_000, maxConcurrentRuns: 4, maxAttempts: 5 },
+      body: { runTimeoutMs: 3_600_000, maxConcurrentRuns: 4, maxAttempts: 5, questionTimeoutMs: 7_200_000 },
     })
     expect(refresh).toHaveBeenCalled()
   })
@@ -255,6 +255,7 @@ function settings(over: Partial<ProjectSettings['workspace']> = {}): ProjectSett
       maxConcurrentRuns: 3,
       runTimeoutMs: 1_800_000,
       maxAttempts: 5,
+      questionTimeoutMs: 7_200_000,
       autoMerge: false,
       supervisorAutonomy: 'propose',
       haltedReason: null,

@@ -683,6 +683,7 @@ export const executionEventSchema = z.discriminatedUnion('type', [
      * H9 F8 adds the three dispatch limits `setWorkspaceLimits` is the first writer of --
      * `runTimeoutMs` (milliseconds on both ends, the column's own unit), `maxConcurrentRuns` and
      * `maxAttempts` -- one event per limit that moved, on the terms every field above set.
+     * Human cards H3 adds `questionTimeoutMs` on the same terms.
      */
     payload: z.object({
       field: z.enum([
@@ -697,6 +698,7 @@ export const executionEventSchema = z.discriminatedUnion('type', [
         'runTimeoutMs',
         'maxConcurrentRuns',
         'maxAttempts',
+        'questionTimeoutMs',
       ]),
       from: z.union([z.string(), z.number(), z.boolean(), z.null()]),
       to: z.union([z.string(), z.number(), z.boolean(), z.null()]),

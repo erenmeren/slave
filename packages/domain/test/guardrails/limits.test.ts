@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isWorkspaceLimitAllowed, WORKSPACE_LIMIT_BOUNDS, WORKSPACE_LIMIT_RULE } from '../../src/guardrails/limits.js'
+import { isWorkspaceLimitAllowed, QUESTION_TIMEOUT_DEFAULT_MS, WORKSPACE_LIMIT_BOUNDS, WORKSPACE_LIMIT_RULE } from '../../src/guardrails/limits.js'
 
 describe('the workspace limit bounds (H9 F8)', () => {
   it('holds the timeout to 5..180 whole minutes', () => {
@@ -27,5 +27,15 @@ describe('the workspace limit bounds (H9 F8)', () => {
     expect(WORKSPACE_LIMIT_RULE.maxConcurrentRuns).toBe('runs at once must be a whole number from 1 to 10')
     expect(WORKSPACE_LIMIT_RULE.maxAttempts).toBe('attempts per task must be a whole number from 1 to 10')
     expect(WORKSPACE_LIMIT_BOUNDS.maxAttempts).toEqual({ min: 1, max: 10 })
+  })
+
+  it('bounds the question timeout to 15 minutes .. 72 hours in whole minutes (human cards H3)', () => {
+    expect(QUESTION_TIMEOUT_DEFAULT_MS).toBe(2 * 3_600_000)
+    expect(isWorkspaceLimitAllowed('questionTimeoutMs', 15 * 60_000)).toBe(true)
+    expect(isWorkspaceLimitAllowed('questionTimeoutMs', 72 * 3_600_000)).toBe(true)
+    expect(isWorkspaceLimitAllowed('questionTimeoutMs', 14 * 60_000)).toBe(false)
+    expect(isWorkspaceLimitAllowed('questionTimeoutMs', 72 * 3_600_000 + 60_000)).toBe(false)
+    expect(isWorkspaceLimitAllowed('questionTimeoutMs', 15 * 60_000 + 1)).toBe(false)
+    expect(WORKSPACE_LIMIT_RULE.questionTimeoutMs).toBe('a question timeout must be a whole number of minutes from 15 to 4320')
   })
 })

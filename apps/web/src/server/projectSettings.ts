@@ -18,6 +18,8 @@ export interface ProjectSettings {
     readonly maxConcurrentRuns: number
     readonly runTimeoutMs: number
     readonly maxAttempts: number
+    /** Human cards H3: how long a run waits on an unanswered question, in milliseconds. */
+    readonly questionTimeoutMs: number
     /** E R7: whether an approved review merges the branch, or leaves it to a person. */
     readonly autoMerge: boolean
     /** E R1: whether the Supervisor's decisions wait for a person, or are carried out. */
@@ -62,6 +64,7 @@ export async function buildProjectSettings(workspaceId: string): Promise<Project
       maxConcurrentRuns: workspace.maxConcurrentRuns,
       runTimeoutMs: workspace.runTimeoutMs,
       maxAttempts: workspace.maxAttempts,
+      questionTimeoutMs: workspace.questionTimeoutMs,
       autoMerge: workspace.autoMerge,
       supervisorAutonomy: workspace.supervisorAutonomy,
       haltedReason: workspace.haltedReason,

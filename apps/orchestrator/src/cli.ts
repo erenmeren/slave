@@ -712,7 +712,7 @@ const USAGE = `usage: orchestrator <command> [options]
                                        Turning it on stamps nothing that is already done: work
                                        merged by hand stays unstamped and still needs
                                        confirm-integration once, and the command says how much.
-  set-limits --workspace <id> [--run-timeout-min <n>] [--max-concurrent-runs <n>] [--max-attempts <n>]
+  set-limits --workspace <id> [--run-timeout-min <n>] [--max-concurrent-runs <n>] [--max-attempts <n>] [--question-timeout-min <n>]
                                        how long one run may work (5-180 minutes, default 30), how
                                        many runs the project has at once (1-10, default 3) and how
                                        many attempts a task gets (1-10, default 3). Refused with
@@ -3880,8 +3880,9 @@ export async function main(argv: readonly string[]): Promise<number> {
       const timeoutText = flagText(flags, 'run-timeout-min')
       const concurrentText = flagText(flags, 'max-concurrent-runs')
       const attemptsText = flagText(flags, 'max-attempts')
-      if (timeoutText === undefined && concurrentText === undefined && attemptsText === undefined) {
-        throw new Error('one of --run-timeout-min, --max-concurrent-runs or --max-attempts is required')
+      const questionText = flagText(flags, 'question-timeout-min')
+      if (timeoutText === undefined && concurrentText === undefined && attemptsText === undefined && questionText === undefined) {
+        throw new Error('one of --run-timeout-min, --max-concurrent-runs, --max-attempts or --question-timeout-min is required')
       }
       // Handed on as numbers and NOT checked here: `setWorkspaceLimits` owns the bounds and the
       // sentence, so `--run-timeout-min 1.5` and `--max-attempts lots` (NaN) are told the same rule
@@ -3890,6 +3891,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         ...(timeoutText === undefined ? {} : { runTimeoutMs: Number(timeoutText) * 60_000 }),
         ...(concurrentText === undefined ? {} : { maxConcurrentRuns: Number(concurrentText) }),
         ...(attemptsText === undefined ? {} : { maxAttempts: Number(attemptsText) }),
+        ...(questionText === undefined ? {} : { questionTimeoutMs: Number(questionText) * 60_000 }),
       })
       if (!result.ok) throw new Error(refusalText(result.error))
       const { moved } = result.value
@@ -3897,9 +3899,9 @@ export async function main(argv: readonly string[]): Promise<number> {
         process.stdout.write(`nothing changed on ${workspaceId}: every limit given already reads that\n`)
         return 0
       }
-      const said = { runTimeoutMs: 'run timeout', maxConcurrentRuns: 'runs at once', maxAttempts: 'attempts per task' }
+      const said = { runTimeoutMs: 'run timeout', maxConcurrentRuns: 'runs at once', maxAttempts: 'attempts per task', questionTimeoutMs: 'question timeout' }
       const figure = (field: keyof typeof said, value: number): string =>
-        field === 'runTimeoutMs' ? `${String(value / 60_000)} min` : String(value)
+        field === 'runTimeoutMs' || field === 'questionTimeoutMs' ? `${String(value / 60_000)} min` : String(value)
       process.stdout.write(
         `limits updated on ${workspaceId}: ` +
           moved.map((move) => `${said[move.field]} ${figure(move.field, move.from)} to ${figure(move.field, move.to)}`).join(', ') +

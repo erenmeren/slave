@@ -1040,6 +1040,7 @@ type SettingsField =
   | 'runTimeoutMs'
   | 'maxConcurrentRuns'
   | 'maxAttempts'
+  | 'questionTimeoutMs'
 
 /** M38 t2 widened this event to the Supervisor's two settings, so the label is a table rather
  *  than the ternary it was while there were only two fields. Task 6 review, "Also": `supervisorAutonomy`
@@ -1057,6 +1058,8 @@ const SETTINGS_LABEL: Record<SettingsField, string> = {
   runTimeoutMs: 'run timeout',
   maxConcurrentRuns: 'runs at once',
   maxAttempts: 'attempts per task',
+  // Human cards H3: how long a run waits on an unanswered question.
+  questionTimeoutMs: 'question timeout',
 }
 
 function WorkspaceSettingsChangedCard(props: ActivityCardProps): ReactElement {
@@ -1085,7 +1088,7 @@ function settingValue(field: SettingsField, value: string | number | boolean | n
   // Already a word (`propose`/`act`) -- `setSupervisorSettings` writes nothing else here.
   if (field === 'supervisorAutonomy') return String(value)
   // Milliseconds on the wire, the column's unit; a person reads `30m`, the Runtime panel's old format.
-  if (field === 'runTimeoutMs') return typeof value === 'number' ? formatTimeout(value) : String(value)
+  if (field === 'runTimeoutMs' || field === 'questionTimeoutMs') return typeof value === 'number' ? formatTimeout(value) : String(value)
   if (value === null) return field === 'provider' ? 'none' : 'no budget'
   return field === 'budgetUsd' ? `$${String(value)}` : String(value)
 }
