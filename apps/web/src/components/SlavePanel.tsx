@@ -16,7 +16,7 @@ import { formatUsd } from '../lib/realMoney'
 import { providerLabel } from '../lib/providerLabel'
 import type { SlaveCardData, SlaveGrant } from '../server/overview'
 import type { PersonDetail } from '../server/persons'
-import { sendControl } from '../lib/postControl'
+import { sendControlFull } from '../lib/postControl'
 import { DeletePersonButton } from './persons/DeletePersonButton'
 import { PersonProjectsGroup, type AssignableProject } from './persons/PersonProjectsGroup'
 import { PersonSkillsGroup } from './persons/PersonSkillsGroup'
@@ -221,6 +221,8 @@ export function SlavePanel({
 }): React.JSX.Element {
   const [pending, setPending] = useState<ReadonlySet<ControlAction>>(new Set())
   const [errorText, setErrorText] = useState<string | null>(null)
+  /** A question somebody else closed first (human cards spec §4): information, never the red band. */
+  const [noticeText, setNoticeText] = useState<string | null>(null)
   const [draft, setDraft] = useState(slave?.queuedMessage ?? '')
   // The effective text, so the box shows what the next dispatch will actually send -- inherited or
   // not. `profileText`/`rolesText` are strings rather than the objects they come from, so the
@@ -315,8 +317,9 @@ export function SlavePanel({
   const refreshPerson = onPersonChanged ?? ((): void => {})
 
   /** The one place this panel writes: mark the control busy, clear the last refusal, dial the
-   *  shared `sendControl`, and show whatever it refused with. Every button below goes through it,
-   *  so the pending set and the error band cannot get out of step per control. */
+   *  shared `sendControlFull`, and show whatever it refused with -- or, for a question somebody
+   *  else closed first, the notice. Every button below goes through it, so the pending set and the
+   *  error band cannot get out of step per control. */
   const send = async (
     action: ControlAction,
     url: string,
@@ -324,8 +327,14 @@ export function SlavePanel({
   ): Promise<void> => {
     setPending((current) => new Set(current).add(action))
     setErrorText(null)
-    const error = await sendControl(url, options)
-    if (error !== null) setErrorText(error)
+    setNoticeText(null)
+    const failure = await sendControlFull(url, options)
+    if (failure !== null && failure.notice !== null) {
+      // Human cards spec §4: the question was closed by somebody else first -- who and when, as
+      // information, then a fresh panel (nothing was written, so no event would wake it).
+      setNoticeText(failure.notice)
+      refreshPerson()
+    } else if (failure !== null) setErrorText(failure.error)
     setPending((current) => {
       const next = new Set(current)
       next.delete(action)
@@ -435,6 +444,11 @@ export function SlavePanel({
       {errorText !== null && (
         <div role="alert" data-testid="panel-error" className="rounded border border-tone-blocked/40 bg-tone-blocked/10 px-2 py-1.5 text-xs text-tone-blocked">
           {errorText}
+        </div>
+      )}
+      {noticeText !== null && (
+        <div role="status" data-testid="panel-notice" className="rounded border border-line px-2 py-1.5 text-xs text-text-2">
+          {noticeText}
         </div>
       )}
 

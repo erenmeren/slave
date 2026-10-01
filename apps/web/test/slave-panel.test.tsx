@@ -534,6 +534,37 @@ describe('SlavePanel', () => {
       expect(fetchMock).not.toHaveBeenCalledWith('/api/w/w1/runs/r1/resume', expect.anything())
     })
 
+    it('shows a question somebody else closed first as information, not an error, and refreshes the panel (human cards spec §4)', async () => {
+      fetchMock.mockImplementation(
+        async () => new Response(JSON.stringify({ error: 'question m-1 was closed', notice: 'Already closed by alice at 2026-10-02 10:00 UTC.' }), { status: 409 }),
+      )
+      const onPersonChanged = vi.fn()
+      render(
+        <SlavePanel
+          slave={slave({
+            status: 'paused',
+            waitingFor: { recipient: 'Maya', question: 'Which queue?', messageId: 'm-1' },
+          })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+          onPersonChanged={onPersonChanged}
+        />,
+      )
+
+      openGroup('messages')
+      fireEvent.change(screen.getByTestId('message-input'), { target: { value: 'payments-retry' } })
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('answer-button'))
+      })
+
+      expect(screen.queryByTestId('panel-error')).toBeNull()
+      expect(screen.getByTestId('panel-notice').textContent).toBe('Already closed by alice at 2026-10-02 10:00 UTC.')
+      expect(screen.getByTestId('panel-notice').getAttribute('role')).toBe('status')
+      expect(onPersonChanged).toHaveBeenCalledTimes(1)
+    })
+
     it('refuses to send a blank answer before the round trip', () => {
       render(
         <SlavePanel

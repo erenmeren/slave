@@ -44,12 +44,14 @@ export async function sendControl(
 
 /** A refusal, with the `notice` a decision route adds when somebody else settled the card first
  *  (human cards spec §4): information to show, not an error -- null on every other refusal. */
-interface ControlFailure {
+export interface ControlFailure {
   readonly error: string
   readonly notice: string | null
 }
 
-async function sendControlFull(
+/** {@link sendControl} with the refusal's `notice` kept: for a surface that can be told a card or
+ *  a question was settled by somebody else first. */
+export async function sendControlFull(
   url: string,
   options: { method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: Record<string, unknown> },
 ): Promise<ControlFailure | null> {

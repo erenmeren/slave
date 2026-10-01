@@ -501,7 +501,7 @@ describe('a question card says how its question stands (human cards H1/H3)', () 
   })
 
   it('says a late answer no run will read, on the card that stays open for it', () => {
-    renderRow(answerDecision({ card: { ...base, askerPackageKey: null, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'unread', lateAnswerNote: 'The answer came after the task finished; no run will read it.' } }))
+    renderRow(answerDecision({ card: { ...base, askerPackageKey: null, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'unread', lateAnswerNote: 'The answer came after its run continued; no run will read it.' } }))
     expect(screen.getByTestId('card-question-state').textContent).toContain('no run will read it')
   })
 

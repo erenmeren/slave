@@ -135,7 +135,7 @@ describe('closing a question (human cards H1)', () => {
     expect(await retireClosedQuestionCards(f.workspaceId, new Date())).toBe(0)
     expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: open.id } })).status).toBe('pending')
     expect(await lateAnswerFate(prisma, q)).toBe('unread')
-    expect(LATE_ANSWER_NOTE.unread).toBe('The answer came after the task finished; no run will read it.')
+    expect(LATE_ANSWER_NOTE.unread).toBe('The answer came after its run continued; no run will read it.')
   })
 
   it('retires a late answer\'s cards from the answer path with where it goes, and an on-time answer\'s as answered (fix round 1)', async () => {

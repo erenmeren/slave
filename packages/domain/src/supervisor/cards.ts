@@ -146,5 +146,5 @@ export type LateAnswerFate = 'hand_off' | 'next_run' | 'unread'
 export const LATE_ANSWER_NOTE: Readonly<Record<LateAnswerFate, string>> = {
   hand_off: 'The answer came after the run continued; it goes to the package as a hand-off.',
   next_run: "The answer came after the run continued; the task's next run reads it, if it has one.",
-  unread: 'The answer came after the task finished; no run will read it.',
+  unread: 'The answer came after its run continued; no run will read it.',
 }
