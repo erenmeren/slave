@@ -173,11 +173,12 @@ const answer = (text: string, costUsd: number): ModelOutcome => ({ kind: 'answer
 
 /** The conductor's two answers by prompt; anything else (a Supervisor situation) is counted and
  *  refused, so the test can say the happy path never needed one. */
-function scripted(conductAnswer: string): { readonly decider: ModelDecider; readonly others: string[] } {
+function scripted(conductAnswer: string, conductorAnswers?: (prompt: string) => string): { readonly decider: ModelDecider; readonly others: string[] } {
   const others: string[] = []
   const decider: ModelDecider = async (input) => {
     if (input.prompt.includes('"requirementsAnswer"')) return answer(REQUIREMENTS, 0.02)
     if (input.prompt.includes('"conductAnswer"')) return answer(conductAnswer, 0.03)
+    if (conductorAnswers !== undefined && input.prompt.includes('"conductorAnswers"')) return answer(conductorAnswers(input.prompt), 0.04)
     others.push(input.prompt)
     return { kind: 'failed', reason: 'not scripted in this test', costUsd: null, tokens: null }
   }
@@ -299,6 +300,8 @@ interface SeedOptions {
   readonly smokeFailures?: number
   /** Extra fields merged into a package worker's `<slave-report>`; `attempt` counts the package's earlier implementation runs. */
   readonly reportExtras?: (packageKey: string, goalVersion: number, attempt: number) => object | undefined
+  /** The batched answer call's reply, by prompt; absent, the fake refuses it (and the test counts it). */
+  readonly conductorAnswers?: (prompt: string) => string
 }
 
 /** A conducted workspace with its goal set, the backend template's managed pool, a reviewer seat,
@@ -341,7 +344,7 @@ async function seed(options: SeedOptions = {}): Promise<Fixture> {
   const adapter = routingAdapter(() => repoPath, starts, async (goalVersion) => {
     if (hook !== undefined) await hook(workspace.id, goalVersion)
   }, options.verificationRounds, options.reportExtras)
-  const { decider, others } = scripted(options.conductAnswer ?? SINGLE)
+  const { decider, others } = scripted(options.conductAnswer ?? SINGLE, options.conductorAnswers)
   return {
     workspaceId: workspace.id,
     repoPath,
@@ -1041,6 +1044,33 @@ describe('conductor end to end', () => {
     const report = await loadGoalReport(f.workspaceId, 1)
     expect(report.ok && report.value.handOffs.map((h) => h.status)).toEqual(['delivered', 'reopened'])
     expect(report.ok && report.value.decisions.map((d) => d.title)).toEqual(['API field naming'])
+    expect(f.others).toEqual([])
+  })
+
+  it('answers a package\'s design question from the plan, and the next package reads the decision (spec C3, C4)', async (): Promise<void> => {
+    const f = await seed({
+      conductAnswer: PARTITIONED,
+      reportExtras: (key, _version, attempt) => (key === 'report' && attempt === 0 ? { questions: ['Which JSON field naming do the endpoints use?'] } : undefined),
+      conductorAnswers: (prompt) =>
+        JSON.stringify({
+          conductorAnswers: [...prompt.matchAll(/^QUESTION (\S+) /gmu)].map((m) => ({
+            messageId: m[1],
+            answer: 'camelCase for every field.',
+            basis: { requirements: ['R1'], packages: ['report'], decisions: [] },
+            changes: 'none',
+            newDecision: { title: 'JSON field naming', decision: 'camelCase for every field' },
+            handOff: null,
+          })),
+        }),
+    })
+    await tickUntil(f, merged(f, 1))
+
+    const decision = await prisma.goalDecision.findFirstOrThrow({ where: { workspaceId: f.workspaceId } })
+    expect(decision).toMatchObject({ title: 'JSON field naming', source: 'conductor_answer' })
+    const integration = await implementationRunsOf(f, 'integration')
+    expect(integration[0]?.prompt).toContain('- JSON field naming: camelCase for every field')
+    expect(await prisma.conductorCall.count({ where: { workspaceId: f.workspaceId, stage: 'answer', outcome: 'ok' } })).toBe(1)
+    expect(await prisma.supervisorDecision.count({ where: { workspaceId: f.workspaceId, situationKind: 'unanswerable_question' } })).toBe(0)
     expect(f.others).toEqual([])
   })
 })
