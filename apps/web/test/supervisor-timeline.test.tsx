@@ -197,6 +197,18 @@ describe('SupervisorTimeline', () => {
     expect(errors[0]?.getAttribute('role')).toBe('alert')
   })
 
+  it('shows a card somebody else settled first as information, not an error, and asks for a fresh queue (human cards spec §4)', async () => {
+    stubFetch({ error: 'question m1 was closed', notice: 'Already closed by alice at 2026-10-02 10:00 UTC.' }, 409)
+    const onRefresh = vi.fn()
+    render(<SupervisorTimeline workspaceId="w1" entries={[DECISION_ENTRY]} needsYou={[]} onRefresh={onRefresh} />)
+    await click(screen.getByTestId('supervisor-approve'))
+    expect(screen.queryByTestId('timeline-error')).toBeNull()
+    const notice = screen.getByTestId('timeline-notice')
+    expect(notice.textContent).toBe('Already closed by alice at 2026-10-02 10:00 UTC.')
+    expect(notice.getAttribute('role')).toBe('status')
+    expect(onRefresh).toHaveBeenCalledTimes(1)
+  })
+
   it('answers an unanswerable question in place', async () => {
     stubFetch({ ok: true })
     render(<SupervisorTimeline workspaceId="w1" entries={[]} needsYou={[QUESTION]} />)

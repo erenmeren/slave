@@ -4,17 +4,22 @@ import {
   DECISION_SOURCE_LABEL,
   GOAL_REPORT_ANSWERED_BY,
   GOAL_REPORT_AUTHOR_WORDS,
+  GOAL_REPORT_CLOSED_BY,
   GOAL_REPORT_STATE_LABEL,
   acceptedCommitText,
+  continuedWithoutAnswer,
   evidenceAnchor,
   evidenceCut,
   formatReportUsd,
   handOffStatusLabel,
   integratedWhere,
   noPackagesLabel,
+  questionClosedWords,
+  questionTaskHref,
   reportCaveats,
   shortCommit,
   smokeOutcomeLabel,
+  formatWait,
   unverifiedRequirementLabel,
   type GoalReport,
   type GoalReportState,
@@ -57,6 +62,7 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
   const d = report.delivery
   const caveats = reportCaveats(report)
   const base = `/w/${report.workspaceId}`
+  const continued = continuedWithoutAnswer(report)
   const verified = (report.requirements ?? []).filter((item) => item.verdict !== null)
   const latestSmoke = report.smoke.at(-1)
   return (
@@ -433,6 +439,34 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
         </ol>
       </Panel>
 
+      {continued.length > 0 && (
+        <Panel title="Runs that continued without an answer">
+          {continued.map((q) => (
+            <div key={q.id} data-testid="goal-report-continued" className="text-[13px] text-t2">
+              <p>
+                <span className="font-mono text-[11.5px] text-t3">{q.at}</span> {q.packageKey ?? 'A worker'}
+                {q.askedBy !== null && ` (${q.askedBy})`} waited {formatWait(q.closed.waitedMs)}, then continued on its own assumption:
+              </p>
+              <pre className={PRE}>{q.question}</pre>
+              <p className="text-t3">
+                The assumption is in the worker&apos;s report
+                {q.taskId === null ? (
+                  '.'
+                ) : (
+                  <>
+                    :{' '}
+                    <Link href={questionTaskHref(report.workspaceId, q.taskId)} className="text-accent" data-testid="goal-report-continued-link">
+                      the task
+                    </Link>
+                    .
+                  </>
+                )}
+              </p>
+            </div>
+          ))}
+        </Panel>
+      )}
+
       <Panel title="Questions">
         {report.questions.length === 0 && <p className="text-[13px] text-t2">No questions were asked.</p>}
         {report.questions.map((q) => (
@@ -451,6 +485,11 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
                 </p>
                 <pre className={PRE}>{q.answer.text}</pre>
               </>
+            )}
+            {q.closed !== null && q.closed.reason !== 'answered' && (
+              <p data-testid="goal-report-question-closed" className="text-t3">
+                Closed: {questionClosedWords(q.closed)} ({GOAL_REPORT_CLOSED_BY[q.closed.by]}, {q.closed.at})
+              </p>
             )}
           </div>
         ))}

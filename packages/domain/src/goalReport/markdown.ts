@@ -1,7 +1,9 @@
 import { CONDUCT_PER_CALL_CAP_USD } from '../conduct/constants.js'
 import { DECISION_SOURCE_LABEL, GOAL_REPORT_STATE_LABEL, HAND_OFF_STATUS_LABEL, acceptedCommitText, handOffNote, noPackagesLabel, reportCaveats, smokeOutcomeLabel, unverifiedRequirementLabel } from './caveats.js'
 import { evidenceAnchor, evidenceCut, formatReportUsd, mdFence, mdInline, mdQuote, shortCommit } from './escape.js'
-import type { GoalReport, GoalReportAuthor } from './types.js'
+import type { QuestionCloseReason } from '../messaging/close.js'
+import { formatWait } from '../supervisor/cards.js'
+import type { GoalReport, GoalReportAuthor, GoalReportQuestion } from './types.js'
 
 /** Who wrote a trail entry's quoted `detail` (plan D6), in words. Exported (plan R6: shared from
  *  one place) so the web page's decision-trail panel (a later task) prints the same words rather
@@ -16,12 +18,41 @@ export const GOAL_REPORT_AUTHOR_WORDS: Readonly<Record<GoalReportAuthor, string>
  *  {@link GOAL_REPORT_AUTHOR_WORDS}. */
 export const GOAL_REPORT_ANSWERED_BY = { person: 'a person', supervisor: 'the Supervisor', slave: 'a slave' } as const
 
+/** Human cards H1: how a question closed, in words (shared with the web page). */
+export const GOAL_REPORT_CLOSE_WORDS = {
+  answered: 'answered',
+  decided: 'decided on a card',
+  dismissed: 'closed without an answer',
+  timed_out: 'continued without an answer',
+  superseded: 'superseded by a new goal version',
+} as const satisfies Readonly<Record<QuestionCloseReason, string>>
+
+/** Who closed a question, in words (shared with the web page): the report never names a user id. */
+export const GOAL_REPORT_CLOSED_BY = { system: 'Slave', person: 'a person' } as const
+
+/** A closed question's line, after "Closed: " -- a timeout says how long the run waited. Shared
+ *  with the web page, so the two say the same. */
+export function questionClosedWords(closed: NonNullable<GoalReportQuestion['closed']>): string {
+  return closed.reason === 'timed_out' ? `${GOAL_REPORT_CLOSE_WORDS.timed_out} after ${formatWait(closed.waitedMs)}` : GOAL_REPORT_CLOSE_WORDS[closed.reason]
+}
+
+/** Human cards H3: the questions a run continued past without an answer, in report order. */
+export function continuedWithoutAnswer(report: GoalReport): readonly (GoalReportQuestion & { readonly closed: NonNullable<GoalReportQuestion['closed']> })[] {
+  return report.questions.flatMap((q) => (q.closed !== null && q.closed.reason === 'timed_out' ? [{ ...q, closed: q.closed }] : []))
+}
+
+/** Where the asking task is read in the app -- its runs and the worker's own report, which names the
+ *  assumption a continued run made. Ids are encoded, so the link is a link whatever they hold. */
+export function questionTaskHref(workspaceId: string, taskId: string): string {
+  return `/w/${encodeURIComponent(workspaceId)}/tasks?task=${encodeURIComponent(taskId)}`
+}
+
 /**
  * The goal version's report as Markdown (spec R10, plan D7): deterministic (a pure function of
  * `report`, no clock read, no sorting of its own) and inert (every value another party wrote goes
  * through `mdInline`, `mdFence` or `mdQuote`). Sections, in order: state, what to know, why it
  * stopped, a refused merge, goal, requirements, rounds, smoke checks, shared decisions, hand-offs, evidence, packages, denied
- * tool calls, spend, decision trail, questions.
+ * tool calls, spend, decision trail, runs that continued without an answer (when any), questions.
  */
 export function renderGoalReportMarkdown(report: GoalReport): string {
   const lines: string[] = []
@@ -197,11 +228,19 @@ export function renderGoalReportMarkdown(report: GoalReport): string {
   }
   lines.push('')
 
+  const continued = continuedWithoutAnswer(report)
+  if (continued.length > 0) {
+    lines.push('## Runs that continued without an answer', '')
+    for (const q of continued) {
+      lines.push(`- ${mdInline(q.at)} · ${askerWords(q)} waited ${formatWait(q.closed.waitedMs)}, then continued on its own assumption:`, ...mdQuote(q.question).map((line) => `  ${line}`), '')
+      lines.push(`  The assumption is in the worker's report${q.taskId === null ? '' : `: [the task](${questionTaskHref(report.workspaceId, q.taskId)})`}.`, '')
+    }
+  }
+
   lines.push('## Questions', '')
   if (report.questions.length === 0) lines.push('No questions were asked.', '')
   for (const q of report.questions) {
-    const who = [q.packageKey === null ? null : mdInline(q.packageKey), q.askedBy === null ? null : `(${mdInline(q.askedBy)})`].filter((part) => part !== null).join(' ')
-    lines.push(`- ${mdInline(q.at)} · ${who === '' ? 'A worker' : who} asked:`, ...mdQuote(q.question).map((line) => `  ${line}`), '')
+    lines.push(`- ${mdInline(q.at)} · ${askerWords(q)} asked:`, ...mdQuote(q.question).map((line) => `  ${line}`), '')
     // A blank line separates the quoted question from what follows: without it, CommonMark's
     // lazy continuation reads a plain "Answered by …"/"Not answered." line as more text inside
     // the worker's own blockquote (no ">" is required to continue a blockquote's last paragraph,
@@ -211,10 +250,19 @@ export function renderGoalReportMarkdown(report: GoalReport): string {
     } else {
       lines.push(`  Answered by ${GOAL_REPORT_ANSWERED_BY[q.answer.by]} at ${mdInline(q.answer.at)}:`, ...mdQuote(q.answer.text).map((line) => `  ${line}`), '')
     }
+    if (q.closed !== null && q.closed.reason !== 'answered') {
+      lines.push(`  Closed: ${questionClosedWords(q.closed)} (${GOAL_REPORT_CLOSED_BY[q.closed.by]}, ${mdInline(q.closed.at)}).`, '')
+    }
   }
 
   lines.push('---', '', "Built from Slave's records of this goal version. Quoted text is marked with who wrote it.")
   return `${lines.join('\n').trimEnd()}\n`
+}
+
+/** Who asked, escaped: the package and the seat's name, or "A worker" when neither is known. */
+function askerWords(q: GoalReportQuestion): string {
+  const who = [q.packageKey === null ? null : mdInline(q.packageKey), q.askedBy === null ? null : `(${mdInline(q.askedBy)})`].filter((part) => part !== null).join(' ')
+  return who === '' ? 'A worker' : who
 }
 
 /** Where an integrated package's task landed (final wave I1): the integration branch when the

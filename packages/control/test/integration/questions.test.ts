@@ -6,7 +6,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { CONDUCTOR_ROLE, LATE_ANSWER_NOTE, QUESTION_SITUATION_KINDS } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { answerQuestion, listPendingQuestions, reportQuestionKey, sendMessage } from '../../src/messaging.js'
-import { closeQuestion, lateAnswerFate, retireClosedQuestionCards, retireQuestionCards } from '../../src/questions.js'
+import { closeQuestion, lateAnswerFate, loadQuestionCards, retireClosedQuestionCards, retireQuestionCards } from '../../src/questions.js'
 import { loadSupervisorWorld } from '../../src/supervisorWorld.js'
 
 const TRUNCATE =
@@ -155,6 +155,42 @@ describe('closing a question (human cards H1)', () => {
         .map((p) => p.reason)
     expect(await reasons(lateCard.id)).toEqual([LATE_ANSWER_NOTE.next_run])
     expect(await reasons(onTimeCard.id)).toEqual(['The question was answered.'])
+  })
+
+  it('reads a card\'s question: its package, whether the asker waits, its close and why the run cannot continue', async () => {
+    const f = await seed()
+    const q = await reportQuestion(f)
+    await prisma.slaveMessage.update({ where: { id: q }, data: { closedAt: new Date('2026-10-02T10:00:00.000Z'), closedReason: 'timed_out', closedBy: 'system', timeoutRefusal: 'the project is halted' } })
+    const cards = await loadQuestionCards(f.workspaceId, [q, 'not-a-message'])
+    expect(cards.get(q)).toMatchObject({ messageId: q, askerWaiting: false, closed: { reason: 'timed_out', by: 'system', at: '2026-10-02T10:00:00.000Z' }, timeoutRefusal: 'the project is halted', goalVersion: 1 })
+    expect(cards.has('not-a-message')).toBe(false)
+  })
+
+  it('names who closed a card\'s question, says when its parked asker still waits, and carries the note of a late answer no run will read (human cards H1/H3)', async () => {
+    const f = await seed() // its task is done and has no package: a late answer is unread
+    const byPerson = await reportQuestion(f, 'by a person')
+    await closeQuestion({ messageId: byPerson, reason: 'dismissed', by: 'u1', decisionId: null, note: () => 'x' }, 'human', 'u1')
+    const byOperator = await reportQuestion(f, 'by an operator')
+    await closeQuestion({ messageId: byOperator, reason: 'decided', by: 'operator', decisionId: null, note: () => null }, 'human', null)
+    const unread = await reportQuestion(f, 'answered late')
+    await closeQuestion({ messageId: unread, reason: 'timed_out', by: 'system', decisionId: null, note: () => null }, 'system', null)
+    expect((await answerQuestion(unread, { body: 'late', answeredBy: 'web operator' })).ok).toBe(true)
+    const timedOut = await reportQuestion(f, 'no answer yet')
+    await closeQuestion({ messageId: timedOut, reason: 'timed_out', by: 'system', decisionId: null, note: () => null }, 'system', null)
+    // A parked asker: its run waits on its latest question, and the timeout pass was refused.
+    const run = await prisma.slaveRun.create({ data: { slaveId: f.seatId, taskId: f.taskId, status: 'paused', pauseReason: 'waiting_for_answer' } })
+    const waiting = await sendMessage(run.id, { kind: 'question', body: 'parked', recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId: f.taskId })
+    if (!waiting.ok) throw new Error(JSON.stringify(waiting.error))
+    await prisma.slaveMessage.update({ where: { id: waiting.value.id }, data: { timeoutRefusal: 'workspace halted: emergency_stop' } })
+
+    const cards = await loadQuestionCards(f.workspaceId, [byPerson, byOperator, unread, timedOut, waiting.value.id])
+
+    expect(cards.get(byPerson)?.closed).toMatchObject({ reason: 'dismissed', by: 'u1', byName: 'u1' })
+    expect(cards.get(byOperator)?.closed).toMatchObject({ reason: 'decided', by: 'operator', byName: 'an operator' })
+    expect(cards.get(unread)).toMatchObject({ lateAnswerNote: LATE_ANSWER_NOTE.unread, lateAnswerFate: 'unread' })
+    expect(cards.get(timedOut)).toMatchObject({ closed: { reason: 'timed_out', byName: 'the system' }, lateAnswerNote: null, lateAnswerFate: 'unread' })
+    expect(cards.get(byPerson)?.lateAnswerFate).toBe(null)
+    expect(cards.get(waiting.value.id)).toMatchObject({ askerWaiting: true, askerRunId: run.id, closed: null, timeoutRefusal: 'workspace halted: emergency_stop' })
   })
 
   it('stores an answer with a NUL byte stripped instead of refusing it (fix round 1)', async () => {

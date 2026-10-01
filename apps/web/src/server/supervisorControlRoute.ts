@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { refusalText, type ControlRefusal } from '@slave-of-ai/control'
+import { closerName, closerNames, refusalText, type ControlRefusal } from '@slave-of-ai/control'
 import type { Result } from '@slave-of-ai/domain'
 import { refusalStatus } from './refusalStatus'
 
@@ -30,7 +30,32 @@ export async function decisionControlResponse(
     return Response.json({ error: 'no such decision in this workspace' }, { status: 404 })
   }
   const result = await operate()
-  return result.ok
-    ? Response.json({ ok: true })
-    : Response.json({ error: refusalText(result.error) }, { status: refusalStatus(result.error.kind) })
+  if (result.ok) return Response.json({ ok: true })
+  const notice = await settledNotice(result.error)
+  return Response.json({ error: refusalText(result.error), ...(notice === null ? {} : { notice }) }, { status: refusalStatus(result.error.kind) })
+}
+
+/**
+ * Human cards spec §4 (Task 4 carry): a card somebody else settled first -- its question closed, or
+ * the card itself resolved -- is not an error the person made. The response carries a `notice`, in
+ * words ("Already closed by alice at 2026-10-02 10:00 UTC."), which the page shows as information
+ * and follows with a refresh of the queue. The account is named, never its id; Slave and an operator
+ * without an account are named in words. Null for every other refusal.
+ */
+async function settledNotice(refusal: ControlRefusal): Promise<string | null> {
+  const settled =
+    refusal.kind === 'question_closed'
+      ? { by: refusal.by, at: refusal.at }
+      : refusal.kind === 'decision_not_pending'
+        ? { by: refusal.resolvedByUserId ?? null, at: refusal.resolvedAt ?? null }
+        : null
+  if (settled === null) return null
+  const name = closerName(settled.by, await closerNames([settled.by]))
+  return `Already closed by ${name}${settled.at === null ? '' : ` at ${noticeTime(settled.at)}`}.`
+}
+
+/** `2026-10-02T10:00:00.000Z` → `2026-10-02 10:00 UTC`: the server renders the sentence, so it
+ *  names its zone rather than guessing the reader's. */
+function noticeTime(iso: string): string {
+  return `${iso.slice(0, 16).replace('T', ' ')} UTC`
 }

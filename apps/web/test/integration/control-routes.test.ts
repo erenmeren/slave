@@ -1183,6 +1183,31 @@ describe('the control routes', () => {
       expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).runtimeRoles).toEqual([])
     })
 
+    it('409s a card whose question somebody else closed, with a notice naming who and when (human cards spec §4)', async (): Promise<void> => {
+      await prisma.user.create({ data: { id: 'u-alice', username: 'alice', passwordHash: 'x' } })
+      const { decisionId, questionId } = await answerProposal()
+      await prisma.slaveMessage.update({
+        where: { id: questionId },
+        data: { closedAt: new Date('2026-10-02T10:00:00.000Z'), closedReason: 'dismissed', closedBy: 'u-alice', closedNote: 'x' },
+      })
+
+      const response = await reject(fixture.workspace.id, decisionId)
+
+      expect(response.status).toBe(409)
+      const body = await response.json()
+      expect(body.notice).toBe('Already closed by alice at 2026-10-02 10:00 UTC.')
+      expect(body.error).toContain('was closed')
+    })
+
+    it('409s a card somebody else resolved first with a notice; an operator or Slave is named in words (human cards spec §4)', async (): Promise<void> => {
+      await prisma.user.create({ data: { id: 'u-alice', username: 'alice', passwordHash: 'x' } })
+      const byAlice = await proposal()
+      await prisma.supervisorDecision.update({ where: { id: byAlice }, data: { status: 'approved', resolvedAt: new Date('2026-10-02T09:30:00.000Z'), resolvedByUserId: 'u-alice' } })
+      expect((await (await approve(fixture.workspace.id, byAlice)).json()).notice).toBe('Already closed by alice at 2026-10-02 09:30 UTC.')
+      const bySlave = await proposal({ status: 'applied' })
+      expect((await (await approve(fixture.workspace.id, bySlave)).json()).notice).toBe('Already closed by the system.')
+    })
+
     it('rejecting keeps the action out of the world and keeps the reason', async (): Promise<void> => {
       const decisionId = await proposal()
 

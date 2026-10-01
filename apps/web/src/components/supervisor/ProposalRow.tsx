@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { PROVIDER_LABEL, SITUATION_LABEL, type Action, type TeamSource } from '@slave-of-ai/domain'
+import { GOAL_REPORT_CLOSE_WORDS, PROVIDER_LABEL, SITUATION_LABEL, type Action, type TeamSource } from '@slave-of-ai/domain'
 // Type-only, so nothing from `server/supervisor.ts` (and nothing it imports -- control, and the
 // Prisma client under it) reaches the client bundle. The same rule `useOverview.ts` states for
 // `OverviewSnapshot`.
@@ -272,6 +272,46 @@ function ConductorDetails({ conductor }: { readonly conductor: NonNullable<Draft
   )
 }
 
+/** Spec H3: where an answer or a decision taken now on a question its run continued past goes. */
+function whereItGoes(card: NonNullable<Decision['card']>): string {
+  if (card.lateAnswerFate === 'next_run') return "; an answer now reaches the task's next run, if it has one."
+  if (card.lateAnswerFate === 'unread') return '; the task has finished, so no run would read an answer.'
+  return card.askerPackageKey === null ? '; an answer stays in its thread.' : `; a decision now reaches the ${card.askerPackageKey} package as a hand-off.`
+}
+
+/**
+ * Human cards H1/H3: how the card's question stands. A parked run whose resume was refused still
+ * waits, and the card says why; a run that continued without an answer says where a decision taken
+ * now goes; a late answer no run will read says so (the card stays open for it); any other close
+ * says how, by whom and when. Nothing while the question is simply open. Every value is a JSX child:
+ * the refusal and the names are data, never markup.
+ */
+function QuestionState({ card }: { readonly card: NonNullable<Decision['card']> }): React.JSX.Element | null {
+  if (card.askerWaiting && card.timeoutRefusal !== null) {
+    return (
+      <span data-testid="card-question-state" className="text-[11px] text-tone-blocked">
+        Still waiting: the wait is over, but the run cannot continue: {card.timeoutRefusal}
+      </span>
+    )
+  }
+  const closed = card.closed
+  if (closed === null) return null
+  if (closed.reason === 'timed_out') {
+    return (
+      <span data-testid="card-question-state" className="text-[11px] text-tone-waiting">
+        The run continued without an answer at {closed.at}
+        {card.lateAnswerNote !== null ? `. ${card.lateAnswerNote}` : whereItGoes(card)}
+      </span>
+    )
+  }
+  const words = GOAL_REPORT_CLOSE_WORDS[closed.reason]
+  return (
+    <span data-testid="card-question-state" className="text-[11px] text-text-2">
+      {`${words.charAt(0).toUpperCase()}${words.slice(1)} by ${closed.byName} at ${closed.at}.`}
+    </span>
+  )
+}
+
 /**
  * One proposal, with everything a person needs to answer it: the situation it was made on, what
  * would happen, and why the Supervisor picked that. Split out of the panel so the pending list and
@@ -360,6 +400,7 @@ export function ProposalRow({
       <span data-testid="supervisor-proposal-rationale" className="text-[11px] text-text-2">
         {decision.rationale}
       </span>
+      {decision.card != null && <QuestionState card={decision.card} />}
       {draft !== null && <DraftEditor draft={draft} question={question} body={body} onBody={setBody} />}
       <div className="flex items-center gap-2">
         <input

@@ -1,6 +1,7 @@
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  CLOSED_BY_SYSTEM,
   GOAL_REPORT_DETAIL_MAX_CHARS,
   GOAL_REPORT_TRAIL_MAX,
   type GOAL_REPORT_ANSWERED_BY,
@@ -415,7 +416,8 @@ export async function versionTrail(
  *  the words live there once), and total over the `Actor` enum, so a new actor fails the build. */
 const ANSWERED_BY: Readonly<Record<'human' | 'system' | 'slave', keyof typeof GOAL_REPORT_ANSWERED_BY>> = { human: 'person', system: 'supervisor', slave: 'slave' }
 
-/** Every question on the version's package tasks, oldest first, with its first answer (plan D6).
+/** Every question on the version's package tasks, oldest first, with its first answer and its
+ *  close (plan D6; human cards H1/H3).
  *  Who answered comes from the answer row's `actor`: `human` is a person, `system` the Supervisor's
  *  sourced answer path, `slave` a seat's `<slave-answer>`. */
 export async function versionQuestions(scope: VersionScope): Promise<readonly GoalReportQuestion[]> {
@@ -429,6 +431,10 @@ export async function versionQuestions(scope: VersionScope): Promise<readonly Go
       slaveId: true,
       body: true,
       createdAt: true,
+      closedAt: true,
+      closedReason: true,
+      closedBy: true,
+      closedNote: true,
       replies: { where: { kind: 'answer' }, orderBy: { seq: 'asc' }, take: 1, select: { body: true, actor: true, createdAt: true } },
     },
   })
@@ -448,6 +454,18 @@ export async function versionQuestions(scope: VersionScope): Promise<readonly Go
               at: answer.createdAt.toISOString(),
               by: ANSWERED_BY[answer.actor],
               text: trimEvidence(answer.body, GOAL_REPORT_DETAIL_MAX_CHARS),
+            },
+      taskId: row.taskId,
+      // Human cards H1/H3: who closed it is a person or Slave -- the report names no account.
+      closed:
+        row.closedAt === null || row.closedReason === null
+          ? null
+          : {
+              at: row.closedAt.toISOString(),
+              reason: row.closedReason,
+              by: row.closedBy === CLOSED_BY_SYSTEM ? 'system' : 'person',
+              note: row.closedNote === null ? null : trimEvidence(row.closedNote, GOAL_REPORT_DETAIL_MAX_CHARS),
+              waitedMs: row.closedAt.getTime() - row.createdAt.getTime(),
             },
     }
   })

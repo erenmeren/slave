@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { sendControl } from '../src/lib/postControl.js'
+import { postControl, sendControl } from '../src/lib/postControl.js'
 
 const assign = vi.fn()
 
@@ -37,5 +37,19 @@ describe('sendControl on 401', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ error: 'run is succeeded' }, { status: 409 }))
     expect(await sendControl('/api/x', { method: 'POST' })).toBe('run is succeeded')
     expect(assign).not.toHaveBeenCalled()
+  })
+})
+
+describe('postControl on a card somebody else settled (human cards spec §4)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('returns the notice beside the error, and null when the refusal carries none', async () => {
+    stubLocation('/w/abc')
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(Response.json({ error: 'question q1 was closed', notice: 'Already closed by alice at 2026-10-02 10:00 UTC.' }, { status: 409 }))
+    expect(await postControl('/api/x')).toEqual({ ok: false, error: 'question q1 was closed', notice: 'Already closed by alice at 2026-10-02 10:00 UTC.' })
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(Response.json({ error: 'run is succeeded' }, { status: 409 }))
+    expect(await postControl('/api/x')).toEqual({ ok: false, error: 'run is succeeded', notice: null })
   })
 })

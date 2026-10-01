@@ -68,6 +68,8 @@ export function HomeClient({
   const [newOpen, setNewOpen] = useState(searchParams.get('new') === '1')
   const [busyDecisionId, setBusyDecisionId] = useState<string | null>(null)
   const [needsYouError, setNeedsYouError] = useState<string | null>(null)
+  /** A card somebody else settled first (human cards spec §4): information, never the red band. */
+  const [needsYouNotice, setNeedsYouNotice] = useState<string | null>(null)
 
   // The header's primary action (M57 R7's idiom): a `Button`, not a bare `<button>`, PUSHED
   // through the URL rather than local-state-only -- the SAME `?new=1` mechanism
@@ -121,8 +123,14 @@ export function HomeClient({
     if (item === undefined) return
     setBusyDecisionId(decisionId)
     setNeedsYouError(null)
+    setNeedsYouNotice(null)
     const result = await postControl(`/api/w/${item.workspaceId}/supervisor/decisions/${decisionId}/${verdict}`)
     setBusyDecisionId(null)
+    if (!result.ok && result.notice !== null) {
+      setNeedsYouNotice(result.notice)
+      router.refresh()
+      return
+    }
     if (!result.ok) {
       setNeedsYouError(result.error)
       return
@@ -147,6 +155,11 @@ export function HomeClient({
           {needsYouError !== null && (
             <p role="alert" data-testid="needs-you-error" className="type-meta mb-[var(--gap-1)] text-s-blocked">
               {needsYouError}
+            </p>
+          )}
+          {needsYouNotice !== null && (
+            <p role="status" data-testid="needs-you-notice" className="type-meta mb-[var(--gap-1)] text-t2">
+              {needsYouNotice}
             </p>
           )}
           {/* I2 (final-review wave): unbounded, this list grows past Home's own `overflow-hidden`

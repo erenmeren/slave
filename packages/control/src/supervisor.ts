@@ -54,7 +54,7 @@ import { requestChange } from './goal.js'
 import { releasePerson } from './persons.js'
 import { discardStaleCandidates, recordMemory } from './memory.js'
 import { answerQuestion, reassignQuestion } from './messaging.js'
-import { announceQuestionClosed, closeQuestionIn, closedByOf, retireQuestionCards, type CloseQuestionInput } from './questions.js'
+import { announceQuestionClosed, closeQuestionIn, closedByOf, loadQuestionCards, retireQuestionCards, type CloseQuestionInput, type QuestionCard } from './questions.js'
 import { isProviderKind } from './org.js'
 import { setRuntimeRoles } from './profile.js'
 import { setSlavePermission } from './permission.js'
@@ -1631,6 +1631,9 @@ export interface DecisionView {
   readonly createdAt: string
   readonly expiresAt: string | null
   readonly resolvedAt: string | null
+  /** Human cards plan A D13: the question a question card is about; null for every other card (and
+   *  for a question that is gone). Optional, so a view built elsewhere keeps compiling. */
+  readonly card?: QuestionCard | null
 }
 
 /** The project's decisions, newest first -- the web panel's and the CLI's read side. `pending`
@@ -1644,6 +1647,8 @@ export async function listDecisions(
     orderBy: { createdAt: 'desc' },
     take: Math.min(opts?.limit ?? DEFAULT_DECISION_LIMIT, MAX_DECISION_LIMIT),
   })
+  // One read for every question card on the page, not one per card.
+  const cards = await loadQuestionCards(workspaceId, rows.filter((row) => isQuestionSituation(row.situationKind)).map((row) => row.subjectId))
   return rows.map((row) => ({
     id: row.id,
     workspaceId: row.workspaceId,
@@ -1664,6 +1669,7 @@ export async function listDecisions(
     createdAt: row.createdAt.toISOString(),
     expiresAt: row.expiresAt?.toISOString() ?? null,
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
+    card: isQuestionSituation(row.situationKind) ? (cards.get(row.subjectId) ?? null) : null,
   }))
 }
 

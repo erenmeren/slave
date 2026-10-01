@@ -116,6 +116,8 @@ export function NeedsYouBar({
   const [items, setItems] = useState<readonly NeedsYouItem[]>(initial)
   const [busy, setBusy] = useState<string | null>(null)
   const [errorText, setErrorText] = useState<string | null>(null)
+  /** A card somebody else settled first (human cards spec §4): information, never the red band. */
+  const [noticeText, setNoticeText] = useState<string | null>(null)
   const shellFacts = useShellFacts(workspaceId)
   const lastFetchedAt = useRef(0)
 
@@ -162,8 +164,16 @@ export function NeedsYouBar({
   const answer = async (decisionId: string, verdict: 'approve' | 'reject'): Promise<void> => {
     setBusy(decisionId)
     setErrorText(null)
+    setNoticeText(null)
     const result = await postControl(`/api/w/${workspaceId}/supervisor/decisions/${decisionId}/${verdict}`)
     setBusy(null)
+    if (!result.ok && result.notice !== null) {
+      // Human cards spec §4: somebody else settled it first -- who and when, then a fresh list.
+      setNoticeText(result.notice)
+      lastFetchedAt.current = Date.now()
+      await load()
+      return
+    }
     if (!result.ok) {
       setErrorText(result.error)
       return
@@ -179,6 +189,11 @@ export function NeedsYouBar({
       {errorText !== null && (
         <p role="alert" data-testid="needs-you-error" className="type-meta mb-[var(--gap-1)] text-s-blocked">
           {errorText}
+        </p>
+      )}
+      {noticeText !== null && (
+        <p role="status" data-testid="needs-you-notice" className="type-meta mb-[var(--gap-1)] text-t2">
+          {noticeText}
         </p>
       )}
       {/* I2 (final-review wave): unbounded, this list grows past the strip's own `overflow-hidden`

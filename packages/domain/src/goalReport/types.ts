@@ -5,6 +5,8 @@
  * re-derives any of it (plan D1). The web page, the Markdown export and the chat note render it.
  * Every timestamp is an ISO string (UTC), so the value crosses a route unchanged.
  */
+import type { QuestionCloseReason } from '../messaging/close.js'
+
 /** `conducted_without_delivery` (final wave I1): a version conducted under Plans 2/3 -- a `conduct`
  *  decision and packages, but no `GoalDelivery` -- whose packages merge straight into the base
  *  branch. Plan 4a's conductor writes the delivery in the packages' own transaction, so a version
@@ -134,6 +136,18 @@ export interface GoalReportQuestion {
   readonly askedBy: string | null
   readonly question: string
   readonly answer: { readonly at: string; readonly by: 'person' | 'supervisor' | 'slave'; readonly text: string } | null
+  /** The asking task: a question a run continued past links to it, because the assumption the run
+   *  made lives in that worker's own report (human cards H3). Null for a task-less question. */
+  readonly taskId: string | null
+  /** Human cards H1/H3: how the question stopped waiting, or null while it waits. `waitedMs` is from
+   *  the question to its close -- for `timed_out`, how long the run waited before it continued. */
+  readonly closed: {
+    readonly at: string
+    readonly reason: QuestionCloseReason
+    readonly by: 'person' | 'system'
+    readonly note: string | null
+    readonly waitedMs: number
+  } | null
 }
 
 /** Plan D5. `versionUsd` = `runsMeasuredUsd + conductorMeasuredUsd + conductorUnmeasuredCalls *

@@ -11,6 +11,7 @@ import {
   trimToFit,
   type LateAnswerFate,
   type QuestionCloseReason,
+  type TaskStatus,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { Principal } from './principal.js'
@@ -140,7 +141,12 @@ const RETIRED_BECAUSE: Readonly<Record<QuestionCloseReason, string>> = {
  */
 export async function lateAnswerFate(client: Prisma.TransactionClient, questionId: string): Promise<LateAnswerFate> {
   const question = await client.slaveMessage.findUnique({ where: { id: questionId }, select: { task: { select: { workPackageId: true, status: true } } } })
-  const task = question?.task ?? null
+  return lateAnswerFateOf(question?.task ?? null)
+}
+
+/** {@link lateAnswerFate}'s rule on an asking task already read, so a page of cards reads it in
+ *  its own query rather than one per card. */
+export function lateAnswerFateOf(task: { readonly workPackageId: string | null; readonly status: TaskStatus } | null): LateAnswerFate {
   if (task === null) return 'unread'
   if (task.workPackageId !== null) return 'hand_off'
   return TERMINAL.includes(task.status) ? 'unread' : 'next_run'
@@ -184,6 +190,111 @@ export async function retireClosedQuestionCards(workspaceId: string, now: Date):
     if (reason !== null) retired += await retireQuestionCards(workspaceId, row.messageId, reason, now)
   }
   return retired
+}
+
+/**
+ * Human cards plan A D13: what a card on a question shows of it. Plan B adds the version's packages
+ * and the decisions the card offers.
+ */
+export interface QuestionCard {
+  readonly messageId: string
+  readonly body: string
+  readonly goalVersion: number | null
+  readonly askerPackageKey: string | null
+  /** The run that asked (`senderRunId`): plan B routes a person's hand-off from it. */
+  readonly askerRunId: string | null
+  /** The asking run is still parked on this question (`deliverToOneRun`'s match). */
+  readonly askerWaiting: boolean
+  /** `by` is the stored `closedBy`; `byName` is what a person reads -- a user's name, "the system"
+   *  or "an operator" (Task 4 carry: a card never shows a raw user id). */
+  readonly closed: { readonly reason: QuestionCloseReason; readonly at: string; readonly by: string; readonly byName: string } | null
+  /** Why the timeout pass could not resume the parked asker (spec H3: "the card says why"). */
+  readonly timeoutRefusal: string | null
+  /** Task 7 carry: a late answer no run will read keeps its card open, and the card says so --
+   *  `LATE_ANSWER_NOTE.unread`, derived at read time (never stored, so it cannot go stale). Null
+   *  otherwise. */
+  readonly lateAnswerNote: string | null
+  /** Where an answer given now goes, for a question its run continued past (`timed_out`); null for
+   *  any other. Spec H3: "the card says where it will go". */
+  readonly lateAnswerFate: LateAnswerFate | null
+}
+
+/** A `closedBy` (or a card's `resolvedByUserId`) in the words a person reads; `names` holds the
+ *  accounts already read. An account that is gone is "a person": it was one. */
+export function closerName(by: string | null, names: ReadonlyMap<string, string>): string {
+  if (by === null || by === CLOSED_BY_SYSTEM) return 'the system'
+  if (by === CLOSED_BY_OPERATOR) return 'an operator'
+  return names.get(by) ?? 'a person'
+}
+
+/** The account names behind a set of `closedBy`/`resolvedByUserId` values, in one read. */
+export async function closerNames(ids: readonly (string | null)[]): Promise<ReadonlyMap<string, string>> {
+  const accounts = [...new Set(ids.filter((id): id is string => id !== null && id !== CLOSED_BY_SYSTEM && id !== CLOSED_BY_OPERATOR))]
+  if (accounts.length === 0) return new Map()
+  const users = await prisma.user.findMany({ where: { id: { in: accounts } }, select: { id: true, username: true } })
+  return new Map(users.map((user) => [user.id, user.username] as const))
+}
+
+/**
+ * Every card's question in one read (plan A D13); a message that is gone is simply absent. A fixed
+ * number of queries whatever the page holds: the questions, the parked runs, each run's latest
+ * question and the closers' names.
+ */
+export async function loadQuestionCards(workspaceId: string, messageIds: readonly string[]): Promise<ReadonlyMap<string, QuestionCard>> {
+  if (messageIds.length === 0) return new Map()
+  const rows = await prisma.slaveMessage.findMany({
+    where: { workspaceId, id: { in: [...messageIds] }, kind: 'question' },
+    select: {
+      id: true,
+      body: true,
+      senderRunId: true,
+      seq: true,
+      closedAt: true,
+      closedReason: true,
+      closedBy: true,
+      timeoutRefusal: true,
+      replies: { where: { kind: 'answer' }, take: 1, select: { id: true } },
+      task: { select: { goalVersion: true, status: true, workPackageId: true, workPackage: { select: { key: true, goalVersion: true } } } },
+    },
+  })
+  const runIds = [...new Set(rows.flatMap((row) => (row.senderRunId === null ? [] : [row.senderRunId])))]
+  const parked =
+    runIds.length === 0
+      ? new Set<string>()
+      : new Set(
+          (await prisma.slaveRun.findMany({ where: { id: { in: runIds }, status: 'paused', pauseReason: 'waiting_for_answer' }, select: { id: true } })).map((run) => run.id),
+        )
+  // A parked run waits on its LATEST question only; an earlier one of its questions is not what holds it.
+  const latest =
+    parked.size === 0
+      ? new Map<string | null, bigint | null>()
+      : new Map(
+          (
+            await prisma.slaveMessage.groupBy({ by: ['senderRunId'], where: { senderRunId: { in: [...parked] }, kind: 'question' }, _max: { seq: true } })
+          ).map((group) => [group.senderRunId, group._max.seq] as const),
+        )
+  const names = await closerNames(rows.map((row) => row.closedBy))
+  return new Map(
+    rows.map((row) => {
+      const fate = row.closedReason === 'timed_out' ? lateAnswerFateOf(row.task) : null
+      const card: QuestionCard = {
+        messageId: row.id,
+        body: row.body,
+        goalVersion: row.task?.workPackage?.goalVersion ?? row.task?.goalVersion ?? null,
+        askerPackageKey: row.task?.workPackage?.key ?? null,
+        askerRunId: row.senderRunId,
+        askerWaiting: row.senderRunId !== null && parked.has(row.senderRunId) && latest.get(row.senderRunId) === row.seq,
+        closed:
+          row.closedAt === null || row.closedReason === null
+            ? null
+            : { reason: row.closedReason, at: row.closedAt.toISOString(), by: row.closedBy ?? CLOSED_BY_SYSTEM, byName: closerName(row.closedBy, names) },
+        timeoutRefusal: row.timeoutRefusal,
+        lateAnswerNote: fate === 'unread' && row.replies.length > 0 ? LATE_ANSWER_NOTE.unread : null,
+        lateAnswerFate: fate,
+      }
+      return [row.id, card] as const
+    }),
+  )
 }
 
 export { CLOSED_BY_SYSTEM }

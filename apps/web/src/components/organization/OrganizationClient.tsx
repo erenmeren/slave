@@ -459,6 +459,7 @@ export function OrganizationNeeds({
 }): React.JSX.Element | null {
   const [busyId, setBusyId] = useState<string | null>(null)
   const [errors, setErrors] = useState<Readonly<Record<string, string>>>({})
+  const [notices, setNotices] = useState<Readonly<Record<string, string>>>({})
 
   const send = async (decisionId: string, path: string, body?: Record<string, unknown>): Promise<void> => {
     setBusyId(decisionId)
@@ -466,8 +467,19 @@ export function OrganizationNeeds({
       const { [decisionId]: _gone, ...rest } = was
       return rest
     })
+    setNotices((was) => {
+      const { [decisionId]: _gone, ...rest } = was
+      return rest
+    })
     const result = await postControl(`/api/w/${workspaceId}/supervisor/decisions/${decisionId}/${path}`, body)
     setBusyId(null)
+    if (!result.ok && result.notice !== null) {
+      // Human cards spec §4: somebody else settled it first -- say who and when, and refetch.
+      const notice = result.notice
+      setNotices((was) => ({ ...was, [decisionId]: notice }))
+      onChanged()
+      return
+    }
     if (!result.ok) {
       setErrors((was) => ({ ...was, [decisionId]: result.error }))
       return
@@ -475,11 +487,18 @@ export function OrganizationNeeds({
     onChanged()
   }
 
-  if (needs.length === 0 && pendingElsewhere === 0 && hints.length === 0) return null
+  const noticeList = Object.entries(notices)
+  if (needs.length === 0 && pendingElsewhere === 0 && hints.length === 0 && noticeList.length === 0) return null
 
   return (
     <>
     <Panel title="what this project still needs">
+      {/* Above the needs, not beside a row: the refetch that follows takes the settled row away. */}
+      {noticeList.map(([decisionId, notice]) => (
+        <span key={decisionId} role="status" data-testid="organization-notice" className="text-[11px] text-text-2">
+          {notice}
+        </span>
+      ))}
       {needs.length > 0 && (
         <div data-testid="organization-needs" className="flex flex-col gap-3">
           {needs.map((need) => (
@@ -529,6 +548,7 @@ export function OrganizationNeeds({
                       {errors[decision.id]}
                     </li>
                   )}
+
                 </ul>
               ))}
             </section>

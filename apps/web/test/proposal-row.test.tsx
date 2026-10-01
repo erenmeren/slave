@@ -478,3 +478,40 @@ describe('a drafted answer', () => {
     expect(screen.getByTestId('supervisor-proposal-source').textContent).toBe('FROM THE POOL')
   })
 })
+
+describe('a question card says how its question stands (human cards H1/H3)', () => {
+  const base = { messageId: 'm-1', body: 'q', goalVersion: 1, askerPackageKey: 'integration', askerRunId: 'r1', lateAnswerNote: null, lateAnswerFate: null }
+  const timedOut = { reason: 'timed_out', at: '2026-10-02T10:00:00.000Z', by: 'system', byName: 'the system' } as const
+
+  it('marks a card whose run continued without an answer, and one whose run cannot continue', () => {
+    renderRow(answerDecision({ card: { ...base, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'hand_off' } }))
+    expect(screen.getByTestId('card-question-state').textContent).toContain('continued without an answer')
+    expect(screen.getByTestId('card-question-state').textContent).toContain('integration package as a hand-off')
+  })
+
+  it('says a parked run still waits, and why it cannot continue', () => {
+    renderRow(answerDecision({ card: { ...base, askerWaiting: true, closed: null, timeoutRefusal: 'workspace halted: emergency_stop' } }))
+    expect(screen.getByTestId('card-question-state').textContent).toContain('Still waiting')
+    expect(screen.getByTestId('card-question-state').textContent).toContain('cannot continue: workspace halted: emergency_stop')
+  })
+
+  it('names how, by whom and when a closed question closed', () => {
+    renderRow(answerDecision({ card: { ...base, askerWaiting: false, closed: { reason: 'dismissed', at: '2026-10-02T09:00:00.000Z', by: 'u1', byName: 'alice' }, timeoutRefusal: null } }))
+    expect(screen.getByTestId('card-question-state').textContent).toBe('Closed without an answer by alice at 2026-10-02T09:00:00.000Z.')
+  })
+
+  it('says a late answer no run will read, on the card that stays open for it', () => {
+    renderRow(answerDecision({ card: { ...base, askerPackageKey: null, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'unread', lateAnswerNote: 'The answer came after the task finished; no run will read it.' } }))
+    expect(screen.getByTestId('card-question-state').textContent).toContain('no run will read it')
+  })
+
+  it("says an answer given now reaches the task's next run when the task has no package", () => {
+    renderRow(answerDecision({ card: { ...base, askerPackageKey: null, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'next_run' } }))
+    expect(screen.getByTestId('card-question-state').textContent).toContain("reaches the task's next run")
+  })
+
+  it('shows nothing for a card with no question, or an open one nobody waits on', () => {
+    renderRow(decision({}))
+    expect(screen.queryByTestId('card-question-state')).toBeNull()
+  })
+})

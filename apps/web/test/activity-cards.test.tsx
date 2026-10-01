@@ -651,12 +651,16 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('settings-to').textContent).toBe('60m')
   })
 
-  it('workspace.settings_changed names the question timeout, in minutes (human cards H3)', () => {
+  it('workspace.settings_changed names the question timeout, in hours where they read better (human cards H3)', () => {
     const Card = ACTIVITY_CARDS['workspace.settings_changed']
-    render(<Card event={baseEvent('workspace.settings_changed', { field: 'questionTimeoutMs', from: 7_200_000, to: 1_800_000 })} {...CARD_PROPS} />)
+    const { unmount } = render(<Card event={baseEvent('workspace.settings_changed', { field: 'questionTimeoutMs', from: 7_200_000, to: 1_800_000 })} {...CARD_PROPS} />)
     expect(screen.getByTestId('transition-label').textContent).toBe('question timeout')
-    expect(screen.getByTestId('settings-from').textContent).toBe('120m')
+    expect(screen.getByTestId('settings-from').textContent).toBe('2h')
     expect(screen.getByTestId('settings-to').textContent).toBe('30m')
+    unmount()
+    render(<Card event={baseEvent('workspace.settings_changed', { field: 'questionTimeoutMs', from: 259_200_000, to: 5_400_000 })} {...CARD_PROPS} />)
+    expect(screen.getByTestId('settings-from').textContent).toBe('72h')
+    expect(screen.getByTestId('settings-to').textContent).toBe('90m')
   })
 
   it('workspace.settings_changed says attempts per task as a plain figure', () => {

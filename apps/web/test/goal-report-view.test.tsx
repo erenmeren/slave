@@ -181,12 +181,39 @@ describe('GoalReportView', () => {
     render(
       <GoalReportView
         report={report({
-          questions: [{ id: 'q1', at: '2026-09-29T10:02:00.000Z', packageKey: 'report', askedBy: 'Alex', question: 'Which delimiter?', answer: { at: '2026-09-29T10:03:00.000Z', by: 'supervisor', text: 'Comma.' } }],
+          questions: [{ id: 'q1', at: '2026-09-29T10:02:00.000Z', packageKey: 'report', askedBy: 'Alex', taskId: null, closed: null, question: 'Which delimiter?', answer: { at: '2026-09-29T10:03:00.000Z', by: 'supervisor', text: 'Comma.' } }],
         })}
       />,
     )
     expect(screen.getByTestId('goal-report-trail-entry').textContent).toContain(GOAL_REPORT_AUTHOR_WORDS.model)
     expect(screen.getByTestId('goal-report-question').textContent).toContain(`Answered by ${GOAL_REPORT_ANSWERED_BY.supervisor}`)
+  })
+
+  it('says how a question closed, and lists each run that continued without an answer with its wait and a link to its task (human cards H1/H3)', () => {
+    const base = { at: '2026-10-02T08:00:00.000Z', packageKey: 'integration', askedBy: 'Ivo', answer: null }
+    const timedOut = { at: '2026-10-02T10:00:00.000Z', reason: 'timed_out', by: 'system', note: null, waitedMs: 7_200_000 } as const
+    render(
+      <GoalReportView
+        report={report({
+          questions: [
+            { ...base, id: 'm1', taskId: 't1', question: '<b>May I edit package.json?</b>', closed: timedOut },
+            { ...base, id: 'm2', taskId: 't2', question: 'Which port?', closed: { ...timedOut, reason: 'dismissed', by: 'person', waitedMs: 3_600_000 } },
+          ],
+        })}
+      />,
+    )
+    const closedLines = screen.getAllByTestId('goal-report-question-closed').map((line) => line.textContent)
+    expect(closedLines).toEqual([
+      'Closed: continued without an answer after 2 hours (Slave, 2026-10-02T10:00:00.000Z)',
+      'Closed: closed without an answer (a person, 2026-10-02T10:00:00.000Z)',
+    ])
+    const continued = screen.getAllByTestId('goal-report-continued')
+    expect(continued).toHaveLength(1)
+    expect(continued[0]?.textContent).toContain('integration (Ivo) waited 2 hours, then continued on its own assumption:')
+    // A worker's words are characters on the page, never markup.
+    expect(continued[0]?.querySelector('b')).toBeNull()
+    expect(continued[0]?.textContent).toContain('<b>May I edit package.json?</b>')
+    expect(screen.getByTestId('goal-report-continued-link').getAttribute('href')).toBe(`/w/${report().workspaceId}/tasks?task=t1`)
   })
 
   describe('smoke checks and denied tool calls (skeleton spec S7/S9, plan B Task 7)', () => {

@@ -67,10 +67,14 @@ export function SupervisorTimeline({
   workspaceId,
   entries,
   needsYou,
+  onRefresh,
 }: {
   readonly workspaceId: string
   readonly entries: readonly TimelineEntry[]
   readonly needsYou: readonly NeedsYouItem[]
+  /** Asks the page for a fresh queue. A card somebody else settled first writes nothing, so no
+   *  event wakes the page's stream: the row asks instead (human cards spec §4). */
+  readonly onRefresh?: () => void
 }): React.JSX.Element {
   /** Empty means ALL -- a filter nobody has touched hides nothing. */
   const [lanes, setLanes] = useState<ReadonlySet<TimelineLane>>(new Set())
@@ -78,6 +82,8 @@ export function SupervisorTimeline({
    *  unblocking a task are two independent acts on two independent rows. */
   const [busyId, setBusyId] = useState<string | null>(null)
   const [errors, setErrors] = useState<Readonly<Record<string, string>>>({})
+  /** A card somebody else settled first, by row: information, not a refusal of this person's act. */
+  const [notices, setNotices] = useState<Readonly<Record<string, string>>>({})
   const [answers, setAnswers] = useState<Readonly<Record<string, string>>>({})
 
   const decisionEntries = entries.filter((entry) => entry.decision !== null)
@@ -123,8 +129,17 @@ export function SupervisorTimeline({
       const { [rowId]: _gone, ...rest } = was
       return rest
     })
+    setNotices((was) => {
+      const { [rowId]: _gone, ...rest } = was
+      return rest
+    })
     const result = await postControl(url, body)
-    if (!result.ok) setErrors((was) => ({ ...was, [rowId]: result.error }))
+    if (!result.ok && result.notice !== null) {
+      // Human cards spec §4: who settled it and when, then a fresh queue -- not a red band.
+      const notice = result.notice
+      setNotices((was) => ({ ...was, [rowId]: notice }))
+      onRefresh?.()
+    } else if (!result.ok) setErrors((was) => ({ ...was, [rowId]: result.error }))
     setBusyId(null)
     return result.ok
   }
@@ -159,6 +174,12 @@ export function SupervisorTimeline({
     // No gutter of its own any more: `OverviewClient`'s Recent changes section owns the page's
     // 24px padding, and a second copy here indented the timeline out of line with every band.
     <div data-testid="supervisor-timeline" className="flex flex-col gap-3">
+      {/* Above the queue, not beside a row: the refresh that follows takes the settled row away. */}
+      {Object.entries(notices).map(([rowId, notice]) => (
+        <span key={rowId} role="status" data-testid="timeline-notice" className="text-[11px] text-text-2">
+          {notice}
+        </span>
+      ))}
       {waiting > 0 && (
         <section data-testid="timeline-decisions">
           <Panel>

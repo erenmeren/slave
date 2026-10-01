@@ -21,7 +21,7 @@ import {
   type MemoryStatus,
   type MemoryType,
 } from '@slave-of-ai/domain'
-import { formatTimeout } from '../../lib/format'
+import { formatQuestionTimeout, formatTimeout } from '../../lib/format'
 import { formatUsd } from '../../lib/realMoney'
 import { plural } from '../../lib/plural'
 import { ActivityCard, type ActivityCardProps } from './ActivityCard'
@@ -1088,7 +1088,9 @@ function settingValue(field: SettingsField, value: string | number | boolean | n
   // Already a word (`propose`/`act`) -- `setSupervisorSettings` writes nothing else here.
   if (field === 'supervisorAutonomy') return String(value)
   // Milliseconds on the wire, the column's unit; a person reads `30m`, the Runtime panel's old format.
-  if (field === 'runTimeoutMs' || field === 'questionTimeoutMs') return typeof value === 'number' ? formatTimeout(value) : String(value)
+  if (field === 'runTimeoutMs') return typeof value === 'number' ? formatTimeout(value) : String(value)
+  // Hours where they read better (`2h`, `72h`), minutes otherwise (`90m`).
+  if (field === 'questionTimeoutMs') return typeof value === 'number' ? formatQuestionTimeout(value) : String(value)
   if (value === null) return field === 'provider' ? 'none' : 'no budget'
   return field === 'budgetUsd' ? `$${String(value)}` : String(value)
 }

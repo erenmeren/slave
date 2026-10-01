@@ -312,4 +312,27 @@ describe('versionQuestions', () => {
       expect.objectContaining({ packageKey: 'pkg1', question: 'Quote all?', answer: null }),
     ])
   })
+
+  it('says how each question closed, by whom in words, and how long it waited; its task links the report (human cards H1/H3)', async (): Promise<void> => {
+    const s = await seed()
+    const asked = new Date('2026-10-02T08:00:00.000Z')
+    const base = { workspaceId: s.workspaceId, taskId: s.taskOf[1], slaveId: s.slaveId, kind: 'question' as const, expectsReply: true, actor: 'slave' as const, createdAt: asked }
+    const timedOut = await prisma.slaveMessage.create({
+      data: { ...base, threadId: 't1', body: 'May I edit package.json?', closedAt: new Date('2026-10-02T10:00:00.000Z'), closedReason: 'timed_out', closedBy: 'system', closedNote: 'No answer came in 2 hours.' },
+    })
+    const dismissed = await prisma.slaveMessage.create({
+      data: { ...base, threadId: 't2', body: 'Which port?', closedAt: new Date('2026-10-02T09:00:00.000Z'), closedReason: 'dismissed', closedBy: 'operator', closedNote: null },
+    })
+    const open = await prisma.slaveMessage.create({ data: { ...base, threadId: 't3', body: 'Still open?' } })
+
+    const questions = await versionQuestions(await loadVersionScope(s.workspaceId, 1))
+    const byId = new Map(questions.map((q) => [q.id, q] as const))
+
+    expect(byId.get(timedOut.id)).toMatchObject({
+      taskId: s.taskOf[1],
+      closed: { at: '2026-10-02T10:00:00.000Z', reason: 'timed_out', by: 'system', note: 'No answer came in 2 hours.', waitedMs: 7_200_000 },
+    })
+    expect(byId.get(dismissed.id)?.closed).toEqual({ at: '2026-10-02T09:00:00.000Z', reason: 'dismissed', by: 'person', note: null, waitedMs: 3_600_000 })
+    expect(byId.get(open.id)?.closed).toBe(null)
+  })
 })

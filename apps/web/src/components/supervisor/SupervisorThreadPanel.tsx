@@ -327,6 +327,8 @@ export function SupervisorThreadPanel({
   const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
+  /** A card somebody else settled first (human cards spec §4): information, never the red band. */
+  const [noticeText, setNoticeText] = useState<string | null>(null)
   // R1/R8 (Task 7): the scope line's own switch. `null` until the view answers once -- `useShellFacts`
   // carries none of the Supervisor's settings (`hooks/useShellFacts.ts`'s own `sameFacts` list), so
   // this panel reads them off `GET /api/w/:id/supervisor` itself rather than growing a field onto a
@@ -620,10 +622,15 @@ export function SupervisorThreadPanel({
     // The last refusal is about the last act, not this one: a band that outlives what it described
     // is a band a person reads as being about the button they just pressed.
     setErrorText(null)
+    setNoticeText(null)
     const result = await postControl(`/api/w/${workspaceId}/supervisor/decisions/${decisionId}/${verdict}`)
     setBusy(false)
     if (result.ok) await load()
-    else setErrorText(result.error)
+    else if (result.notice !== null) {
+      // Human cards spec §4: somebody else settled it first -- who and when, then a fresh thread.
+      setNoticeText(result.notice)
+      await load()
+    } else setErrorText(result.error)
   }
   const onAnswer = (decisionId: string, verdict: 'approve' | 'reject'): void => void answer(decisionId, verdict)
 
@@ -874,6 +881,11 @@ export function SupervisorThreadPanel({
         {errorText !== null && (
           <span role="alert" data-testid="supervisor-request-error" className="text-[12.5px] text-s-blocked">
             {errorText}
+          </span>
+        )}
+        {noticeText !== null && (
+          <span role="status" data-testid="supervisor-request-notice" className="text-[12.5px] text-t2">
+            {noticeText}
           </span>
         )}
         {/* R14/I3: `rounded-[11px]` was the one hand-rolled radius left on this panel -- the field

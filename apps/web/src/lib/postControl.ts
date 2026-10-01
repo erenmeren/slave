@@ -39,6 +39,20 @@ export async function sendControl(
   // of a worker that has many, which is the verb HTTP has for that.
   options: { method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: Record<string, unknown> },
 ): Promise<string | null> {
+  return (await sendControlFull(url, options))?.error ?? null
+}
+
+/** A refusal, with the `notice` a decision route adds when somebody else settled the card first
+ *  (human cards spec §4): information to show, not an error -- null on every other refusal. */
+interface ControlFailure {
+  readonly error: string
+  readonly notice: string | null
+}
+
+async function sendControlFull(
+  url: string,
+  options: { method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: Record<string, unknown> },
+): Promise<ControlFailure | null> {
   try {
     const response =
       options.body === undefined
@@ -55,18 +69,24 @@ export async function sendControl(
     // so a control surface that cannot use `sendControl` (`ProjectsPanel`) still gets it.
     if (response.status === 401) onUnauthorized()
     const data: unknown = await response.json().catch(() => null)
-    return errorMessage(data, response.status)
+    return { error: errorMessage(data, response.status), notice: noticeOf(data) }
   } catch (cause) {
-    return cause instanceof Error ? cause.message : String(cause)
+    return { error: cause instanceof Error ? cause.message : String(cause), notice: null }
   }
+}
+
+function noticeOf(data: unknown): string | null {
+  if (data === null || typeof data !== 'object') return null
+  const value = (data as { notice?: unknown }).notice
+  return typeof value === 'string' ? value : null
 }
 
 export async function postControl(
   url: string,
   body?: Record<string, unknown>,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const error = await sendControl(url, body === undefined ? { method: 'POST' } : { method: 'POST', body })
-  return error === null ? { ok: true } : { ok: false, error }
+): Promise<{ ok: true } | { ok: false; error: string; notice: string | null }> {
+  const failure = await sendControlFull(url, body === undefined ? { method: 'POST' } : { method: 'POST', body })
+  return failure === null ? { ok: true } : { ok: false, error: failure.error, notice: failure.notice }
 }
 
 /**

@@ -216,8 +216,8 @@ describe('renderGoalReportMarkdown', () => {
     const md = renderGoalReportMarkdown(
       report({
         questions: [
-          { id: 'q1', at: '2026-09-29T10:02:00.000Z', packageKey: 'report', askedBy: 'Alex', question: 'CSV header row?', answer: { at: '2026-09-29T10:03:00.000Z', by: 'supervisor', text: 'Yes, one header row.' } },
-          { id: 'q2', at: '2026-09-29T10:02:30.000Z', packageKey: 'report', askedBy: null, question: 'Quote all?', answer: null },
+          { id: 'q1', at: '2026-09-29T10:02:00.000Z', packageKey: 'report', askedBy: 'Alex', taskId: null, closed: null, question: 'CSV header row?', answer: { at: '2026-09-29T10:03:00.000Z', by: 'supervisor', text: 'Yes, one header row.' } },
+          { id: 'q2', at: '2026-09-29T10:02:30.000Z', packageKey: 'report', askedBy: null, taskId: null, closed: null, question: 'Quote all?', answer: null },
         ],
       }),
     )
@@ -226,12 +226,51 @@ describe('renderGoalReportMarkdown', () => {
     expect(md).toContain('  Not answered.')
   })
 
+  it('says how each question closed, and how long a run waited before it continued (human cards H1/H3)', () => {
+    const q = { id: 'm1', at: '2026-10-02T08:00:00.000Z', packageKey: 'integration', askedBy: 'Ivo', taskId: 't1', question: 'May I edit package.json?', answer: null }
+    const md = renderGoalReportMarkdown(
+      report({
+        questions: [
+          { ...q, closed: { at: '2026-10-02T10:00:00.000Z', reason: 'timed_out', by: 'system', note: 'No answer came in 2 hours.', waitedMs: 7_200_000 } },
+          { ...q, id: 'm2', closed: { at: '2026-10-02T09:00:00.000Z', reason: 'dismissed', by: 'person', note: null, waitedMs: 3_600_000 } },
+          { ...q, id: 'm3', closed: null },
+        ],
+      }),
+    )
+    expect(md).toContain('  Closed: continued without an answer after 2 hours (Slave, 2026-10-02T10:00:00.000Z).')
+    expect(md).toContain('  Closed: closed without an answer (a person, 2026-10-02T09:00:00.000Z).')
+    expect(md.match(/Closed:/g)).toHaveLength(2)
+  })
+
+  it('lists each question a run continued past without an answer: the question, the wait and a link to the task whose report names the assumption (human cards H3)', () => {
+    const base = { at: '2026-10-02T08:00:00.000Z', packageKey: 'integration', askedBy: 'Ivo', answer: null }
+    const timedOut = { at: '2026-10-02T10:00:00.000Z', reason: 'timed_out', by: 'system', note: null, waitedMs: 7_200_000 } as const
+    const md = renderGoalReportMarkdown(
+      report({
+        workspaceId: 'ws1',
+        questions: [
+          { ...base, id: 'm1', taskId: 't1', question: 'May I edit *package.json*?', closed: timedOut },
+          { ...base, id: 'm2', taskId: null, question: 'Which port?', closed: { ...timedOut, waitedMs: 5_400_000 } },
+          { ...base, id: 'm3', taskId: 't3', question: 'Dismissed one', closed: { ...timedOut, reason: 'dismissed', by: 'person' } },
+        ],
+      }),
+    )
+    const section = md.slice(md.indexOf('## Runs that continued without an answer'), md.indexOf('## Questions'))
+    expect(section).toContain('- 2026-10-02T08:00:00.000Z · integration (Ivo) waited 2 hours, then continued on its own assumption:')
+    expect(section).toContain('  > May I edit \\*package.json\\*?')
+    expect(section).toContain("  The assumption is in the worker's report: [the task](/w/ws1/tasks?task=t1).")
+    expect(section).toContain('waited 1 hour 30 minutes')
+    expect(section).toContain("  The assumption is in the worker's report.")
+    expect(section).not.toContain('Dismissed one')
+    expect(renderGoalReportMarkdown(report())).not.toContain('## Runs that continued without an answer')
+  })
+
   it('puts a blank line between the quoted question and its attribution line, so a lazy blockquote continuation cannot swallow it', () => {
     const md = renderGoalReportMarkdown(
       report({
         questions: [
-          { id: 'q1', at: '2026-09-29T10:02:00.000Z', packageKey: 'report', askedBy: 'Alex', question: 'CSV header row?', answer: { at: '2026-09-29T10:03:00.000Z', by: 'supervisor', text: 'Yes, one header row.' } },
-          { id: 'q2', at: '2026-09-29T10:02:30.000Z', packageKey: 'report', askedBy: null, question: 'Quote all?', answer: null },
+          { id: 'q1', at: '2026-09-29T10:02:00.000Z', packageKey: 'report', askedBy: 'Alex', taskId: null, closed: null, question: 'CSV header row?', answer: { at: '2026-09-29T10:03:00.000Z', by: 'supervisor', text: 'Yes, one header row.' } },
+          { id: 'q2', at: '2026-09-29T10:02:30.000Z', packageKey: 'report', askedBy: null, taskId: null, closed: null, question: 'Quote all?', answer: null },
         ],
       }),
     )
