@@ -191,6 +191,10 @@ describe('answerConductorQuestions (spec C4)', () => {
     await deliverAnswers(f.workspaceId)
     const delivered = await prisma.slaveMessage.findFirstOrThrow({ where: { replyToId: f.qPaused, kind: 'answer' } })
     expect(delivered.deliveredAt).not.toBeNull()
+    // requestResume records the intent on the parked run itself, with the answer as its queued message.
+    const parked = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: f.integrationTaskId, status: 'paused' } })
+    expect(parked.resumeRequestedAt).not.toBeNull()
+    expect(parked.queuedMessage).toContain('camelCase')
   })
 
   it('sends an answer that would move ownership to a person, and one with an unverifiable basis for approval', async () => {
@@ -363,16 +367,20 @@ describe('answerConductorQuestions (spec C4)', () => {
     // The run context writes into the worktree's git exclude file, so the directory must be a repository.
     const worktreePath = mkdtempSync(join(tmpdir(), 'conductor-answers-'))
     execFileSync('git', ['init', '-q', worktreePath])
-    const built = await buildRunContext({
-      runId: run.id as never,
-      kind: 'implementation',
-      slaveId: f.seatId as never,
-      workspaceId: f.workspaceId as never,
-      taskId: f.integrationTaskId as never,
-      worktreePath,
-      provider: 'claude_code',
-    })
-    rmSync(worktreePath, { recursive: true, force: true })
+    let built: Awaited<ReturnType<typeof buildRunContext>>
+    try {
+      built = await buildRunContext({
+        runId: run.id as never,
+        kind: 'implementation',
+        slaveId: f.seatId as never,
+        workspaceId: f.workspaceId as never,
+        taskId: f.integrationTaskId as never,
+        worktreePath,
+        provider: 'claude_code',
+      })
+    } finally {
+      rmSync(worktreePath, { recursive: true, force: true })
+    }
     expect(built.prompt).toContain('- Error shape:')
   })
 
@@ -383,11 +391,12 @@ describe('answerConductorQuestions (spec C4)', () => {
     const rows = await prisma.packageHandOff.findMany({ where: { workspaceId: f.workspaceId } })
     expect(rows).toEqual([expect.objectContaining({ source: 'answer', toPackageKey: 'integration', status: 'pending', change: 'serve frontend/dist at /' })])
     const events = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_package_handed_off' } })
-    expect(events.map((e) => (e.payload as { source: string; fromPackage: unknown }).source)).toEqual(['answer'])
+    expect(events.map((e) => (e.payload as { source: string }).source)).toEqual(['answer'])
     const decision = await prisma.supervisorDecision.findFirstOrThrow({ where: { subjectId: f.qReport, situationKind: 'conductor_question' } })
     expect(decision.tier).toBe('applied')
     await deliverAnswers(f.workspaceId)
     const finished = await prisma.slaveMessage.findMany({ where: { replyToId: f.qReport, kind: 'answer' } })
-    expect(finished.every((m) => m.deliveredAt === null)).toBe(true)
+    expect(finished).toHaveLength(1)
+    expect(finished[0]?.deliveredAt).toBeNull()
   })
 })
