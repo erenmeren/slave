@@ -197,7 +197,7 @@ export interface GoalReportSmoke {
 export interface GoalReportHandOff {
   readonly id: string
   readonly at: string
-  readonly source: 'report' | 'answer'
+  readonly source: 'report' | 'answer' | 'person'
   readonly fromPackage: string | null
   readonly toPackage: string | null
   readonly path: string | null

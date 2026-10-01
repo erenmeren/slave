@@ -376,6 +376,11 @@ function titleFor(
       const to = payload['toPackage']
       return `goal v${typeof version === 'number' ? String(version) : '?'}: ${typeof from === 'string' ? from : 'the conductor'} handed work to ${typeof to === 'string' ? to : 'no package'}`
     }
+    // Human cards H1: a question stopped waiting.
+    case 'slave.question_closed': {
+      const reason = payload['reason']
+      return `question ${typeof reason === 'string' ? reason.replace('_', ' ') : 'closed'}`
+    }
     // M48 R5/R7: a runbook adopted, or stopped. The payload's `title` is not a field this event
     // carries, so without a case of its own it would read as its own type name on the PLAN CHANGE
     // lane -- and this is the one entry that says how the project decided to work.

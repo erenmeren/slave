@@ -79,6 +79,7 @@ export const TYPES_BY_KIND = {
     'run.stopped',
     'slave.message_sent',
     'slave.message_reassigned',
+    'slave.question_closed',
   ],
   guardrails: ['guardrail.tripped'],
   // The workspace's own lifecycle -- the goal, the plan it became, the company later assigned to

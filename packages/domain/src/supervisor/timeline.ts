@@ -98,6 +98,7 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   'broker.refused': 'work',
   'permission.changed': 'work',
   'slave.message_sent': 'work',
+  'slave.question_closed': 'work', // Human cards H1: a question stopped waiting, beside the message that answered it.
   // M50 R3: the end of one worker's engagement is part of the work story, beside the messages and
   // the pauses -- who was here, and until when. Not `decision`: the Supervisor applies this
   // routinely, and the decision lane is for what a person still has to answer.

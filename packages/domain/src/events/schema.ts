@@ -6,6 +6,7 @@ import { EXTERNAL_EVENT_KINDS } from '../external/request.js'
 import { GOAL_REPORT_FILES_MAX } from '../goalReport/constants.js'
 import { MEMORY_SCOPES, MEMORY_SOURCE_KINDS, MEMORY_STATUSES, MEMORY_TYPES } from '../memory/types.js'
 import { ACTION_KINDS, DECIDERS, TIERS } from '../supervisor/actions.js'
+import { QUESTION_CLOSE_REASONS } from '../messaging/close.js'
 import { SITUATION_KINDS } from '../supervisor/situations.js'
 
 const envelope = {
@@ -593,7 +594,7 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     payload: z.object({
       version: z.number().int().positive(),
       handOffId: z.string().min(1),
-      source: z.enum(['report', 'answer']),
+      source: z.enum(['report', 'answer', 'person']),
       fromPackage: z.string().min(1).nullable(),
       toPackage: z.string().min(1).nullable(),
       path: z.string().min(1).max(500).nullable(),
@@ -601,6 +602,21 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       delivery: z.enum(['prompt', 'rework', 'duplicate', 'own', 'question']),
       // `HANDOFF_EVENT_CHANGE_MAX_CHARS`, spelled here the way this file spells every stored bound.
       change: z.string().max(500),
+    }),
+  }),
+  // Human-cards spec H1 (plan A D11): a question stopped waiting -- answered, decided on a card,
+  // dismissed, past its timeout, or superseded by a new goal version. `by` is a user id, `operator`
+  // or `system`; `note` is the head of what the asker continues with.
+  z.object({
+    ...envelope,
+    type: z.literal('slave.question_closed'),
+    payload: z.object({
+      messageId: z.string().min(1),
+      reason: z.enum(QUESTION_CLOSE_REASONS),
+      by: z.string().min(1).max(200),
+      decisionId: z.string().min(1).nullable(),
+      // `QUESTION_CLOSED_EVENT_NOTE_MAX_CHARS`, spelled here the way this file spells every stored bound.
+      note: z.string().max(500).nullable(),
     }),
   }),
   // M40 §4: `cancelTask` took a task off the board -- an operator's own call, or an approved

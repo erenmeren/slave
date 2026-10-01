@@ -100,6 +100,7 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'workspace.goal_retried': { version: 1, round: 3 },
   'workspace.smoke_run': { version: 1, round: 2, attemptId: 'a1', outcome: 'failed', exitCode: 1, durationMs: 1200, output: 'npm error Missing script: "start"', reworkedPackage: 'integration' },
   'workspace.package_handed_off': { version: 1, handOffId: 'h1', source: 'report', fromPackage: 'report', toPackage: 'integration', path: null, package: 'integration', delivery: 'prompt', change: 'expose GET /api/v1/reports' },
+  'slave.question_closed': { messageId: 'm1', reason: 'timed_out', by: 'system', decisionId: null, note: 'No answer came in 2 hours.' },
   'workspace.smoke_handed_off': { version: 1, round: 1, attemptId: 'a1', fromPackage: 'integration', toPackage: 'skeleton', path: 'backend/package.json', change: 'add a "start" script' },
   'workspace.plan_created': {
     goal: 'Ship the checkout flow',

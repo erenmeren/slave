@@ -931,8 +931,9 @@ function WorkspacePackageHandedOffCard(props: ActivityCardProps): ReactElement {
     package: string | null
     delivery: string
     change: string
+    source: string
   }
-  const from = payload.fromPackage ?? 'the conductor'
+  const from = payload.source === 'person' ? 'a person' : (payload.fromPackage ?? 'the conductor')
   const to = payload.toPackage ?? 'no package'
   const what = payload.path ?? payload.package
   return (
@@ -942,6 +943,27 @@ function WorkspacePackageHandedOffCard(props: ActivityCardProps): ReactElement {
         label={`goal v${String(payload.version)}: ${from} handed work to ${to}${what === null ? '' : ` (${what})`}, ${HAND_OFF_DELIVERY[payload.delivery] ?? payload.delivery}`}
       >
         {payload.change !== '' && <span data-testid="package-handoff-change">{payload.change}</span>}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+const QUESTION_CLOSED_WORDS: Readonly<Record<string, string>> = {
+  answered: 'answered',
+  decided: 'decided on a card',
+  dismissed: 'closed without an answer',
+  timed_out: 'continued without an answer',
+  superseded: 'superseded by a new goal version',
+}
+
+/** Human cards H1: a question stopped waiting. `note` is what the asker was told, quoted as a child. */
+function SlaveQuestionClosedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { reason: string; by: string; note: string | null }
+  const who = payload.by === 'system' ? 'Slave' : 'a person'
+  return (
+    <ActivityCard {...props}>
+      <Transition tone={payload.reason === 'timed_out' ? 'warn' : 'working'} label={`question ${QUESTION_CLOSED_WORDS[payload.reason] ?? payload.reason} (${who})`}>
+        {payload.note !== null && <span data-testid="question-closed-note">{payload.note}</span>}
       </Transition>
     </ActivityCard>
   )
@@ -1817,6 +1839,7 @@ export const ACTIVITY_CARDS = {
   'workspace.smoke_run': WorkspaceSmokeRunCard,
   'workspace.smoke_handed_off': WorkspaceSmokeHandedOffCard,
   'workspace.package_handed_off': WorkspacePackageHandedOffCard,
+  'slave.question_closed': SlaveQuestionClosedCard,
   'workspace.plan_created': WorkspacePlanCreatedCard,
   'workspace.replan_started': WorkspaceReplanStartedCard,
   'workspace.replanned': WorkspaceReplannedCard,

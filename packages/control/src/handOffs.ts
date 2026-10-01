@@ -34,7 +34,7 @@ type Tx = Prisma.TransactionClient
 export interface RouteHandOffsInput {
   readonly workspaceId: string
   readonly goalVersion: number
-  readonly source: 'report' | 'answer'
+  readonly source: 'report' | 'answer' | 'person'
   /** `report:<runId>` or (Plan B) `answer:<decisionId>`; item i is stored under `<sourceKey>:<i>`. */
   readonly sourceKey: string
   /** The run whose report carried it (or whose question the answer answered): a question sender. */
