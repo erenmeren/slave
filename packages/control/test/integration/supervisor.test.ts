@@ -3144,6 +3144,15 @@ describe('a card closes its question (human cards H1)', () => {
     expect(!second.ok && second.error.kind).toBe('supervisor_cooldown')
   })
 
+  it('cools a question as one key: an approved re-addressing card holds back a waiting_stale card on the same question (final wave, finding 2)', async () => {
+    const f = await seedQuestion({ answerer: true, live: true })
+    const now = new Date()
+    await prisma.supervisorDecision.create({ data: { workspaceId: f.workspaceId, situationKind: 'unanswerable_question', subjectId: f.questionId, situation: {}, candidates: [], chosenIndex: 0, action: { kind: 'reassign_question', messageId: f.questionId, toSlaveId: f.answererId }, rationale: 'x', tier: 'proposed', status: 'approved', decidedBy: 'rules', createdAt: new Date(now.getTime() - 10 * 60_000), resolvedAt: new Date(now.getTime() - 60_000) } })
+    const refused = await record(f.workspaceId, 'waiting_stale', f.questionId, now)
+    expect(!refused.ok && refused.error.kind).toBe('supervisor_cooldown')
+    expect((await record(f.workspaceId, 'waiting_stale', f.questionId, new Date(now.getTime() + COOLDOWN_MS))).ok).toBe(true)
+  })
+
   it('refuses a card on a closed question', async () => {
     const f = await seedQuestion()
     await prisma.slaveMessage.update({ where: { id: f.questionId }, data: { closedAt: new Date(), closedReason: 'dismissed', closedBy: 'u1' } })
@@ -3314,7 +3323,9 @@ describe('a card closes its question (human cards H1)', () => {
     const f = await seedQuestion({ status: 'blocked' })
     const now = new Date()
     await proposal(f, 'conductor_question', { kind: 'mark_task_failed', taskId: f.taskId, reason: 'stuck' }, { status: 'approved', resolvedAt: new Date(now.getTime() - 60_000) })
-    expect((await record(f.workspaceId, 'waiting_stale', f.questionId, now)).ok).toBe(true)
+    // Refused by the question's cooldown (final wave, finding 2), not by a heal: nothing closed it.
+    const refused = await record(f.workspaceId, 'waiting_stale', f.questionId, now)
+    expect(!refused.ok && refused.error.kind).toBe('supervisor_cooldown')
     expect((await question(f.questionId)).closedAt).toBeNull()
   })
 
@@ -3323,7 +3334,8 @@ describe('a card closes its question (human cards H1)', () => {
     const move = await reassignCard(f)
     expect((await approveDecision(move.id)).ok).toBe(true)
     await prisma.task.update({ where: { id: f.taskId }, data: { status: 'done' } })
-    const later = new Date(Date.now() + HEAL_APPROVED_CLOSE_AFTER_MS + 60_000)
+    // Past the heal window and the question's cooldown (final wave, finding 2), so the record is made.
+    const later = new Date(Date.now() + Math.max(HEAL_APPROVED_CLOSE_AFTER_MS, COOLDOWN_MS) + 60_000)
     expect((await record(f.workspaceId, 'waiting_stale', f.questionId, later)).ok).toBe(true)
     expect((await question(f.questionId)).closedAt).toBeNull()
   })

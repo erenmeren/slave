@@ -956,6 +956,21 @@ describe('filterFresh', () => {
     })
     expect(keys(filterFresh(observe(w), w))).toEqual([['review_cap_blocked', 't1']])
   })
+
+  // Final wave, finding 2: a question cools as one key, by its latest card of any question kind.
+  it('cools every question kind on a question by its latest card: a re-addressed unanswerable card holds back waiting_stale', () => {
+    const stale = { kind: 'waiting_stale' as const, subjectId: 'm1', summary: 'x', facts: {} }
+    const approved = decision({ situationKind: 'unanswerable_question', subjectId: 'm1', status: 'approved', tier: 'proposed', createdAt: NOW - 20 * 60_000, resolvedAt: NOW - 60_000 })
+    const w = world({ decisions: [approved] })
+    expect(filterFresh([stale], w)).toEqual([])
+    // An older waiting_stale card long cooled does not free it: the latest card is the one that counts.
+    const older = decision({ situationKind: 'waiting_stale', subjectId: 'm1', status: 'expired', tier: 'escalated', createdAt: NOW - 3 * COOLDOWN_MS, resolvedAt: NOW - 2 * COOLDOWN_MS })
+    expect(filterFresh([stale], world({ decisions: [older, approved] }))).toEqual([])
+    // Past the latest card's cooldown the question is free again, and another question never was held.
+    const cooled = world({ decisions: [{ ...approved, resolvedAt: NOW - COOLDOWN_MS - 1 }] })
+    expect(filterFresh([stale], cooled)).toHaveLength(1)
+    expect(filterFresh([{ ...stale, subjectId: 'm2' }], w)).toHaveLength(1)
+  })
 })
 
 describe('observe -- what it produces is storable', () => {

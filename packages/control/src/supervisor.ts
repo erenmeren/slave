@@ -250,15 +250,20 @@ export async function recordDecision(
       const until = open.expiresAt ?? new Date(open.createdAt.getTime() + cooldownMs)
       return { ok: false as const, error: cooldown(situation, until) }
     }
+    // Final wave, finding 2: a question cools as one key -- its latest card of ANY question kind,
+    // under that card's own kind's cooldown -- so a re-addressed `unanswerable_question` card does
+    // not let `waiting_stale` raise a card on the same question on the next tick (`filterFresh`
+    // reads the same latest row).
     const last = await tx.supervisorDecision.findFirst({
-      where: key,
+      where: onQuestion ? { workspaceId: input.workspaceId, subjectId: situation.subjectId, situationKind: { in: [...QUESTION_SITUATION_KINDS] } } : key,
       orderBy: { createdAt: 'desc' },
-      select: { createdAt: true, resolvedAt: true },
+      select: { createdAt: true, resolvedAt: true, situationKind: true },
     })
     if (last !== null) {
       const anchor = last.resolvedAt ?? last.createdAt
-      if (now.getTime() - anchor.getTime() <= cooldownMs) {
-        return { ok: false as const, error: cooldown(situation, new Date(anchor.getTime() + cooldownMs)) }
+      const lastCooldownMs = COOLDOWN_BY_KIND[last.situationKind] ?? COOLDOWN_MS
+      if (now.getTime() - anchor.getTime() <= lastCooldownMs) {
+        return { ok: false as const, error: cooldown(situation, new Date(anchor.getTime() + lastCooldownMs)) }
       }
     }
 

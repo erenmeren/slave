@@ -535,6 +535,57 @@ describe('supervise', () => {
     expect(await decisions(workspace.id)).toHaveLength(1)
   })
 
+  it('raises no waiting_stale card on the next tick after a hire was approved on the question\'s unanswerable card (final wave, finding 2)', async (): Promise<void> => {
+    const workspace = await prisma.workspace.create({
+      data: { name: 'Hired Platform', repoPath: '/tmp/hired', verifyCommands: ['npm test'], setupCommands: [] },
+    })
+    const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
+    const asker = await prisma.slave.create({ data: { teamId: team.id, role: 'product', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
+    // The hire the approved card made: Sam now holds the role, and has work, so the question is
+    // the ordinary `waiting_stale` shape -- the kind a per-kind cooldown let through.
+    await prisma.slave.create({ data: { teamId: team.id, role: 'Security', runtimeRoles: ['security'], personId: (await prisma.person.create({ data: { name: 'Sam' } })).id } })
+    await prisma.task.create({
+      data: { workspaceId: workspace.id, title: 'Audit the login', description: 'read it', status: 'ready', requiredRole: 'security', maxAttempts: 3 },
+    })
+    const askerRun = await prisma.slaveRun.create({ data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' } })
+    const question = await prisma.slaveMessage.create({
+      data: {
+        slaveId: asker.id,
+        workspaceId: workspace.id,
+        senderRunId: askerRun.id,
+        recipientRole: 'security',
+        threadId: 'thread-1',
+        kind: 'question',
+        body: 'which cipher?',
+        expectsReply: true,
+        createdAt: new Date(NOW.getTime() - WAITING_STALE_MS - 60_000),
+      },
+    })
+    const hire = { kind: 'hire_from_catalog', templateId: 'tpl-security', capability: 'security.application', capabilityLabel: 'Application security', name: 'Sam', rationale: 'x', temporary: false, engagementTaskId: null }
+    await prisma.supervisorDecision.create({
+      data: {
+        workspaceId: workspace.id,
+        situationKind: 'unanswerable_question',
+        subjectId: question.id,
+        situation: { kind: 'unanswerable_question', subjectId: question.id, summary: 'x', facts: {} },
+        candidates: [{ action: hire, tier: 'proposed', why: 'x' }],
+        chosenIndex: 0,
+        action: hire,
+        rationale: 'nobody holds security',
+        tier: 'proposed',
+        status: 'approved',
+        decidedBy: 'rules',
+        createdAt: ago(10 * 60_000),
+        resolvedAt: ago(60_000),
+      },
+    })
+
+    const next = await supervise({ workspaceId: workspace.id, now: clock })
+    expect(next).toMatchObject({ decided: 0 })
+    expect(await decisions(workspace.id)).toHaveLength(1)
+    expect(await prisma.slaveMessage.findUniqueOrThrow({ where: { id: question.id }, select: { closedAt: true } })).toEqual({ closedAt: null })
+  })
+
   it('counts a cooldown refusal rather than failing the pass', async (): Promise<void> => {
     const fixture = await seed()
     // An OPEN proposal for the same key, older than the world loader's 24 h window -- so
