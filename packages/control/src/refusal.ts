@@ -14,6 +14,7 @@ import {
   WORKSPACE_LIMIT_RULE,
   type BrokerRefusalReason,
   type ExternalSource,
+  type QuestionCloseReason,
   type WorkspaceLimitField,
 } from '@slave-of-ai/domain'
 import { sectors } from '@slave-of-ai/simulation'
@@ -497,6 +498,9 @@ export type ControlRefusal =
    *  has stopped waiting for one (`stillPendingQuestion`'s definition, shared with the worker's own
    *  inbox). Re-addressing it would put a settled question in a second worker's inbox. */
   | { readonly kind: 'question_answered'; readonly messageId: string }
+  /** Human cards plan A D6: the question was closed -- decided, dismissed or superseded -- before
+   *  this answer reached it, so nothing was written. `by` is a user id, `operator` or `system`. */
+  | { readonly kind: 'question_closed'; readonly messageId: string; readonly reason: QuestionCloseReason; readonly by: string; readonly at: string }
   /**
    * M39 t2: the worker named cannot answer this question, so moving it there would only hide it.
    *
@@ -953,6 +957,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return `message ${refusal.messageId} is not a question: there is nothing to re-address`
     case 'question_answered':
       return `question ${refusal.messageId} is no longer waiting on an answer`
+    case 'question_closed':
+      return `question ${refusal.messageId} was closed (${refusal.reason.replace('_', ' ')}) by ${refusal.by === 'system' ? 'Slave' : refusal.by} at ${refusal.at}: nothing was written`
     case 'reassign_not_permitted':
       return `question ${refusal.messageId} cannot be re-addressed to slave ${refusal.slaveId}: ${refusal.reason}`
     case 'draft_missing':

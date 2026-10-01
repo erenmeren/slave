@@ -788,13 +788,13 @@ async function loadRunPrompts(
  * accepted or abandoned, has no next run, so the question is no longer pending for anybody -- and
  * `conductor_question` stops firing for it. Only report questions (the stored
  * `send:report:` key, the marker `stillPendingQuestion` reads): a parked `<slave-ask>` question is
- * pending while its run waits, whatever its task. Supervisor-as-conductor plan B D8 (spec C5,
- * OBS-9): a conductor report question of a `done` task that a decision already settled -- answered,
- * or sent to a person -- is not pending either, so it is not re-escalated every tick. At most three
- * bounded reads, and none on a mailbox with no report question in it.
+ * pending while its run waits, whatever its task. Human cards plan A D4: the C5 filter (a done
+ * task's decided report question) is closing now -- the verbs that settle a question close it, and
+ * `stillPendingQuestion` reads the close. At most two bounded reads, and none on a mailbox with no
+ * report question in it.
  */
 async function dropUnusableReportQuestions<
-  T extends { readonly id: string; readonly taskId: string | null; readonly idempotencyKey: string | null; readonly recipientRole: string | null },
+  T extends { readonly id: string; readonly taskId: string | null; readonly idempotencyKey: string | null },
 >(
   tx: Prisma.TransactionClient,
   workspaceId: string,
@@ -819,38 +819,11 @@ async function dropUnusableReportQuestions<
       })
     ).map((row) => [row.id, row] as const),
   )
-  // Plan B D8 (spec C5, OBS-9): a done task's report question that was decided about -- answered
-  // and applied, or sent to a person who then resolved the card, whatever they did -- is not pending
-  // for the conductor path any more. A `failed` row (its verb refused), a `noop`, and a card still
-  // `pending` (final wave I2) leave it pending.
-  // Conductor questions only: a report question to any other role keeps its exact behaviour.
-  const doneReportIds = rows
-    .filter((row) => isReport(row) && row.recipientRole === CONDUCTOR_ROLE && row.taskId !== null && tasks.get(row.taskId)?.status === 'done')
-    .map((row) => row.id)
-  const decided = new Set(
-    doneReportIds.length === 0
-      ? []
-      : (
-          await tx.supervisorDecision.findMany({
-            where: {
-              workspaceId,
-              subjectId: { in: doneReportIds },
-              situationKind: { in: ['conductor_question', 'unanswerable_question', 'waiting_stale'] },
-              // Final wave I2: a `pending` card is not settled yet -- its question stays, so the
-              // card a person approves still shows what it answers.
-              status: { notIn: ['failed', 'pending'] },
-              tier: { not: 'noop' },
-            },
-            select: { subjectId: true },
-          })
-        ).map((row) => row.subjectId),
-  )
   const stillUseful = (row: T): boolean => {
     if (!isReport(row)) return true
     const task = row.taskId === null ? undefined : tasks.get(row.taskId)
     if (task === undefined) return true
     if (task.status === 'failed' || task.status === 'cancelled') return false
-    if (task.status === 'done' && decided.has(row.id)) return false
     return task.workPackage === null || !closedVersions.has(task.workPackage.goalVersion)
   }
   return rows.filter(stillUseful)

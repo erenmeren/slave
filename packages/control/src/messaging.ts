@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
-  type MessageKind, type Result, type SlaveMessageView, answerBar, err, isValidRecipient, ok,
+  CLOSED_BY_SYSTEM, type MessageKind, type Result, type SlaveMessageView, answerBar, err, isValidRecipient, ok,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { Principal } from './principal.js'
+import { announceQuestionClosed, closedByOf, closeQuestionIn } from './questions.js'
 import type { ControlRefusal } from './refusal.js'
 
 const SEND_TIMEOUT_MS = 5_000
@@ -311,16 +312,22 @@ export const STORED_REPORT_QUESTION_KEY_PREFIX = namespacedKey('send', REPORT_QU
  * the answer box. Its answer is read by the seat's NEXT run on the task (`inbox.ts`), so it is
  * waited on until a reply lands; the idempotency key `report.ts` sends it under is the marker, since
  * no other path writes one with that prefix.
+ *
+ * Human cards H1: and it is not closed (`closedAt`).
  */
 export function stillPendingQuestion(waitingRunIds: string[]): {
   kind: 'question'
   expectsReply: true
+  closedAt: null
   replies: { none: Record<string, never> }
   AND: [{ OR: [{ senderRunId: { in: string[] } }, { senderRunId: { not: null }; idempotencyKey: { startsWith: string } }] }]
 } {
   return {
     kind: 'question' as const,
     expectsReply: true as const,
+    // Human cards H1: a closed question is pending nowhere -- the world, the inbox, the answer box
+    // and a re-address all read this one rule. A question with no close follows the rule below.
+    closedAt: null,
     replies: { none: {} },
     // Wrapped in AND so a caller's own `OR` (the inbox's recipient match) is not overwritten.
     AND: [
@@ -485,7 +492,19 @@ export async function answerQuestion(
       const seen = await tx.slaveMessage.findUnique({
         where: { workspaceId_idempotencyKey: { workspaceId, idempotencyKey: key } },
       })
-      if (seen !== null) return { replayed: true as const, row: seen }
+      if (seen !== null) return { replayed: true as const, row: seen, closed: null }
+
+      // Human cards plan A D6: a question a person decided, dismissed or superseded takes no answer.
+      // Refused before anything is written, so returning is safe here (nothing to roll back). An
+      // `answered` question takes a second answer as before; a `timed_out` one takes a late answer,
+      // which the goal pass routes to the asking package (D9). The question row is locked first --
+      // the mutex `closeQuestion` and `claimTheAnswer` take -- so a close that commits meanwhile is
+      // seen here rather than answered over.
+      await tx.$queryRaw`SELECT 1 FROM "SlaveMessage" WHERE id = ${question.id} FOR UPDATE`
+      const state = await tx.slaveMessage.findUniqueOrThrow({ where: { id: question.id }, select: { closedAt: true, closedReason: true, closedBy: true } })
+      if (state.closedAt !== null && state.closedReason !== null && state.closedReason !== 'answered' && state.closedReason !== 'timed_out') {
+        return { refused: { kind: 'question_closed' as const, messageId: question.id, reason: state.closedReason, by: state.closedBy ?? CLOSED_BY_SYSTEM, at: state.closedAt.toISOString() } }
+      }
 
       const row = await tx.slaveMessage.create({
         data: {
@@ -507,11 +526,14 @@ export async function answerQuestion(
           idempotencyKey: key,
         },
       })
-      return { replayed: false as const, row }
+      const close = { messageId: question.id, reason: 'answered' as const, by: origin === 'human' ? closedByOf(input.principal) : CLOSED_BY_SYSTEM, note: null, decisionId: null }
+      const closed = await closeQuestionIn(tx, close, new Date())
+      return { replayed: false as const, row, closed: closed ? close : null }
     },
     { timeout: SEND_TIMEOUT_MS, maxWait: SEND_MAX_WAIT_MS },
   )
 
+  if ('refused' in outcome) return err(outcome.refused)
   if (!outcome.replayed) {
     await appendEvent({
       type: 'slave.message_sent',
@@ -532,6 +554,9 @@ export async function answerQuestion(
       },
       userId: input.principal?.userId ?? null,
     })
+    if (outcome.closed !== null) {
+      await announceQuestionClosed(question, outcome.closed, origin, input.principal?.userId ?? null)
+    }
   }
 
   return ok(toView(outcome.row))

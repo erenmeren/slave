@@ -163,6 +163,7 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   not_a_question: true,
   message_not_question: true,
   question_answered: true,
+  question_closed: true,
   reassign_not_permitted: true,
   draft_missing: true,
   profile_too_long: true,
