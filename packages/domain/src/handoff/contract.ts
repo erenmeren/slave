@@ -84,7 +84,8 @@ export function parseHandoffContract(value: unknown): Result<HandoffContract, st
  * beside an instruction asking for exactly that object.
  *
  * `requirementsAnswer`/`conductAnswer` join them for the conductor (Conductor Plan 2): a goal quoting either
- * must not steer the conductor's own calls.
+ * must not steer the conductor's own calls. `conductorAnswers` is the Supervisor's batched answer to
+ * the conductor's questions (Plan B D10): a worker quoting it must not steer that call.
  */
 export const ROUTING_LITERALS = [
   'candidateIndex',
@@ -95,6 +96,7 @@ export const ROUTING_LITERALS = [
   'supervisorReply',
   'requirementsAnswer',
   'conductAnswer',
+  'conductorAnswers',
 ] as const
 
 /**

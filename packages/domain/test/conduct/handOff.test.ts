@@ -135,3 +135,19 @@ describe('trimToFit (controller ruling F1)', () => {
     for (const text of [renderAskedOfYou([view]).text, renderHandOffRework([view]).text, renderHandOffQuestion({ view, reason: 'r\u0000' })]) expect(text).not.toContain('\u0000')
   })
 })
+
+describe('renderSharedDecisions (controller ruling F12)', () => {
+  it('lists every decision whole while they fit, then names the rest -- never a cut mid-decision', () => {
+    const decisions = Array.from({ length: 40 }, (_, i) => ({ title: `decision ${String(i)}`, decision: `${String(i)} `.repeat(190).trim() }))
+    const text = renderSharedDecisions(decisions)
+    expect(text).not.toContain('characters cut')
+    const shown = decisions.filter((d) => text.includes(`- ${d.title}: ${d.decision}\n`) || text.endsWith(`- ${d.title}: ${d.decision}`))
+    expect(shown.length).toBeGreaterThan(0)
+    expect(shown.length).toBeLessThan(40)
+    expect(text).toContain(`${String(40 - shown.length)} more shared decisions not shown: decision ${String(shown.length)}, `)
+    expect(text.split('\n').filter((line) => line.startsWith('- '))).toHaveLength(shown.length)
+  })
+  it('lists a short set in full, with no "not shown" line', () => {
+    expect(renderSharedDecisions([{ title: 'a', decision: 'b' }, { title: 'c', decision: 'd' }])).not.toContain('not shown')
+  })
+})

@@ -6,6 +6,8 @@ import {
   HANDOFF_CHANGE_MAX_CHARS,
   HANDOFF_PROMPT_ITEM_MAX_CHARS,
   SHARED_DECISIONS_PROMPT_MAX_CHARS,
+  SHARED_DECISION_TEXT_MAX_CHARS,
+  SHARED_DECISION_TITLE_MAX_CHARS,
   VERIFICATION_REWORK_MAX_CHARS,
 } from './constants.js'
 import { isOwned, ownershipRuleFor } from './ownership.js'
@@ -220,16 +222,46 @@ export function renderHandOffQuestion(input: { readonly view: HandOffView; reado
   ].join('\n')
 }
 
-/** Spec C3: the "Shared decisions" block of a contract; empty when the version has none. */
+/** Bounds the "N more shared decisions not shown" line: titles are short, but a hand-edited version could hold many. */
+const DECISIONS_NOT_SHOWN_MAX_CHARS = 4000
+
+/**
+ * Controller ruling F12 (spec C3, "every contract lists them"): shared decisions go in WHOLE, in
+ * order, while they fit `budget`; the ones that do not are named by title in a trusted line. Never a
+ * cut mid-decision: a head/tail trim of 40 decisions silently dropped the middle ones, and a package
+ * that never saw a binding decision guesses against it. The first decision always goes in (each is
+ * bounded on its own), as `fitItems` does. Every title and decision is stored text, sanitised and
+ * bounded here where it enters a prompt; `line` only arranges the two.
+ */
+export function fitSharedDecisions(
+  decisions: readonly { readonly title: string; readonly decision: string }[],
+  line: (title: string, decision: string) => string,
+  budget: number,
+): readonly string[] {
+  const clean = (text: string, max: number): string => sanitisePersonText(trimToFit(storableText(text).replace(/\s+/gu, ' ').trim(), max))
+  const lines: string[] = []
+  let used = 0
+  for (const d of decisions) {
+    const next = line(clean(d.title, SHARED_DECISION_TITLE_MAX_CHARS), clean(d.decision, SHARED_DECISION_TEXT_MAX_CHARS))
+    if (lines.length > 0 && used + next.length + 1 > budget) break
+    lines.push(next)
+    used += next.length + 1
+  }
+  const rest = decisions.slice(lines.length)
+  if (rest.length > 0) {
+    const titles = rest.map((d) => clean(d.title, SHARED_DECISION_TITLE_MAX_CHARS)).join(', ')
+    lines.push(trimToFit(`${String(rest.length)} more shared decisions not shown: ${titles}`, DECISIONS_NOT_SHOWN_MAX_CHARS))
+  }
+  return lines
+}
+
+/** Spec C3: the "Shared decisions" block of a contract; empty when the version has none. Whole decisions only (F12). */
 export function renderSharedDecisions(decisions: readonly { readonly title: string; readonly decision: string }[]): string {
   if (decisions.length === 0) return ''
-  return trimToFit(
-    [
-      'Shared decisions (every package follows these; if one is wrong for your work, ask the conductor instead of working around it):',
-      ...decisions.map((d) => `- ${sanitisePersonText(storableText(d.title))}: ${sanitisePersonText(storableText(d.decision).replace(/\s+/gu, ' ').trim())}`),
-    ].join('\n'),
-    SHARED_DECISIONS_PROMPT_MAX_CHARS,
-  )
+  return [
+    'Shared decisions (every package follows these; if one is wrong for your work, ask the conductor instead of working around it):',
+    ...fitSharedDecisions(decisions, (title, decision) => `- ${title}: ${decision}`, SHARED_DECISIONS_PROMPT_MAX_CHARS),
+  ].join('\n')
 }
 
 /** Spec C2 "Dependency leads": what the packages this one depends on reported, the verifier's digest. */

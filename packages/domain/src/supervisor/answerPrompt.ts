@@ -12,6 +12,7 @@ import {
   SOURCE_QUOTE_MAX_CHARS,
   THREAD_BODY_MAX_CHARS,
 } from './constants.js'
+import { conductorDraftSchema, type ConductorDraft } from './conductorDraft.js'
 import { PROFILE_HEADING, cap, firstJsonObject } from './prompt.js'
 import { boundThread, type SupervisorQuestion, type SupervisorWorld, type ThreadMessage } from './world.js'
 
@@ -102,6 +103,10 @@ export interface Draft {
    * could not be validated by its own schema would be a type nobody could safely read a row into.
    */
   readonly editedBody?: string | undefined
+  /** Supervisor-as-conductor plan B D6: the basis, the `changes` verdict, and the decision and hand-off
+   *  a conductor answer carries; absent on every other draft. `| undefined` for the schema's sake,
+   *  like `editedBody`. */
+  readonly conductor?: ConductorDraft | undefined
 }
 
 /** Validates a `SupervisorDecision.draft` `Json` value at read, the way `actionSchema` validates
@@ -117,6 +122,7 @@ export const draftSchema: z.ZodType<Draft, z.ZodTypeDef, unknown> = z.object({
   critical: z.object({ lexicon: z.array(z.string().min(1)), model: z.boolean() }),
   confidence: z.enum(['sourced', 'interpretation']),
   editedBody: z.string().max(ANSWER_MAX_CHARS).optional(),
+  conductor: conductorDraftSchema.optional(),
 })
 
 /** A source the loader did not fill says so, in the prompt, in words -- a heading with nothing

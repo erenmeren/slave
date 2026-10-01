@@ -287,3 +287,6 @@ export const GOAL_DECISIONS_MAX = 40
 /** Plan B D9: how much of a version's history the batched prompt carries. */
 export const CONDUCTOR_EARLIER_ANSWERS_MAX = 20
 export const CONDUCTOR_PLAN_HANDOFFS_MAX = 30
+
+/** Controller ruling F12: the shared decisions' share of the batched answer prompt; the rest are named, never cut. */
+export const CONDUCTOR_PROMPT_DECISIONS_MAX_CHARS = 12_000
