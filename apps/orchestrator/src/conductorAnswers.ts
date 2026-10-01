@@ -4,6 +4,7 @@ import {
   CONDUCT_PER_CALL_CAP_USD,
   CONDUCTOR_ANSWER_BATCH_MAX,
   CONDUCTOR_ANSWER_RETRY_CAP,
+  CONDUCTOR_ANSWER_VERSIONS_PER_TICK,
   buildConductorAnswerPrompt,
   candidates,
   criticalMatches,
@@ -47,9 +48,12 @@ export interface ConductorPass {
   readonly drafted: number
   /** Batched answer calls made, whatever came back -- one ledger row each. */
   readonly calls: number
+  /** The questions this pass answered (applied and carried out): the loop must not raise a fresh
+   *  `waiting_stale` card about a wait this pass just ended (review M4). */
+  readonly answeredIds: ReadonlySet<string>
 }
 
-type Tally = { -readonly [K in keyof ConductorPass]: ConductorPass[K] }
+type Tally = { -readonly [K in keyof Omit<ConductorPass, 'answeredIds'>]: ConductorPass[K] } & { readonly answeredIds: Set<string> }
 
 interface Choice {
   readonly chosenIndex: number
@@ -77,7 +81,7 @@ const pausedFirst = (a: SupervisorQuestion, b: SupervisorQuestion): number =>
  * left it out alike (plan B D4).
  */
 export async function answerConductorQuestions(input: ConductorPassInput): Promise<ConductorPass> {
-  const tally: Tally = { decided: 0, applied: 0, proposed: 0, skippedCooldown: 0, answered: 0, drafted: 0, calls: 0 }
+  const tally: Tally = { decided: 0, applied: 0, proposed: 0, skippedCooldown: 0, answered: 0, drafted: 0, calls: 0, answeredIds: new Set() }
   const batches = new Map<number, { readonly plan: SupervisorConductorPlan; readonly questions: SupervisorQuestion[] }>()
   for (const situation of input.situations) {
     const question = input.world.questions.find((q) => q.messageId === situation.subjectId)
@@ -115,7 +119,7 @@ export async function answerConductorQuestions(input: ConductorPassInput): Promi
     }
     const attempts = await answerAttempts(input.workspaceId, question.messageId)
     if (attempts.count >= CONDUCTOR_ANSWER_RETRY_CAP) {
-      await escalate(input, tally, situation, `the conductor's answer call failed ${String(attempts.count)} times; the last: ${attempts.last}`)
+      await escalate(input, tally, situation, attemptsText(attempts))
       continue
     }
     const batch = batches.get(plan.goalVersion) ?? { plan, questions: [] }
@@ -123,7 +127,10 @@ export async function answerConductorQuestions(input: ConductorPassInput): Promi
     batches.set(plan.goalVersion, batch)
   }
 
-  for (const { plan, questions } of batches.values()) {
+  // Review M3: the oldest versions first, at most CONDUCTOR_ANSWER_VERSIONS_PER_TICK calls a pass;
+  // the others are neither asked nor counted as attempts, and wait for the next tick.
+  const due = [...batches.values()].toSorted((a, b) => a.plan.goalVersion - b.plan.goalVersion).slice(0, CONDUCTOR_ANSWER_VERSIONS_PER_TICK)
+  for (const { plan, questions } of due) {
     if (input.seam === null) break
     const batch = questions.toSorted(pausedFirst).slice(0, CONDUCTOR_ANSWER_BATCH_MAX)
     tally.calls += 1
@@ -187,19 +194,35 @@ async function callForAnswers(
   return result
 }
 
-/** Plan B D4: the answer calls this question was in since it was last decided, and the last reason. */
-async function answerAttempts(workspaceId: string, messageId: string): Promise<{ readonly count: number; readonly last: string }> {
-  const latest = await prisma.supervisorDecision.findFirst({
-    where: { workspaceId, subjectId: messageId, situationKind: 'conductor_question' },
-    orderBy: { createdAt: 'desc' },
-    select: { createdAt: true },
-  })
+interface Attempts {
+  readonly count: number
+  readonly failed: number
+  /** The newest failed call's stored reason, or null when every call came back usable. */
+  readonly lastFailure: string | null
+}
+
+/**
+ * Plan B D4: the answer calls this question was ever in, failed batches and usable replies that left
+ * it out alike. The WHOLE history (review I1, controller ruling): a window opened at the latest
+ * decision would include the cap's own escalation, so every person resolving that card would buy the
+ * question three more paid batches. Past the cap it is re-escalated by the rules each cooldown, free.
+ */
+async function answerAttempts(workspaceId: string, messageId: string): Promise<Attempts> {
   const calls = await prisma.conductorCall.findMany({
-    where: { workspaceId, stage: 'answer', questionIds: { has: messageId }, ...(latest === null ? {} : { createdAt: { gt: latest.createdAt } }) },
+    where: { workspaceId, stage: 'answer', questionIds: { has: messageId } },
     orderBy: { createdAt: 'asc' },
-    select: { reason: true },
+    select: { outcome: true, reason: true },
   })
-  return { count: calls.length, last: calls.at(-1)?.reason ?? 'the answer left this question out' }
+  const failures = calls.filter((call) => call.outcome === 'failed')
+  return { count: calls.length, failed: failures.length, lastFailure: failures.at(-1)?.reason ?? null }
+}
+
+/** Review M6: the card says what happened -- failed calls, replies that left it out, or both. */
+function attemptsText(attempts: Attempts): string {
+  const n = String(attempts.count)
+  if (attempts.failed === attempts.count) return `the conductor's answer call failed ${n} times; the last: ${attempts.lastFailure ?? 'no reason recorded'}`
+  if (attempts.failed === 0) return `it was in ${n} answer calls without an answer; each reply left it out`
+  return `it was in ${n} answer calls without an answer (${String(attempts.failed)} failed; the last: ${attempts.lastFailure ?? 'no reason recorded'})`
 }
 
 /** The rules' escalation, with the reason in the summary a person's card shows (spec C4: "the real reason in the card"). */
@@ -249,6 +272,7 @@ async function record(input: ConductorPassInput, tally: Tally, situation: Situat
   }
   if (choice.draft === undefined) return
   tally.answered += 1
+  tally.answeredIds.add(situation.subjectId)
   // Task 2 carry: the wait a `waiting_stale` escalation was raised about is over once the answer is out.
   await retireAnsweredWaitingStale(input.workspaceId, situation.subjectId, input.now)
 }

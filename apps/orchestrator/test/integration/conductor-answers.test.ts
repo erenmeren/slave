@@ -137,6 +137,20 @@ async function seed(opts: { readonly reportQuestion?: string; readonly extraRepo
   return { workspaceId: workspace.id, seatId: seat.id, integrationTaskId, qReport, qPaused, now: new Date(Date.now() + 60_000) }
 }
 
+/** Another conducted version with one finished package whose run asked one report question. */
+async function addVersion(f: Fixture, goalVersion: number): Promise<string> {
+  const pkg = await prisma.workPackage.create({
+    data: { workspaceId: f.workspaceId, goalVersion, key: 'report', title: 'report', requirementKeys: [], ownedPaths: ['src/report/**'], interface: '', isIntegration: false, templateId: 'tpl' },
+  })
+  const task = await prisma.task.create({
+    data: { workspaceId: f.workspaceId, title: `report v${String(goalVersion)}`, description: 'x', status: 'done', requiredRole: 'implementer', maxAttempts: 3, goalVersion, workPackageId: pkg.id, assigneeId: f.seatId, integratedAt: new Date() },
+  })
+  const run = await prisma.slaveRun.create({ data: { taskId: task.id, slaveId: f.seatId, status: 'succeeded', terminalAt: new Date() } })
+  const sent = await sendMessage(run.id, { kind: 'question', body: `Is v${String(goalVersion)} JSON camelCase?`, recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId: task.id, idempotencyKey: reportQuestionKey(run.id, 0) })
+  if (!sent.ok) throw new Error(`send failed: ${JSON.stringify(sent.error)}`)
+  return sent.value.id
+}
+
 const TRUNCATE =
   'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "ConductorCall", "GoalDecision", "PackageHandOff", "SlaveMessage", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "WorkPackage", "RequirementSet", "GoalDelivery", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE'
 
@@ -222,8 +236,9 @@ describe('answerConductorQuestions (spec C4)', () => {
     expect(model.prompts).toHaveLength(3)
     expect(idsIn(model.prompts[1] ?? '')).toEqual([f.qReport])
     const left = await prisma.supervisorDecision.findFirstOrThrow({ where: { subjectId: f.qReport } })
-    // Calls 2 and 3 carried only qReport and answered nothing, so they are failed calls with the parser's reason.
-    expect((left.situation as { summary: string }).summary).toContain('failed 3 times; the last: no entry answered a question that was asked')
+    // Call 1 answered the others and left qReport out; calls 2 and 3 carried only qReport and answered
+    // nothing, so they are failed calls with the parser's reason. The card says both (review M6).
+    expect((left.situation as { summary: string }).summary).toContain('it was in 3 answer calls without an answer (2 failed; the last: no entry answered a question that was asked')
   })
 
   it('makes no call when no model is wired: the rules escalate every conductor question (plan B D3)', async () => {
@@ -290,5 +305,48 @@ describe('answerConductorQuestions (spec C4)', () => {
     const rows = await prisma.supervisorDecision.findMany({ where: { workspaceId: f.workspaceId, situationKind: 'conductor_question' } })
     expect(rows).toHaveLength(2)
     for (const row of rows) expect(row).toMatchObject({ tier: 'escalated', decidedBy: 'rules' })
+  })
+
+  // Review I1: the attempts are counted over the question's whole history, so a person resolving
+  // the cap's card does not buy three more paid batches.
+  it('re-escalates a capped question by the rules after a person rejects its card, without asking again', async () => {
+    const f = await seed()
+    const model = scripted(() => ({ kind: 'failed', reason: 'model overloaded', costUsd: null, tokens: null }))
+    for (let i = 0; i < 4; i += 1) await supervise({ workspaceId: f.workspaceId, decider: model.decider, model: 'm', now: () => new Date(f.now.getTime() + i * 1000) })
+    expect(model.prompts).toHaveLength(3)
+    const card = await prisma.supervisorDecision.findFirstOrThrow({ where: { subjectId: f.qPaused, situationKind: 'conductor_question' } })
+    expect((await rejectDecision(card.id)).ok).toBe(true)
+    const later = new Date(f.now.getTime() + COOLDOWN_MS + 60_000)
+    await supervise({ workspaceId: f.workspaceId, decider: model.decider, model: 'm', now: () => later })
+    expect(model.prompts).toHaveLength(3)
+    const rows = await prisma.supervisorDecision.findMany({ where: { subjectId: f.qPaused, situationKind: 'conductor_question' }, orderBy: { createdAt: 'asc' } })
+    expect(rows).toHaveLength(2)
+    expect(rows[1]).toMatchObject({ tier: 'escalated', decidedBy: 'rules', status: 'pending' })
+  })
+
+  // Review M3: one call per version, but at most the two oldest versions a pass.
+  it('batches at most the two oldest versions a pass, and leaves the third for the next tick', async () => {
+    const f = await seed()
+    const v2 = await addVersion(f, 2)
+    const v3 = await addVersion(f, 3)
+    const model = scripted((prompt) => answerJson(idsIn(prompt).map((id) => ok(id, { basis: { requirements: [], packages: ['report'], decisions: [] } }))))
+    const report = await supervise({ workspaceId: f.workspaceId, decider: model.decider, model: 'm', now: () => f.now })
+    expect(report.conductorCalls).toBe(2)
+    const asked = model.prompts.flatMap(idsIn)
+    expect(asked).toContain(v2)
+    expect(asked).toContain(f.qPaused)
+    expect(asked).not.toContain(v3)
+    expect(await prisma.supervisorDecision.count({ where: { subjectId: v3 } })).toBe(0)
+    expect(await prisma.conductorCall.count({ where: { questionIds: { has: v3 } } })).toBe(0)
+  })
+
+  // Review M4: a parked question past its wait that the batch answers in the same pass gets no card.
+  it('raises no waiting_stale card for a stale parked question the batch answers in the same pass', async () => {
+    const f = await seed()
+    const late = new Date(f.now.getTime() + WAITING_STALE_MS + 60_000)
+    const model = scripted((prompt) => answerJson(idsIn(prompt).map((id) => ok(id))))
+    const report = await supervise({ workspaceId: f.workspaceId, decider: model.decider, model: 'm', now: () => late })
+    expect(report.answered).toBe(2)
+    expect(await prisma.supervisorDecision.count({ where: { subjectId: f.qPaused, situationKind: 'waiting_stale' } })).toBe(0)
   })
 })

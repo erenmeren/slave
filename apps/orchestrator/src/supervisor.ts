@@ -256,6 +256,8 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
 
   for (const situation of situations) {
     if (situation.kind === 'conductor_question') continue
+    // Review M4: the batch above just ended this wait; a fresh `waiting_stale` card about it would ask a person about nothing.
+    if (situation.kind === 'waiting_stale' && conducted.answeredIds.has(situation.subjectId)) continue
 
     // E R4 ("a `retry_task` applied in the same pass or the previous one"), Task 8 erratum E12.
     //
