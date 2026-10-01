@@ -25,6 +25,15 @@ async function seed(): Promise<Fixture> {
   return { workspaceId: ws.id, seatId: seat.id, taskId: task.id }
 }
 
+/** Puts the fixture's task in a package of goal version 1, whose delivery is `status` (none: no row). */
+async function inPackage(f: Fixture, status: 'integrating' | 'verifying' | 'accepted' | 'needs_human' | 'abandoned' | null, merged = false): Promise<void> {
+  const pkg = await prisma.workPackage.create({ data: { workspaceId: f.workspaceId, goalVersion: 1, key: 'report', title: 'report', requirementKeys: [], ownedPaths: ['src/**'], interface: '', isIntegration: false, templateId: 'tpl' } })
+  await prisma.task.update({ where: { id: f.taskId }, data: { workPackageId: pkg.id } })
+  if (status !== null) {
+    await prisma.goalDelivery.create({ data: { workspaceId: f.workspaceId, goalVersion: 1, integrationBranch: 'slaveofai/goal-v1-x', baseCommit: 'a'.repeat(40), status, ...(merged ? { mergedAt: new Date() } : {}) } })
+  }
+}
+
 async function reportQuestion(f: Fixture, body = 'Which error shape?'): Promise<string> {
   const run = await prisma.slaveRun.create({ data: { slaveId: f.seatId, taskId: f.taskId, status: 'succeeded' } })
   const sent = await sendMessage(run.id, { kind: 'question', body, recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId: f.taskId, idempotencyKey: reportQuestionKey(run.id, 0) })
@@ -112,8 +121,7 @@ describe('closing a question (human cards H1)', () => {
 
   it('retires a timed-out question\'s open card once a late answer is on record, saying where it goes (ruling F7, fix round 1)', async () => {
     const f = await seed()
-    const pkg = await prisma.workPackage.create({ data: { workspaceId: f.workspaceId, goalVersion: 1, key: 'report', title: 'report', requirementKeys: [], ownedPaths: ['src/**'], interface: '', isIntegration: false, templateId: 'tpl' } })
-    await prisma.task.update({ where: { id: f.taskId }, data: { workPackageId: pkg.id } })
+    await inPackage(f, 'integrating')
     const q = await reportQuestion(f)
     const open = await card(f, q, 'conductor_question')
     await closeQuestion({ messageId: q, reason: 'timed_out', by: 'system', decisionId: null, note: () => null }, 'system', null)
@@ -138,6 +146,35 @@ describe('closing a question (human cards H1)', () => {
     expect(await lateAnswerFate(prisma, q)).toBe('unread')
     expect(LATE_ANSWER_NOTE.unread).toBe('The answer came after its run continued; no run will read it.')
   })
+
+  it('says a late answer goes to the package as a hand-off only while its goal version is still routed (final wave, finding 6)', async () => {
+    const f = await seed()
+    await inPackage(f, 'verifying')
+    const q = await reportQuestion(f)
+    await closeQuestion({ messageId: q, reason: 'timed_out', by: 'system', decisionId: null, note: () => null }, 'system', null)
+    expect(await lateAnswerFate(prisma, q)).toBe('hand_off')
+    expect((await loadQuestionCards(f.workspaceId, [q])).get(q)?.lateAnswerFate).toBe('hand_off')
+  })
+
+  for (const [label, status, merged] of [
+    ['merged', 'accepted', true],
+    ['abandoned', 'abandoned', false],
+    ['waiting on a person', 'needs_human', false],
+    ['never delivered', null, false],
+  ] as const) {
+    it(`keeps a late answer's card open, unread, when its package's goal version is ${label} (final wave, finding 6)`, async () => {
+      const f = await seed()
+      await inPackage(f, status, merged)
+      const q = await reportQuestion(f)
+      const open = await card(f, q, 'conductor_question')
+      await closeQuestion({ messageId: q, reason: 'timed_out', by: 'system', decisionId: null, note: () => null }, 'system', null)
+      expect(await lateAnswerFate(prisma, q)).toBe('unread')
+      expect((await answerQuestion(q, { body: 'late', answeredBy: 'web operator' })).ok).toBe(true)
+      expect(await retireClosedQuestionCards(f.workspaceId, new Date())).toBe(0)
+      expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: open.id } })).status).toBe('pending')
+      expect((await loadQuestionCards(f.workspaceId, [q])).get(q)).toMatchObject({ lateAnswerFate: 'unread', lateAnswerNote: LATE_ANSWER_NOTE.unread })
+    })
+  }
 
   it('retires a late answer\'s cards from the answer path with where it goes, and an on-time answer\'s as answered (fix round 1)', async () => {
     const f = await seed()
