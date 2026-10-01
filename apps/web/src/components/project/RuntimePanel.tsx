@@ -12,8 +12,8 @@ import { Button } from '../ui/Button'
 
 /**
  * The Settings tab's runtime panel (M24 §4, moved off the Overview card of the same shape): the
- * workspace's runtime and its spend ceiling, beside `GoalPanel`, plus the three dispatch limits
- * (run timeout, runs at once, attempts) underneath. H9 F8 made those editable: until then they were
+ * workspace's runtime and its spend ceiling, beside `GoalPanel`, plus the four dispatch limits
+ * (run timeout, runs at once, attempts, question timeout) underneath. H9 F8 made those editable: until then they were
  * shown read-only and nothing anywhere could write them.
  *
  * No optimistic state: every control on this page follows M11's rule that the server's next
@@ -230,8 +230,9 @@ type Limits = { readonly maxConcurrentRuns: number; readonly runTimeoutMs: numbe
 const LIMIT_FIELDS: readonly WorkspaceLimitField[] = ['runTimeoutMs', 'maxConcurrentRuns', 'maxAttempts', 'questionTimeoutMs']
 
 /**
- * The three dispatch limits as one form (H9 F8): the timeout in MINUTES, the unit a person thinks
- * in and the one `set-limits --run-timeout-min` takes, converted to the column's milliseconds here.
+ * The four dispatch limits as one form (H9 F8, human cards H3): the timeouts in MINUTES, the unit a
+ * person thinks in and the one `set-limits --run-timeout-min` / `--question-timeout-min` take,
+ * converted to the column's milliseconds here.
  *
  * Checked before anything is sent, against the domain's own bounds and in the domain's own words --
  * the sentence `setWorkspaceLimits` would answer with, so a figure out of range reads the same

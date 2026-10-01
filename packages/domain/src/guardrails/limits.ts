@@ -1,5 +1,6 @@
 /**
- * The three dispatch limits a person may move on a project (H9 F8), and how far.
+ * The dispatch limits a person may move on a project (H9 F8; human cards H3 added the fourth), and
+ * how far.
  *
  * `Workspace.runTimeoutMs`, `maxConcurrentRuns` and `maxAttempts` had their defaults since M2 and
  * NO writer: the Runtime panel showed them read-only and no CLI verb touched them, so a project

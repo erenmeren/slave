@@ -191,8 +191,9 @@ export interface WorkspaceLimitMove {
 }
 
 /**
- * Sets any of the project's three dispatch limits (H9 F8): how long a run may work, how many runs
- * the project has at once, and how many attempts a task gets.
+ * Sets any of the project's four dispatch limits (H9 F8, human cards H3): how long a run may work,
+ * how many runs the project has at once, how many attempts a task gets, and how long a run waits
+ * on an unanswered question.
  *
  * `Workspace.runTimeoutMs` had no writer at all -- no verb, no route, the Runtime panel showed it
  * read-only -- so a project whose tasks legitimately take longer than thirty minutes could only be

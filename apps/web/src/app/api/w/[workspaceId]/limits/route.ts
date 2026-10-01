@@ -21,8 +21,8 @@ const bodySchema = z.object({
 const BODY_ERROR = 'the body must be { "runTimeoutMs"?: number, "maxConcurrentRuns"?: number, "maxAttempts"?: number, "questionTimeoutMs"?: number }'
 
 /**
- * The project's three dispatch limits (H9 F8): how long a run may work, how many runs at once, and
- * how many attempts a task gets.
+ * The project's four dispatch limits (H9 F8, human cards H3): how long a run may work, how many runs
+ * at once, how many attempts a task gets, and how long a run waits on an unanswered question.
  *
  * PATCH, the Supervisor settings route's reason: each write replaces some fields of a workspace
  * that has many, and an absent field means "leave it alone". `workspaceControlResponse` gives the

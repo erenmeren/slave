@@ -714,13 +714,17 @@ const USAGE = `usage: orchestrator <command> [options]
                                        confirm-integration once, and the command says how much.
   set-limits --workspace <id> [--run-timeout-min <n>] [--max-concurrent-runs <n>] [--max-attempts <n>] [--question-timeout-min <n>]
                                        how long one run may work (5-180 minutes, default 30), how
-                                       many runs the project has at once (1-10, default 3) and how
-                                       many attempts a task gets (1-10, default 3). Refused with
-                                       no flag at all, and refused outright -- nothing written --
-                                       when any figure is out of range. A raised timeout reaches
-                                       a run that is already working; attempts reach tasks
-                                       planned from now on, and a task already on the board keeps
-                                       the ceiling it was planned with.
+                                       many runs the project has at once (1-10, default 3), how
+                                       many attempts a task gets (1-10, default 3) and how long a
+                                       run waits on an unanswered question (15-4320 minutes, default
+                                       120): past it the run continues on its safest assumption,
+                                       says which in its report, and the question closes as
+                                       continued without an answer. Refused with no flag at all,
+                                       and refused outright -- nothing written -- when any figure
+                                       is out of range. A raised timeout reaches a run that is
+                                       already working; attempts reach tasks planned from now on,
+                                       and a task already on the board keeps the ceiling it was
+                                       planned with.
 
   delete-slave --slave <id> [--yes]    delete the PERSON sitting in this seat, and every other
                                        project they are on. Omit --yes to see how many projects
@@ -3873,8 +3877,9 @@ export async function main(argv: readonly string[]): Promise<number> {
       return 0
     }
 
-    // H9 F8: the three dispatch limits, which had defaults since M2 and no writer -- a project
-    // whose runs need more than thirty minutes could only be helped by an UPDATE typed into psql.
+    // H9 F8: the dispatch limits, which had defaults since M2 and no writer -- a project whose runs
+    // need more than thirty minutes could only be helped by an UPDATE typed into psql. Human cards
+    // H3 added the fourth, the question timeout.
     case 'set-limits': {
       const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
       const timeoutText = flagText(flags, 'run-timeout-min')
