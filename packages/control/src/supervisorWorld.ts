@@ -820,8 +820,9 @@ async function dropUnusableReportQuestions<
     ).map((row) => [row.id, row] as const),
   )
   // Plan B D8 (spec C5, OBS-9): a done task's report question that was decided about -- answered
-  // and applied, or sent to a person, whatever the person then did -- is not pending for the
-  // conductor path any more. Only a `failed` row (its verb refused) and a `noop` leave it pending.
+  // and applied, or sent to a person who then resolved the card, whatever they did -- is not pending
+  // for the conductor path any more. A `failed` row (its verb refused), a `noop`, and a card still
+  // `pending` (final wave I2) leave it pending.
   // Conductor questions only: a report question to any other role keeps its exact behaviour.
   const doneReportIds = rows
     .filter((row) => isReport(row) && row.recipientRole === CONDUCTOR_ROLE && row.taskId !== null && tasks.get(row.taskId)?.status === 'done')
@@ -835,7 +836,9 @@ async function dropUnusableReportQuestions<
               workspaceId,
               subjectId: { in: doneReportIds },
               situationKind: { in: ['conductor_question', 'unanswerable_question', 'waiting_stale'] },
-              status: { not: 'failed' },
+              // Final wave I2: a `pending` card is not settled yet -- its question stays, so the
+              // card a person approves still shows what it answers.
+              status: { notIn: ['failed', 'pending'] },
               tier: { not: 'noop' },
             },
             select: { subjectId: true },

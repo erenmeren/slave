@@ -2390,13 +2390,15 @@ describe('loadSupervisorWorld -- goal versions and their verification (Conductor
     const undecided = await ask(done, 'never decided')
     const refused = await ask(done, 'its verb refused')
     const live = await ask(await task('rework'), 'decided, task live')
-    for (const [subjectId, status] of [[rejected, 'rejected'], [live, 'rejected'], [refused, 'failed']] as const) {
+    // Final wave I2: a card still waiting on a person keeps its question, so the card can show it.
+    const awaiting = await ask(done, 'its card is pending')
+    for (const [subjectId, status] of [[rejected, 'rejected'], [live, 'rejected'], [refused, 'failed'], [awaiting, 'pending']] as const) {
       await prisma.supervisorDecision.create({
         data: { workspaceId: fixture.workspaceId, situationKind: 'conductor_question', subjectId, situation: {}, candidates: [], chosenIndex: 0, action: { kind: 'escalate_to_human', summary: 'x' }, rationale: 'x', tier: 'escalated', status, decidedBy: 'rules' },
       })
     }
     const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
-    expect(world.questions.map((q) => q.messageId).sort()).toEqual([undecided, refused, live].sort())
+    expect(world.questions.map((q) => q.messageId).sort()).toEqual([undecided, refused, live, awaiting].sort())
     // A report question's run has finished: it is never parked on it.
     expect(world.questions.every((q) => !q.askerWaiting)).toBe(true)
   })
