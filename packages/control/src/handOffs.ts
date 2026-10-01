@@ -5,6 +5,7 @@ import {
   HANDOFF_REOPENS_MAX,
   handOffFingerprint,
   handOffItemSchema,
+  lateAnswerChange,
   renderHandOffQuestion,
   renderHandOffRework,
   resolveHandOff,
@@ -35,7 +36,8 @@ export interface RouteHandOffsInput {
   readonly workspaceId: string
   readonly goalVersion: number
   readonly source: 'report' | 'answer' | 'person'
-  /** `report:<runId>` or (Plan B) `answer:<decisionId>`; item i is stored under `<sourceKey>:<i>`. */
+  /** `report:<runId>`, `answer:<decisionId>`, `late:<answerId>` or (human cards plan B) `person:<decisionId>`;
+   *  item i is stored under `<sourceKey>:<i>`. */
   readonly sourceKey: string
   /** The run whose report carried it (or whose question the answer answered): a question sender. */
   readonly fromRunId: string
@@ -97,15 +99,17 @@ async function packagesOf(tx: Tx, workspaceId: string, goalVersion: number) {
   })
 }
 
-/** A stored row as the domain renderers read it. */
+/** A stored row as the domain renderers read it. A person's row (`source = person`, human cards plan A
+ *  D10) is rendered under the operator's heading, not under the workers' trust line. */
 export function handOffView(row: {
   readonly id: string
+  readonly source?: string
   readonly fromPackageKey: string | null
   readonly path: string | null
   readonly packageKey: string | null
   readonly change: string
 }): HandOffView {
-  return { id: row.id, from: row.fromPackageKey, path: row.path, packageKey: row.packageKey, change: row.change }
+  return { id: row.id, from: row.fromPackageKey, path: row.path, packageKey: row.packageKey, change: row.change, fromOperator: row.source === 'person' }
 }
 
 /** Controller ruling F8: stored worker text never carries a NUL byte or a lone surrogate (spec §5). */
@@ -290,6 +294,7 @@ export async function routeStoredHandOffs(deliveryId: string): Promise<void> {
     }
   }
   await routeStoredAnswerHandOffs(deliveryId)
+  await routeLateAnswers(deliveryId)
 }
 
 /** Plan B D7: the key prefix an answer's hand-off is stored under; its one item is `answer:<decisionId>:0`. */
@@ -372,6 +377,59 @@ async function routeStoredAnswerHandOffs(deliveryId: string): Promise<void> {
       })
     } catch (error) {
       console.error(`[hand-off] decision ${row.id}: its conductor answer's hand-off was not routed this pass:`, error)
+    }
+  }
+}
+
+/** Human cards plan A D9: the key a late answer's hand-off is stored under; its one item is `late:<answerId>:0`. */
+export function lateAnswerSourceKey(answerId: string): string {
+  return `late:${answerId}`
+}
+
+/**
+ * Human-cards spec H3, §4 (plan A D9): an answer that never woke anyone because its run had already
+ * continued past the question timeout is routed, as a hand-off, to the package that asked -- spec
+ * §4's "the other becomes a hand-off". Its question is closed `timed_out`, the answer is neither
+ * delivered nor superseded, and its run is not still parked on it with no resume standing (then
+ * `deliverAnswers` delivers it, unless the run has asked again since). A person's answer is
+ * `source = person`, rendered under the operator's heading (D10); another party's is `answer`. The
+ * goal pass's backstop shape, like {@link routeStoredAnswerHandOffs}: one query, idempotent by
+ * {@link lateAnswerSourceKey}, no lock held. A question on a task outside any package is the
+ * inbox's to deliver (`apps/orchestrator/src/inbox.ts`), never routed here.
+ */
+export async function routeLateAnswers(deliveryId: string): Promise<void> {
+  const late = await prisma.$queryRaw<
+    { answerId: string; workspaceId: string; goalVersion: number; senderRunId: string; packageKey: string; question: string; answer: string; actor: string }[]
+  >`
+    SELECT a.id AS "answerId", d."workspaceId", d."goalVersion", q."senderRunId", p.key AS "packageKey", q.body AS question, a.body AS answer, a.actor::text AS actor
+    FROM "GoalDelivery" d
+    JOIN "WorkPackage" p ON p."workspaceId" = d."workspaceId" AND p."goalVersion" = d."goalVersion"
+    JOIN "Task" t ON t."workPackageId" = p.id
+    JOIN "SlaveMessage" q ON q."taskId" = t.id AND q.kind = 'question' AND q."closedReason" = 'timed_out'
+    JOIN "SlaveMessage" a ON a."replyToId" = q.id AND a.kind = 'answer' AND a."deliveredAt" IS NULL AND a."supersededAt" IS NULL
+    WHERE d.id = ${deliveryId}
+      AND q."senderRunId" IS NOT NULL
+      AND NOT (
+        EXISTS (SELECT 1 FROM "SlaveRun" r WHERE r.id = q."senderRunId" AND r.status = 'paused' AND r."pauseReason" = 'waiting_for_answer' AND r."resumeRequestedAt" IS NULL)
+        AND NOT EXISTS (SELECT 1 FROM "SlaveMessage" n WHERE n."senderRunId" = q."senderRunId" AND n.kind = 'question' AND n.seq > q.seq)
+      )
+      AND NOT EXISTS (SELECT 1 FROM "PackageHandOff" h WHERE h."workspaceId" = d."workspaceId" AND h."sourceKey" = 'late:' || a.id || ':0')
+    ORDER BY a."createdAt", a.id`
+  for (const row of late) {
+    // One answer that throws is said and skipped; the next pass retries it (no row at `late:<id>:0`).
+    try {
+      await routeHandOffs({
+        workspaceId: row.workspaceId,
+        goalVersion: row.goalVersion,
+        source: row.actor === 'human' ? 'person' : 'answer',
+        sourceKey: lateAnswerSourceKey(row.answerId),
+        fromRunId: row.senderRunId,
+        // Nobody's own package: the asker's package is the target, never `own` (its run has moved on).
+        fromPackageKey: null,
+        items: [{ package: row.packageKey, change: lateAnswerChange(row.question, row.answer) }],
+      })
+    } catch (error) {
+      console.error(`[hand-off] answer ${row.answerId}: its late answer was not routed this pass:`, error)
     }
   }
 }

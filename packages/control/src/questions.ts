@@ -131,19 +131,25 @@ const RETIRED_BECAUSE: Readonly<Record<QuestionCloseReason, string>> = {
 
 /**
  * Plan A D5, the tick's backstop: every pending question card whose question is closed for any
- * reason but `timed_out` (whose card stays open, spec H3) is retired. One query, and nothing else
- * when there is nothing to retire.
+ * reason but `timed_out` (whose card stays open, spec H3) is retired. Ruling F7: a `timed_out`
+ * question that has since taken a late answer is settled too -- the answer goes to the asking package
+ * as a hand-off (`routeLateAnswers`), so its card has nothing left to decide; it is retired as
+ * answered. One query, and nothing else when there is nothing to retire.
  */
 export async function retireClosedQuestionCards(workspaceId: string, now: Date): Promise<number> {
   const rows = await prisma.$queryRaw<{ messageId: string; reason: QuestionCloseReason }[]>`
-    SELECT DISTINCT d."subjectId" AS "messageId", m."closedReason"::text AS reason
+    SELECT DISTINCT d."subjectId" AS "messageId",
+      CASE WHEN m."closedReason" = 'timed_out' THEN 'answered' ELSE m."closedReason"::text END AS reason
     FROM "SupervisorDecision" d
     JOIN "SlaveMessage" m ON m.id = d."subjectId"
     WHERE d."workspaceId" = ${workspaceId}
       AND d.status = 'pending'
       AND d."situationKind" IN ('waiting_stale', 'unanswerable_question', 'conductor_question')
       AND m."closedAt" IS NOT NULL
-      AND m."closedReason" <> 'timed_out'`
+      AND (
+        m."closedReason" <> 'timed_out'
+        OR EXISTS (SELECT 1 FROM "SlaveMessage" a WHERE a."replyToId" = m.id AND a.kind = 'answer')
+      )`
   let retired = 0
   for (const row of rows) retired += await retireQuestionCards(workspaceId, row.messageId, RETIRED_BECAUSE[row.reason], now)
   return retired

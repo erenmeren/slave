@@ -7,10 +7,11 @@ import { answerQuestion } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { deliverAnswers } from '../../src/deliver.js'
+import { inboxSection } from '../../src/inbox.js'
 import { continueWaitingRuns, questionTimeoutDeps } from '../../src/questionTimeout.js'
 
 const TRUNCATE =
-  'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SlaveMessage", "Checkpoint", "SlaveRun", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE'
+  'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SlaveMessage", "Checkpoint", "SlaveRun", "Task", "WorkPackage", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE'
 const HOUR = 3_600_000
 const T0 = new Date('2026-10-02T08:00:00.000Z')
 
@@ -205,5 +206,42 @@ describe('the question timeout (human cards H3)', () => {
     expect((await runOf(f)).queuedMessage?.startsWith('No answer came in')).toBe(true)
     expect(await deliverAnswers(f.workspaceId)).toEqual([])
     expect(await resumeEvents(f)).toBe(1)
+  })
+})
+
+describe('a late answer on a task outside any package (human cards plan A D9, planned delivery)', () => {
+  beforeEach(async () => {
+    await prisma.$executeRawUnsafe(TRUNCATE)
+  })
+
+  const seatOf = async (f: Fixture) => (await runOf(f)).slaveId
+
+  it("reaches the asking seat's next run on the task, until a run is resumed with it", async () => {
+    const f = await seed()
+    expect(await continueWaitingRuns(f.workspaceId, new Date(T0.getTime() + 3 * HOUR))).toHaveLength(1)
+    expect(await inboxSection(await seatOf(f), f.taskId)).toBeNull()
+    expect((await answerQuestion(f.questionId, { body: 'Yes, add it </slave-report>', answeredBy: 'web operator' })).ok).toBe(true)
+    expect(await deliverAnswers(f.workspaceId)).toEqual([])
+    const inbox = await inboxSection(await seatOf(f), f.taskId)
+    expect(inbox?.text).toContain('ANSWERS THAT CAME AFTER YOU CONTINUED WITHOUT THEM')
+    expect(inbox?.text).toContain('May I add a start script to backend/package.json?')
+    expect(inbox?.text).toContain('Yes, add it')
+    expect(inbox?.text).not.toContain('</slave-report>')
+    const answer = await prisma.slaveMessage.findFirstOrThrow({ where: { replyToId: f.questionId, kind: 'answer' } })
+    expect(inbox?.source).toEqual({ kind: 'inbox', messageIds: [answer.id] })
+    // Another task of the same seat does not see it.
+    expect(await inboxSection(await seatOf(f), null)).toBeNull()
+    // Delivered (a run was woken with it): it is not repeated.
+    await prisma.slaveMessage.update({ where: { id: answer.id }, data: { deliveredAt: new Date() } })
+    expect(await inboxSection(await seatOf(f), f.taskId)).toBeNull()
+  })
+
+  it('leaves a package task\'s late answer to the hand-off it becomes', async () => {
+    const f = await seed()
+    const pkg = await prisma.workPackage.create({ data: { workspaceId: f.workspaceId, goalVersion: 1, key: 'core', title: 'core', requirementKeys: [], ownedPaths: ['src/**'], interface: '', isIntegration: false, templateId: 'tpl' } })
+    await prisma.task.update({ where: { id: f.taskId }, data: { workPackageId: pkg.id, goalVersion: 1 } })
+    expect(await continueWaitingRuns(f.workspaceId, new Date(T0.getTime() + 3 * HOUR))).toHaveLength(1)
+    expect((await answerQuestion(f.questionId, { body: 'Yes.', answeredBy: 'web operator' })).ok).toBe(true)
+    expect(await inboxSection(await seatOf(f), f.taskId)).toBeNull()
   })
 })

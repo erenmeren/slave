@@ -108,4 +108,19 @@ describe('closing a question (human cards H1)', () => {
     expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: stays.id } })).status).toBe('pending')
     expect(QUESTION_SITUATION_KINDS).toEqual(['waiting_stale', 'unanswerable_question', 'conductor_question'])
   })
+
+  it('retires a timed-out question\'s open card once a late answer is on record (ruling F7)', async () => {
+    const f = await seed()
+    const q = await reportQuestion(f)
+    const open = await card(f, q, 'conductor_question')
+    await closeQuestion({ messageId: q, reason: 'timed_out', by: 'system', decisionId: null, note: () => null }, 'system', null)
+    expect(await retireClosedQuestionCards(f.workspaceId, new Date())).toBe(0)
+    // Written directly: the answer path's own retire is what crashed, and the backstop catches it.
+    const asked = await prisma.slaveMessage.findUniqueOrThrow({ where: { id: q } })
+    await prisma.slaveMessage.create({ data: { workspaceId: f.workspaceId, taskId: f.taskId, slaveId: f.seatId, recipientSlaveId: f.seatId, threadId: asked.threadId, replyToId: q, kind: 'answer', body: 'late', actor: 'human' } })
+    expect(await retireClosedQuestionCards(f.workspaceId, new Date())).toBe(1)
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: open.id } })).status).toBe('expired')
+    const said = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'supervisor_resolved' } })
+    expect(said.map((e) => (e.payload as { reason: string }).reason)).toEqual(['The question was answered.'])
+  })
 })

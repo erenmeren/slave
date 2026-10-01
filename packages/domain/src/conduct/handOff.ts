@@ -131,10 +131,22 @@ export interface HandOffView {
   readonly path: string | null
   readonly packageKey: string | null
   readonly change: string
+  /** Human cards plan A D10: a person's request (`source = person`), rendered under its own heading. */
+  readonly fromOperator?: boolean
+}
+
+/** Human cards plan A D10: the heading a person's requests sit under -- the operator's words, unlike
+ *  the workers' requests below {@link HANDOFF_TRUST_LINE}. Still sanitised and bounded like any
+ *  stored text, and still to be done only in the package's own files. */
+export const OPERATOR_HANDOFF_HEADING = 'From the operator (a person decided this on a card; do it in your own files):'
+
+/** Who a hand-off is from, as its line and the "more requests" line name it. */
+function fromName(view: HandOffView): string {
+  return view.fromOperator === true ? 'the operator' : view.from === null ? 'the conductor' : sanitisePersonText(storableText(view.from))
 }
 
 function itemLine(view: HandOffView): string {
-  const from = view.from === null ? 'the conductor' : sanitisePersonText(storableText(view.from))
+  const from = fromName(view)
   const where = view.path === null ? '' : ` (${sanitisePersonText(storableText(view.path))})`
   const change = trimToFit(sanitisePersonText(storableText(view.change).replace(/\s+/gu, ' ').trim()), HANDOFF_PROMPT_ITEM_MAX_CHARS)
   return `- from ${from}${where}: ${change}`
@@ -174,10 +186,25 @@ function fitItems(head: string, items: readonly HandOffView[], tail: readonly st
   }
   const rest = items.slice(shownIds.length)
   if (rest.length > 0) {
-    const keys = [...new Set(rest.map((view) => (view.from === null ? 'the conductor' : sanitisePersonText(storableText(view.from)))))].join(', ')
+    const keys = [...new Set(rest.map(fromName))].join(', ')
     lines.push(`${String(rest.length)} more requests from ${keys} wait for your next run.`)
   }
   return { text: [head, ...lines, ...tail].join('\n'), shownIds }
+}
+
+/**
+ * Plan A D10: a person's items first, under {@link OPERATOR_HANDOFF_HEADING}, then the workers' under
+ * `workerHead`, then `tail`; each part fitted whole by {@link fitItems} within what the part before it
+ * left. A block with no operator item is byte-identical to `fitItems(workerHead, items, tail, budget)`.
+ */
+function fitBlocks(workerHead: string, items: readonly HandOffView[], tail: readonly string[], budget: number): HandOffBlock {
+  const operator = items.filter((view) => view.fromOperator === true)
+  const workers = items.filter((view) => view.fromOperator !== true)
+  if (operator.length === 0) return fitItems(workerHead, workers, tail, budget)
+  const first = fitItems(OPERATOR_HANDOFF_HEADING, operator, workers.length === 0 ? tail : [], budget)
+  if (workers.length === 0) return first
+  const second = fitItems(workerHead, workers, tail, Math.max(0, budget - first.text.length))
+  return { text: `${first.text}\n${second.text}`, shownIds: [...first.shownIds, ...second.shownIds] }
 }
 
 /**
@@ -190,7 +217,7 @@ export const HANDOFF_TRUST_LINE =
 /** Plan A D9: the "Asked of your package" block of a contract; empty when nothing was asked. */
 export function renderAskedOfYou(items: readonly HandOffView[]): HandOffBlock {
   if (items.length === 0) return { text: '', shownIds: [] }
-  return fitItems(
+  return fitBlocks(
     `${HANDOFF_TRUST_LINE}\nAsked of your package by other packages (do each one that is right, in your own files; if one is not right, say why in your report):`,
     items,
     [],
@@ -200,7 +227,7 @@ export function renderAskedOfYou(items: readonly HandOffView[]): HandOffBlock {
 
 /** Plan A D4: the rework reason when hand-offs reopen a finished package. */
 export function renderHandOffRework(items: readonly HandOffView[]): HandOffBlock {
-  return fitItems(
+  return fitBlocks(
     `${HANDOFF_TRUST_LINE}\nYour package was finished, and other packages have since asked it for these changes:`,
     items,
     ['Make each change that is right, in your own files, and say in your report why you left any out. Then finish as your instructions describe.'],
@@ -214,7 +241,7 @@ export function renderHandOffRework(items: readonly HandOffView[]): HandOffBlock
  */
 export function renderHandOffQuestion(input: { readonly view: HandOffView; readonly reason: string }): string {
   const target = input.view.path !== null ? ` in ${sanitisePersonText(storableText(input.view.path))}` : input.view.packageKey !== null ? ` of the ${sanitisePersonText(storableText(input.view.packageKey))} package` : ''
-  const from = input.view.from === null ? 'the conductor' : `the ${sanitisePersonText(storableText(input.view.from))} package`
+  const from = input.view.fromOperator === true ? 'the operator' : input.view.from === null ? 'the conductor' : `the ${sanitisePersonText(storableText(input.view.from))} package`
   return [
     `A hand-off from ${from} was not delivered: ${sanitisePersonText(storableText(input.reason))}.`,
     `It asks for a change${target}: ${trimToFit(sanitisePersonText(storableText(input.view.change).replace(/\s+/gu, ' ').trim()), HANDOFF_CHANGE_MAX_CHARS)}`,

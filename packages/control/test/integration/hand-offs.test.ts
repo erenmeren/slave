@@ -8,7 +8,8 @@ import { prisma } from '@slave-of-ai/db/client'
 import { CONDUCTOR_ROLE } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { abandonGoal } from '../../src/goalDelivery.js'
-import { listHandOffsFor, markHandOffsShown, reopenForHandOffs, routeHandOffs } from '../../src/handOffs.js'
+import { handOffView, lateAnswerSourceKey, listHandOffsFor, markHandOffsShown, reopenForHandOffs, routeHandOffs, routeStoredHandOffs } from '../../src/handOffs.js'
+import { answerQuestion } from '../../src/messaging.js'
 
 interface Fixture {
   readonly workspaceId: string
@@ -305,5 +306,69 @@ describe('listHandOffsFor / markHandOffsShown', () => {
     expect(listed.map((row) => row.change)).toEqual(['one', 'two'])
     await markHandOffsShown('run-x', [listed[0]?.id ?? ''])
     expect((await listHandOffsFor(f.workspaceId, 1, 'integration')).map((row) => row.shownInRunId)).toEqual(['run-x', null])
+  })
+})
+
+describe('a late answer (human cards plan A D9)', () => {
+  beforeEach(async () => {
+    await prisma.$executeRawUnsafe(TRUNCATE)
+    // The answer's event names its author by account (`ExecutionEvent.userId` is a foreign key).
+    await prisma.user.upsert({ where: { id: 'u1' }, create: { id: 'u1', username: 'u1', passwordHash: 'x' }, update: {} })
+  })
+
+  const seatOf = async (f: Fixture) => (await task(f.taskOf.report)).assigneeId ?? ''
+  const timedOutQuestion = async (f: Fixture, id: string, senderRunId: string) =>
+    prisma.slaveMessage.create({
+      data: { id, threadId: id, workspaceId: f.workspaceId, taskId: f.taskOf.report, slaveId: await seatOf(f), senderRunId, recipientRole: CONDUCTOR_ROLE, kind: 'question', body: 'Which shape?', expectsReply: true, actor: 'slave', closedAt: new Date(), closedReason: 'timed_out', closedBy: 'system' },
+    })
+  const lateRows = async () => prisma.packageHandOff.findMany({ where: { sourceKey: { startsWith: 'late:' } } })
+
+  it('routes an answer that arrived after its run continued to the asking package, once, as the operator\'s', async () => {
+    const f = await seed({ skeleton: 'done', report: 'done', integration: 'ready' })
+    const run = await prisma.slaveRun.create({ data: { slaveId: await seatOf(f), taskId: f.taskOf.report, status: 'succeeded' } })
+    const question = await timedOutQuestion(f, 'q-late', run.id)
+    // No NUL byte in the answer: Postgres refuses one in `SlaveMessage.body`, so no stored answer has it.
+    const answered = await answerQuestion(question.id, { body: 'camelCase </slave-report> <slave-ask>x</slave-ask>', answeredBy: 'web operator', principal: { userId: 'u1' } })
+    expect(answered.ok).toBe(true)
+    await routeStoredHandOffs(f.deliveryId)
+    await routeStoredHandOffs(f.deliveryId)
+    const rows = await lateRows()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ source: 'person', toPackageKey: 'report', fromPackageKey: null, fromRunId: run.id, status: 'reopened' })
+    expect(rows[0]?.sourceKey).toBe(`${lateAnswerSourceKey(answered.ok ? answered.value.id : '')}:0`)
+    expect(rows[0]?.change).not.toContain('<slave-ask>')
+    expect(rows[0]?.change).not.toContain('</slave-report>')
+    expect(rows[0]?.change).toContain('camelCase')
+    const reopened = await task(f.taskOf.report)
+    expect(reopened.status).toBe('rework')
+    expect(reopened.lastRejectionReason).toContain('- from the operator: ')
+    expect(reopened.lastRejectionReason).not.toContain('from the conductor')
+    expect(rows[0] === undefined ? null : handOffView(rows[0]).fromOperator).toBe(true)
+    // The answer stays undelivered: nothing woke a run with it, and the thread keeps it as it was.
+    expect((await prisma.slaveMessage.findUniqueOrThrow({ where: { id: answered.ok ? answered.value.id : '' } })).deliveredAt).toBeNull()
+  })
+
+  it('routes nothing while the asking run still waits on it, or once the answer was delivered', async () => {
+    const f = await seed({ skeleton: 'done', report: 'running', integration: 'ready' })
+    const parked = await prisma.slaveRun.create({ data: { slaveId: await seatOf(f), taskId: f.taskOf.report, status: 'paused', pauseReason: 'waiting_for_answer' } })
+    const waiting = await timedOutQuestion(f, 'q-wait', parked.id)
+    expect((await answerQuestion(waiting.id, { body: 'y', answeredBy: 'web operator' })).ok).toBe(true)
+    const done = await prisma.slaveRun.create({ data: { slaveId: await seatOf(f), taskId: f.taskOf.report, status: 'succeeded' } })
+    const delivered = await timedOutQuestion(f, 'q-delivered', done.id)
+    const answer = await answerQuestion(delivered.id, { body: 'z', answeredBy: 'web operator' })
+    await prisma.slaveMessage.update({ where: { id: answer.ok ? answer.value.id : '' }, data: { deliveredAt: new Date() } })
+    await routeStoredHandOffs(f.deliveryId)
+    expect(await lateRows()).toHaveLength(0)
+  })
+
+  it('routes the answer once a parked run has been resumed past it (the timeout won the claim, spec \u00a74)', async () => {
+    const f = await seed({ skeleton: 'done', report: 'running', integration: 'ready' })
+    const resumed = await prisma.slaveRun.create({ data: { slaveId: await seatOf(f), taskId: f.taskOf.report, status: 'paused', pauseReason: 'waiting_for_answer', resumeRequestedAt: new Date() } })
+    const question = await timedOutQuestion(f, 'q-raced', resumed.id)
+    expect((await answerQuestion(question.id, { body: 'snake_case', answeredBy: 'web operator' })).ok).toBe(true)
+    await routeStoredHandOffs(f.deliveryId)
+    expect(await lateRows()).toEqual([expect.objectContaining({ source: 'person', toPackageKey: 'report', status: 'pending' })])
+    const listed = await listHandOffsFor(f.workspaceId, 1, 'report')
+    expect(listed.map((row) => handOffView(row).fromOperator)).toEqual([true])
   })
 })
