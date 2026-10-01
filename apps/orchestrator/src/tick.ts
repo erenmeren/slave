@@ -431,8 +431,11 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
 
   // Human cards H3 (plan A D7): a run whose question nobody answered within the question timeout,
   // or whose question a person closed without an answer, continues -- after delivery, so a real
-  // answer always goes first, and before the resume pass, so it continues in this tick.
-  await continueWaitingRuns(deps.workspaceId)
+  // answer always goes first, and before the resume pass, so it continues in this tick. Wrapped as on
+  // the halted branch (final wave, finding 4): a throw here must not skip the rest of the tick.
+  await continueWaitingRuns(deps.workspaceId).catch((error: unknown) => {
+    console.error(`[tick] the question timeout pass for workspace ${deps.workspaceId} failed:`, error)
+  })
 
   await resumeRequestedRuns(deps)
 

@@ -8,7 +8,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { deliverAnswers } from '../../src/deliver.js'
 import { inboxSection } from '../../src/inbox.js'
-import { continueWaitingRuns, questionTimeoutDeps } from '../../src/questionTimeout.js'
+import { RESUMED_WITHOUT_ANSWER_NOTE, continueWaitingRuns, questionTimeoutDeps } from '../../src/questionTimeout.js'
 
 const TRUNCATE =
   'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SlaveMessage", "Checkpoint", "SlaveRun", "Task", "WorkPackage", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE'
@@ -23,19 +23,22 @@ interface Fixture {
 }
 
 /** A run parked on a question at T0, with a checkpoint (a resume needs one) and a dead pid. */
-async function seed(options: { readonly timeoutMs?: number; readonly haltedReason?: string } = {}): Promise<Fixture> {
-  const ws = await prisma.workspace.create({
-    data: {
-      name: `Timeout ${String(Math.random())}`,
-      repoPath: '/nonexistent',
-      verifyCommands: ['true'],
-      setupCommands: [],
-      ...(options.timeoutMs === undefined ? {} : { questionTimeoutMs: options.timeoutMs }),
-      ...(options.haltedReason === undefined ? {} : { haltedReason: options.haltedReason, haltedAt: T0 }),
-    },
-  })
-  const team = await prisma.team.create({ data: { workspaceId: ws.id, name: 'E' } })
-  const person = await prisma.person.create({ data: { name: 'Ivo' } })
+async function seed(options: { readonly timeoutMs?: number; readonly haltedReason?: string; readonly workspaceId?: string } = {}): Promise<Fixture> {
+  const ws =
+    options.workspaceId !== undefined
+      ? { id: options.workspaceId }
+      : await prisma.workspace.create({
+          data: {
+            name: `Timeout ${String(Math.random())}`,
+            repoPath: '/nonexistent',
+            verifyCommands: ['true'],
+            setupCommands: [],
+            ...(options.timeoutMs === undefined ? {} : { questionTimeoutMs: options.timeoutMs }),
+            ...(options.haltedReason === undefined ? {} : { haltedReason: options.haltedReason, haltedAt: T0 }),
+          },
+        })
+  const team = await prisma.team.create({ data: { workspaceId: ws.id, name: `E ${String(Math.random())}` } })
+  const person = await prisma.person.create({ data: { name: `Ivo ${String(Math.random())}` } })
   const seat = await prisma.slave.create({ data: { teamId: team.id, role: 'Implementer', runtimeRoles: ['implementer'], personId: person.id } })
   const task = await prisma.task.create({
     data: { workspaceId: ws.id, title: 'integration', description: 'x', status: 'waiting', requiredRole: 'implementer', maxAttempts: 3, assigneeId: seat.id },
@@ -175,6 +178,80 @@ describe('the question timeout (human cards H3)', () => {
     expect(await continueWaitingRuns(f.workspaceId, new Date(T0.getTime() + 3 * HOUR))).toEqual([])
     expect(await resumeEvents(f)).toBe(1)
   })
+  it('goes on to the other runs when one run throws, and says so (final wave, finding 4)', async () => {
+    const f = await seed()
+    const g = await seed({ workspaceId: f.workspaceId })
+    const real = questionTimeoutDeps.requestResume
+    questionTimeoutDeps.requestResume = async (...args) => {
+      if (args[0] === f.runId) throw new Error('the database went away for this one')
+      return real(...args)
+    }
+    try {
+      expect(await continueWaitingRuns(f.workspaceId, new Date(T0.getTime() + 3 * HOUR))).toEqual([{ runId: g.runId, questionId: g.questionId, reason: 'timed_out' }])
+    } finally {
+      questionTimeoutDeps.requestResume = real
+    }
+    expect((await questionOf(f)).closedAt).toBeNull()
+    expect((await questionOf(g)).closedReason).toBe('timed_out')
+  })
+
+  it('reads a halt once per pass, outside the locks, and never asks to resume under it (final wave, finding 4)', async () => {
+    const f = await seed({ haltedReason: 'emergency_stop' })
+    await seed({ workspaceId: f.workspaceId })
+    const real = questionTimeoutDeps.requestResume
+    let asked = 0
+    questionTimeoutDeps.requestResume = async (...args) => {
+      asked += 1
+      return real(...args)
+    }
+    try {
+      expect(await continueWaitingRuns(f.workspaceId, new Date(T0.getTime() + 3 * HOUR))).toEqual([])
+    } finally {
+      questionTimeoutDeps.requestResume = real
+    }
+    expect(asked).toBe(0)
+    const refusals = await prisma.slaveMessage.findMany({ where: { workspaceId: f.workspaceId, kind: 'question' }, select: { timeoutRefusal: true } })
+    expect(refusals.map((q) => q.timeoutRefusal?.includes('halted'))).toEqual([true, true])
+  })
+
+  it('closes, on a later pass, a question whose run was resumed by a pass that then rolled back (final wave, finding 5)', async () => {
+    const f = await seed()
+    // Asked in the real past: the resume event below is stamped with the database's clock.
+    await prisma.slaveMessage.update({ where: { id: f.questionId }, data: { createdAt: new Date(Date.now() - HOUR) } })
+    const real = questionTimeoutDeps.requestResume
+    questionTimeoutDeps.requestResume = async (...args) => {
+      const resumed = await real(...args)
+      throw new Error(`the transaction failed after the resume (${String(resumed.ok)})`)
+    }
+    try {
+      expect(await continueWaitingRuns(f.workspaceId, new Date(T0.getTime() + 3 * HOUR))).toEqual([])
+    } finally {
+      questionTimeoutDeps.requestResume = real
+    }
+    // The resume stood; the close rolled back with the transaction.
+    expect((await runOf(f)).resumeRequestedAt).not.toBeNull()
+    expect((await questionOf(f)).closedAt).toBeNull()
+    // The daemon carries the resume out: the run is no longer parked.
+    await prisma.slaveRun.update({ where: { id: f.runId }, data: { status: 'working', pauseReason: null, resumeRequestedAt: null } })
+    expect(await continueWaitingRuns(f.workspaceId, new Date(T0.getTime() + 3 * HOUR + 60_000))).toEqual([])
+    expect(await questionOf(f)).toMatchObject({ closedReason: 'timed_out', closedBy: 'system', closedNote: RESUMED_WITHOUT_ANSWER_NOTE })
+    expect(await prisma.executionEvent.count({ where: { workspaceId: f.workspaceId, type: 'slave_question_closed' } })).toBe(1)
+  })
+
+  it('leaves alone a question its parked run still waits on, an answered one, and one no resume followed (final wave, finding 5)', async () => {
+    const parked = await seed()
+    const answered = await seed({ workspaceId: parked.workspaceId })
+    const neverResumed = await seed({ workspaceId: parked.workspaceId })
+    await answerQuestion(answered.questionId, { body: 'yes', answeredBy: 'web operator' })
+    await prisma.slaveMessage.update({ where: { id: answered.questionId }, data: { closedAt: null, closedReason: null, closedBy: null } })
+    for (const one of [answered, neverResumed]) await prisma.slaveRun.update({ where: { id: one.runId }, data: { status: 'working', pauseReason: null } })
+    // A resume event of the parked run before its question was asked does not count either.
+    await prisma.executionEvent.create({ data: { type: 'run_resume_requested', workspaceId: parked.workspaceId, runId: answered.runId, actor: 'system', payload: {}, ts: new Date(T0.getTime() + 60_000) } })
+    await prisma.executionEvent.create({ data: { type: 'run_resume_requested', workspaceId: parked.workspaceId, runId: neverResumed.runId, actor: 'system', payload: {}, ts: new Date(T0.getTime() - 60_000) } })
+    expect(await continueWaitingRuns(parked.workspaceId, new Date(T0.getTime() + 60_000))).toEqual([])
+    for (const one of [parked, answered, neverResumed]) expect((await questionOf(one)).closedAt).toBeNull()
+  })
+
   it('an answer sent while the pass holds its locks waits, then lands as a late answer on the timed-out question (fix round 1)', async () => {
     const f = await seed()
     const real = questionTimeoutDeps.requestResume
@@ -183,9 +260,15 @@ describe('the question timeout (human cards H3)', () => {
     questionTimeoutDeps.requestResume = async (...args) => {
       // A person answers from another connection while the pass holds the Workspace and question rows.
       answering = answerQuestion(f.questionId, { body: 'Yes, add it.', answeredBy: 'web operator' })
-      void answering.then(() => {
-        settledInsideTheWindow = true
-      })
+      // Final wave minor: a rejection is the assertion below's to report, never an unhandled one.
+      void answering.then(
+        () => {
+          settledInsideTheWindow = true
+        },
+        () => {
+          settledInsideTheWindow = true
+        },
+      )
       await new Promise((resolve) => setTimeout(resolve, 500))
       // Still waiting on the lock: no answer row is visible yet, and the call has not settled.
       expect(settledInsideTheWindow).toBe(false)
