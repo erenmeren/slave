@@ -36,7 +36,7 @@ import {
   type SupervisorWorld,
   type Tier,
 } from '@slave-of-ai/domain'
-import { answerConductorQuestions } from './conductorAnswers.js'
+import { answerConductorQuestions, type ConductorPass } from './conductorAnswers.js'
 
 export interface SuperviseDeps {
   readonly workspaceId: string
@@ -176,6 +176,9 @@ export function modelSeam(decider: ModelDecider | undefined, model: string | und
   return decider !== undefined && model !== undefined ? { decider, model } : null
 }
 
+/** Final wave M1: what a conductor pass that threw contributes -- nothing counted, nothing answered. */
+const NO_CONDUCTOR_PASS: ConductorPass = { decided: 0, applied: 0, proposed: 0, skippedCooldown: 0, answered: 0, drafted: 0, calls: 0, answeredIds: new Set() }
+
 /**
  * One Supervisor pass over one workspace (M38 §5), run at the end of every tick.
  *
@@ -237,14 +240,22 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
 
   // Supervisor-as-conductor spec C4 (plan B D1/D3): conductor questions first, in one call per goal
   // version, outside the per-tick cap; the loop below never sees them.
-  const conducted = await answerConductorQuestions({
-    workspaceId: deps.workspaceId,
-    world,
-    situations: situations.filter((situation) => situation.kind === 'conductor_question'),
-    seam,
-    profile: settings.profile,
-    now,
-  })
+  // Final wave M1: a throw in the conductor pass is said and swallowed -- the rest of the pass still
+  // runs. What it recorded before the throw stays recorded; its questions are retried next tick.
+  let conducted: ConductorPass
+  try {
+    conducted = await answerConductorQuestions({
+      workspaceId: deps.workspaceId,
+      world,
+      situations: situations.filter((situation) => situation.kind === 'conductor_question'),
+      seam,
+      profile: settings.profile,
+      now,
+    })
+  } catch (error) {
+    console.error(`[supervisor] ${deps.workspaceId}: the conductor answer pass failed, the rest of the pass goes on:`, error)
+    conducted = NO_CONDUCTOR_PASS
+  }
 
   let decided = conducted.decided
   let applied = conducted.applied

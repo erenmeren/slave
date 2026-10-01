@@ -5,7 +5,7 @@
  * reason; the critical lexicon, a missing model and a missing plan all hand the question to a person
  * by the rules.
  */
-import { handOffQuestionKey, rejectDecision, reportQuestionKey, sendMessage, type ModelDecider, type ModelOutcome } from '@slave-of-ai/control'
+import { handOffQuestionKey, loadSupervisorWorld, rejectDecision, reportQuestionKey, sendMessage, type ModelDecider, type ModelOutcome } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { CONDUCTOR_ROLE, COOLDOWN_MS, HANDOFF_REOPENS_MAX, WAITING_STALE_MS } from '@slave-of-ai/domain'
 import { execFileSync } from 'node:child_process'
@@ -259,6 +259,54 @@ describe('answerConductorQuestions (spec C4)', () => {
       ['escalated', 'rules'],
       ['escalated', 'rules'],
     ])
+  })
+
+  // Final wave M2: the card says WHY no model was asked -- a halt or a spent budget, not "no model".
+  it('names a halt or a spent budget as the reason a conductor question goes to a person (final wave M2)', async () => {
+    for (const [over, words] of [
+      [{ halted: { reason: 'three failures in a row' } }, 'the workspace is halted'],
+      [{ budgetExhausted: true }, 'the budget is spent'],
+    ] as const) {
+      await prisma.$executeRawUnsafe(TRUNCATE)
+      const f = await seed()
+      const model = scripted((prompt) => answerJson(idsIn(prompt).map((id) => ok(id))))
+      await supervise({
+        workspaceId: f.workspaceId,
+        decider: model.decider,
+        model: 'm',
+        now: () => f.now,
+        loadWorld: async (id, now, opts) => {
+          const loaded = await loadSupervisorWorld(id, now, opts)
+          return { ...loaded, world: { ...loaded.world, ...over } }
+        },
+      })
+      expect(model.prompts).toHaveLength(0)
+      const rows = await prisma.supervisorDecision.findMany({ where: { workspaceId: f.workspaceId, situationKind: 'conductor_question' } })
+      expect(rows).toHaveLength(2)
+      for (const row of rows) {
+        expect(row.rationale, words).toContain(words)
+        expect((row.situation as { summary: string }).summary).toContain(words)
+      }
+    }
+  })
+
+  // Final wave M1: a conductor pass that throws must not lose the rest of the supervision pass.
+  it('still supervises everything else when the conductor pass throws (final wave M1)', async () => {
+    const f = await seed()
+    const late = new Date(f.now.getTime() + WAITING_STALE_MS + 60_000)
+    const model = scripted((prompt) => answerJson(idsIn(prompt).map((id) => ok(id))))
+    const original = prisma.conductorCall.findMany
+    ;(prisma.conductorCall as { findMany: unknown }).findMany = async (): Promise<never> => {
+      throw new Error('the ledger is unreadable')
+    }
+    try {
+      const report = await supervise({ workspaceId: f.workspaceId, decider: model.decider, model: 'm', now: () => late })
+      expect(report.conductorCalls).toBe(0)
+    } finally {
+      ;(prisma.conductorCall as { findMany: unknown }).findMany = original
+    }
+    const stale = await prisma.supervisorDecision.findFirstOrThrow({ where: { subjectId: f.qPaused, situationKind: 'waiting_stale' } })
+    expect(stale).toMatchObject({ decidedBy: 'rules', tier: 'escalated' })
   })
 
   it('escalates a question the critical lexicon stops, without asking the model about it', async () => {

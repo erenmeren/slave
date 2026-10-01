@@ -114,7 +114,15 @@ export async function answerConductorQuestions(input: ConductorPassInput): Promi
       continue
     }
     if (input.seam === null) {
-      await escalate(input, tally, situation, 'there was no model call to answer it with')
+      // Final wave M2: the real reason in the card (spec C4) -- `supervise` withholds the seam on a
+      // halt or a spent budget, which a person must read as such, not as a missing model.
+      const why =
+        input.world.halted !== null
+          ? `the workspace is halted (${input.world.halted.reason}), so no model was asked`
+          : input.world.budgetExhausted
+            ? 'the budget is spent, so no model was asked'
+            : 'there was no model call to answer it with'
+      await escalate(input, tally, situation, why)
       continue
     }
     const attempts = await answerAttempts(input.workspaceId, question.messageId)
