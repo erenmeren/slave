@@ -230,6 +230,44 @@ export function DraftEditor({
           edited by a human: {draft.editedBody}
         </span>
       )}
+      {draft.conductor !== undefined && <ConductorDetails conductor={draft.conductor} />}
+    </div>
+  )
+}
+
+/**
+ * Supervisor-as-conductor final wave I2: what approving a conductor answer DOES beyond sending it --
+ * the shared decision it adds, the hand-off it routes, what it would change, what it rests on, and
+ * what did not verify. A person approving the card must see all of it. Every value is the model's
+ * or a worker's text, so each is a JSX child -- characters on the page, never markup.
+ */
+function ConductorDetails({ conductor }: { readonly conductor: NonNullable<Draft['conductor']> }): React.JSX.Element {
+  const { basis, newDecision, handOff } = conductor
+  const cited = [
+    ...(basis.requirements.length === 0 ? [] : [`requirements ${basis.requirements.join(', ')}`]),
+    ...(basis.packages.length === 0 ? [] : [`packages ${basis.packages.join(', ')}`]),
+    ...(basis.decisions.length === 0 ? [] : [`decisions ${basis.decisions.map((title) => `\u201c${title}\u201d`).join(', ')}`]),
+  ]
+  return (
+    <div data-testid="supervisor-draft-conductor" className="flex flex-col gap-0.5 text-[11px] text-text-2">
+      <span data-testid="supervisor-draft-conductor-decision">
+        {newDecision === null ? 'new shared decision: none' : `new shared decision: \u201c${newDecision.title}\u201d \u2014 ${newDecision.decision}`}
+      </span>
+      <span data-testid="supervisor-draft-conductor-handoff">
+        {handOff === null
+          ? 'hand-off: none'
+          : `hand-off to ${'path' in handOff ? `the owner of ${handOff.path}` : `the ${handOff.package} package`}: ${handOff.change}`}
+      </span>
+      <span data-testid="supervisor-draft-conductor-changes">changes: {conductor.changes}</span>
+      <span data-testid="supervisor-draft-conductor-basis">basis: {cited.length === 0 ? 'nothing' : cited.join(' \u00b7 ')}</span>
+      {conductor.unverified.map((note, index) => (
+        <span key={String(index)} data-testid="supervisor-draft-conductor-unverified" className="text-tone-waiting">
+          not verified: {note}
+        </span>
+      ))}
+      <span data-testid="supervisor-draft-conductor-edit-note" className="text-text-3">
+        Editing the answer applies neither the decision nor the hand-off.
+      </span>
     </div>
   )
 }

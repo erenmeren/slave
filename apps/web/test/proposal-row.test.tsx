@@ -393,6 +393,47 @@ describe('a drafted answer', () => {
     expect(source.querySelector('script')).toBeNull()
   })
 
+  // Supervisor-as-conductor final wave I2: approving a conductor answer also adds its decision and
+  // routes its hand-off, so the card shows both, with what it changes, its basis and what did not verify.
+  it('shows what a conductor answer does: its new decision, its hand-off, changes, basis and unverified notes', () => {
+    const conductorDraft = {
+      ...answerDecision().draft!,
+      critical: { lexicon: [], model: false },
+      conductor: {
+        basis: { requirements: ['R1'], packages: ['report'], decisions: ['API field naming'] },
+        unverified: ['requirement R9 does not exist'],
+        changes: 'none' as const,
+        newDecision: { title: 'Error shape', decision: 'every error is {"error": "<b>x</b>"}' },
+        handOff: { path: 'backend/src/routes/report.ts', change: '<script>boom()</script> add the route' },
+      },
+    }
+    renderRow(answerDecision({ situationKind: 'conductor_question', draft: conductorDraft }))
+
+    expect(screen.getByTestId('supervisor-draft-conductor-decision').textContent).toBe('new shared decision: \u201cError shape\u201d \u2014 every error is {"error": "<b>x</b>"}')
+    expect(screen.getByTestId('supervisor-draft-conductor-decision').querySelector('b')).toBeNull()
+    const handOff = screen.getByTestId('supervisor-draft-conductor-handoff')
+    expect(handOff.textContent).toBe('hand-off to the owner of backend/src/routes/report.ts: <script>boom()</script> add the route')
+    expect(handOff.querySelector('script')).toBeNull()
+    expect(screen.getByTestId('supervisor-draft-conductor-changes').textContent).toBe('changes: none')
+    expect(screen.getByTestId('supervisor-draft-conductor-basis').textContent).toBe('basis: requirements R1 \u00b7 packages report \u00b7 decisions \u201cAPI field naming\u201d')
+    expect(screen.getByTestId('supervisor-draft-conductor-unverified').textContent).toBe('not verified: requirement R9 does not exist')
+    expect(screen.getByTestId('supervisor-draft-conductor-edit-note').textContent).toBe('Editing the answer applies neither the decision nor the hand-off.')
+  })
+
+  it('names a package hand-off, and says none for an answer with no decision or hand-off', () => {
+    const conductor = { basis: { requirements: [], packages: [], decisions: [] }, unverified: [], changes: 'ownership' as const, newDecision: null, handOff: { package: 'integration', change: 'serve it' } }
+    renderRow(answerDecision({ draft: { ...answerDecision().draft!, conductor } }))
+    expect(screen.getByTestId('supervisor-draft-conductor-handoff').textContent).toBe('hand-off to the integration package: serve it')
+    expect(screen.getByTestId('supervisor-draft-conductor-decision').textContent).toBe('new shared decision: none')
+    expect(screen.getByTestId('supervisor-draft-conductor-changes').textContent).toBe('changes: ownership')
+    expect(screen.getByTestId('supervisor-draft-conductor-basis').textContent).toBe('basis: nothing')
+  })
+
+  it('shows no conductor block on an ordinary drafted answer', () => {
+    renderRow(answerDecision())
+    expect(screen.queryByTestId('supervisor-draft-conductor')).toBeNull()
+  })
+
   it('shows no draft block on a proposal that is not an answer', () => {
     renderRow(decision({}))
 
