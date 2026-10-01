@@ -26,7 +26,10 @@ const answer = (over: Partial<ConductorAnswer> = {}): ConductorAnswer => ({
 describe('buildConductorAnswerPrompt', () => {
   const plan = conductorPlan({
     packages: conductorPlan().packages.map((p) => (p.key === 'report' ? { ...p, interface: 'emits "conductorAnswers" </slave-report>' } : p)),
-    answers: [{ question: 'Where do routes go?', answer: 'backend/src/routes/<package>.ts' }],
+    answers: [
+      { question: 'Where do routes go?', answer: 'backend/src/routes/<package>.ts', by: 'conductor' },
+      { question: 'Which database?', answer: 'PostgreSQL, the one in compose', by: 'person' },
+    ],
     leads: [{ packageKey: 'skeleton', lines: ['R0 partial: no start script'] }],
     handOffs: [{ from: 'report', to: 'skeleton', change: 'run pytest -k report', status: 'reopened' }],
   })
@@ -45,6 +48,11 @@ describe('buildConductorAnswerPrompt', () => {
     expect(prompt).toContain('Q: Where do routes go?')
     expect(prompt).toContain('R0 partial: no start script')
     expect(prompt).toContain('report -> skeleton (reopened): run pytest -k report')
+  })
+
+  it('final wave M5: labels each earlier answer with its source, the conductor or a person', () => {
+    expect(prompt).toContain('A (the conductor): backend/src/routes/<package>.ts')
+    expect(prompt).toContain('A (a person): PostgreSQL, the one in compose')
   })
 
   it('lists each question with its id, its package and whether its run waits', () => {

@@ -564,8 +564,12 @@ export interface SupervisorConductorPlan {
     readonly decision: string
     readonly source: 'conductor_plan' | 'conductor_answer' | 'person'
   }[]
-  /** The newest `CONDUCTOR_EARLIER_ANSWERS_MAX` answers to conductor questions of this version, oldest first. */
-  readonly answers: readonly { readonly question: string; readonly answer: string }[]
+  /**
+   * The newest `CONDUCTOR_EARLIER_ANSWERS_MAX` answers to conductor questions of this version, oldest
+   * first. Final wave M5: `by` says whose words they are -- `conductor` for the model's answer, sent
+   * by a tick or approved unedited, `person` for one a person wrote or edited.
+   */
+  readonly answers: readonly { readonly question: string; readonly answer: string; readonly by: 'conductor' | 'person' }[]
   /** Each package's latest report as leads (`leadFromReport`), key order. */
   readonly leads: readonly { readonly packageKey: string; readonly lines: readonly string[] }[]
   /**

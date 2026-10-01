@@ -2432,7 +2432,7 @@ describe('loadSupervisorWorld -- goal versions and their verification (Conductor
         requirements: [{ key: 'R1', text: 'csv' }],
         packages: [expect.objectContaining({ key: 'report', ownedPaths: ['r/**'], taskStatus: 'waiting', interface: 'render()' })],
         decisions: [{ title: 'API field naming', decision: 'camelCase', source: 'conductor_plan' }],
-        answers: [{ question: 'which delimiter?', answer: 'a comma' }],
+        answers: [{ question: 'which delimiter?', answer: 'a comma', by: 'conductor' }],
         handOffs: [
           { from: 'api', to: 'report', change: 'add a total row', status: 'reopened' },
           { from: 'api', to: 'report', change: 'rename the column', status: 'delivered' },
@@ -2458,6 +2458,42 @@ describe('loadSupervisorWorld -- goal versions and their verification (Conductor
     expect(world.questions.find((q) => q.messageId === routed.value.id)?.fromHandOffRouting).toBe(true)
     expect(world.questions.find((q) => q.messageId === reported.value.id)?.fromHandOffRouting).toBe(false)
     expect(world.conductorPlans[0]?.packages).toEqual([expect.objectContaining({ key: 'report', handOffReopens: 2 })])
+  })
+
+  // Final wave M5: the batched prompt labels whose words each earlier answer is.
+  it('labels each earlier answer: the conductor\'s (sent by a tick, or approved unedited) or a person\'s (final wave M5)', async (): Promise<void> => {
+    const fixture = await seed()
+    const worker = await seat(fixture, 'Wes', ['implementer'])
+    const pkg = await prisma.workPackage.create({ data: { workspaceId: fixture.workspaceId, goalVersion: 1, key: 'report', title: 'Report', requirementKeys: ['R1'], ownedPaths: ['r/**'], interface: '', templateId: 't-backend' } })
+    const taskId = (await prisma.task.create({ data: { workspaceId: fixture.workspaceId, title: 'Report', description: 'x', status: 'waiting', requiredRole: 'implementer', maxAttempts: 3, assigneeId: worker, workPackageId: pkg.id, goalVersion: 1 } })).id
+    const run = await prisma.slaveRun.create({ data: { slaveId: worker, taskId, status: 'succeeded', kind: 'implementation' } })
+    const answered = async (body: string, answer: string, actor: 'system' | 'human', draft?: object): Promise<void> => {
+      const q = await sendMessage(run.id, { kind: 'question', body, recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId })
+      if (!q.ok) throw new Error('send failed')
+      await prisma.slaveMessage.create({ data: { workspaceId: fixture.workspaceId, slaveId: worker, taskId, threadId: q.value.threadId, replyToId: q.value.id, kind: 'answer', body: answer, actor } })
+      if (draft !== undefined) {
+        await prisma.supervisorDecision.create({
+          data: { workspaceId: fixture.workspaceId, situationKind: 'conductor_question', subjectId: q.value.id, situation: {}, candidates: [], chosenIndex: 0, action: { kind: 'answer_question', messageId: q.value.id }, draft, rationale: 'x', tier: 'proposed', status: 'approved', decidedBy: 'model' },
+        })
+      }
+    }
+    const conductor = { basis: { requirements: ['R1'], packages: [], decisions: [] }, unverified: [], changes: 'none', newDecision: null, handOff: null }
+    const base = { body: 'model words', sources: [], rejectedSources: [], critical: { lexicon: [], model: false }, confidence: 'sourced', conductor }
+    await answered('q1', 'by the tick', 'system')
+    await answered('q2', 'approved as written', 'human', base)
+    await answered('q3', 'edited by Ana', 'human', { ...base, editedBody: 'edited by Ana' })
+    await answered('q4', 'typed by Ana', 'human')
+    const parked = await prisma.slaveRun.create({ data: { slaveId: worker, taskId, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' } })
+    const sent = await sendMessage(parked.id, { kind: 'question', body: 'which port?', recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId })
+    if (!sent.ok) throw new Error('send failed')
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.conductorPlans[0]?.answers.map((a) => [a.answer, a.by])).toEqual([
+      ['by the tick', 'conductor'],
+      ['approved as written', 'conductor'],
+      ['edited by Ana', 'person'],
+      ['typed by Ana', 'person'],
+    ])
   })
 
   it('loads no plan when no conductor question is pending (conductor D9)', async (): Promise<void> => {

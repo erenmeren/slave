@@ -952,8 +952,28 @@ async function loadConductorPlans(tx: Prisma.TransactionClient, workspaceId: str
       },
       orderBy: { seq: 'desc' },
       take: CONDUCTOR_EARLIER_ANSWERS_MAX,
-      select: { body: true, replyTo: { select: { body: true } } },
+      select: { body: true, actor: true, replyToId: true, replyTo: { select: { body: true } } },
     })
+    // Final wave M5: whose words each answer is. A tick sends the conductor's (`system`); a `human`
+    // answer is a person's unless it is a conductor answer a person approved without editing it.
+    const approvedUnedited = new Set(
+      (
+        await tx.supervisorDecision.findMany({
+          where: {
+            workspaceId,
+            situationKind: 'conductor_question',
+            status: 'approved',
+            subjectId: { in: answers.flatMap((row) => (row.actor === 'human' && row.replyToId !== null ? [row.replyToId] : [])) },
+          },
+          select: { subjectId: true, draft: true },
+        })
+      )
+        .filter((row) => {
+          const draft = row.draft as { readonly conductor?: unknown; readonly editedBody?: unknown } | null
+          return draft !== null && typeof draft === 'object' && draft.conductor != null && typeof draft.editedBody !== 'string'
+        })
+        .map((row) => row.subjectId),
+    )
     const handOffs = await tx.packageHandOff.findMany({
       where: { workspaceId, goalVersion },
       orderBy: [{ createdAt: 'desc' }, { sourceKey: 'desc' }],
@@ -975,7 +995,11 @@ async function loadConductorPlans(tx: Prisma.TransactionClient, workspaceId: str
         handOffReopens: p.handOffReopens,
       })),
       decisions,
-      answers: answers.toReversed().map((row) => ({ question: row.replyTo?.body ?? '', answer: row.body })),
+      answers: answers.toReversed().map((row) => ({
+        question: row.replyTo?.body ?? '',
+        answer: row.body,
+        by: row.actor === 'system' || (row.replyToId !== null && approvedUnedited.has(row.replyToId)) ? ('conductor' as const) : ('person' as const),
+      })),
       leads: packages.flatMap((p) => {
         const stored = p.reports[0]
         const lead = stored === undefined ? null : leadFromReport(p.key, stored.report)
