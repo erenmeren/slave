@@ -136,9 +136,10 @@ export interface HandOffView {
 }
 
 /** Human cards plan A D10: the heading a person's requests sit under -- the operator's words, unlike
- *  the workers' requests below {@link HANDOFF_TRUST_LINE}. Still sanitised and bounded like any
+ *  the workers' requests below {@link HANDOFF_TRUST_LINE}: a decision on a card, or an answer typed
+ *  into the answer box that arrived late (final wave minor). Still sanitised and bounded like any
  *  stored text, and still to be done only in the package's own files. */
-export const OPERATOR_HANDOFF_HEADING = 'From the operator (a person decided this on a card; do it in your own files):'
+export const OPERATOR_HANDOFF_HEADING = 'From the operator (a person answered or decided this; do it in your own files):'
 
 /** Who a hand-off is from, as its line and the "more requests" line name it. */
 function fromName(view: HandOffView): string {
@@ -196,12 +197,17 @@ function fitItems(head: string, items: readonly HandOffView[], tail: readonly st
  * Plan A D10: a person's items first, under {@link OPERATOR_HANDOFF_HEADING}, then the workers' under
  * `workerHead`, then `tail`; each part fitted whole by {@link fitItems} within what the part before it
  * left. A block with no operator item is byte-identical to `fitItems(workerHead, items, tail, budget)`.
+ * `operatorOnlyLead` opens a block of a person's items alone -- the line `workerHead` would have
+ * carried that is not the workers' trust line (final wave, finding 8: a rework still says the
+ * package was finished).
  */
-function fitBlocks(workerHead: string, items: readonly HandOffView[], tail: readonly string[], budget: number): HandOffBlock {
+function fitBlocks(workerHead: string, items: readonly HandOffView[], tail: readonly string[], budget: number, operatorOnlyLead: string | null = null): HandOffBlock {
   const operator = items.filter((view) => view.fromOperator === true)
   const workers = items.filter((view) => view.fromOperator !== true)
   if (operator.length === 0) return fitItems(workerHead, workers, tail, budget)
-  const first = fitItems(OPERATOR_HANDOFF_HEADING, operator, workers.length === 0 ? tail : [], budget)
+  const operatorHead = workers.length === 0 && operatorOnlyLead !== null ? `${operatorOnlyLead}
+${OPERATOR_HANDOFF_HEADING}` : OPERATOR_HANDOFF_HEADING
+  const first = fitItems(operatorHead, operator, workers.length === 0 ? tail : [], budget)
   if (workers.length === 0) return first
   const second = fitItems(workerHead, workers, tail, Math.max(0, budget - first.text.length))
   return { text: `${first.text}\n${second.text}`, shownIds: [...first.shownIds, ...second.shownIds] }
@@ -232,6 +238,7 @@ export function renderHandOffRework(items: readonly HandOffView[]): HandOffBlock
     items,
     ['Make each change that is right, in your own files, and say in your report why you left any out. Then finish as your instructions describe.'],
     VERIFICATION_REWORK_MAX_CHARS - 400,
+    'Your package was finished, and has since been asked for these changes:',
   )
 }
 

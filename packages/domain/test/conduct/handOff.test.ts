@@ -186,12 +186,23 @@ describe("a person's hand-off (human cards plan A D10)", () => {
 
   it('never puts the operator under the "not from the operator" line, and ends a rework once', () => {
     const only = renderHandOffRework([operator])
-    expect(only.text.startsWith(OPERATOR_HANDOFF_HEADING)).toBe(true)
+    expect(only.text.split('\n')[1]).toBe(OPERATOR_HANDOFF_HEADING)
     expect(only.text).not.toContain(HANDOFF_TRUST_LINE)
     const both = renderHandOffRework([operator, worker]).text
     expect(both.split('Then finish as your instructions describe.')).toHaveLength(2)
     expect(both.split('\n').at(-1)).toContain('Then finish as your instructions describe.')
     expect(both).not.toContain('from the conductor')
+  })
+
+  it('tells an operator-only rework that its package was finished (final wave, finding 8)', () => {
+    expect(renderHandOffRework([operator]).text.startsWith('Your package was finished')).toBe(true)
+    expect(renderHandOffRework([operator, worker]).text).toContain('Your package was finished')
+    // The contract's block is not a rework: no such line there.
+    expect(renderAskedOfYou([operator]).text.startsWith(OPERATOR_HANDOFF_HEADING)).toBe(true)
+  })
+
+  it('heads a person\'s requests as answered or decided, since a late answer-box answer lands there too (final wave minor)', () => {
+    expect(OPERATOR_HANDOFF_HEADING).toContain('a person answered or decided this')
   })
 
   it('names the operator in the conductor question a person\'s undeliverable hand-off becomes', () => {
