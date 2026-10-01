@@ -15,7 +15,6 @@ import {
   PRUNE_BATCH,
   QUESTION_SITUATION_KINDS,
   READDRESSING_ACTION_KINDS,
-  TERMINAL,
   actionSchema,
   candidateSchema,
   dismissResumeMessage,
@@ -54,7 +53,7 @@ import { requestChange } from './goal.js'
 import { releasePerson } from './persons.js'
 import { discardStaleCandidates, recordMemory } from './memory.js'
 import { answerQuestion, reassignQuestion } from './messaging.js'
-import { announceQuestionClosed, closeQuestionIn, closedByOf, loadQuestionCards, retireQuestionCards, type CloseQuestionInput, type QuestionCard } from './questions.js'
+import { announceQuestionClosed, closeQuestionIn, closedByOf, loadQuestionCards, lockCardQuestion, retireQuestionCards, type CardQuestion, type CloseQuestionInput, type QuestionCard } from './questions.js'
 import { isProviderKind } from './org.js'
 import { setRuntimeRoles } from './profile.js'
 import { setSlavePermission } from './permission.js'
@@ -1278,66 +1277,6 @@ const notPending = (
   resolvedByUserId: row.resolvedByUserId,
 })
 
-/** The question a card is about, as a verdict reads it under the lock. */
-interface CardQuestion {
-  readonly id: string
-  readonly workspaceId: string
-  readonly taskId: string | null
-  readonly slaveId: string
-  readonly body: string
-  readonly createdAt: Date
-  readonly closedAt: Date | null
-  readonly closedReason: QuestionCloseReason | null
-  readonly closedBy: string | null
-  /** The asking task is not done, failed or cancelled (a question with no task counts as live). */
-  readonly askerTaskLive: boolean
-  /** The asking run is paused `waiting_for_answer`. */
-  readonly askerParked: boolean
-}
-
-/**
- * Locks a card's question for a verdict: the Workspace row first (`recordDecision`'s and
- * `answerQuestion`'s lock, so no card is recorded and no answer lands between the read and the
- * close), then the question row (`closeQuestion`'s and `claimTheAnswer`'s). Never the reverse.
- * Null when the message is gone or is not a question.
- */
-async function lockCardQuestion(tx: Prisma.TransactionClient, workspaceId: string, messageId: string): Promise<CardQuestion | null> {
-  await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
-  await tx.$queryRaw`SELECT 1 FROM "SlaveMessage" WHERE id = ${messageId} FOR UPDATE`
-  const message = await tx.slaveMessage.findUnique({
-    where: { id: messageId },
-    select: {
-      id: true,
-      kind: true,
-      workspaceId: true,
-      taskId: true,
-      slaveId: true,
-      senderRunId: true,
-      body: true,
-      createdAt: true,
-      closedAt: true,
-      closedReason: true,
-      closedBy: true,
-      task: { select: { status: true } },
-    },
-  })
-  if (message === null || message.kind !== 'question') return null
-  const asker = message.senderRunId === null ? null : await tx.slaveRun.findUnique({ where: { id: message.senderRunId }, select: { status: true, pauseReason: true } })
-  return {
-    id: message.id,
-    workspaceId: message.workspaceId,
-    taskId: message.taskId,
-    slaveId: message.slaveId,
-    body: message.body,
-    createdAt: message.createdAt,
-    closedAt: message.closedAt,
-    closedReason: message.closedReason,
-    closedBy: message.closedBy,
-    askerTaskLive: message.task === null || !TERMINAL.includes(message.task.status),
-    askerParked: asker?.status === 'paused' && asker.pauseReason === 'waiting_for_answer',
-  }
-}
-
 /** A close a verdict made, to be announced and followed by its retirements after the commit. */
 interface CardClose {
   readonly question: CardQuestion
@@ -1524,6 +1463,9 @@ export async function expirePendingDecisions(workspaceId: string, now: Date): Pr
       })
       if (taken.count === 0) return { taken: false as const }
       if (question === null) return { taken: true as const, close: null }
+      // Final wave, finding 1: a question with a live answer is not timed out by its card's expiry --
+      // the answer settled it, even one stored before an answer closed its question.
+      if ((await tx.slaveMessage.count({ where: { replyToId: question.id, kind: 'answer', supersededAt: null } })) > 0) return { taken: true as const, close: null }
       const action = parsedOrThrow(actionSchema.safeParse(row.action), `SupervisorDecision ${row.id}.action`)
       return { taken: true as const, close: await closeForVerdict(tx, question, { id: row.id, situationKind: row.situationKind, actionKind: action.kind }, 'expired', null, undefined, now) }
     })

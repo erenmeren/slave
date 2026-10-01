@@ -6,6 +6,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { CONDUCTOR_ROLE, LATE_ANSWER_NOTE, QUESTION_SITUATION_KINDS } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { answerQuestion, listPendingQuestions, reportQuestionKey, sendMessage } from '../../src/messaging.js'
+import { expirePendingDecisions } from '../../src/supervisor.js'
 import { closeQuestion, lateAnswerFate, loadQuestionCards, retireClosedQuestionCards, retireQuestionCards } from '../../src/questions.js'
 import { loadSupervisorWorld } from '../../src/supervisorWorld.js'
 
@@ -191,6 +192,60 @@ describe('closing a question (human cards H1)', () => {
     expect(cards.get(timedOut)).toMatchObject({ closed: { reason: 'timed_out', byName: 'Slave' }, lateAnswerNote: null, lateAnswerFate: 'unread' })
     expect(cards.get(byPerson)?.lateAnswerFate).toBe(null)
     expect(cards.get(waiting.value.id)).toMatchObject({ askerWaiting: true, askerRunId: run.id, closed: null, timeoutRefusal: 'workspace halted: emergency_stop' })
+  })
+
+  // Final wave, finding 1: a worker's answer (`sendMessage` kind 'answer', the path
+  // `apps/orchestrator/src/answer.ts` takes) closes its question as a person's does.
+  const peerAnswers = async (f: Fixture, questionId: string, body = 'use camelCase') => {
+    const team = await prisma.slave.findUniqueOrThrow({ where: { id: f.seatId }, select: { teamId: true } })
+    const peer = await prisma.slave.create({ data: { teamId: team.teamId, role: 'Conductor', runtimeRoles: [CONDUCTOR_ROLE], personId: (await prisma.person.create({ data: { name: 'Cleo' } })).id } })
+    const run = await prisma.slaveRun.create({ data: { slaveId: peer.id, status: 'working' } })
+    const asked = await prisma.slaveMessage.findUniqueOrThrow({ where: { id: questionId } })
+    return sendMessage(run.id, { kind: 'answer', body, recipientSlaveId: asked.slaveId, replyToId: questionId, idempotencyKey: `answer:${run.id}:${questionId}` })
+  }
+
+  it('closes a question a worker answered, by the system, and retires its open card (final wave, finding 1)', async () => {
+    const f = await seed()
+    const q = await reportQuestion(f)
+    const open = await card(f, q, 'conductor_question')
+    const sent = await peerAnswers(f, q)
+    expect(sent.ok).toBe(true)
+    expect(await prisma.slaveMessage.findUniqueOrThrow({ where: { id: q } })).toMatchObject({ closedReason: 'answered', closedBy: 'system', closedNote: null })
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: open.id } })).status).toBe('expired')
+    const closedEvents = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'slave_question_closed' } })
+    expect(closedEvents.map((e) => (e.payload as { reason: string; by: string })).map((p) => [p.reason, p.by])).toEqual([['answered', 'system']])
+    // The card no longer waits a day to expire as `timed_out`: an expiry pass a day later finds nothing.
+    expect(await expirePendingDecisions(f.workspaceId, new Date(Date.now() + 25 * 3_600_000))).toBe(0)
+    expect((await prisma.slaveMessage.findUniqueOrThrow({ where: { id: q } })).closedReason).toBe('answered')
+  })
+
+  it('refuses a worker\'s answer to a dismissed question, writing nothing (final wave, finding 1)', async () => {
+    const f = await seed()
+    const q = await reportQuestion(f)
+    await closeQuestion({ messageId: q, reason: 'dismissed', by: 'u1', decisionId: null, note: () => 'x' }, 'human', 'u1')
+    const sent = await peerAnswers(f, q)
+    expect(!sent.ok && sent.error.kind).toBe('question_closed')
+    expect(await prisma.slaveMessage.count({ where: { replyToId: q } })).toBe(0)
+  })
+
+  it('takes a worker\'s late answer on a timed-out question, keeping its reason (final wave, finding 1)', async () => {
+    const f = await seed()
+    const q = await reportQuestion(f)
+    await closeQuestion({ messageId: q, reason: 'timed_out', by: 'system', decisionId: null, note: () => null }, 'system', null)
+    expect((await peerAnswers(f, q)).ok).toBe(true)
+    expect((await prisma.slaveMessage.findUniqueOrThrow({ where: { id: q } })).closedReason).toBe('timed_out')
+  })
+
+  it('does not time out, on its card\'s expiry, a question that has a live answer (final wave, finding 1 guard)', async () => {
+    const f = await seed()
+    const q = await reportQuestion(f)
+    const asked = await prisma.slaveMessage.findUniqueOrThrow({ where: { id: q } })
+    // An answer whose close was never written (one stored before the worker path closed questions).
+    await prisma.slaveMessage.create({ data: { workspaceId: f.workspaceId, taskId: f.taskId, slaveId: f.seatId, recipientSlaveId: f.seatId, threadId: asked.threadId, replyToId: q, kind: 'answer', body: 'yes', actor: 'slave' } })
+    const due = await card(f, q, 'conductor_question')
+    await prisma.supervisorDecision.update({ where: { id: due.id }, data: { expiresAt: new Date(Date.now() - 1000) } })
+    expect(await expirePendingDecisions(f.workspaceId, new Date())).toBe(1)
+    expect((await prisma.slaveMessage.findUniqueOrThrow({ where: { id: q } })).closedAt).toBe(null)
   })
 
   it('stores an answer with a NUL byte stripped instead of refusing it (fix round 1)', async () => {

@@ -16,6 +16,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { Principal } from './principal.js'
+import type { ControlRefusal } from './refusal.js'
 
 /**
  * Human-cards spec H1: a question closes once, and a closed question is pending nowhere. Every close
@@ -79,10 +80,72 @@ export async function announceQuestionClosed(
   })
 }
 
+/** The question a card is about, as a verdict reads it under the lock. */
+export interface CardQuestion {
+  readonly id: string
+  readonly workspaceId: string
+  readonly taskId: string | null
+  readonly slaveId: string
+  readonly body: string
+  readonly createdAt: Date
+  readonly closedAt: Date | null
+  readonly closedReason: QuestionCloseReason | null
+  readonly closedBy: string | null
+  /** The asking task is not done, failed or cancelled (a question with no task counts as live). */
+  readonly askerTaskLive: boolean
+  /** The asking run is paused `waiting_for_answer`. */
+  readonly askerParked: boolean
+}
+
 /**
- * Closes one question on its own (a card verb, an expiry, a timeout): the question row is locked
- * first (`claimTheAnswer`'s mutex), the note is built from the question as stored, and the event
- * follows the commit. True when this call closed it.
+ * The one question lock (final wave, finding 9): the Workspace row first (`recordDecision`'s,
+ * `sendMessage`'s and `answerQuestion`'s lock, so no card is recorded and no answer lands between
+ * the read and the close), then the question row (`claimTheAnswer`'s). Never the reverse: every
+ * close path -- a card verdict, an expiry, {@link closeQuestion}, an answer -- takes it this way.
+ * Taking it again inside a transaction that already holds the Workspace row is a no-op re-lock.
+ * Null when the message is gone or is not a question.
+ */
+export async function lockCardQuestion(tx: Prisma.TransactionClient, workspaceId: string, messageId: string): Promise<CardQuestion | null> {
+  await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
+  await tx.$queryRaw`SELECT 1 FROM "SlaveMessage" WHERE id = ${messageId} FOR UPDATE`
+  const message = await tx.slaveMessage.findUnique({
+    where: { id: messageId },
+    select: {
+      id: true,
+      kind: true,
+      workspaceId: true,
+      taskId: true,
+      slaveId: true,
+      senderRunId: true,
+      body: true,
+      createdAt: true,
+      closedAt: true,
+      closedReason: true,
+      closedBy: true,
+      task: { select: { status: true } },
+    },
+  })
+  if (message === null || message.kind !== 'question') return null
+  const asker = message.senderRunId === null ? null : await tx.slaveRun.findUnique({ where: { id: message.senderRunId }, select: { status: true, pauseReason: true } })
+  return {
+    id: message.id,
+    workspaceId: message.workspaceId,
+    taskId: message.taskId,
+    slaveId: message.slaveId,
+    body: message.body,
+    createdAt: message.createdAt,
+    closedAt: message.closedAt,
+    closedReason: message.closedReason,
+    closedBy: message.closedBy,
+    askerTaskLive: message.task === null || !TERMINAL.includes(message.task.status),
+    askerParked: asker?.status === 'paused' && asker.pauseReason === 'waiting_for_answer',
+  }
+}
+
+/**
+ * Closes one question on its own (a card verb, an expiry, a timeout): the question is locked by
+ * {@link lockCardQuestion} (Workspace, then the question row), the note is built from the question
+ * as stored, and the event follows the commit. True when this call closed it.
  */
 export async function closeQuestion(
   input: Omit<CloseQuestionInput, 'note'> & { readonly note: (question: { readonly body: string; readonly createdAt: Date }) => string | null },
@@ -90,12 +153,11 @@ export async function closeQuestion(
   userId: string | null,
   now: Date = new Date(),
 ): Promise<boolean> {
+  // The workspace is read unlocked to know which row to lock first: a message never changes workspace.
+  const where = await prisma.slaveMessage.findUnique({ where: { id: input.messageId }, select: { workspaceId: true } })
+  if (where === null) return false
   const outcome = await prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT 1 FROM "SlaveMessage" WHERE id = ${input.messageId} FOR UPDATE`
-    const question = await tx.slaveMessage.findUnique({
-      where: { id: input.messageId },
-      select: { workspaceId: true, taskId: true, slaveId: true, body: true, createdAt: true },
-    })
+    const question = await lockCardQuestion(tx, where.workspaceId, input.messageId)
     if (question === null) return null
     const close: CloseQuestionInput = { ...input, note: input.note(question) }
     return (await closeQuestionIn(tx, close, now)) ? { question, close } : null
@@ -163,6 +225,63 @@ export async function answeredRetireReason(client: Prisma.TransactionClient, que
   if (closedReason !== 'timed_out') return RETIRED_BECAUSE.answered
   const fate = await lateAnswerFate(client, questionId)
   return fate === 'unread' ? null : LATE_ANSWER_NOTE[fate]
+}
+
+/**
+ * Final wave, finding 1: what an answer may do to the question it replies to, read under
+ * {@link lockCardQuestion}. Plan A D6: a question a person decided, dismissed or superseded takes no
+ * answer (`refused`); an `answered` one takes a second answer, and a `timed_out` one a late answer
+ * (`open`, either way). `not_a_question`: the reply is to some other message, and closes nothing.
+ * Every caller reads this before its first write, so returning the refusal commits nothing.
+ */
+export type AnswerGate =
+  | { readonly kind: 'refused'; readonly refusal: ControlRefusal }
+  | { readonly kind: 'open'; readonly question: CardQuestion }
+  | { readonly kind: 'not_a_question' }
+
+export async function gateAnswerIn(tx: Prisma.TransactionClient, workspaceId: string, messageId: string): Promise<AnswerGate> {
+  const question = await lockCardQuestion(tx, workspaceId, messageId)
+  if (question === null) return { kind: 'not_a_question' }
+  const { closedAt, closedReason } = question
+  if (closedAt !== null && closedReason !== null && closedReason !== 'answered' && closedReason !== 'timed_out') {
+    return { kind: 'refused', refusal: { kind: 'question_closed', messageId, reason: closedReason, by: question.closedBy ?? CLOSED_BY_SYSTEM, at: closedAt.toISOString() } }
+  }
+  return { kind: 'open', question }
+}
+
+/** An answer's close, made in the answer's transaction and finished by {@link afterAnswered}. */
+export interface AnsweredClose {
+  readonly question: CardQuestion
+  /** The close this answer made; null when the question was closed already (a second or a late answer). */
+  readonly close: CloseQuestionInput | null
+  /** {@link answeredRetireReason}: null keeps the question's cards open. */
+  readonly retireReason: string | null
+}
+
+/**
+ * Inside the answer's transaction, after the answer row: closes the question `answered` (`by`: who
+ * answered, `system` for a worker) and reads, under the same lock, what its cards are retired with.
+ * One rule for every answer -- a person's, the Supervisor's, a worker's.
+ */
+export async function closeAnsweredIn(tx: Prisma.TransactionClient, gate: { readonly question: CardQuestion }, by: string, now: Date): Promise<AnsweredClose> {
+  const close: CloseQuestionInput = { messageId: gate.question.id, reason: 'answered', by, note: null, decisionId: null }
+  const closed = await closeQuestionIn(tx, close, now)
+  const retireReason = await answeredRetireReason(tx, gate.question.id, gate.question.closedReason)
+  return { question: gate.question, close: closed ? close : null, retireReason }
+}
+
+/**
+ * After the answer's commit: the close's one event, then every open card about the question retired
+ * (plan A D5) -- or kept open, when no run will read a late answer. The retirement is said and
+ * swallowed: the answer is out, and the tick's backstop retires what this missed.
+ */
+export async function afterAnswered(answered: AnsweredClose, actor: 'human' | 'system', userId: string | null, now: Date = new Date()): Promise<void> {
+  if (answered.close !== null) await announceQuestionClosed(answered.question, answered.close, actor, userId)
+  try {
+    if (answered.retireReason !== null) await retireQuestionCards(answered.question.workspaceId, answered.question.id, answered.retireReason, now)
+  } catch (error) {
+    console.error(`[messaging] question ${answered.question.id}: its open cards were not retired:`, error)
+  }
 }
 
 /**
