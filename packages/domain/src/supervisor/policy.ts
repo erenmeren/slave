@@ -1,5 +1,7 @@
+import { CONDUCTOR_ROLE } from '../conduct/constants.js'
 import type { Action, Candidate, Tier } from './actions.js'
-import type { SituationKind } from './situations.js'
+import { RULES_ONLY_SITUATION_KINDS } from './constants.js'
+import type { Situation, SituationKind } from './situations.js'
 import type { SupervisorQuestion, SupervisorSlave, SupervisorWorld } from './world.js'
 
 /**
@@ -376,4 +378,14 @@ export function chooseByRules(cands: readonly Candidate[], situationKind: Situat
   if (routine.length === 1) return routine[0]!
   const escalation = cands.findIndex((candidate) => candidate.action.kind === 'escalate_to_human')
   return escalation === -1 ? cands.length - 1 : escalation
+}
+
+/**
+ * Whether the rules alone decide `situation` (Plan 4b I2's list, plus plan B D2): a stale wait on
+ * the conductor is escalated for visibility, never thought about with money -- its answer is the
+ * batch's, and a model choosing between "escalate" and "no action" would only spend.
+ */
+export function decidedByRulesOnly(situation: Situation): boolean {
+  if (RULES_ONLY_SITUATION_KINDS.includes(situation.kind)) return true
+  return situation.kind === 'waiting_stale' && situation.facts['recipientRole'] === CONDUCTOR_ROLE
 }

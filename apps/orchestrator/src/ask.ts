@@ -97,8 +97,9 @@ async function recipientCanAnswer(
   if (role === null) return 'the ask names no recipient'
 
   // Conductor spec R7: nobody holds the conductor's role, by design -- the question is written, and
-  // the Supervisor answers it through `unanswerable_question` in the conductor's own voice. Counting
-  // holders would refuse the one recipient a package worker's prompt tells it to ask.
+  // the Supervisor answers it as a `conductor_question` from the goal version's plan (supervisor-as-
+  // conductor spec C4). Counting holders would refuse the one recipient a package worker's prompt
+  // tells it to ask.
   if (role === CONDUCTOR_ROLE) return null
 
   // A holder of a role is a slave that may be DISPATCHED as one (M37 §5): the roster this run was

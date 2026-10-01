@@ -833,20 +833,25 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
     }
 
     case 'waiting_stale':
-    case 'unanswerable_question': {
+    case 'unanswerable_question':
+    case 'conductor_question': {
       // `subjectId` IS the message id for both question kinds (spec section 2). A situation whose
       // question the world no longer holds cannot be answered or re-addressed -- there is nothing
       // to build a prompt from and nobody to re-address to -- so it falls through to the last
       // resorts rather than offering an action against a question that is not there.
       const question = world.questions.find((pending) => pending.messageId === situation.subjectId)
       if (question === undefined) break
+      // Plan B D2: a stale wait on the conductor is for a person to see; the batch owns the answer.
+      if (situation.kind === 'waiting_stale' && question.recipientRole === CONDUCTOR_ROLE) break
 
       offers.push(
         candidate(
           { kind: 'answer_question', messageId: question.messageId },
           world,
           situation.kind,
-          'The workspace goal, the asking task, the thread and the asker\'s own run context may already hold the answer; the Supervisor drafts one and sends it only if every quote it cites is really there.',
+          question.recipientRole === CONDUCTOR_ROLE
+            ? 'The conductor answers from the goal version\'s plan -- its requirements, packages, ownership and shared decisions -- and a person decides only when the answer would change one of them.'
+            : 'The workspace goal, the asking task, the thread and the asker\'s own run context may already hold the answer; the Supervisor drafts one and sends it only if every quote it cites is really there.',
         ),
       )
 

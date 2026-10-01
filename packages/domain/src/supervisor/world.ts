@@ -374,6 +374,21 @@ export interface SupervisorQuestion {
    * `SupervisorWorld.slaves`.
    */
   readonly holders: readonly string[]
+  /**
+   * Supervisor-as-conductor plan B: the goal version the question belongs to -- the asking task's
+   * package's version, else the task's own stamp -- so a conductor question is answered from THAT
+   * version's plan and never from another's. Null for a task with no version (a planner-graph task).
+   */
+  readonly goalVersion: number | null
+  /** Plan B: the asking task's package key, null for a task with no package. The answer prompt
+   *  names who asked, and a hand-off in the answer comes FROM this package. */
+  readonly askerPackageKey: string | null
+  /**
+   * Plan B (spec C5): the asking run is parked on this question (`paused`, `waiting_for_answer`).
+   * A REPORT question never is -- its run finished -- which is why only a parked asker raises the
+   * conductor's `waiting_stale`: nobody is waiting on a report question, so its age means nothing.
+   */
+  readonly askerWaiting: boolean
 }
 
 /** A recent `SupervisorDecision`, as much of it as {@link filterFresh} and {@link summarise} need. */
@@ -504,6 +519,58 @@ export interface SupervisorGoalDelivery {
     readonly unverifiable: number
     readonly failedKeys: readonly string[]
   } | null
+}
+
+/**
+ * Supervisor-as-conductor plan B: one work package of a conducted goal version, as a conductor
+ * answer needs it. It carries `key`, `ownedPaths` and `isIntegration`, so it is also a Plan A
+ * `HandOffOwner` -- an answer's hand-off resolves against exactly the packages shown to the model.
+ */
+export interface SupervisorPlanPackage {
+  readonly key: string
+  readonly title: string
+  readonly requirementKeys: readonly string[]
+  readonly ownedPaths: readonly string[]
+  readonly isIntegration: boolean
+  readonly interface: string
+  readonly dependsOn: readonly string[]
+  /** The package task's status (plan A D2: its oldest task), or null when it has none. A hand-off
+   *  to a package whose task is gone or failed would only come back as a new question (ruling F5). */
+  readonly taskStatus: string | null
+}
+
+/**
+ * Supervisor-as-conductor plan B (spec C4): everything a goal version's conductor question may be
+ * answered from -- the version's requirements, packages, shared decisions, earlier answers, the
+ * packages' reports and recent hand-offs. Every list is bounded by the loader, so one batched
+ * answer call cannot grow with the age of the version.
+ */
+export interface SupervisorConductorPlan {
+  readonly goalVersion: number
+  readonly requirements: readonly { readonly key: string; readonly text: string }[]
+  readonly packages: readonly SupervisorPlanPackage[]
+  readonly decisions: readonly {
+    readonly title: string
+    readonly decision: string
+    readonly source: 'conductor_plan' | 'conductor_answer' | 'person'
+  }[]
+  /** The newest `CONDUCTOR_EARLIER_ANSWERS_MAX` answers to conductor questions of this version, oldest first. */
+  readonly answers: readonly { readonly question: string; readonly answer: string }[]
+  /** Each package's latest report as leads (`leadFromReport`), key order. */
+  readonly leads: readonly { readonly packageKey: string; readonly lines: readonly string[] }[]
+  /**
+   * The newest `CONDUCTOR_PLAN_HANDOFFS_MAX` hand-offs of this version, oldest first.
+   *
+   * LOADER CONTRACT (ruling F7): `status` is the RECORDED status (Plan A `recordedHandOffStatus`),
+   * never the raw column -- a settled reopen stores `delivered` with `reopenedAt` set, and showing
+   * it as "delivered" would tell the conductor the change arrived when the package was reopened.
+   */
+  readonly handOffs: readonly {
+    readonly from: string | null
+    readonly to: string | null
+    readonly change: string
+    readonly status: string
+  }[]
 }
 
 /**
@@ -654,6 +721,10 @@ export interface SupervisorWorld {
   /** Conductor Plan 4b (R11): the goal versions still open -- see {@link SupervisorGoalDelivery}'s
    *  loader contract. EMPTY on a planner-graph project, which has none. */
   readonly goalDeliveries: readonly SupervisorGoalDelivery[]
+  /** Supervisor-as-conductor plan B D9 (R11): the plan of every goal version a pending conductor
+   *  question belongs to. EMPTY unless such a question is pending -- the loader does not pay for
+   *  a version's plan on a tick with nothing to answer from it. */
+  readonly conductorPlans: readonly SupervisorConductorPlan[]
 }
 
 /**

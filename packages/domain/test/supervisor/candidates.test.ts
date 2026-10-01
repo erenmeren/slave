@@ -720,18 +720,23 @@ describe('candidates -- questions', () => {
     })
   })
 
-  it('offers only the sourced answer and escalation for a question to the conductor: nobody is hired to hold its role', () => {
-    // A staffable idle slave is in the world, so the staffing offers WOULD appear for any other
-    // unheld role. The conductor's role is held by nobody by design (spec R7).
+  it('offers only the answer and the last resorts for a question to the conductor (spec C4)', () => {
     const w = world({
       questions: [question({ askerSlaveId: 's9', recipientRole: 'conductor', holders: [] })],
       slaves: [ASKER, IDLE_HOLDER],
       tasks: [ASKING_TASK],
     })
-    expect(observe(w)[0]?.kind).toBe('unanswerable_question')
-    const cands = offered(w)
+    const situation = observe(w)[0]!
+    expect(situation.kind).toBe('conductor_question')
+    const cands = candidates(situation, w)
     expect(kinds(cands)).toEqual(['answer_question', 'escalate_to_human', 'no_action'])
     expect(cands[0]?.action).toEqual({ kind: 'answer_question', messageId: 'm1' })
+  })
+
+  it('offers no answer on a waiting_stale about the conductor: the batch owns the answer (plan B D2)', () => {
+    const w = world({ questions: [question({ createdAt: STALE, recipientRole: 'conductor', askerWaiting: true })] })
+    const stale = observe(w).find((s) => s.kind === 'waiting_stale')!
+    expect(kinds(candidates(stale, w))).toEqual(['escalate_to_human', 'no_action'])
   })
 
   it('offers nothing but the last resorts when the world no longer holds the question', () => {

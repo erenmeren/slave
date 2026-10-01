@@ -354,15 +354,23 @@ describe('observe -- unanswerable_question', () => {
     expect(keys(observe(w))).toEqual([['unanswerable_question', 'm1']])
   })
 
-  it('names the conductor as the conductor, not as a role nobody holds', () => {
+  it('observes a question to the conductor as conductor_question, at once, not as a role nobody holds (spec C4)', () => {
     const w = world({
-      questions: [question({ createdAt: NOW, recipientRole: 'conductor' })],
+      questions: [question({ createdAt: NOW, recipientRole: 'conductor', goalVersion: 1, askerPackageKey: 'report' })],
       slaves: [slave({ runtimeRoles: ['backend'] })],
     })
-    const [situation] = observe(w)
-    expect(situation?.kind).toBe('unanswerable_question')
-    expect(situation?.summary).toContain('the conductor')
-    expect(situation?.summary).not.toContain('"conductor" role')
+    const situations = observe(w)
+    expect(keys(situations)).toEqual([['conductor_question', 'm1']])
+    expect(situations[0]?.summary).toContain('the conductor')
+    expect(situations[0]?.facts).toMatchObject({ goalVersion: 1, askerWaiting: false })
+  })
+
+  it('also raises waiting_stale for a run parked on the conductor for more than 30 minutes, never for a report question (spec C5)', () => {
+    const old = NOW - WAITING_STALE_MS - 60_000
+    const parked = observe(world({ questions: [question({ createdAt: old, recipientRole: 'conductor', askerWaiting: true })] }))
+    expect(keys(parked)).toEqual([['waiting_stale', 'm1'], ['conductor_question', 'm1']])
+    const reported = observe(world({ questions: [question({ createdAt: old, recipientRole: 'conductor', askerWaiting: false })] }))
+    expect(keys(reported)).toEqual([['conductor_question', 'm1']])
   })
 
   it('reports a question addressed to a slave that is not in the workspace', () => {

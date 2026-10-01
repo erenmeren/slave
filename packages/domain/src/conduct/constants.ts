@@ -1,9 +1,10 @@
 import { SUPERVISOR_PER_CALL_CAP_USD } from '../supervisor/constants.js'
 
 /**
- * The role a question to the conductor is addressed to (spec R7). No seat ever holds it, so a
- * question to it is `unanswerable_question` the moment it is written, and the Supervisor's sourced
- * answer path -- the conductor's own voice -- answers it.
+ * The role a question to the conductor is addressed to (spec R7). No seat ever holds it, by design,
+ * so a question to it is a `conductor_question` the moment it is written (supervisor-as-conductor
+ * spec C4) -- never `unanswerable_question` -- and the conductor answers it from the goal version's
+ * plan, in one batched call per version.
  */
 export const CONDUCTOR_ROLE = 'conductor'
 

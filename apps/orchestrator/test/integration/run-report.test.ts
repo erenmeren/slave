@@ -344,7 +344,7 @@ describe('a package run files its report before verify', () => {
     const pending = await listPendingQuestions(f.workspaceId)
     expect(pending.ok && pending.value.map((m) => m.id)).toEqual([question.id])
     const { world } = await loadSupervisorWorld(f.workspaceId, new Date())
-    expect(observe(world).some((s) => s.kind === 'unanswerable_question' && s.subjectId === question.id)).toBe(true)
+    expect(observe(world).some((s) => s.kind === 'conductor_question' && s.subjectId === question.id)).toBe(true)
 
     const answered = await answerQuestion(question.id, { body: 'Yes, omit them.', answeredBy: 'test' })
     expect(answered.ok).toBe(true)

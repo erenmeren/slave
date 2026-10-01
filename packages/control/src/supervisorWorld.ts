@@ -1537,6 +1537,11 @@ export async function loadSupervisorWorld(
             // handoff must not take the Supervisor's mailbox down.
             taskHandoff: task?.handoff ?? null,
             holders: holdersOf(row, task?.requiredRole ?? null, slaves),
+            // PLACEHOLDER (plan B Task 2): Task 4 loads the version, the package and whether the
+            // asker is parked. Until then no conductor question has a version or a parked asker.
+            goalVersion: null,
+            askerPackageKey: null,
+            askerWaiting: false,
           }
         }),
         decisions: decisionRows.map((row) => ({
@@ -1564,6 +1569,9 @@ export async function loadSupervisorWorld(
         staffingPreferences,
         evidence,
         goalDeliveries: await loadGoalDeliveries(tx, workspaceId),
+        // PLACEHOLDER (plan B Task 2): Task 4 loads the plan of every version a pending conductor
+        // question belongs to, with each hand-off's recorded status (ruling F7).
+        conductorPlans: [],
       }
 
       return {
