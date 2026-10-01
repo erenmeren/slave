@@ -16,6 +16,7 @@ import {
   neutraliseMarkers,
   promotionFor,
   readsAsPlatform,
+  sanitisePersonText,
   situationSchema,
   type Action,
   type Candidate,
@@ -34,6 +35,7 @@ import { appendEvent } from '@slave-of-ai/events'
 import type { ProviderKind } from '@slave-of-ai/providers'
 import { steerRun } from './breaker.js'
 import { hireFromTemplate, seatMember, mergeRuntimeRoles } from './capability.js'
+import { applyConductorOutcome } from './conductorAnswer.js'
 import { clearHalt } from './emergency.js'
 import { requestChange } from './goal.js'
 import { releasePerson } from './persons.js'
@@ -460,8 +462,23 @@ async function carryOut(
       )
     case 'mark_task_failed':
       return reached(await failTask(action.taskId, action.reason, origin, principal))
-    case 'answer_question':
-      return reached(await sendDraftedAnswer(action.messageId, decision, origin, principal))
+    case 'answer_question': {
+      const sent = await sendDraftedAnswer(action.messageId, decision, origin, principal)
+      // Supervisor-as-conductor plan B D7: a conductor answer's decision and hand-off follow the
+      // answer out -- unless a person replaced the model's words (an edit), which applies neither
+      // (plan-writer ruling). Outside any lock: the routing takes the delivery's, which is not
+      // re-entrant. A failure here is said and swallowed: the answer is already out, and the goal
+      // pass routes a hand-off that never landed (`routeStoredHandOffs`, F4).
+      const conductor = decision.draft?.conductor
+      if (sent.ok && conductor !== undefined && decision.draft?.editedBody === undefined) {
+        try {
+          await applyConductorOutcome({ workspaceId: decision.workspaceId, decisionId: decision.id, messageId: action.messageId, conductor })
+        } catch (error) {
+          console.error(`[supervisor] decision ${decision.id}: the conductor answer's decision or hand-off was not recorded:`, error)
+        }
+      }
+      return reached(sent)
+    }
     case 'reassign_question':
       return reached(
         await reassignQuestion(action.messageId, action.toSlaveId, SUPERVISOR_ACTOR, origin, principal, decision.id),
@@ -802,7 +819,10 @@ async function sendDraftedAnswer(
 ): Promise<Result<unknown, ControlRefusal>> {
   const written = sendableBody(decision.draft)
   if (written === null) return err({ kind: 'draft_missing', decisionId: decision.id })
-  const body = neutraliseMarkers(written)
+  // Controller ruling F8: the conductor's own words are defused whole -- markers and routing
+  // literals -- whatever wrote the stored draft (the judging already did; both defuses are
+  // idempotent, so nothing is escaped twice). A person's edit is a person's, as on every answer.
+  const body = decision.draft?.conductor !== undefined && decision.draft.editedBody === undefined ? sanitisePersonText(written) : neutraliseMarkers(written)
   if (body.length > ANSWER_MAX_CHARS) return err({ kind: 'invalid_message_body' })
   return answerQuestion(
     messageId,

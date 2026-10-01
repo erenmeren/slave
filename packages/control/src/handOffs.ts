@@ -4,12 +4,14 @@ import {
   HANDOFF_EVENT_CHANGE_MAX_CHARS,
   HANDOFF_REOPENS_MAX,
   handOffFingerprint,
+  handOffItemSchema,
   renderHandOffQuestion,
   renderHandOffRework,
   resolveHandOff,
   storableText,
   trimToFit,
   reportedHandOffSchema,
+  type HandOffItem,
   type HandOffView,
   type ReportedHandOff,
 } from '@slave-of-ai/domain'
@@ -250,7 +252,8 @@ export async function routeHandOffs(input: RouteHandOffsInput): Promise<readonly
  * position (`report:<runId>:0`; a routing stores a report's items in one transaction, so the first
  * row stands for all of them) is routed now. One query, and nothing else, when there is nothing to
  * route. Idempotent by `sourceKey`, like the filing it stands in for, and it must run with no lock
- * held (`routeHandOffs`'s rule).
+ * held (`routeHandOffs`'s rule). Then the same for carried-out conductor answers (F4,
+ * {@link routeStoredAnswerHandOffs}).
  */
 export async function routeStoredHandOffs(deliveryId: string): Promise<void> {
   const unrouted = await prisma.$queryRaw<{ runId: string; handOffs: unknown; packageKey: string; workspaceId: string; goalVersion: number }[]>`
@@ -279,6 +282,86 @@ export async function routeStoredHandOffs(deliveryId: string): Promise<void> {
       fromRunId: report.runId,
       fromPackageKey: report.packageKey,
       items: items.flatMap((item) => (item.success ? [item.data] : [])),
+    })
+  }
+  await routeStoredAnswerHandOffs(deliveryId)
+}
+
+/** Plan B D7: the key prefix an answer's hand-off is stored under; its one item is `answer:<decisionId>:0`. */
+export function answerHandOffSourceKey(decisionId: string): string {
+  return `answer:${decisionId}`
+}
+
+/**
+ * Plan B D7: routes a carried-out conductor answer's hand-off from the run that asked. The asker's
+ * own package counts as `own` only while that run is parked on the question (the answer itself
+ * carries the change to it); a finished asker's package is reopened like any other. Idempotent by
+ * {@link answerHandOffSourceKey}, and must run with no delivery lock held ({@link routeHandOffs}).
+ */
+export async function routeAnswerHandOff(input: {
+  readonly workspaceId: string
+  readonly goalVersion: number
+  readonly decisionId: string
+  readonly fromRunId: string
+  readonly askerPackageKey: string | null
+  readonly handOff: HandOffItem
+}): Promise<void> {
+  const asker = await prisma.slaveRun.findUnique({ where: { id: input.fromRunId }, select: { status: true, pauseReason: true } })
+  const parked = asker?.status === 'paused' && asker.pauseReason === 'waiting_for_answer'
+  await routeHandOffs({
+    workspaceId: input.workspaceId,
+    goalVersion: input.goalVersion,
+    source: 'answer',
+    sourceKey: answerHandOffSourceKey(input.decisionId),
+    fromRunId: input.fromRunId,
+    fromPackageKey: parked ? input.askerPackageKey : null,
+    items: [input.handOff],
+  })
+}
+
+/**
+ * Controller ruling F4 (spec C2, "never dropped"): an applied conductor answer's hand-off is routed
+ * once, after the answer went out, and a failure there (a busy delivery lock) is logged and
+ * swallowed -- this is its backstop, on the goal pass beside the reports'. One query: the version's
+ * conductor answers that were carried out (`applied`, or `approved` with no edit -- an edited
+ * approval applies no hand-off, plan-writer ruling), whose answer is on record, whose draft carries
+ * a hand-off, and that have no row at `answer:<decisionId>:0`. Idempotent by that key.
+ */
+async function routeStoredAnswerHandOffs(deliveryId: string): Promise<void> {
+  const unrouted = await prisma.$queryRaw<
+    { id: string; workspaceId: string; goalVersion: number; handOff: unknown; senderRunId: string; packageKey: string | null }[]
+  >`
+    SELECT s.id, s."workspaceId", d."goalVersion", s.draft -> 'conductor' -> 'handOff' AS "handOff", m."senderRunId", p.key AS "packageKey"
+    FROM "GoalDelivery" d
+    JOIN "SupervisorDecision" s ON s."workspaceId" = d."workspaceId" AND s."situationKind" = 'conductor_question'
+    JOIN "SlaveMessage" m ON m.id = s.action ->> 'messageId'
+    JOIN "Task" t ON t.id = m."taskId"
+    LEFT JOIN "WorkPackage" p ON p.id = t."workPackageId"
+    WHERE d.id = ${deliveryId}
+      AND s.status IN ('applied', 'approved')
+      AND s.action ->> 'kind' = 'answer_question'
+      AND jsonb_typeof(s.draft -> 'conductor' -> 'handOff') = 'object'
+      AND jsonb_typeof(s.draft -> 'editedBody') IS DISTINCT FROM 'string'
+      AND m."senderRunId" IS NOT NULL
+      AND COALESCE(p."goalVersion", t."goalVersion") = d."goalVersion"
+      AND EXISTS (SELECT 1 FROM "SlaveMessage" a WHERE a."replyToId" = m.id AND a.kind = 'answer')
+      AND NOT EXISTS (
+        SELECT 1 FROM "PackageHandOff" h WHERE h."workspaceId" = d."workspaceId" AND h."sourceKey" = 'answer:' || s.id || ':0'
+      )
+    ORDER BY s."createdAt", s.id`
+  for (const row of unrouted) {
+    const handOff = handOffItemSchema.safeParse(row.handOff)
+    if (!handOff.success) {
+      console.error(`[hand-off] decision ${row.id}: its conductor answer's hand-off cannot be read -- not routed`)
+      continue
+    }
+    await routeAnswerHandOff({
+      workspaceId: row.workspaceId,
+      goalVersion: row.goalVersion,
+      decisionId: row.id,
+      fromRunId: row.senderRunId,
+      askerPackageKey: row.packageKey,
+      handOff: handOff.data,
     })
   }
 }
