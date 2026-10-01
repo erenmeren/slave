@@ -8,8 +8,13 @@
 import { rejectDecision, reportQuestionKey, sendMessage, type ModelDecider, type ModelOutcome } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { CONDUCTOR_ROLE, COOLDOWN_MS, WAITING_STALE_MS } from '@slave-of-ai/domain'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { deliverAnswers } from '../../src/deliver.js'
+import { buildRunContext } from '../../src/runContext.js'
 import { supervise } from '../../src/supervisor.js'
 
 const answerJson = (entries: object[]): ModelOutcome => ({ kind: 'answer', text: JSON.stringify({ conductorAnswers: entries }), costUsd: 0.05, tokens: null, numTurns: 1 })
@@ -348,5 +353,41 @@ describe('answerConductorQuestions (spec C4)', () => {
     const report = await supervise({ workspaceId: f.workspaceId, decider: model.decider, model: 'm', now: () => late })
     expect(report.answered).toBe(2)
     expect(await prisma.supervisorDecision.count({ where: { subjectId: f.qPaused, situationKind: 'waiting_stale' } })).toBe(0)
+  })
+
+  it('puts an answer\'s new decision in the next package\'s contract (spec §6)', async () => {
+    const f = await seed()
+    const model = scripted((prompt) => answerJson(idsIn(prompt).map((id) => ok(id, id === f.qReport ? { newDecision: { title: 'Error shape', decision: '{"error":{"code","message"}}' } } : {}))))
+    await supervise({ workspaceId: f.workspaceId, decider: model.decider, model: 'm', now: () => f.now })
+    const run = await prisma.slaveRun.create({ data: { taskId: f.integrationTaskId, slaveId: f.seatId, status: 'starting' } })
+    // The run context writes into the worktree's git exclude file, so the directory must be a repository.
+    const worktreePath = mkdtempSync(join(tmpdir(), 'conductor-answers-'))
+    execFileSync('git', ['init', '-q', worktreePath])
+    const built = await buildRunContext({
+      runId: run.id as never,
+      kind: 'implementation',
+      slaveId: f.seatId as never,
+      workspaceId: f.workspaceId as never,
+      taskId: f.integrationTaskId as never,
+      worktreePath,
+      provider: 'claude_code',
+    })
+    rmSync(worktreePath, { recursive: true, force: true })
+    expect(built.prompt).toContain('- Error shape:')
+  })
+
+  it('routes an answer\'s hand-off for a finished task to the package that owns the change, and never delivers that answer (spec C4)', async () => {
+    const f = await seed()
+    const model = scripted((prompt) => answerJson(idsIn(prompt).map((id) => ok(id, id === f.qReport ? { handOff: { package: 'integration', change: 'serve frontend/dist at /' } } : {}))))
+    await supervise({ workspaceId: f.workspaceId, decider: model.decider, model: 'm', now: () => f.now })
+    const rows = await prisma.packageHandOff.findMany({ where: { workspaceId: f.workspaceId } })
+    expect(rows).toEqual([expect.objectContaining({ source: 'answer', toPackageKey: 'integration', status: 'pending', change: 'serve frontend/dist at /' })])
+    const events = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_package_handed_off' } })
+    expect(events.map((e) => (e.payload as { source: string; fromPackage: unknown }).source)).toEqual(['answer'])
+    const decision = await prisma.supervisorDecision.findFirstOrThrow({ where: { subjectId: f.qReport, situationKind: 'conductor_question' } })
+    expect(decision.tier).toBe('applied')
+    await deliverAnswers(f.workspaceId)
+    const finished = await prisma.slaveMessage.findMany({ where: { replyToId: f.qReport, kind: 'answer' } })
+    expect(finished.every((m) => m.deliveredAt === null)).toBe(true)
   })
 })
