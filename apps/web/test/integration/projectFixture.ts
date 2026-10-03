@@ -28,6 +28,8 @@ export interface SeedOptions {
   readonly supervisorEnabled?: boolean
   /** The role the seeded worker holds, in `role` and in `runtimeRoles`. */
   readonly role?: string
+  /** `Workspace.name`, which is unique: a test seeding several projects names each. */
+  readonly name?: string
 }
 
 /** Every table the three suites write, in FK order. `SupervisorDecision`, `GoalVersion` and
@@ -44,7 +46,7 @@ export async function seedWorkspace(options: SeedOptions = {}): Promise<ProjectF
   const role = options.role ?? 'dev'
   const workspace = await prisma.workspace.create({
     data: {
-      name: 'Checkout Platform',
+      name: options.name ?? 'Checkout Platform',
       repoPath: '/tmp/m45-fixture-does-not-need-to-exist',
       verifyCommands: ['true'],
       setupCommands: [],
@@ -55,7 +57,8 @@ export async function seedWorkspace(options: SeedOptions = {}): Promise<ProjectF
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const person = await prisma.person.create({ data: { name: 'Alex' } })
+  // `Person.name` is unique too: a project seeded under its own name gets its own person.
+  const person = await prisma.person.create({ data: { name: options.name === undefined ? 'Alex' : `Alex of ${options.name}` } })
   const slave = await prisma.slave.create({ data: { teamId: team.id, role, runtimeRoles: [role], personId: person.id } })
   return { workspaceId: workspace.id, teamId: team.id, slaveId: slave.id, personId: person.id }
 }

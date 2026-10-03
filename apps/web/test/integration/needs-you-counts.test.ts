@@ -1,4 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
+import { SITUATION_KINDS } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildHomeSnapshot } from '../../src/server/home.js'
 import { buildNeedsYou, type NeedsYouItem } from '../../src/server/needsYou.js'
@@ -145,6 +146,61 @@ describe('one queue, one set of numbers (human cards H4)', () => {
     expect(strip).toEqual([])
     expect(sidebar?.blockingCount).toBe(0)
     expect(home.needsYou.filter((item) => item.workspaceId === fixture.workspaceId)).toEqual([])
+  })
+
+  // Fix round 2: the sidebar runs in the root layout -- one project whose queue cannot be built
+  // must not fail the sidebar, the layout or Home for every project.
+  it("survives one project's queue failing: every project listed, the failing one on its fallback count", async (): Promise<void> => {
+    const broken = await seedWorkspace({ autoMerge: false, name: 'Broken' })
+    const healthy = await seedWorkspace({ autoMerge: false, name: 'Healthy' })
+    for (const { workspaceId } of [broken, healthy]) {
+      const blocked = await task(workspaceId, { title: 'Wire the webhook', status: 'blocked', goalVersion: 1 })
+      await card(workspaceId, 'task_blocked_human', blocked, new Date(Date.UTC(2026, 9, 3, 8, 0)))
+    }
+    const delegate = prisma.workspace as unknown as { findUnique: (args: { where: { id?: string } }) => Promise<unknown> }
+    const original = delegate.findUnique
+    const errors: unknown[] = []
+    const originalError = console.error
+    delegate.findUnique = async (args) => {
+      if (args.where.id === broken.workspaceId) throw new Error('the world would not load')
+      return original.call(prisma.workspace, args)
+    }
+    console.error = (...args: unknown[]): void => void errors.push(args)
+    try {
+      const tree = await buildSidebarTree()
+      const home = await buildHomeSnapshot()
+
+      expect(tree.map((row) => row.id).sort()).toEqual([broken.workspaceId, healthy.workspaceId].sort())
+      // Exact where the queue was read: one row (the task and its card merged). The fallback where
+      // it was not: the blocked task and its card, counted with no world.
+      expect(tree.find((row) => row.id === healthy.workspaceId)?.blockingCount).toBe(1)
+      expect(tree.find((row) => row.id === broken.workspaceId)?.blockingCount).toBe(2)
+      // Home renders: the healthy project's row, none for the broken one.
+      expect(home.needsYou.map((item) => item.workspaceId)).toEqual([healthy.workspaceId])
+      expect(errors.some((entry) => String((entry as unknown[])[0]).includes(broken.workspaceId))).toBe(true)
+    } finally {
+      delegate.findUnique = original
+      console.error = originalError
+    }
+  })
+
+  // Fix round 2: the sidebar reads a project's queue only where `mayHaveBlockingRow` says a row can
+  // block. For a card of EVERY situation kind, the count it shows is the queue's -- a kind the queue
+  // starts to call blocking without the pre-filter knowing it would fail here.
+  it('agrees with the queue for a card of every situation kind', async (): Promise<void> => {
+    const projects: { readonly kind: string; readonly workspaceId: string }[] = []
+    for (const kind of SITUATION_KINDS) {
+      const { workspaceId } = await seedWorkspace({ autoMerge: false, name: `Project ${kind}` })
+      await card(workspaceId, kind, `${workspaceId}:v1:${kind}`, new Date(Date.UTC(2026, 9, 3, 8, 0)))
+      projects.push({ kind, workspaceId })
+    }
+
+    const tree = await buildSidebarTree()
+
+    for (const { kind, workspaceId } of projects) {
+      const strip = await buildNeedsYou(workspaceId)
+      expect({ kind, count: tree.find((row) => row.id === workspaceId)?.blockingCount }).toEqual({ kind, count: strip.filter((row) => row.blocking).length })
+    }
   })
 
   it('counts nothing for an empty queue', async (): Promise<void> => {

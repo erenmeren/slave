@@ -104,8 +104,15 @@ export async function buildHomeSnapshot(
   const queues = await Promise.all(
     hot.map(async (row): Promise<readonly HomeNeedsYouItem[]> => {
       // The sidebar already built this project's queue when it had to count its blocking rows.
-      const items = built.get(row.id) ?? (await buildNeedsYou(row.id, now))
-      return items.map((item) => ({ ...item, workspaceId: row.id, workspaceName: row.name }))
+      // Fix round 2: a queue that cannot be built leaves its project without rows -- logged, never
+      // a Home that fails for everyone.
+      try {
+        const items = built.get(row.id) ?? (await buildNeedsYou(row.id, now))
+        return items.map((item) => ({ ...item, workspaceId: row.id, workspaceName: row.name }))
+      } catch (cause) {
+        console.error(`home: the needs-you queue of project ${row.id} could not be built; it is listed without rows`, cause)
+        return []
+      }
     }),
   )
   const needsYou = queues.flat().sort((a, b) => Number(b.blocking) - Number(a.blocking) || Date.parse(a.since) - Date.parse(b.since))

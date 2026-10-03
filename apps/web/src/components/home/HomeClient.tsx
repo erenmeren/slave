@@ -69,6 +69,11 @@ export function HomeClient({
   const [needsYouError, setNeedsYouError] = useState<string | null>(null)
   /** A card somebody else settled first (human cards spec §4): information, never the red band. */
   const [needsYouNotice, setNeedsYouNotice] = useState<string | null>(null)
+  // Fix round 2: a fresh snapshot (the poll, a refresh) clears an old refusal -- the list it refused
+  // on has been read again, and a red line with nothing left to act on is noise. The notice stays.
+  useEffect((): void => {
+    setNeedsYouError(null)
+  }, [snapshot])
 
   // The header's primary action (M57 R7's idiom): a `Button`, not a bare `<button>`, PUSHED
   // through the URL rather than local-state-only -- the SAME `?new=1` mechanism
@@ -151,8 +156,19 @@ export function HomeClient({
           className="rounded-surface border border-accent/35 bg-accent/10 px-3.5 py-2.5"
         >
           {needsYouError !== null && (
-            <p role="alert" data-testid="needs-you-error" className="type-meta mb-[var(--gap-1)] text-s-blocked">
-              {needsYouError}
+            <p className="type-meta mb-[var(--gap-1)] flex items-start gap-2 text-s-blocked">
+              <span role="alert" data-testid="needs-you-error" className="min-w-0 flex-1">
+                {needsYouError}
+              </span>
+              <button
+                type="button"
+                data-testid="needs-you-error-dismiss"
+                aria-label="dismiss this error"
+                onClick={() => setNeedsYouError(null)}
+                className="shrink-0 text-t3 hover:text-t1"
+              >
+                ×
+              </button>
             </p>
           )}
           {needsYouNotice !== null && (

@@ -157,13 +157,20 @@ export function NeedsYouRow({
         )}
         {isDecision && !item.questionCard && !item.oneClick && <span className="flex flex-none">{decideLink}</span>}
       </div>
-      {item.questionCard && item.oneClick && item.draftPreview !== null && (
-        // Task 9 fix round 1: the words "Send this answer" sends, as text -- a person must not send
-        // what they cannot see. Bounded by the server (`DRAFT_PREVIEW_MAX_CHARS`); the whole draft
-        // is on the card behind "decide".
-        <p data-testid="needs-you-draft" className="ml-[14px] line-clamp-2 break-words text-t2">
-          {`Sends: “${item.draftPreview}”`}
-        </p>
+      {item.questionCard && item.draftPreview !== null && (
+        // Task 9 fix rounds 1-2: the words "Send this answer" sends, ALL of them, as text -- a person
+        // must not send what they cannot see. Bounded by the server (`DRAFT_PREVIEW_MAX_CHARS`); a
+        // longer draft is cut, says so, and has no one click: it is read and sent on the card.
+        <div className="ml-[14px] flex flex-col gap-[2px] text-t2">
+          <p data-testid="needs-you-draft" className="whitespace-pre-wrap break-words">
+            {`${item.draftPreviewCut ? 'The draft begins' : 'Sends'}: “${item.draftPreview}”`}
+          </p>
+          {item.draftPreviewCut && (
+            <p data-testid="needs-you-draft-cut" className="text-t1">
+              The answer is longer than this: read all of it on the card (decide) before it is sent.
+            </p>
+          )}
+        </div>
       )}
       {item.merged.length > 0 && (
         // Merging never hides something a person has to do (spec H4): how many, and each one link away.
@@ -242,9 +249,15 @@ export function NeedsYouBar({
   // only, so a prop change after mount needs this effect to actually take.
   useEffect((): void => {
     setItems(initial)
-    // A fresh read from the layout (a navigation, a workspace switch): an old notice is not news.
-    setNoticeText(null)
   }, [initial])
+
+  // Fix round 2: a notice stays until it is dismissed or the person acts again -- a re-render of the
+  // layout (the refresh that empties the list included) does not take it away. Another PROJECT's
+  // bar is a different conversation, so a workspace switch does.
+  useEffect((): void => {
+    setNoticeText(null)
+    setErrorText(null)
+  }, [workspaceId])
 
   const load = async (): Promise<void> => {
     try {
@@ -252,6 +265,9 @@ export function NeedsYouBar({
       if (!response.ok) return
       const next = (await response.json()) as readonly NeedsYouItem[]
       setItems(next)
+      // Fix round 2: a later refresh that succeeds clears an old refusal -- the list it refused on
+      // is gone, and a red line with nothing left to act on is noise.
+      setErrorText(null)
     } catch {
       // Keep the list we have -- a bar that empties itself because one poll failed is worse
       // than one that is a few seconds stale (`ProjectSwitcher.tsx`'s own rule).
@@ -303,8 +319,19 @@ export function NeedsYouBar({
   return (
     <section data-testid="needs-you" className="rounded-surface border border-accent/35 bg-accent/10 px-3.5 py-2.5">
       {errorText !== null && (
-        <p role="alert" data-testid="needs-you-error" className="type-meta mb-[var(--gap-1)] text-s-blocked">
-          {errorText}
+        <p className="type-meta mb-[var(--gap-1)] flex items-start gap-2 text-s-blocked">
+          <span role="alert" data-testid="needs-you-error" className="min-w-0 flex-1">
+            {errorText}
+          </span>
+          <button
+            type="button"
+            data-testid="needs-you-error-dismiss"
+            aria-label="dismiss this error"
+            onClick={() => setErrorText(null)}
+            className="shrink-0 text-t3 hover:text-t1"
+          >
+            ×
+          </button>
         </p>
       )}
       {noticeText !== null && (

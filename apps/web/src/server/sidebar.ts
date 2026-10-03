@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { buildNeedsYou, type NeedsYouItem } from './needsYou'
+import { BLOCKING_TASK_STATUS, buildNeedsYou, mayHaveBlockingRow, type NeedsYouItem } from './needsYou'
 import {
   BLOCKING_SITUATION_KINDS,
   needsYou,
@@ -117,16 +117,39 @@ export async function readSidebar(now: Date = new Date()): Promise<SidebarRead> 
     unintegratedDoneGroups.find((group) => group.workspaceId === workspaceId)?._count._all ?? 0
   const pendingDecisionsOf = (workspaceId: string): number =>
     pendingDecisionGroups.find((group) => group.workspaceId === workspaceId)?._count._all ?? 0
-  const mayBlock = (workspaceId: string): boolean =>
-    (parkedRunGroups.find((group) => group.workspaceId === workspaceId)?.n ?? 0n) > 0n ||
-    (blockingCardGroups.find((group) => group.workspaceId === workspaceId)?._count._all ?? 0) > 0 ||
-    taskGroups.some((group) => group.workspaceId === workspaceId && group.status === 'blocked' && group._count._all > 0)
+  const blockedTasksOf = (workspaceId: string): number =>
+    taskGroups.find((group) => group.workspaceId === workspaceId && group.status === BLOCKING_TASK_STATUS)?._count._all ?? 0
+  const blockingCardsOf = (workspaceId: string): number =>
+    blockingCardGroups.find((group) => group.workspaceId === workspaceId)?._count._all ?? 0
+  const parkedRunsOf = (workspaceId: string): number =>
+    Number(parkedRunGroups.find((group) => group.workspaceId === workspaceId)?.n ?? 0n)
 
-  const candidates = workspaces.filter((workspace) => mayBlock(workspace.id))
-  const queues = new Map(
-    await Promise.all(candidates.map(async (workspace) => [workspace.id, await buildNeedsYou(workspace.id, now)] as const)),
+  const candidates = workspaces.filter((workspace) =>
+    mayHaveBlockingRow({ blockedTasks: blockedTasksOf(workspace.id), blockingCards: blockingCardsOf(workspace.id), parkedRuns: parkedRunsOf(workspace.id) }),
   )
-  const blockingOf = (workspaceId: string): number => (queues.get(workspaceId) ?? []).filter((row) => row.blocking).length
+  // Fix round 2: each project's queue on its own. This read runs in the ROOT layout, so one project
+  // whose world will not load must not take every page of every project down with it: its failure
+  // is logged, its queue is absent, and its count falls back to the one that needs no world.
+  const built = await Promise.all(
+    candidates.map(async (workspace): Promise<readonly [string, readonly NeedsYouItem[]] | null> => {
+      try {
+        return [workspace.id, await buildNeedsYou(workspace.id, now)] as const
+      } catch (cause) {
+        console.error(`sidebar: the needs-you queue of project ${workspace.id} could not be built; its blocking count falls back to its blocked tasks and blocking cards`, cause)
+        return null
+      }
+    }),
+  )
+  const queues = new Map(built.filter((entry): entry is readonly [string, readonly NeedsYouItem[]] => entry !== null))
+  const failed = new Set(candidates.filter((_, index) => built[index] === null).map((workspace) => workspace.id))
+  const blockingOf = (workspaceId: string): number => {
+    // The fallback, for a queue that could not be read: what blocks with no world read -- blocked
+    // tasks and the blocking cards. It may count a blocked task and its card twice, and it misses a
+    // parked question; it is shown only while the queue itself cannot be read.
+    if (failed.has(workspaceId)) return blockedTasksOf(workspaceId) + blockingCardsOf(workspaceId)
+    // A project `mayHaveBlockingRow` ruled out has no queue read and no blocking row.
+    return (queues.get(workspaceId) ?? []).filter((row) => row.blocking).length
+  }
 
   const tree = workspaces.map((workspace): SidebarProject => {
     let needsYouCount = 0

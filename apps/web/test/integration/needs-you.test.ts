@@ -246,6 +246,9 @@ describe('buildNeedsYou: one queue per goal version (human cards H4)', () => {
     expect([...(row?.draftPreview ?? '')]).toHaveLength(DRAFT_PREVIEW_MAX_CHARS)
     expect(row?.draftPreview?.endsWith('…')).toBe(true)
     expect(row?.draftPreview?.includes('tail')).toBe(false)
+    // Fix round 2: a draft the row cannot show whole has no one click -- it is read on the card.
+    expect(row?.draftPreviewCut).toBe(true)
+    expect(row?.oneClick).toBe(false)
   })
 
   it('puts project-level items after every version', async (): Promise<void> => {
@@ -294,6 +297,7 @@ describe('buildNeedsYou: one queue per goal version (human cards H4)', () => {
     expect([byId.get(draftlessCard)?.oneClick, byId.get(draftedCard)?.oneClick, byId.get(readdressCard)?.oneClick]).toEqual([false, true, false])
     // Fix round 1: the words the one click sends ride on its row; none where there is no one click.
     expect([byId.get(draftlessCard)?.draftPreview, byId.get(draftedCard)?.draftPreview, byId.get(readdressCard)?.draftPreview]).toEqual([null, 'Use Stripe.', null])
+    expect(byId.get(draftedCard)?.draftPreviewCut).toBe(false)
     expect(items.every((item) => item.questionCard)).toBe(true)
     expect(items).toHaveLength(3)
   })

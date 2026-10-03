@@ -30,6 +30,7 @@ const DECISION: NeedsYouItem = {
   oneClick: true,
   questionCard: false,
   draftPreview: null,
+  draftPreviewCut: false,
 }
 
 const BLOCKED: NeedsYouItem = {
@@ -49,6 +50,7 @@ const BLOCKED: NeedsYouItem = {
   oneClick: false,
   questionCard: false,
   draftPreview: null,
+  draftPreviewCut: false,
 }
 
 /** A question card offering `send_answer` (human cards H4, pre-flight F56): one labelled click. */
@@ -68,6 +70,11 @@ const ANSWER_CARD: NeedsYouItem = {
 /** A question card that does not offer `send_answer` -- an escalation, or a draftless answer. */
 const ESCALATION_CARD: NeedsYouItem = { ...ANSWER_CARD, id: 'd-3', decisionId: 'd-3', href: '/w/w1/activity#decision-d-3', oneClick: false }
 
+/** What the page's stream has published (`useShellFacts`): null -- no poll -- unless a case wakes
+ *  the bar the way a project page's stream does. */
+let shellFacts: unknown = null
+vi.mock('../src/hooks/useShellFacts', () => ({ useShellFacts: () => shellFacts }))
+
 let fetchMock: ReturnType<typeof vi.fn>
 
 beforeEach((): void => {
@@ -77,6 +84,7 @@ beforeEach((): void => {
 
 afterEach((): void => {
   vi.unstubAllGlobals()
+  shellFacts = null
 })
 
 describe('NeedsYouBar', () => {
@@ -152,6 +160,32 @@ describe('NeedsYouBar', () => {
 
     expect(screen.getByTestId('needs-you-error').textContent).toBe('the decision was already answered')
     expect(screen.getByTestId('needs-you-row')).toBeTruthy()
+  })
+
+  // Fix round 2: a refusal is dismissible, and a later refresh that succeeds clears it.
+  it('dismisses a refusal, and clears one when a later refresh succeeds', async (): Promise<void> => {
+    fetchMock.mockImplementation(async (input: unknown) => {
+      if (String(input).endsWith('/approve')) return new Response(JSON.stringify({ error: 'the decision was already answered' }), { status: 409 })
+      return new Response(JSON.stringify([]), { status: 200 })
+    })
+    const view = render(<NeedsYouBar workspaceId="w1" initial={[DECISION]} />)
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('needs-you-approve'))
+    })
+    fireEvent.click(screen.getByTestId('needs-you-error-dismiss'))
+    expect(screen.queryByTestId('needs-you-error')).toBeNull()
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('needs-you-approve'))
+    })
+    expect(screen.getByTestId('needs-you-error')).toBeTruthy()
+    // The page's stream wakes the bar; its refresh comes back (empty) and the old refusal goes.
+    shellFacts = { tick: 1 }
+    await act(async () => {
+      view.rerender(<NeedsYouBar workspaceId="w1" initial={[DECISION]} />)
+    })
+    await waitFor(() => expect(screen.queryByTestId('needs-you-error')).toBeNull())
+    expect(screen.queryByTestId('needs-you')).toBeNull()
   })
 
   it('is absent for an empty queue', () => {
@@ -305,8 +339,48 @@ describe('NeedsYouBar', () => {
       const { unmount } = render(<NeedsYouRow item={{ ...ANSWER_CARD, draftPreview: 'Use Stripe.' }} busy={null} onAnswer={() => {}} />)
       expect(screen.getByTestId('needs-you-draft').textContent).toBe('Sends: “Use Stripe.”')
       unmount()
-      render(<NeedsYouRow item={{ ...ESCALATION_CARD, draftPreview: 'Use Stripe.' }} busy={null} onAnswer={() => {}} />)
+      // No preview where the server gave none (a card that does not offer send_answer), nor on a
+      // machine card.
+      const { unmount: again } = render(<NeedsYouRow item={ESCALATION_CARD} busy={null} onAnswer={() => {}} />)
       expect(screen.queryByTestId('needs-you-draft')).toBeNull()
+      again()
+      render(<NeedsYouRow item={{ ...DECISION, draftPreview: 'Use Stripe.' }} busy={null} onAnswer={() => {}} />)
+      expect(screen.queryByTestId('needs-you-draft')).toBeNull()
+    })
+
+    it('shows the whole preview, never clamped to a few lines (fix round 2)', () => {
+      const draft = `${'Use Stripe for cards.\n'.repeat(12)}Done.`
+      render(<NeedsYouRow item={{ ...ANSWER_CARD, draftPreview: draft }} busy={null} onAnswer={() => {}} />)
+      const shown = screen.getByTestId('needs-you-draft')
+      expect(shown.textContent).toBe(`Sends: “${draft}”`)
+      expect(shown.className).not.toMatch(/line-clamp|truncate/)
+      expect(screen.queryByTestId('needs-you-draft-cut')).toBeNull()
+    })
+
+    it('says a cut draft is longer, and offers decide instead of the one click (fix round 2)', () => {
+      render(<NeedsYouRow item={{ ...ANSWER_CARD, oneClick: false, draftPreview: 'Use Stripe…', draftPreviewCut: true }} busy={null} onAnswer={() => {}} />)
+      expect(screen.getByTestId('needs-you-draft').textContent).toBe('The draft begins: “Use Stripe…”')
+      expect(screen.getByTestId('needs-you-draft-cut').textContent).toContain('longer than this')
+      expect(screen.queryByTestId('needs-you-approve')).toBeNull()
+      expect(screen.getByTestId('needs-you-open').getAttribute('href')).toBe(ANSWER_CARD.href)
+    })
+
+    it('keeps the notice when the layout hands down a fresh, empty list (fix round 2)', async (): Promise<void> => {
+      fetchMock.mockImplementation(async (input: unknown) => {
+        if (String(input).endsWith('/decide')) {
+          return new Response(JSON.stringify({ ok: true, outcome: { decision: { kind: 'send_answer' }, summary: 'sent the drafted answer' } }), { status: 200 })
+        }
+        return new Response(JSON.stringify([]), { status: 200 })
+      })
+      const view = render(<NeedsYouBar workspaceId="w1" initial={[ANSWER_CARD]} />)
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('needs-you-approve'))
+      })
+      view.rerender(<NeedsYouBar workspaceId="w1" initial={[]} />)
+      expect(screen.getByTestId('needs-you-notice').textContent).toBe('Waiting on an answer: Which gateway? — sent the drafted answer')
+      // Another project's bar starts clean.
+      view.rerender(<NeedsYouBar workspaceId="w2" initial={[]} />)
+      expect(screen.queryByTestId('needs-you')).toBeNull()
     })
 
     it('renders a hostile draft inert', () => {

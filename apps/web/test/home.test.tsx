@@ -93,6 +93,7 @@ function needsYouItem(over: Partial<HomeNeedsYouItem> = {}): HomeNeedsYouItem {
     oneClick: false,
     questionCard: false,
     draftPreview: null,
+    draftPreviewCut: false,
     workspaceId: 'w1',
     workspaceName: 'Checkout Platform',
     ...over,
@@ -249,6 +250,37 @@ describe('HomeClient', () => {
 
     expect(screen.queryByTestId('needs-you-row')).toBeNull()
     expect(screen.getByTestId('needs-you-notice').textContent).toBe('Waiting on an answer: Which gateway? — sent the drafted answer')
+  })
+
+  // Fix round 2: a refusal on Home is dismissible, and a fresh snapshot clears it -- while a notice stays.
+  it('dismisses a refusal, and a fresh snapshot clears one', async (): Promise<void> => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'the decision was already answered' }), { status: 409 })))
+    const machine = needsYouItem({ kind: 'decision', id: 'd5', decisionId: 'd5', taskId: null, title: 'No reviewer: nobody holds reviewer', oneClick: true, blocking: false })
+    const view = renderHome(snapshot({ needsYou: [machine] }))
+    const tree = (initial: HomeSnapshot): React.JSX.Element => (
+      <ModeProvider>
+        <ModeProbe />
+        <HeaderActionProvider>
+          <HeaderActionSlot />
+          <HomeClient initial={initial} companies={companies} />
+        </HeaderActionProvider>
+      </ModeProvider>
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('needs-you-approve'))
+    })
+    expect(screen.getByTestId('needs-you-error').textContent).toBe('the decision was already answered')
+    fireEvent.click(screen.getByTestId('needs-you-error-dismiss'))
+    expect(screen.queryByTestId('needs-you-error')).toBeNull()
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('needs-you-approve'))
+    })
+    expect(screen.getByTestId('needs-you-error')).toBeTruthy()
+    view.rerender(tree(snapshot({ needsYou: [] })))
+    expect(screen.queryByTestId('needs-you-error')).toBeNull()
+    expect(screen.queryByTestId('home-needs-you')).toBeNull()
   })
 
   it('wraps the needs-you queue in a ScrollArea capped at 30dvh, so 30 items scroll inside Home instead of growing it (I2)', () => {

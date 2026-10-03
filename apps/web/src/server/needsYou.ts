@@ -75,20 +75,45 @@ export interface NeedsYouItem {
   readonly questionCard: boolean
   /** Task 9 fix round 1: the words a question card's one click would send -- the draft as a person
    *  edited it, else as drafted (what `send_answer` sends) -- cut to {@link DRAFT_PREVIEW_MAX_CHARS}.
-   *  A person must not send words they cannot see. Null on every row without that one click. */
+   *  A person must not send words they cannot see. Null on every question card that does not offer
+   *  `send_answer`, and on every row that is not a question card. */
   readonly draftPreview: string | null
+  /** Fix round 2: the draft is longer than {@link draftPreview}. Such a row has NO one click -- the
+   *  person reads the whole answer on the card ("decide") before it is sent. */
+  readonly draftPreviewCut: boolean
+}
+
+/**
+ * Task 9 fix round 2: the facts every blocking row stands on, beside the rule that marks it -- so a
+ * reader that must not walk the world for every project (the sidebar) can tell which projects can
+ * have one. A row blocks when it holds a task in this status, a card of a `BLOCKING_SITUATION_KINDS`
+ * kind, or a question whose asker is parked (`askerWaiting`: a run paused waiting for an answer).
+ * A new blocking source added below must be added here too; `needs-you-counts.test.ts` fails when
+ * the two disagree for any situation kind.
+ */
+export const BLOCKING_TASK_STATUS = 'blocked'
+
+export function mayHaveBlockingRow(facts: {
+  readonly blockedTasks: number
+  readonly blockingCards: number
+  readonly parkedRuns: number
+}): boolean {
+  return facts.blockedTasks > 0 || facts.blockingCards > 0 || facts.parkedRuns > 0
 }
 
 /** How much of a draft a needs-you row shows beside its one click: enough to recognise the answer;
  *  the whole of it is on the card, one link away. */
 export const DRAFT_PREVIEW_MAX_CHARS = 280
 
-/** The draft `send_answer` would send, cut to the preview's bound on a whole character. */
-function draftPreviewOf(draft: DecisionView['draft']): string | null {
+/** The draft `send_answer` would send, cut to the preview's bound on a whole character, and whether
+ *  it had to be cut. */
+function draftPreviewOf(draft: DecisionView['draft']): { readonly text: string; readonly cut: boolean } | null {
   const body = draft?.editedBody ?? draft?.body ?? null
   if (body === null) return null
   const chars = [...body]
-  return chars.length <= DRAFT_PREVIEW_MAX_CHARS ? body : `${chars.slice(0, DRAFT_PREVIEW_MAX_CHARS - 1).join('')}…`
+  return chars.length <= DRAFT_PREVIEW_MAX_CHARS
+    ? { text: body, cut: false }
+    : { text: `${chars.slice(0, DRAFT_PREVIEW_MAX_CHARS - 1).join('')}…`, cut: true }
 }
 
 /** One item before the queue is built: everything but what the merge decides. */
@@ -181,7 +206,7 @@ export async function buildNeedsYou(
     ) {
       continue
     }
-    const blocked = task.status === 'blocked'
+    const blocked = task.status === BLOCKING_TASK_STATUS
     const kind = blocked ? 'blocked_task' : 'integrate'
     items.push({
       kind,
@@ -203,12 +228,14 @@ export async function buildNeedsYou(
       oneClick: false,
       questionCard: false,
       draftPreview: null,
+      draftPreviewCut: false,
     })
   }
 
   for (const decision of decisions) {
     const taskId = taskOfDecision(decision)
     const card = decision.card ?? null
+    const preview = card !== null && card.offers.includes('send_answer') ? draftPreviewOf(decision.draft) : null
     items.push({
       kind: 'decision',
       id: decision.id,
@@ -229,9 +256,11 @@ export async function buildNeedsYou(
       // the card offers it -- never on a draftless answer card, which would approve into
       // `draft_missing`, and never on an escalation or a re-address card, whose decisions are the
       // card's own. A machine card keeps its approve.
-      oneClick: card === null || card.offers.includes('send_answer'),
+      // ... and (fix round 2) only where the row can show ALL of what it sends.
+      oneClick: card === null || (card.offers.includes('send_answer') && preview !== null && !preview.cut),
       questionCard: card !== null,
-      draftPreview: card !== null && card.offers.includes('send_answer') ? draftPreviewOf(decision.draft) : null,
+      draftPreview: preview?.text ?? null,
+      draftPreviewCut: preview?.cut ?? false,
     })
   }
 
@@ -262,6 +291,7 @@ export async function buildNeedsYou(
         oneClick: false,
         questionCard: false,
         draftPreview: null,
+        draftPreviewCut: false,
       })
     }
   }

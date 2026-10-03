@@ -52,7 +52,7 @@ const DECISION_ENTRY: TimelineEntry = {
 }
 
 /** Human cards H4's fields, as a lone item with nothing merged into it carries them. */
-const QUEUE_FIELDS = { goalVersion: null, blocking: false, groupKey: 'x', mergedIds: [], merged: [], oneClick: false, questionCard: false, draftPreview: null } as const
+const QUEUE_FIELDS = { goalVersion: null, blocking: false, groupKey: 'x', mergedIds: [], merged: [], oneClick: false, questionCard: false, draftPreview: null, draftPreviewCut: false } as const
 
 const QUESTION: NeedsYouItem = { kind: 'question', id: 'm1', title: 'Ada asked: Which gateway?', href: '/w/w1#question-m1', since: '2026-09-09T10:00:00.000Z', taskId: null, decisionId: null, messageId: 'm1', ...QUEUE_FIELDS }
 const BLOCKED: NeedsYouItem = { kind: 'blocked_task', id: 't1', title: 'Wire the webhook — no credentials', href: '/w/w1/tasks?task=t1', since: '2026-09-09T10:00:00.000Z', taskId: 't1', decisionId: null, messageId: null, ...QUEUE_FIELDS }
