@@ -16,12 +16,14 @@ import { refusalStatus } from './refusalStatus'
  * a cross-project approve would succeed.
  *
  * `Result<unknown, ...>`, not `Result<void, ...>`, for the reason the sibling shells give: the
- * envelope is `{ ok: true }` whatever the verb returns.
+ * envelope is `{ ok: true }` whatever the verb returns -- unless `present` says what of the value a
+ * page needs, which is spread beside `ok` (the decide route's `outcome`, plan B Task 6).
  */
-export async function decisionControlResponse(
+export async function decisionControlResponse<T>(
   workspaceId: string,
   decisionId: string,
-  operate: () => Promise<Result<unknown, ControlRefusal>>,
+  operate: () => Promise<Result<T, ControlRefusal>>,
+  present?: (value: T) => Readonly<Record<string, unknown>>,
 ): Promise<Response> {
   const decision = await prisma.supervisorDecision.findUnique({
     where: { id: decisionId },
@@ -31,7 +33,7 @@ export async function decisionControlResponse(
     return Response.json({ error: 'no such decision in this workspace' }, { status: 404 })
   }
   const result = await operate()
-  if (result.ok) return Response.json({ ok: true })
+  if (result.ok) return Response.json(present === undefined ? { ok: true } : { ok: true, ...present(result.value) })
   const notice = await settledNotice(result.error, decisionId)
   return Response.json({ error: refusalText(result.error), ...(notice === null ? {} : { notice }) }, { status: refusalStatus(result.error.kind) })
 }
