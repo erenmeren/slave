@@ -83,6 +83,8 @@ const question = (over?: Partial<Question>): Question => ({
   waitingOn: 'anyone with the product role',
   holders: 0,
   since: '2026-09-09T08:00:00.000Z',
+  goalVersion: null,
+  askerWaiting: true,
   ...over,
 })
 

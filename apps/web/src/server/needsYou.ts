@@ -1,6 +1,16 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { listDecisions, type DecisionView } from '@slave-of-ai/control'
-import { SITUATION_LABEL, needsYou, type TaskStatus } from '@slave-of-ai/domain'
+import {
+  BLOCKING_SITUATION_KINDS,
+  SITUATION_LABEL,
+  buildQueue,
+  groupKeyFor,
+  isQuestionSituation,
+  isTaskSituation,
+  needsYou,
+  versionOfSubject,
+  type TaskStatus,
+} from '@slave-of-ai/domain'
 import { buildSupervisorView } from './supervisor'
 
 /**
@@ -13,10 +23,14 @@ import { buildSupervisorView } from './supervisor'
  * role). So decisions are counted as ROWS, exactly the way `docs/ia.md` records it for the project
  * card's own count (M45 plan erratum E20).
  *
- * DE-DUPLICATED PER TASK, which is the other half of E20: a blocked task with a pending decision
- * about it is ONE thing waiting on a person, not two. The decision wins, because the decision is
- * the row that carries an answer a person can give in place (approve / reject); the task-shaped
- * entry for it is dropped, and the domain is told `decisionPending` so its own verdict agrees.
+ * Human cards H4: per goal version, blocking first, one row per subject. Spec H4: "Cards are
+ * listed per goal version. Within a version, those blocking it (a paused run, `needs_human`) come
+ * first. Cards on one subject -- the same question, task, package or file -- merge into one card."
+ * The order and the merge are the domain's (`buildQueue`, `groupKeyFor`); this file reads the rows.
+ * A blocked task with a pending decision about it is still ONE row (E20), now because it MERGES
+ * into the decision's row (`task:<id>`) rather than being dropped: the decision heads the row, and
+ * the task rides on it in `merged`, so nothing a person has to do is hidden behind the merge. A
+ * question with an open card is listed once, as the card.
  *
  * `href` always points at a surface that can actually resolve the item. `integrate` links to the
  * board rather than offering a button, because `confirmIntegration` has no web route -- it is a
@@ -34,7 +48,35 @@ export interface NeedsYouItem {
   readonly taskId: string | null
   readonly decisionId: string | null
   readonly messageId: string | null
+  /** Human cards H4, plan B D8: the goal version this item belongs to -- the question's, the task's
+   *  (its package's version, else its own stamp), or the one a `<ws>:v<n>` subject names. Null for a
+   *  project-level item, which is listed after every version. */
+  readonly goalVersion: number | null
+  /** Human cards H4, plan B D8: this row blocks its version -- it holds a question whose asker is
+   *  parked, a `goal_needs_human`, a `task_blocked_human` or a blocked task. A merged row blocks
+   *  when any of its items does. */
+  readonly blocking: boolean
+  /** Human cards H4, plan B D8: the subject the row stands for (`groupKeyFor`): `question:<id>`,
+   *  `task:<id>`, or the card's own key. */
+  readonly groupKey: string
+  /** Human cards H4, plan B D8: the ids of the items merged into this row, besides its own. */
+  readonly mergedIds: readonly string[]
+  /** The merged items themselves, oldest first (each with nothing merged into it): merging never
+   *  hides something a person has to do, so the row leads to every one of them, and a page that
+   *  acts on each item -- the activity timeline -- still lists them all. */
+  readonly merged: readonly NeedsYouItem[]
+  /** Human cards H4, plan B D8: the row can be settled in one click -- a machine card's approve,
+   *  or `send_answer` on a question card that offers it (pre-flight F56). False on every question
+   *  card that does not offer `send_answer` (a draftless answer card included): its row links to
+   *  the card's decisions instead. False on every item that is not a decision. */
+  readonly oneClick: boolean
+  /** The row is a question card (Plan A D13): its one click is `send_answer` through the decide
+   *  route, and it has no Reject -- "dismiss and close" is one of the card's decisions. */
+  readonly questionCard: boolean
 }
+
+/** One item before the queue is built: everything but what the merge decides. */
+type QueueItem = Omit<NeedsYouItem, 'mergedIds' | 'merged'>
 
 /** The pending decisions `buildOverviewSnapshot` has already listed, handed down rather than
  *  listed again (fix round 1, review Important 8). Optional, with a fallback read, so a direct
@@ -55,10 +97,20 @@ export async function buildNeedsYou(
   if (workspace === null) return []
 
   // One read for both task kinds: `blocked` and `done` are the only two statuses any of the three
-  // task-shaped clauses can be in, so a single query answers all of them.
+  // task-shaped clauses can be in, so a single query answers all of them. The version is the
+  // package's, else the task's own stamp -- the same reading a question card's version is.
   const tasks = await prisma.task.findMany({
     where: { workspaceId, status: { in: ['blocked', 'done'] } },
-    select: { id: true, title: true, status: true, integratedAt: true, lastRejectionReason: true, createdAt: true },
+    select: {
+      id: true,
+      title: true,
+      status: true,
+      integratedAt: true,
+      lastRejectionReason: true,
+      createdAt: true,
+      goalVersion: true,
+      workPackage: { select: { goalVersion: true } },
+    },
     orderBy: { createdAt: 'asc' },
   })
 
@@ -73,20 +125,33 @@ export async function buildNeedsYou(
     buildSupervisorView(workspaceId, now),
   ])
 
-  // A decision's `subjectId` is a task id only for the task-shaped situations; for every other
-  // kind it is a role name, a message id or the workspace's own id, none of which can collide with
-  // a task id. So membership in this set IS "there is a pending decision about this task".
-  const decidedSubjects = new Set(decisions.map((decision) => decision.subjectId))
+  // The task a decision is about: its facts' `taskId` (a run's card names its task there), else its
+  // subject for the task situations. Only for the version and the merge -- never a task the
+  // decision row claims to BE.
+  const taskOfDecision = (decision: DecisionView): string | null => {
+    const fact = decision.situation.facts['taskId']
+    if (typeof fact === 'string') return fact
+    return isTaskSituation(decision.situationKind) ? decision.subjectId : null
+  }
 
-  const items: NeedsYouItem[] = []
+  // The versions of the decisions' tasks the read above did not already hold: one more query, and
+  // none at all when every decision is about a blocked or done task, or about no task.
+  const versionOfTask = new Map(tasks.map((task) => [task.id, task.workPackage?.goalVersion ?? task.goalVersion ?? null] as const))
+  const unread = [...new Set(decisions.flatMap((decision) => {
+    const taskId = taskOfDecision(decision)
+    return taskId === null || versionOfTask.has(taskId) ? [] : [taskId]
+  }))]
+  if (unread.length > 0) {
+    const rows = await prisma.task.findMany({
+      where: { workspaceId, id: { in: unread } },
+      select: { id: true, goalVersion: true, workPackage: { select: { goalVersion: true } } },
+    })
+    for (const row of rows) versionOfTask.set(row.id, row.workPackage?.goalVersion ?? row.goalVersion ?? null)
+  }
+
+  const items: QueueItem[] = []
 
   for (const task of tasks) {
-    // E20's de-duplication, BEFORE the domain is asked: a pending decision about this task is this
-    // task's one entry, and the decision row below is the one that carries an answer a person can
-    // give in place. Passing `decisionPending: true` to `needsYou` and then dropping the task
-    // anyway (which this loop did until fix round 1) let the domain's answer look load-bearing
-    // when nothing could read it.
-    if (decidedSubjects.has(task.id)) continue
     // The domain decides which tasks need a person, not this file: `needsYou` is where the four
     // rules live. NOTE that the project card's own needs-you count (`server/org.ts`) does NOT
     // agree with this queue today -- it counts decisions and tasks by its own reading -- and
@@ -101,8 +166,9 @@ export async function buildNeedsYou(
       continue
     }
     const blocked = task.status === 'blocked'
+    const kind = blocked ? 'blocked_task' : 'integrate'
     items.push({
-      kind: blocked ? 'blocked_task' : 'integrate',
+      kind,
       id: task.id,
       title: blocked
         ? `${task.title} — ${task.lastRejectionReason ?? 'blocked'}`
@@ -112,10 +178,20 @@ export async function buildNeedsYou(
       taskId: task.id,
       decisionId: null,
       messageId: null,
+      goalVersion: versionOfTask.get(task.id) ?? null,
+      // Plan B D8: a blocked task blocks its version; work waiting to be integrated does not.
+      blocking: blocked,
+      // E20 / spec H4: a blocked task with a pending decision about it merges into that decision's
+      // row through this key, rather than being dropped.
+      groupKey: groupKeyFor({ kind, situationKind: null, subjectId: task.id, taskId: task.id }),
+      oneClick: false,
+      questionCard: false,
     })
   }
 
   for (const decision of decisions) {
+    const taskId = taskOfDecision(decision)
+    const card = decision.card ?? null
     items.push({
       kind: 'decision',
       id: decision.id,
@@ -129,8 +205,20 @@ export async function buildNeedsYou(
       taskId: null,
       decisionId: decision.id,
       messageId: null,
+      goalVersion: card?.goalVersion ?? (taskId === null ? null : (versionOfTask.get(taskId) ?? null)) ?? versionOfSubject(decision.subjectId),
+      blocking: card?.askerWaiting === true || BLOCKING_SITUATION_KINDS.includes(decision.situationKind),
+      groupKey: groupKeyFor({ kind: 'decision', situationKind: decision.situationKind, subjectId: decision.subjectId, taskId }),
+      // Pre-flight F56: a question card's one click is `send_answer`, so it is offered only where
+      // the card offers it -- never on a draftless answer card, which would approve into
+      // `draft_missing`, and never on an escalation or a re-address card, whose decisions are the
+      // card's own. A machine card keeps its approve.
+      oneClick: card === null || card.offers.includes('send_answer'),
+      questionCard: card !== null,
     })
   }
+
+  // Spec H4: "a question with an open card is listed once, as the card" -- the card is its row.
+  const carded = new Set(decisions.filter((decision) => isQuestionSituation(decision.situationKind)).map((decision) => decision.subjectId))
 
   if (view !== null) {
     for (const question of view.questions) {
@@ -138,6 +226,7 @@ export async function buildNeedsYou(
       // holder, so nothing but a person will ever answer it. A question a slave CAN answer is
       // the fleet waiting on itself and is not on this list.
       if (question.holders !== 0) continue
+      if (carded.has(question.messageId)) continue
       items.push({
         kind: 'question',
         id: question.messageId,
@@ -148,10 +237,37 @@ export async function buildNeedsYou(
         taskId: null,
         decisionId: null,
         messageId: question.messageId,
+        goalVersion: question.goalVersion,
+        // Pre-flight F27: a bare question blocks its version when its asker is parked on it.
+        blocking: question.askerWaiting,
+        groupKey: groupKeyFor({ kind: 'question', situationKind: null, subjectId: question.messageId, taskId: null }),
+        oneClick: false,
+        questionCard: false,
       })
     }
   }
 
-  // Oldest first: the thing that has waited longest is the thing to do.
-  return items.sort((a, b) => Date.parse(a.since) - Date.parse(b.since))
+  // Spec H4 (plan B D8): newest version first, project-level items last; within a version what
+  // blocks it first, then the oldest; one row per subject, headed by its card.
+  const itemKey = (item: QueueItem): string => `${item.kind}:${item.id}`
+  const byKey = new Map(items.map((item) => [itemKey(item), item] as const))
+  const groups = buildQueue(
+    items.map((item) => ({
+      id: itemKey(item),
+      groupKey: item.groupKey,
+      goalVersion: item.goalVersion,
+      blocking: item.blocking,
+      since: item.since,
+      decision: item.kind === 'decision',
+    })),
+  )
+  return groups.flatMap((group): NeedsYouItem[] => {
+    const [head, ...rest] = group.ids.flatMap((id) => {
+      const item = byKey.get(id)
+      return item === undefined ? [] : [item]
+    })
+    if (head === undefined) return []
+    const merged = rest.map((item): NeedsYouItem => ({ ...item, mergedIds: [], merged: [] }))
+    return [{ ...head, blocking: group.blocking, mergedIds: merged.map((item) => item.id), merged }]
+  })
 }

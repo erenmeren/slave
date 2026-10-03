@@ -90,6 +90,12 @@ export interface SupervisorQuestionView {
   /** When it was asked, ISO -- the world speaks epoch ms, and nothing but a string survives the
    *  route's `Response.json` unchanged. */
   readonly since: string
+  /** Human cards H4 (plan B D8): the goal version the question belongs to, straight off the world
+   *  question; null for a question about no versioned task. */
+  readonly goalVersion: number | null
+  /** Human cards H4 (plan B D8): the asking run is parked on this question -- what makes it block
+   *  its version. Straight off the world question. */
+  readonly askerWaiting: boolean
 }
 
 /**
@@ -164,5 +170,7 @@ function toQuestionView(question: SupervisorQuestion, roster: readonly Superviso
         : `anyone with the ${question.recipientRole ?? 'unknown'} role`,
     holders: question.holders.length,
     since: new Date(question.createdAt).toISOString(),
+    goalVersion: question.goalVersion,
+    askerWaiting: question.askerWaiting,
   }
 }

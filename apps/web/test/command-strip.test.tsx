@@ -63,6 +63,14 @@ const ITEMS: readonly NeedsYouItem[] = [
     taskId: null,
     decisionId: 'd-1',
     messageId: null,
+    // Human cards H4: a machine card, settled in one click.
+    goalVersion: null,
+    blocking: false,
+    groupKey: 'no_reviewer:reviewer',
+    mergedIds: [],
+    merged: [],
+    oneClick: true,
+    questionCard: false,
   },
   {
     kind: 'blocked_task',
@@ -73,6 +81,13 @@ const ITEMS: readonly NeedsYouItem[] = [
     taskId: 't-1',
     decisionId: null,
     messageId: null,
+    goalVersion: null,
+    blocking: true,
+    groupKey: 'task:t-1',
+    mergedIds: [],
+    merged: [],
+    oneClick: false,
+    questionCard: false,
   },
 ]
 

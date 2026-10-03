@@ -5,12 +5,11 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
 import { useHome } from '../../hooks/useHome'
 import { formatUsd } from '../../lib/realMoney'
-import { postControl } from '../../lib/postControl'
-import type { HomeSnapshot } from '../../server/home'
+import type { HomeNeedsYouItem, HomeSnapshot } from '../../server/home'
 import { KpiStrip } from '../analytics/KpiStrip'
 import type { CompanyRow } from '../CompanyManager'
 import { useMode } from '../mode/ModeProvider'
-import { NeedsYouRow } from '../project/NeedsYouBar'
+import { NeedsYouRow, answerNeedsYou, type NeedsYouVerdict } from '../project/NeedsYouBar'
 import { NewProjectDrawer } from '../projects/NewProjectDrawer'
 import { useHeaderAction } from '../shell/HeaderActionProvider'
 import { Button } from '../ui/Button'
@@ -118,23 +117,20 @@ export function HomeClient({
     [searchParams, router],
   )
 
-  const answerNeedsYou = async (decisionId: string, verdict: 'approve' | 'reject'): Promise<void> => {
-    const item = needsYou.find((row) => row.decisionId === decisionId)
-    if (item === undefined) return
-    setBusyDecisionId(decisionId)
+  /** One click on a row (plan B Task 9): the shared {@link answerNeedsYou} -- a question card's
+   *  `send_answer` through the decide route -- then a fresh snapshot right away, whatever it said. */
+  const onNeedsYou = async (item: HomeNeedsYouItem, verdict: NeedsYouVerdict): Promise<void> => {
+    if (item.decisionId === null) return
+    setBusyDecisionId(item.decisionId)
     setNeedsYouError(null)
     setNeedsYouNotice(null)
-    const result = await postControl(`/api/w/${item.workspaceId}/supervisor/decisions/${decisionId}/${verdict}`)
+    const result = await answerNeedsYou(item.workspaceId, item, verdict)
     setBusyDecisionId(null)
-    if (!result.ok && result.notice !== null) {
-      setNeedsYouNotice(result.notice)
-      router.refresh()
-      return
-    }
-    if (!result.ok) {
+    if (result.error !== null) {
       setNeedsYouError(result.error)
       return
     }
+    setNeedsYouNotice(result.notice)
     router.refresh()
   }
 
@@ -171,7 +167,7 @@ export function HomeClient({
                 item={item}
                 workspaceName={item.workspaceName}
                 busy={busyDecisionId}
-                onAnswer={(decisionId, verdict) => void answerNeedsYou(decisionId, verdict)}
+                onAnswer={(_row, verdict) => void onNeedsYou(item, verdict)}
               />
             ))}
           </ScrollArea>

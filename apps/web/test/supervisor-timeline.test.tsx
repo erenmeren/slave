@@ -51,9 +51,12 @@ const DECISION_ENTRY: TimelineEntry = {
   },
 }
 
-const QUESTION: NeedsYouItem = { kind: 'question', id: 'm1', title: 'Ada asked: Which gateway?', href: '/w/w1#question-m1', since: '2026-09-09T10:00:00.000Z', taskId: null, decisionId: null, messageId: 'm1' }
-const BLOCKED: NeedsYouItem = { kind: 'blocked_task', id: 't1', title: 'Wire the webhook — no credentials', href: '/w/w1/tasks?task=t1', since: '2026-09-09T10:00:00.000Z', taskId: 't1', decisionId: null, messageId: null }
-const INTEGRATE: NeedsYouItem = { kind: 'integrate', id: 't2', title: 'Add the banner — ready to integrate', href: '/w/w1/tasks?task=t2', since: '2026-09-09T10:00:00.000Z', taskId: 't2', decisionId: null, messageId: null }
+/** Human cards H4's fields, as a lone item with nothing merged into it carries them. */
+const QUEUE_FIELDS = { goalVersion: null, blocking: false, groupKey: 'x', mergedIds: [], merged: [], oneClick: false, questionCard: false } as const
+
+const QUESTION: NeedsYouItem = { kind: 'question', id: 'm1', title: 'Ada asked: Which gateway?', href: '/w/w1#question-m1', since: '2026-09-09T10:00:00.000Z', taskId: null, decisionId: null, messageId: 'm1', ...QUEUE_FIELDS }
+const BLOCKED: NeedsYouItem = { kind: 'blocked_task', id: 't1', title: 'Wire the webhook — no credentials', href: '/w/w1/tasks?task=t1', since: '2026-09-09T10:00:00.000Z', taskId: 't1', decisionId: null, messageId: null, ...QUEUE_FIELDS }
+const INTEGRATE: NeedsYouItem = { kind: 'integrate', id: 't2', title: 'Add the banner — ready to integrate', href: '/w/w1/tasks?task=t2', since: '2026-09-09T10:00:00.000Z', taskId: 't2', decisionId: null, messageId: null, ...QUEUE_FIELDS }
 
 let fetchMock: ReturnType<typeof vi.fn>
 
@@ -204,7 +207,8 @@ describe('SupervisorTimeline', () => {
     await click(screen.getByTestId('supervisor-approve'))
     expect(screen.queryByTestId('timeline-error')).toBeNull()
     const notice = screen.getByTestId('timeline-notice')
-    expect(notice.textContent).toBe('Already closed by alice at 2026-10-02 10:00 UTC.')
+    // Named by its card (plan B Task 9 carry): the refresh takes the row it was about away.
+    expect(notice.textContent).toBe(`${DECISION_ENTRY.title} — Already closed by alice at 2026-10-02 10:00 UTC.`)
     expect(notice.getAttribute('role')).toBe('status')
     expect(onRefresh).toHaveBeenCalledTimes(1)
   })
@@ -264,7 +268,7 @@ describe('SupervisorTimeline', () => {
   // Fix round 1, minor 3: the queue and the timeline are two reads, and a decision recorded
   // between them reaches the brief's needs-you tile with no `DecisionView` behind it here.
   it('still shows a pending decision whose body never reached this page, as a link with no actions', () => {
-    const stranded = { kind: 'decision' as const, id: 'd9', title: 'No reviewer: nobody holds reviewer', href: '/w/w1#decision-d9', since: '2026-09-09T10:00:00.000Z', taskId: null, decisionId: 'd9', messageId: null }
+    const stranded = { kind: 'decision' as const, id: 'd9', title: 'No reviewer: nobody holds reviewer', href: '/w/w1#decision-d9', since: '2026-09-09T10:00:00.000Z', taskId: null, decisionId: 'd9', messageId: null, ...QUEUE_FIELDS, oneClick: true }
     render(<SupervisorTimeline workspaceId="w1" entries={ENTRIES} needsYou={[stranded]} />)
     const row = screen.getByTestId('timeline-decision-unavailable')
     expect(row.textContent).toContain('nobody holds reviewer')
@@ -275,8 +279,16 @@ describe('SupervisorTimeline', () => {
     expect(screen.queryByTestId('supervisor-approve')).toBeNull()
   })
 
+  // Human cards H4: a task merged into its card's needs-you row is still acted on here.
+  it('lists a task merged into a decision row, with its own unblock', () => {
+    const queued = { kind: 'decision' as const, id: 'd1', title: 'No reviewer: nobody holds reviewer', href: '/w/w1#decision-d1', since: '2026-09-09T11:00:00.000Z', taskId: null, decisionId: 'd1', messageId: null, ...QUEUE_FIELDS, oneClick: true, mergedIds: ['t1'], merged: [BLOCKED] }
+    render(<SupervisorTimeline workspaceId="w1" entries={[DECISION_ENTRY]} needsYou={[queued]} />)
+    expect(screen.getAllByTestId('supervisor-proposal')).toHaveLength(1)
+    expect(screen.getAllByTestId('timeline-unblock')).toHaveLength(1)
+  })
+
   it('renders a decision once, not twice, when the queue and the entries both carry it', () => {
-    const queued = { kind: 'decision' as const, id: 'd1', title: 'No reviewer: nobody holds reviewer', href: '/w/w1#decision-d1', since: '2026-09-09T11:00:00.000Z', taskId: null, decisionId: 'd1', messageId: null }
+    const queued = { kind: 'decision' as const, id: 'd1', title: 'No reviewer: nobody holds reviewer', href: '/w/w1#decision-d1', since: '2026-09-09T11:00:00.000Z', taskId: null, decisionId: 'd1', messageId: null, ...QUEUE_FIELDS, oneClick: true }
     render(<SupervisorTimeline workspaceId="w1" entries={[DECISION_ENTRY]} needsYou={[queued]} />)
     expect(screen.getAllByTestId('supervisor-proposal')).toHaveLength(1)
     expect(screen.queryByTestId('timeline-decision-unavailable')).toBeNull()
@@ -394,9 +406,28 @@ describe('SupervisorTimeline: a question card is decided in place (human cards H
     expect(JSON.parse((fetchMock.mock.calls[0]?.[1] as { body?: string }).body ?? '')).toEqual({ kind: 'dismiss', reason: null })
     expect(screen.queryByTestId('timeline-error')).toBeNull()
     const notice = screen.getByTestId('timeline-notice')
-    expect(notice.textContent).toBe('Already closed by alice at 2026-10-02 10:00 UTC.')
+    expect(notice.textContent).toBe(`${QUESTION_CARD_ENTRY.title} — Already closed by alice at 2026-10-02 10:00 UTC.`)
     expect(notice.getAttribute('role')).toBe('status')
     expect(onRefresh).toHaveBeenCalledTimes(1)
+  })
+
+  // Plan B Task 9 carry: what the decision did is shown, named by its card, and the queue is asked
+  // for at once -- not at the next stream event.
+  it("shows the decision's outcome named by its card, and refreshes at once", async () => {
+    stubFetch({ ok: true, outcome: { decision: { kind: 'give_work' }, summary: 'gave the skeleton package work: Add a start script. (it waits until the version is integrating again)' } })
+    const onRefresh = vi.fn()
+    render(<SupervisorTimeline workspaceId="w1" entries={[QUESTION_CARD_ENTRY]} needsYou={[]} onRefresh={onRefresh} />)
+
+    giveWork()
+    await click(screen.getByTestId('card-decide'))
+
+    const notice = screen.getByTestId('timeline-notice')
+    expect(notice.textContent).toBe(
+      `${QUESTION_CARD_ENTRY.title} — gave the skeleton package work: Add a start script. (it waits until the version is integrating again)`,
+    )
+    expect(notice.getAttribute('role')).toBe('status')
+    expect(onRefresh).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('timeline-error')).toBeNull()
   })
 
   it('shows any other refusal beside the card, as an alert', async () => {

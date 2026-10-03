@@ -85,6 +85,13 @@ function needsYouItem(over: Partial<HomeNeedsYouItem> = {}): HomeNeedsYouItem {
     taskId: 't1',
     decisionId: null,
     messageId: null,
+    goalVersion: null,
+    blocking: true,
+    groupKey: 'task:t1',
+    mergedIds: [],
+    merged: [],
+    oneClick: false,
+    questionCard: false,
     workspaceId: 'w1',
     workspaceName: 'Checkout Platform',
     ...over,
@@ -173,6 +180,48 @@ describe('HomeClient', () => {
   it('renders one needs-you-row per cross-project item', () => {
     renderHome()
     expect(screen.getAllByTestId('needs-you-row')).toHaveLength(2)
+  })
+
+  // Human cards H4 / pre-flight F56 and F64: Home draws the strip's row, so a question card here has
+  // no bare Approve or Reject either -- its one click is send_answer through the decide route.
+  it('offers no Approve or Reject on a question card, and posts its one click to the decide route, naming the card in what it shows', async (): Promise<void> => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, outcome: { decision: { kind: 'send_answer' }, summary: 'sent the drafted answer' } }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const answerCard = needsYouItem({
+      kind: 'decision',
+      id: 'd2',
+      decisionId: 'd2',
+      taskId: null,
+      title: 'Waiting on an answer: Which gateway?',
+      href: '/w/w1/activity#decision-d2',
+      goalVersion: 2,
+      groupKey: 'question:m2',
+      oneClick: true,
+      questionCard: true,
+    })
+    const escalation = needsYouItem({ ...answerCard, id: 'd3', decisionId: 'd3', href: '/w/w1/activity#decision-d3', oneClick: false })
+    renderHome(snapshot({ needsYou: [answerCard, escalation] }))
+
+    const [first, second] = screen.getAllByTestId('needs-you-row')
+    expect(second?.querySelector('[data-testid="needs-you-approve"]')).toBeNull()
+    expect(second?.querySelector('[data-testid="needs-you-open"]')?.getAttribute('href')).toBe('/w/w1/activity#decision-d3')
+    for (const row of [first, second]) {
+      expect(row?.querySelector('[data-testid="needs-you-reject"]')).toBeNull()
+      const words = [...(row?.querySelectorAll('button') ?? [])].map((button) => button.textContent?.trim().toLowerCase())
+      expect(words).not.toContain('approve')
+    }
+
+    await act(async () => {
+      fireEvent.click(within(first as HTMLElement).getByTestId('needs-you-approve'))
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/supervisor/decisions/d2/decide', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'send_answer' }),
+    })
+    expect(screen.getByTestId('needs-you-notice').textContent).toBe('Waiting on an answer: Which gateway? — sent the drafted answer')
+    expect(routerRefresh).toHaveBeenCalledTimes(1)
   })
 
   it('wraps the needs-you queue in a ScrollArea capped at 30dvh, so 30 items scroll inside Home instead of growing it (I2)', () => {

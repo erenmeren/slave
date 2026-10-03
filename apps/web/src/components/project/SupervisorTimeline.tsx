@@ -7,7 +7,7 @@ import { LANE_LABEL, TIMELINE_LANES, type TimelineLane } from '@slave-of-ai/doma
 // reaches the client bundle. The same rule `supervisor/ProposalRow.tsx` states for `SupervisorView`.
 import type { NeedsYouItem } from '../../server/needsYou'
 import type { TimelineEntry } from '../../server/timeline'
-import { postControl } from '../../lib/postControl'
+import { aboutCard, postControl, postDecision } from '../../lib/postControl'
 import { ProposalRow } from '../supervisor/ProposalRow'
 import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
@@ -87,9 +87,12 @@ export function SupervisorTimeline({
   const [answers, setAnswers] = useState<Readonly<Record<string, string>>>({})
 
   const decisionEntries = entries.filter((entry) => entry.decision !== null)
-  const questions = needsYou.filter((item) => item.kind === 'question' && item.messageId !== null)
-  const blocked = needsYou.filter((item) => item.kind === 'blocked_task' && item.taskId !== null)
-  const integrate = needsYou.filter((item) => item.kind === 'integrate')
+  // Every item of a merged row (human cards H4): the needs-you row leads here, and this is where
+  // each of them -- a task merged into its card's row included -- is acted on.
+  const queue = needsYou.flatMap((item) => [item, ...item.merged])
+  const questions = queue.filter((item) => item.kind === 'question' && item.messageId !== null)
+  const blocked = queue.filter((item) => item.kind === 'blocked_task' && item.taskId !== null)
+  const integrate = queue.filter((item) => item.kind === 'integrate')
 
   /**
    * A pending decision the QUEUE knows about and the timeline's own entries do not (fix round 1,
@@ -103,7 +106,7 @@ export function SupervisorTimeline({
    * approve, and a button with nothing behind it is worse than an honest pointer.
    */
   const shownDecisionIds = new Set(decisionEntries.map((entry) => entry.decision?.id))
-  const strandedDecisions = needsYou.filter(
+  const strandedDecisions = queue.filter(
     (item) => item.kind === 'decision' && item.decisionId !== null && !shownDecisionIds.has(item.decisionId),
   )
 
@@ -123,7 +126,7 @@ export function SupervisorTimeline({
 
   /** One row's write. Returns whether it landed, so a row with a box of its own can clear it on
    *  success and keep it on a refusal (fix round 1, minor 5). */
-  const send = async (rowId: string, url: string, body?: Record<string, unknown>): Promise<boolean> => {
+  const send = async (rowId: string, url: string, body?: Record<string, unknown>, about?: string): Promise<boolean> => {
     setBusyId(rowId)
     setErrors((was) => {
       const { [rowId]: _gone, ...rest } = was
@@ -135,13 +138,36 @@ export function SupervisorTimeline({
     })
     const result = await postControl(url, body)
     if (!result.ok && result.notice !== null) {
-      // Human cards spec §4: who settled it and when, then a fresh queue -- not a red band.
-      const notice = result.notice
+      // Human cards spec §4: who settled it and when, then a fresh queue -- not a red band. Named
+      // by its card (plan B Task 9 carry): the refresh takes the row it was about away.
+      const notice = about === undefined ? result.notice : aboutCard(about, result.notice)
       setNotices((was) => ({ ...was, [rowId]: notice }))
       onRefresh?.()
     } else if (!result.ok) setErrors((was) => ({ ...was, [rowId]: result.error }))
     setBusyId(null)
     return result.ok
+  }
+
+  /** A person's decision on a question card (plan B Task 9 carry): what it did is shown, named by
+   *  its card, and the queue is asked for again at once rather than at the next stream event -- the
+   *  card it decided leaves the list. A card settled first is a notice and a refresh, as in `send`. */
+  const decide = async (rowId: string, url: string, body: Record<string, unknown>, about: string): Promise<void> => {
+    setBusyId(rowId)
+    setErrors((was) => {
+      const { [rowId]: _gone, ...rest } = was
+      return rest
+    })
+    setNotices((was) => {
+      const { [rowId]: _gone, ...rest } = was
+      return rest
+    })
+    const result = await postDecision(url, body)
+    if (result.ok || result.notice !== null) {
+      const text = result.ok ? result.summary : result.notice
+      if (text !== null) setNotices((was) => ({ ...was, [rowId]: aboutCard(about, text) }))
+      onRefresh?.()
+    } else setErrors((was) => ({ ...was, [rowId]: result.error }))
+    setBusyId(null)
   }
 
   /** Send an answer, and empty the box only if it was actually written. */
@@ -206,11 +232,11 @@ export function SupervisorTimeline({
                     // The same two envelopes `SupervisorPanel` sends: no body at all unless the
                     // operator rewrote the draft, and a blank reason is no reason rather than an
                     // empty one.
-                    onApprove={(body) => void send(rowId, `${url}/approve`, body === undefined ? undefined : { body })}
-                    onReject={(reason) => void send(rowId, `${url}/reject`, reason.trim() === '' ? {} : { reason })}
-                    // Human cards H2: a question card's decision, posted as the decide route's body.
-                    // Through the same `send`, so a card settled first is a notice and a refresh.
-                    onDecide={(body) => void send(rowId, `${url}/decide`, body)}
+                    onApprove={(body) => void send(rowId, `${url}/approve`, body === undefined ? undefined : { body }, entry.title)}
+                    onReject={(reason) => void send(rowId, `${url}/reject`, reason.trim() === '' ? {} : { reason }, entry.title)}
+                    // Human cards H2: a question card's decision, posted as the decide route's body;
+                    // its outcome shown and the queue refreshed at once (plan B Task 9 carry).
+                    onDecide={(body) => void decide(rowId, `${url}/decide`, body, entry.title)}
                   />
                   {error !== null && <li>{error}</li>}
                 </ul>

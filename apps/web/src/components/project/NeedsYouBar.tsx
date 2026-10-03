@@ -5,21 +5,53 @@ import { useEffect, useRef, useState } from 'react'
 import type { NeedsYouItem } from '../../server/needsYou'
 import { useShellFacts } from '../../hooks/useShellFacts'
 import { formatAge } from '../../lib/format'
-import { postControl } from '../../lib/postControl'
+import { aboutCard, postControl, postDecision } from '../../lib/postControl'
 import { Button } from '../ui/Button'
 import { Chip } from '../ui/Chip'
 import { LiveDot } from '../ui/LiveDot'
 import { ScrollArea } from '../ui/ScrollArea'
 
+/** What one click on a needs-you row does: a machine card's approve or reject, or `send_answer` on
+ *  a question card that offers it (pre-flight F56). */
+export type NeedsYouVerdict = 'approve' | 'reject' | 'send_answer'
+
+/**
+ * One click on a needs-you row, posted (plan B Task 9): a machine card through its approve/reject
+ * route, a question card's `send_answer` through the decide route -- so the person's decision is
+ * recorded and reported (spec H1), never the bare approve. Shared by the strip and Home, which draw
+ * the same row. Returns what to show: the outcome or a settled-first notice (each named by the card
+ * it is about), or the refusal.
+ */
+export async function answerNeedsYou(
+  workspaceId: string,
+  item: NeedsYouItem,
+  verdict: NeedsYouVerdict,
+): Promise<{ readonly notice: string | null; readonly error: string | null }> {
+  const url = `/api/w/${workspaceId}/supervisor/decisions/${item.decisionId ?? item.id}`
+  if (verdict === 'send_answer') {
+    const result = await postDecision(`${url}/decide`, { kind: 'send_answer' })
+    if (result.ok) return { notice: result.summary === null ? null : aboutCard(item.title, result.summary), error: null }
+    return result.notice !== null ? { notice: aboutCard(item.title, result.notice), error: null } : { notice: null, error: result.error }
+  }
+  const result = await postControl(`${url}/${verdict}`)
+  if (result.ok) return { notice: null, error: null }
+  return result.notice !== null ? { notice: aboutCard(item.title, result.notice), error: null } : { notice: null, error: result.error }
+}
+
 /**
  * One `needs-you-row` (M61 R7/Task 6, spec erratum E8), pulled out of this bar so Home's own
  * cross-project queue (Task 8) can draw the SAME row rather than a second copy of it: the
- * `data-kind`, the title link, the age and the decision's Approve/Reject pair are all exactly what
- * this bar has always rendered.
+ * `data-kind`, the title link, the age and the decision's actions are all exactly what this bar
+ * renders.
  *
  * `workspaceName` is the one thing Home's queue needs that this bar never has: this bar is already
- * scoped to one project, so its own callers pass nothing and the chip is absent, byte-identical to
- * before this extraction.
+ * scoped to one project, so its own callers pass nothing and the chip is absent.
+ *
+ * Human cards H4 (plan B Task 9): the row names its goal version, says when it blocks that version
+ * (`data-blocking`, and in words, not by colour alone), and says how many items merged into it, each
+ * one link away. One click only where `oneClick` holds: a machine card keeps Approve and Reject; a
+ * question card offers "Send this answer" only when the card offers `send_answer`, never Reject
+ * ("dismiss and close" is one of the card's decisions), and always a "decide" link to the card.
  */
 export function NeedsYouRow({
   item,
@@ -32,7 +64,7 @@ export function NeedsYouRow({
    *  `NeedsYouBar`'s own project-scoped queue. */
   readonly workspaceName?: string
   readonly busy: string | null
-  readonly onAnswer: (decisionId: string, verdict: 'approve' | 'reject') => void
+  readonly onAnswer: (item: NeedsYouItem, verdict: NeedsYouVerdict) => void
 }): React.JSX.Element {
   // Hydration-mismatch fix (final-review wave, T11 minor promoted): `formatAge` reads `Date.now()`,
   // which is a different instant on the server (render time) and the client (hydrate time) --
@@ -41,43 +73,106 @@ export function NeedsYouRow({
   // later, same idiom, same reason.
   const [mounted, setMounted] = useState(false)
   useEffect((): void => setMounted(true), [])
+  const isDecision = item.kind === 'decision' && item.decisionId !== null
+  const disabled = busy !== null && busy === item.decisionId
+  const decideLink = (
+    <Link
+      data-testid="needs-you-open"
+      href={item.href}
+      title={`decide: ${item.title}`}
+      className="type-meta text-t1 underline"
+    >
+      decide
+    </Link>
+  )
   return (
-    // A `<div>`, not a `<Link>` (review fix round 1, Important 1): a decision row's Approve/
-    // Reject are real `<button>`s, and nesting a button inside an anchor is invalid HTML the
-    // Task 6 version got away with only because nothing on the row was ever clicked but the
-    // row itself. The title is the row's own link now; the buttons are its siblings.
-    <div data-testid="needs-you-row" data-kind={item.kind} className="type-meta flex items-center gap-2">
-      <LiveDot tone="waiting" />
-      {workspaceName !== undefined && (
-        <Chip testId="needs-you-project" tone="waiting">
-          {workspaceName}
-        </Chip>
-      )}
-      <Link href={item.href} className="min-w-0 flex-1 truncate text-t1 hover:underline">
-        {item.title}
-      </Link>
-      <span className="shrink-0 text-t3">{mounted ? formatAge(item.since) : ''}</span>
-      {item.kind === 'decision' && item.decisionId !== null && (
-        <span className="flex flex-none gap-[6px]">
-          <Button
-            variant="primary"
-            size="sm"
-            data-testid="needs-you-approve"
-            disabled={busy === item.decisionId}
-            onClick={() => onAnswer(item.decisionId as string, 'approve')}
-          >
-            Approve
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            data-testid="needs-you-reject"
-            disabled={busy === item.decisionId}
-            onClick={() => onAnswer(item.decisionId as string, 'reject')}
-          >
-            Reject
-          </Button>
-        </span>
+    // A `<div>`, not a `<Link>` (review fix round 1, Important 1): a decision row's buttons are
+    // real `<button>`s, and nesting a button inside an anchor is invalid HTML. The title is the
+    // row's first link; the buttons are its siblings.
+    <div
+      data-testid="needs-you-row"
+      data-kind={item.kind}
+      data-blocking={item.blocking ? 'true' : 'false'}
+      className="type-meta flex flex-col gap-[2px]"
+    >
+      <div className="flex items-center gap-2">
+        <LiveDot tone={item.blocking ? 'blocked' : 'waiting'} />
+        {workspaceName !== undefined && (
+          <Chip testId="needs-you-project" tone="waiting">
+            {workspaceName}
+          </Chip>
+        )}
+        {item.goalVersion !== null && (
+          <Chip testId="needs-you-version" title={`goal version ${String(item.goalVersion)}`}>
+            {`v${String(item.goalVersion)}`}
+          </Chip>
+        )}
+        <Link href={item.href} className="min-w-0 flex-1 truncate text-t1 hover:underline">
+          {item.title}
+        </Link>
+        {item.blocking && (
+          <span data-testid="needs-you-blocking" className="shrink-0 font-medium text-s-blocked">
+            {item.goalVersion === null ? 'blocking' : `blocking v${String(item.goalVersion)}`}
+          </span>
+        )}
+        <span className="shrink-0 text-t3">{mounted ? formatAge(item.since) : ''}</span>
+        {isDecision && item.questionCard && (
+          <span className="flex flex-none items-center gap-[6px]">
+            {item.oneClick && (
+              <Button
+                variant="primary"
+                size="sm"
+                data-testid="needs-you-approve"
+                data-verdict="send_answer"
+                disabled={disabled}
+                onClick={() => onAnswer(item, 'send_answer')}
+              >
+                Send this answer
+              </Button>
+            )}
+            {decideLink}
+          </span>
+        )}
+        {isDecision && !item.questionCard && item.oneClick && (
+          <span className="flex flex-none gap-[6px]">
+            <Button
+              variant="primary"
+              size="sm"
+              data-testid="needs-you-approve"
+              disabled={disabled}
+              onClick={() => onAnswer(item, 'approve')}
+            >
+              Approve
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid="needs-you-reject"
+              disabled={disabled}
+              onClick={() => onAnswer(item, 'reject')}
+            >
+              Reject
+            </Button>
+          </span>
+        )}
+        {isDecision && !item.questionCard && !item.oneClick && <span className="flex flex-none">{decideLink}</span>}
+      </div>
+      {item.merged.length > 0 && (
+        // Merging never hides something a person has to do (spec H4): how many, and each one link away.
+        <details data-testid="needs-you-merged" data-count={item.merged.length} className="ml-[14px] text-t2">
+          <summary className="cursor-pointer">
+            {`+${String(item.merged.length)} more on this subject`}
+          </summary>
+          <ul className="mt-[2px] flex flex-col gap-[2px]">
+            {item.merged.map((member) => (
+              <li key={`${member.kind}-${member.id}`} data-kind={member.kind}>
+                <Link href={member.href} className="truncate text-t2 hover:underline">
+                  {member.title}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
     </div>
   )
@@ -104,7 +199,8 @@ const NEEDS_YOU_REFETCH_MS = 5_000
  * `/api/w/:id/supervisor/decisions/:id/(approve|reject)` route, `needs-you-approve`/
  * `needs-you-reject`, and the same shared `needs-you-error` line. It refetches directly on success
  * rather than waiting for the throttled poll: the row it just answered must not sit there stale
- * for up to `NEEDS_YOU_REFETCH_MS`.
+ * for up to `NEEDS_YOU_REFETCH_MS`. A question card's one click is `send_answer` on the decide
+ * route instead (plan B Task 9, pre-flight F56), and what it did is shown in `needs-you-notice`.
  */
 export function NeedsYouBar({
   workspaceId,
@@ -157,27 +253,24 @@ export function NeedsYouBar({
     // alone and is recreated every render; depending on it would defeat the throttle above.
   }, [workspaceId, shellFacts])
 
-  /** Copied off the deleted `NeedsYouCard.tsx`'s own `answer` -- same route, same "no optimistic
-   *  removal, the refusal belongs to the attempt that earned it" rule. It DOES refetch on success
-   *  now, though (unlike the old card, which rode the page's own stream): this bar has no stream
-   *  of its own to ride, so the row it just answered has to be asked for directly. */
-  const answer = async (decisionId: string, verdict: 'approve' | 'reject'): Promise<void> => {
-    setBusy(decisionId)
+  /** Copied off the deleted `NeedsYouCard.tsx`'s own `answer` -- "no optimistic removal, the
+   *  refusal belongs to the attempt that earned it" -- through {@link answerNeedsYou}. It refetches
+   *  right after every settled click: this bar has no stream of its own to ride, so the row it just
+   *  answered has to be asked for directly (plan B Task 9 carry: no wait for the next poll). */
+  const answer = async (item: NeedsYouItem, verdict: NeedsYouVerdict): Promise<void> => {
+    if (item.decisionId === null) return
+    setBusy(item.decisionId)
     setErrorText(null)
     setNoticeText(null)
-    const result = await postControl(`/api/w/${workspaceId}/supervisor/decisions/${decisionId}/${verdict}`)
+    const result = await answerNeedsYou(workspaceId, item, verdict)
     setBusy(null)
-    if (!result.ok && result.notice !== null) {
-      // Human cards spec §4: somebody else settled it first -- who and when, then a fresh list.
-      setNoticeText(result.notice)
-      lastFetchedAt.current = Date.now()
-      await load()
-      return
-    }
-    if (!result.ok) {
+    if (result.error !== null) {
       setErrorText(result.error)
       return
     }
+    // Human cards spec §4: somebody else settled it first -- who and when -- or what the decision
+    // did; either way named by its card, then a fresh list.
+    setNoticeText(result.notice)
     lastFetchedAt.current = Date.now()
     await load()
   }
@@ -204,7 +297,7 @@ export function NeedsYouBar({
             key={`${item.kind}-${item.id}`}
             item={item}
             busy={busy}
-            onAnswer={(decisionId, verdict) => void answer(decisionId, verdict)}
+            onAnswer={(row, verdict) => void answer(row, verdict)}
           />
         ))}
       </ScrollArea>

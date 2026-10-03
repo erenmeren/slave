@@ -190,8 +190,9 @@ export async function buildSupervisorTimeline(
   }
 
   // The DECISION REQUIRED lane's live half: the same queue the brief's tile counts, so the number
-  // and the list can never disagree (spec R2's "each with its existing inline action").
-  for (const item of waiting) {
+  // and the list can never disagree (spec R2's "each with its existing inline action"). Every item
+  // of a merged row, not only its head (human cards H4): this lane is where each is acted on.
+  for (const item of waiting.flatMap((row) => [row, ...row.merged])) {
     const subject = SUBJECT_BY_ITEM_KIND[item.kind]
     if (subject === null) continue
     const lane = laneFor(subject)
