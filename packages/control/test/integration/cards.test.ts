@@ -201,7 +201,7 @@ describe('decideCard: answers and dismissal (human cards H2.1, H2.2, H2.7)', () 
     const f = await seedCard()
     const question = (await loadQuestionCards(f.workspaceId, [f.questionId])).get(f.questionId)
     if (question === undefined) throw new Error('no card question')
-    const card: PendingCard = { id: f.cardId, workspaceId: f.workspaceId, subjectId: f.questionId, actionKind: 'escalate_to_human', question: { ...question, offers: ['dismiss'] } }
+    const card: PendingCard = { id: f.cardId, workspaceId: f.workspaceId, subjectId: f.questionId, actionKind: 'escalate_to_human', action: { kind: 'escalate_to_human', summary: 'a person decides' }, question: { ...question, offers: ['dismiss'] } }
     await prisma.slaveMessage.update({ where: { id: f.questionId }, data: { closedAt: new Date(), closedReason: 'decided', closedBy: 'u2' } })
     const now = new Date()
     const thrown = await prisma
@@ -212,6 +212,73 @@ describe('decideCard: answers and dismissal (human cards H2.1, H2.2, H2.7)', () 
     // The claim was written before the refusal was known; the throw rolled it back.
     expect(await cardOf(f)).toMatchObject({ status: 'pending', resolvedAt: null, personDecision: null })
     expect(await questionOf(f)).toMatchObject({ closedReason: 'decided', closedBy: 'u2' })
+  })
+
+  it('records the person\'s decision in the approval\'s own claim on an answer card, and names it in the event (review M4)', async () => {
+    const f = await seedCard({ draft: 'Yes: the skeleton adds it.' })
+    expect((await decideCard(f.cardId, { kind: 'send_answer' }, { userId: 'u1' })).ok).toBe(true)
+    expect((await cardOf(f)).personDecision).toMatchObject({ decision: { kind: 'send_answer' }, by: 'u1', goalVersion: 1, summary: 'sent the drafted answer' })
+    const resolved = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'supervisor_resolved' } })
+    expect(resolved.map((e) => e.payload)).toEqual([{ decisionId: f.cardId, outcome: 'approved', reason: 'A person decided: sent the drafted answer' }])
+  })
+
+  it('answers on a re-address card without approving the move it proposed (review I1)', async () => {
+    const f = await seedCard()
+    const seat = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: f.workspaceId } } })
+    const action = { kind: 'reassign_question', messageId: f.questionId, toSlaveId: seat.id }
+    const move = await prisma.supervisorDecision.create({ data: { workspaceId: f.workspaceId, situationKind: 'unanswerable_question', subjectId: f.questionId, situation: { kind: 'unanswerable_question', subjectId: f.questionId, summary: 'x', facts: {} }, candidates: [{ action, tier: 'proposed', why: 'x' }], chosenIndex: 0, action, rationale: 'x', tier: 'proposed', status: 'pending', decidedBy: 'rules' } })
+    await prisma.supervisorDecision.delete({ where: { id: f.cardId } })
+    const before = await questionOf(f)
+    expect((await decideCard(move.id, { kind: 'write_answer', body: 'Yes, add it.' }, { userId: 'u1' })).ok).toBe(true)
+    expect(await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: move.id } })).toMatchObject({ status: 'rejected', resolvedByUserId: 'u1' })
+    const after = await questionOf(f)
+    expect(after).toMatchObject({ closedReason: 'answered', closedBy: 'u1' })
+    // The proposed re-address was never carried out: the question is addressed as it was.
+    expect({ recipientSlaveId: after.recipientSlaveId, recipientRole: after.recipientRole }).toEqual({ recipientSlaveId: before.recipientSlaveId, recipientRole: before.recipientRole })
+    expect(await answersTo(f)).toBe(1)
+  })
+
+  it('approves an answer written on an escalation card (review I1)', async () => {
+    const f = await seedCard()
+    expect((await decideCard(f.cardId, { kind: 'write_answer', body: 'Yes.' }, { userId: 'u1' })).ok).toBe(true)
+    expect((await cardOf(f)).status).toBe('approved')
+  })
+
+  it('refuses, inside the transaction, a card claimed by someone else after the unlocked read (review M1)', async () => {
+    const f = await seedCard()
+    const question = (await loadQuestionCards(f.workspaceId, [f.questionId])).get(f.questionId)
+    if (question === undefined) throw new Error('no card question')
+    const card: PendingCard = { id: f.cardId, workspaceId: f.workspaceId, subjectId: f.questionId, actionKind: 'escalate_to_human', action: { kind: 'escalate_to_human', summary: 'a person decides' }, question }
+    // The winner took the card between `decideCard`'s read and this claim.
+    const takenAt = new Date()
+    await prisma.supervisorDecision.update({ where: { id: f.cardId }, data: { status: 'approved', resolvedAt: takenAt, resolvedByUserId: 'u2' } })
+    const now = new Date()
+    const thrown = await prisma
+      .$transaction((tx) => claimAndClose(tx, { card, status: 'rejected', principal: { userId: 'u1' }, personDecision: { decision: { kind: 'dismiss', reason: null }, goalVersion: 1, by: 'u1', at: now.toISOString(), summary: 'dismissed the question' }, close: { reason: 'dismissed', note: 'n' }, now }))
+      .then(() => null, (error: unknown) => error)
+    expect((thrown as CardRefused).refusal).toEqual({ kind: 'decision_not_pending', decisionId: f.cardId, status: 'approved', resolvedAt: takenAt.toISOString(), resolvedByUserId: 'u2' })
+    expect(await cardOf(f)).toMatchObject({ status: 'approved', resolvedByUserId: 'u2', personDecision: null })
+    expect((await questionOf(f)).closedAt).toBeNull()
+    expect(await closeEvents(f)).toBe(0)
+  })
+
+  it('marks the card failed, with the failed event, when the answer is refused after the claim (review M6)', async () => {
+    const f = await seedCard()
+    // `answerQuestion` reads its question on the shared client; the claim reads on the transaction's.
+    const delegate = prisma.slaveMessage as unknown as { findUnique: (...args: unknown[]) => Promise<unknown> }
+    const original = delegate.findUnique
+    delegate.findUnique = () => Promise.resolve(null)
+    let refused
+    try {
+      refused = await decideCard(f.cardId, { kind: 'write_answer', body: 'Yes.' }, { userId: 'u1' })
+    } finally {
+      delegate.findUnique = original
+    }
+    expect(!refused.ok && refused.error.kind).toBe('message_not_found')
+    expect(await cardOf(f)).toMatchObject({ status: 'failed', failureReason: `no message with id ${f.questionId}` })
+    const failed = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'supervisor_failed' } })
+    expect(failed.map((e) => e.payload)).toEqual([{ decisionId: f.cardId, action: { kind: 'escalate_to_human', summary: 'a person decides' }, reason: `no message with id ${f.questionId}` }])
+    expect((await questionOf(f)).closedAt).toBeNull()
   })
 
   it('reports a committed decision as made when a step after the commit fails (ruling F54)', async () => {
@@ -259,7 +326,7 @@ describe('decideCard on a question its run continued past (ruling F37)', () => {
     const question = (await loadQuestionCards(f.workspaceId, [f.questionId])).get(f.questionId)
     if (question === undefined) throw new Error('no card question')
     expect(question.lateAnswerFate).toBe('hand_off')
-    const card: PendingCard = { id: f.cardId, workspaceId: f.workspaceId, subjectId: f.questionId, actionKind: 'escalate_to_human', question }
+    const card: PendingCard = { id: f.cardId, workspaceId: f.workspaceId, subjectId: f.questionId, actionKind: 'escalate_to_human', action: { kind: 'escalate_to_human', summary: 'a person decides' }, question }
     await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'verifying' } })
     const now = new Date()
     const thrown = await prisma

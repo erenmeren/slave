@@ -1057,11 +1057,15 @@ async function addRuntimeRoles(
  * until somebody types one. Every reason an approval could be refused is established BEFORE
  * {@link claimPending} runs, so a refused approval leaves the proposal exactly as open as it found
  * it (fix round 1).
+ *
+ * `personDecision` (human cards plan B): what a person decided on a question card, when the approval
+ * comes from `decideCard` -- written by the claim, and named in the resolved event's reason.
  */
 export async function approveDecision(
   decisionId: string,
   principal?: Principal,
   edit?: { readonly body: string },
+  personDecision?: PersonDecision,
 ): Promise<Result<void, ControlRefusal>> {
   // Everything this approval can be refused for is checked BEFORE the row is claimed -- with an
   // edit AND without one (fix round 1): a refusal must not consume the one pending decision a human
@@ -1084,9 +1088,16 @@ export async function approveDecision(
     return err({ kind: 'draft_missing', decisionId })
   }
 
+  // Plan B (review M4): a person's card decision (`decideCard`) is written by the claim itself, so the
+  // card is never approved without the record the goal report reads.
   const claim = await claimPending(
     decisionId,
-    { status: 'approved', resolvedAt: new Date(), resolvedByUserId: principal?.userId ?? null },
+    {
+      status: 'approved',
+      resolvedAt: new Date(),
+      resolvedByUserId: principal?.userId ?? null,
+      ...(personDecision === undefined ? {} : { personDecision: personDecision as unknown as Prisma.InputJsonValue }),
+    },
     { verdict: 'approved', reason: null, principal },
   )
   if (!claim.ok) return claim
@@ -1114,7 +1125,7 @@ export async function approveDecision(
     // which person (fix round 2). `resolvedByUserId` keeps the same fact on the row. Only an
     // EXPIRY stays `system`: nobody acted there, which is the whole fact it records.
     actor: 'human',
-    payload: { decisionId, outcome: 'approved', reason: null },
+    payload: { decisionId, outcome: 'approved', reason: personDecision === undefined ? null : `A person decided: ${personDecision.summary}` },
     userId: principal?.userId ?? null,
   })
 
@@ -1250,7 +1261,7 @@ async function answerDraft(decisionId: string): Promise<Result<Draft | null | 'n
  */
 async function claimPending(
   decisionId: string,
-  data: { readonly status: DecisionStatus; readonly resolvedAt: Date; readonly resolvedByUserId: string | null },
+  data: { readonly status: DecisionStatus; readonly resolvedAt: Date; readonly resolvedByUserId: string | null; readonly personDecision?: Prisma.InputJsonValue },
   verdict: { readonly verdict: 'approved' | 'rejected'; readonly reason: string | null; readonly principal: Principal | undefined },
 ): Promise<Result<{ readonly workspaceId: string; readonly closedInClaim: boolean; readonly close: CardClose | null }, ControlRefusal>> {
   return prisma.$transaction(async (tx) => {

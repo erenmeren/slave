@@ -9,6 +9,7 @@ import {
   personDecisionSummary,
   personText,
   storableJsonReviver,
+  type Action,
   type CardDecision,
   type CardDecisionKind,
   type PersonDecision,
@@ -62,6 +63,8 @@ export interface PendingCard {
   readonly workspaceId: string
   readonly subjectId: string
   readonly actionKind: string
+  /** The card's proposed action as stored (the `supervisor.failed` event names it). */
+  readonly action: Action
   readonly question: QuestionCard
 }
 
@@ -182,10 +185,16 @@ export async function inCardTransaction<T>(work: () => Promise<T>): Promise<Resu
   }
 }
 
-/** The status a person's decision leaves the card in (plan B D3). */
+/**
+ * The status a person's decision leaves the card in (plan B D3): `approved` only when the person
+ * carried out what the card asked -- an answer on an answer card or on an escalation, any decision
+ * on an escalation. On a card proposing the machine's own move (hire, seat, assign a capability,
+ * re-address), a person's answer or decision is `rejected`: that proposed action was not taken
+ * (Task 3 ruling, review I1).
+ */
 function statusFor(actionKind: string, decision: CardDecision): 'approved' | 'rejected' {
   if (decision.kind === 'dismiss') return 'rejected'
-  if (decision.kind === 'send_answer' || decision.kind === 'write_answer') return 'approved'
+  if (decision.kind === 'send_answer' || decision.kind === 'write_answer') return actionKind === 'answer_question' || actionKind === 'escalate_to_human' ? 'approved' : 'rejected'
   return actionKind === 'escalate_to_human' ? 'approved' : 'rejected'
 }
 
@@ -221,7 +230,7 @@ export async function decideCard(decisionId: string, raw: unknown, principal?: P
   }
   if (!question.offers.includes(decision.kind)) return err({ kind: 'card_decision_not_offered', decisionId, decision: decision.kind })
 
-  const card: PendingCard = { id: row.id, workspaceId: row.workspaceId, subjectId: row.subjectId, actionKind: action.data.kind, question }
+  const card: PendingCard = { id: row.id, workspaceId: row.workspaceId, subjectId: row.subjectId, actionKind: action.data.kind, action: action.data, question }
   const now = new Date()
   const target = { packageKey: decision.kind === 'give_file' ? decision.toPackage : decision.kind === 'give_work' && 'package' in decision.target ? decision.target.package : null }
   const record = (extra: Partial<PersonDecision> = {}): PersonDecision => ({
@@ -237,7 +246,7 @@ export async function decideCard(decisionId: string, raw: unknown, principal?: P
   switch (decision.kind) {
     case 'send_answer':
     case 'write_answer':
-      return decideAnswer(card, decision, record(), principal, now)
+      return decideAnswer(card, decision, record(), status, principal, now)
     case 'dismiss': {
       const input: ClaimInput = {
         card,
@@ -265,14 +274,17 @@ export async function decideCard(decisionId: string, raw: unknown, principal?: P
  * H2.1/H2.2: an answer. On an answer card, the approval path (an edit for a person's own words,
  * which applies neither the draft's decision nor its hand-off). On any other question card, the card
  * is claimed with no close -- `answerQuestion` closes the question `answered` in its own transaction
- * -- and a refusal there marks the card failed with the reason. A crash between the two leaves the
- * card approved with the person's text in `personDecision`, and `healApprovedClose` leaves such a
- * question open rather than closing it `decided` (ruling F51).
+ * -- and a refusal there marks the card failed with the reason and a `supervisor.failed` event. The
+ * card is `approved` on an escalation and `rejected` on a re-address card, whose proposed move was
+ * not taken ({@link statusFor}). A crash between the two leaves the card resolved with the person's
+ * text in `personDecision`, and `healApprovedClose` leaves such a question open rather than closing
+ * it `decided` (ruling F51).
  */
 async function decideAnswer(
   card: PendingCard,
   decision: Extract<CardDecision, { kind: 'send_answer' | 'write_answer' }>,
   personDecision: PersonDecision,
+  status: 'approved' | 'rejected',
   principal: Principal | undefined,
   now: Date,
 ): Promise<Result<DecideOutcome, ControlRefusal>> {
@@ -282,26 +294,28 @@ async function decideAnswer(
   // Before any write: a body of NULs alone is empty once storable.
   if (body === '') return err({ kind: 'invalid_card_decision', reason: 'the answer is empty' })
   if (card.actionKind === 'answer_question') {
-    const approved = await approveDecision(card.id, principal, body === null ? undefined : { body })
+    // The person's decision is written by the approval's own conditional claim (review M4), so a
+    // card is never approved without it; the resolved event carries its summary.
+    const approved = await approveDecision(card.id, principal, body === null ? undefined : { body }, personDecision)
     if (!approved.ok) return approved
-    try {
-      // The approval's claim was this person's (it returned ok), so the record is theirs to write.
-      await prisma.supervisorDecision.update({ where: { id: card.id }, data: { personDecision: personDecision as unknown as Prisma.InputJsonValue } })
-    } catch (error) {
-      console.error(`[cards] decision ${card.id}: the person's decision was not recorded on it:`, error)
-    }
     return ok({ decision: decision.kind, summary: personDecision.summary })
   }
   if (body === null) return err({ kind: 'card_decision_not_offered', decisionId: card.id, decision: decision.kind })
-  const input: ClaimInput = { card, status: 'approved', principal, personDecision, close: null, now }
+  const input: ClaimInput = { card, status, principal, personDecision, close: null, now }
   const claimed = await inCardTransaction(() => prisma.$transaction((tx) => claimAndClose(tx, input)))
   if (!claimed.ok) return claimed
   const answered = await answerQuestion(card.subjectId, { body, answeredBy: 'a person, on a card', ...(principal === undefined ? {} : { principal }) }, 'human')
   if (!answered.ok) {
     // The claim committed, the answer did not: the card says why, and the question stays as it was
     // (spec §4: a refused decision does not close the question).
+    // Recorded as `applyDecision` records a refused action: the row `failed` with the reason, and a
+    // `supervisor.failed` event (review M6). Said and swallowed: the refusal is what is returned.
     try {
-      await prisma.supervisorDecision.updateMany({ where: { id: card.id, status: 'approved' }, data: { status: 'failed', failureReason: refusalText(answered.error) } })
+      const reason = refusalText(answered.error)
+      const failed = await prisma.supervisorDecision.updateMany({ where: { id: card.id, status }, data: { status: 'failed', failureReason: reason } })
+      if (failed.count === 1) {
+        await appendEvent({ type: 'supervisor.failed', workspaceId: card.workspaceId, actor: 'system', payload: { decisionId: card.id, action: card.action, reason }, userId: principal?.userId ?? null })
+      }
     } catch (error) {
       console.error(`[cards] decision ${card.id}: its refused answer was not recorded:`, error)
     }
