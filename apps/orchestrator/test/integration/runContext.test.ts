@@ -3,13 +3,15 @@ import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
-import { adoptRunbook, recordMemory, refusalText, reopenForHandOffs, routeHandOffs, syncCapabilityTaxonomy, syncRunbooks } from '@slave-of-ai/control'
+import { adoptRunbook, decideCard, recordMemory, refusalText, reopenForHandOffs, routeHandOffs, sendMessage, syncCapabilityTaxonomy, syncRunbooks } from '@slave-of-ai/control'
 import { Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   ANSWER_BLOCK_OPEN,
   ASK_BLOCK_OPEN,
+  CONDUCTOR_ROLE,
   HANDOFF_TRUST_LINE,
   IMPLEMENTATION_WORK_RULES,
+  OPERATOR_HANDOFF_HEADING,
   PLANNING_GRAPH_INSTRUCTIONS,
   PROFILE_MAX_CHARS,
   REPLAN_INSTRUCTIONS,
@@ -910,6 +912,57 @@ describe('buildRunContext', () => {
       expect((await prisma.packageHandOff.findUniqueOrThrow({ where: { id: pending.id } })).shownInRunId).toBe(fixture.runId)
     })
 
+    /** A card a person decides: the config package's run is parked on a question to the conductor,
+     *  escalated to a person (human cards plan B). */
+    async function questionCard(): Promise<string> {
+      const config = await prisma.workPackage.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId, key: 'config' } })
+      const configTask = await prisma.task.create({ data: { workspaceId: fixture.workspaceId, title: 'Config', description: 'x', status: 'waiting', requiredRole: 'backend', maxAttempts: 3, goalVersion: 1, workPackageId: config.id } })
+      const asker = await prisma.slaveRun.create({ data: { taskId: configTask.id, slaveId: fixture.slaveId, status: 'paused', pauseReason: 'waiting_for_answer', pausedAt: new Date(), kind: 'implementation' } })
+      await prisma.task.update({ where: { id: configTask.id }, data: { activeRunId: asker.id } })
+      const asked = await sendMessage(asker.id, { kind: 'question', body: 'How does the product start?', recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId: configTask.id })
+      if (!asked.ok) throw new Error(JSON.stringify(asked.error))
+      const action = { kind: 'escalate_to_human', summary: 'a person decides' }
+      const card = await prisma.supervisorDecision.create({
+        data: {
+          workspaceId: fixture.workspaceId, situationKind: 'conductor_question', subjectId: asked.value.id,
+          situation: { kind: 'conductor_question', subjectId: asked.value.id, summary: 'q', facts: {} },
+          candidates: [{ action, tier: 'escalated', why: 'x' }], chosenIndex: 0, action, rationale: 'x', tier: 'escalated', status: 'pending', decidedBy: 'rules',
+        },
+      })
+      return card.id
+    }
+
+    it("carries a person's shared decision, decided on another package's card, into a later contract of the version (Task 10 (a))", async () => {
+      await bindToPackage()
+      const card = await questionCard()
+      const decided = await decideCard(card, { kind: 'record_decision', title: 'Start command', text: 'npm start runs node src/server.ts' })
+      expect(decided.ok).toBe(true)
+      expect(await prisma.goalDecision.findFirstOrThrow()).toMatchObject({ source: 'person', goalVersion: 1 })
+
+      const { prompt } = await buildImplementation(fixture)
+
+      expect(prompt).toContain('Shared decisions (every package follows these')
+      expect(prompt).toContain('- Start command: npm start runs node src/server.ts')
+    })
+
+    it("shows a person's work, given on a card, in the first contract of a package that has not started (Task 10 (b))", async () => {
+      await bindToPackage()
+      // The report package has not started: its one task waits for a run, and the fixture's run is its first.
+      await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'ready', goalVersion: 1 } })
+      const card = await questionCard()
+      const decided = await decideCard(card, { kind: 'give_work', target: { package: 'report' }, request: 'print the start command in the report header' })
+      expect(decided.ok && decided.value.summary).toBe('gave the report package work: print the start command in the report header')
+      expect(await prisma.packageHandOff.findMany()).toMatchObject([{ source: 'person', toPackageKey: 'report', status: 'pending', shownInRunId: null }])
+
+      const { prompt } = await buildImplementation(fixture)
+
+      const heading = prompt.indexOf(OPERATOR_HANDOFF_HEADING)
+      expect(heading).toBeGreaterThanOrEqual(0)
+      expect(prompt.indexOf('- from the operator: print the start command in the report header')).toBeGreaterThan(heading)
+      expect(prompt).not.toContain(HANDOFF_TRUST_LINE)
+      expect((await prisma.packageHandOff.findFirstOrThrow()).shownInRunId).toBe(fixture.runId)
+    })
+
     it('says nothing extra for a package with no decisions, hand-offs or reports (spec §4)', async () => {
       await bindToPackage()
       const { prompt } = await buildImplementation(fixture)
@@ -1083,6 +1136,30 @@ describe('buildRunContext', () => {
 
       expect(prompt).toContain('Asked of your package by other packages')
       expect(prompt.split('read the page size from Config.pageSize')).toHaveLength(2)
+    })
+
+    /** Final wave minor: a peer's late answer is named by its seat in the rework reason AND in the
+     *  contract's match against it, so the reopen run is shown it once, not twice. */
+    it("shows a reopen run a peer's late answer once, named by its seat", async () => {
+      await bindToPackage()
+      await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'done', integratedAt: new Date() } })
+      const delivery = await prisma.goalDelivery.create({ data: { workspaceId: fixture.workspaceId, goalVersion: 1, integrationBranch: 'slaveofai/goal-v1-x', baseCommit: 'a'.repeat(40) } })
+      const ada = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Ada' } })).id } })
+      const answer = await prisma.slaveMessage.create({ data: { workspaceId: fixture.workspaceId, slaveId: ada.id, threadId: 't-late', kind: 'answer', body: 'camelCase', actor: 'slave' } })
+      await prisma.packageHandOff.create({
+        data: {
+          workspaceId: fixture.workspaceId, goalVersion: 1, source: 'answer', sourceKey: `late:${answer.id}:0`, fromRunId: 'r0', fromPackageKey: null, toPackageKey: 'report',
+          packageKey: 'report', change: 'Q: Which shape? A: camelCase', fingerprint: 'f', status: 'pending',
+        },
+      })
+      await reopenForHandOffs(delivery.id)
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).lastRejectionReason).toContain('- from Ada (Reviewer): Q: Which shape? A: camelCase')
+
+      const { prompt } = await buildImplementation(fixture)
+
+      expect(prompt.split('Q: Which shape? A: camelCase')).toHaveLength(2)
+      expect(prompt).not.toContain('Asked of your package')
+      expect(prompt).not.toContain('from the conductor')
     })
 
     it('stamps nothing when the prompt is refused, since nobody was shown it', async () => {

@@ -1,10 +1,20 @@
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   CONDUCTOR_ROLE,
+  HANDOFF_CHANGE_MAX_CHARS,
   HANDOFF_EVENT_CHANGE_MAX_CHARS,
+  displayName,
+  HANDOFF_DELIVERING_STATUS,
   HANDOFF_REOPENS_MAX,
+  handOffFromName,
   handOffFingerprint,
   handOffItemSchema,
+  handOffReopensSpent,
+  handOffRoute,
+  isHandOffVersionEnded,
+  lateAnswerChange,
+  personDecisionSchema,
+  personText,
   renderHandOffQuestion,
   renderHandOffRework,
   resolveHandOff,
@@ -34,8 +44,9 @@ type Tx = Prisma.TransactionClient
 export interface RouteHandOffsInput {
   readonly workspaceId: string
   readonly goalVersion: number
-  readonly source: 'report' | 'answer'
-  /** `report:<runId>` or (Plan B) `answer:<decisionId>`; item i is stored under `<sourceKey>:<i>`. */
+  readonly source: 'report' | 'answer' | 'person'
+  /** `report:<runId>`, `answer:<decisionId>`, `late:<answerId>` or (human cards plan B) `person:<decisionId>`;
+   *  item i is stored under `<sourceKey>:<i>`. */
   readonly sourceKey: string
   /** The run whose report carried it (or whose question the answer answered): a question sender. */
   readonly fromRunId: string
@@ -56,9 +67,6 @@ const HAND_OFF_ORDER = [{ createdAt: 'asc' as const }, { sourceKey: 'asc' as con
 
 /** The statuses a request is "on record" in, for the per-version dedup (plan A D6). */
 const ON_RECORD = ['pending', 'reopened', 'delivered'] as const
-
-/** A target task in one of these can take no more work: the request becomes a conductor question. */
-const CANNOT_TAKE: ReadonlySet<string> = new Set(['failed', 'cancelled'])
 
 /** Thrown inside the lock when a guarded move lost its race: rolls every move of the pass back. */
 class HandOffMoved extends Error {}
@@ -81,8 +89,22 @@ async function withVersionLock<T>(deliveryId: string | null, workspaceId: string
   return deliveryId === null ? prisma.$transaction(locked, { maxWait: 10_000, timeout: 30_000 }) : withDeliveryLock(deliveryId, locked)
 }
 
-/** The version's packages with their one task (plan A D2: the oldest, as every rework path reads it). */
-async function packagesOf(tx: Tx, workspaceId: string, goalVersion: number) {
+/** One package of a version as {@link packagesOf} reads it. */
+export interface VersionPackage {
+  readonly id: string
+  readonly key: string
+  readonly ownedPaths: readonly string[]
+  readonly releasedPaths: readonly string[]
+  readonly isIntegration: boolean
+  readonly handOffReopens: number
+  /** Its one task (plan A D2), or none. */
+  readonly tasks: readonly { readonly id: string; readonly status: string; readonly attempt: number }[]
+}
+
+/** The version's packages with their one task (plan A D2: the oldest, as every rework path reads it).
+ *  Exported for a person's `give_work` (final review M4): the card reads the packages as the routing
+ *  and the reopen pass read them, so the three cannot judge one package differently. */
+export async function packagesOf(tx: Pick<Tx, 'workPackage'>, workspaceId: string, goalVersion: number): Promise<readonly VersionPackage[]> {
   return tx.workPackage.findMany({
     where: { workspaceId, goalVersion },
     orderBy: { key: 'asc' },
@@ -90,6 +112,8 @@ async function packagesOf(tx: Tx, workspaceId: string, goalVersion: number) {
       id: true,
       key: true,
       ownedPaths: true,
+      // Human cards plan B D5: a given file routes to its new owner, never back to the one that gave it.
+      releasedPaths: true,
       isIntegration: true,
       handOffReopens: true,
       tasks: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: 1, select: { id: true, status: true, attempt: true } },
@@ -97,15 +121,81 @@ async function packagesOf(tx: Tx, workspaceId: string, goalVersion: number) {
   })
 }
 
-/** A stored row as the domain renderers read it. */
+/** A stored row as the domain renderers read it. A person's row (`source = person`, human cards plan A
+ *  D10) is rendered under the operator's heading, not under the workers' trust line. */
 export function handOffView(row: {
   readonly id: string
+  readonly source?: string
   readonly fromPackageKey: string | null
   readonly path: string | null
   readonly packageKey: string | null
   readonly change: string
 }): HandOffView {
-  return { id: row.id, from: row.fromPackageKey, path: row.path, packageKey: row.packageKey, change: row.change }
+  return { id: row.id, from: row.fromPackageKey, path: row.path, packageKey: row.packageKey, change: row.change, fromOperator: row.source === 'person' }
+}
+
+/** The answer id behind a late answer's stored key, `late:<answerId>:0` ({@link lateAnswerSourceKey}). */
+const LATE_ANSWER_KEY = /^late:(.+):\d+$/u
+
+/** What a worker's late answer reads as once its answer row is gone with its seat ({@link handOffViews}). */
+const GONE_WORKER = 'another worker'
+
+/**
+ * {@link handOffView} for each row, with a worker's late answer named (final wave minor): it comes
+ * from no package, and "from the conductor" would put the conductor's name on a worker's words. The
+ * answering seat's name, read off the answer row (`sendMessage` writes the sender as `slaveId`). A
+ * person's answer is the operator's (`source = person`) and the Supervisor's (`actor = system`) stays
+ * the conductor's.
+ *
+ * An answer row can be gone: it cascades with its `slaveId` -- the answering seat for a worker's
+ * answer, but the ASKING seat for the Supervisor's (`answerQuestion` writes the asker there) -- so a
+ * missing row alone does not say who wrote it. Its `slave.message_sent` event does (stored as `slave_message_sent`; `ExecutionEvent`
+ * has no foreign key to the seat and outlives it): `actor = slave` reads as "another worker", any
+ * other, or no event at all (a crash between the commit and the append), as the conductor -- the
+ * reading before this change. One read for the answers, a second only when one is gone, none when no
+ * row is a late answer. Every renderer of one set of rows must use this, so a line matched against an
+ * earlier render (the rework reason in `runContext`) matches; a seat renamed or deleted in between
+ * makes the request listed again, never dropped.
+ */
+export async function handOffViews(
+  rows: readonly (Parameters<typeof handOffView>[0] & { readonly sourceKey: string; readonly workspaceId: string })[],
+  client: Pick<Prisma.TransactionClient, 'slaveMessage' | 'executionEvent'> = prisma,
+): Promise<HandOffView[]> {
+  const answerIdOf = (row: { readonly source?: string; readonly fromPackageKey: string | null; readonly sourceKey: string }): string | null =>
+    row.source === 'answer' && row.fromPackageKey === null ? (LATE_ANSWER_KEY.exec(row.sourceKey)?.[1] ?? null) : null
+  const late = rows.flatMap((row) => {
+    const answerId = answerIdOf(row)
+    return answerId === null ? [] : [{ answerId, workspaceId: row.workspaceId }]
+  })
+  if (late.length === 0) return rows.map(handOffView)
+  const answers = await client.slaveMessage.findMany({
+    where: { id: { in: late.map((item) => item.answerId) } },
+    select: { id: true, actor: true, slave: { select: { role: true, person: { select: { name: true } } } } },
+  })
+  const authorOf = new Map<string, string | null>(
+    answers.map((answer) => [answer.id, answer.actor === 'slave' ? displayName({ name: answer.slave.person.name, role: answer.slave.role }) : null] as const),
+  )
+  const gone = late.filter((item) => !authorOf.has(item.answerId))
+  if (gone.length > 0) {
+    const said = await client.executionEvent.findMany({
+      where: {
+        type: 'slave_message_sent',
+        workspaceId: { in: [...new Set(gone.map((item) => item.workspaceId))] },
+        OR: gone.map((item) => ({ payload: { path: ['messageId'], equals: item.answerId } })),
+      },
+      select: { actor: true, payload: true },
+    })
+    for (const event of said) {
+      const messageId = (event.payload as { readonly messageId?: unknown }).messageId
+      if (typeof messageId === 'string' && event.actor === 'slave') authorOf.set(messageId, GONE_WORKER)
+    }
+  }
+  return rows.map((row) => {
+    const view = handOffView(row)
+    const answerId = answerIdOf(row)
+    const author = answerId === null ? null : (authorOf.get(answerId) ?? null)
+    return author === null ? view : { ...view, fromWorker: author }
+  })
 }
 
 /** Controller ruling F8: stored worker text never carries a NUL byte or a lone surrogate (spec §5). */
@@ -156,7 +246,7 @@ export async function routeHandOffs(input: RouteHandOffsInput): Promise<readonly
     // nothing into it: what would be delivered or asked is stored `expired`, as `expirePendingHandOffs`
     // leaves a pending one, and is neither announced, asked nor reopened for.
     const ended = delivery === null ? null : (await tx.goalDelivery.findUnique({ where: { id: delivery.id }, select: { status: true } }))?.status
-    const endedAs = ended === 'accepted' || ended === 'abandoned' ? ended : null
+    const endedAs = typeof ended === 'string' && isHandOffVersionEnded(ended) ? ended : null
     const out: { readonly row: HandOffRow; readonly delivery: Delivery | null }[] = []
     for (const [index, raw] of input.items.entries()) {
       const sourceKey = `${input.sourceKey}:${String(index)}`
@@ -182,7 +272,8 @@ export async function routeHandOffs(input: RouteHandOffsInput): Promise<readonly
         status = 'own'
         note = 'the reporting package owns it'
         routedAs = 'own'
-      } else if (task === undefined || CANNOT_TAKE.has(task.status)) {
+      } else if (handOffRoute(ended ?? null, task?.status) === 'to_conductor') {
+        // Final wave round 2: `handOffRoute`, the rule a late answer's card reads its fate from.
         status = 'to_conductor'
         note = `the ${target.key} package cannot take it: its task is ${task?.status ?? 'gone'}`
         routedAs = 'question'
@@ -290,6 +381,8 @@ export async function routeStoredHandOffs(deliveryId: string): Promise<void> {
     }
   }
   await routeStoredAnswerHandOffs(deliveryId)
+  await routeLateAnswers(deliveryId)
+  await routeStoredPersonHandOffs(deliveryId)
 }
 
 /** Plan B D7: the key prefix an answer's hand-off is stored under; its one item is `answer:<decisionId>:0`. */
@@ -376,6 +469,143 @@ async function routeStoredAnswerHandOffs(deliveryId: string): Promise<void> {
   }
 }
 
+/** Human cards plan A D9: the key a late answer's hand-off is stored under; its one item is `late:<answerId>:0`. */
+export function lateAnswerSourceKey(answerId: string): string {
+  return `late:${answerId}`
+}
+
+/**
+ * Human-cards spec H3, §4 (plan A D9): an answer that never woke anyone because its run had already
+ * continued past the question timeout is routed, as a hand-off, to the package that asked -- spec
+ * §4's "the other becomes a hand-off". Its question is closed `timed_out`, the answer is neither
+ * delivered nor superseded, and its run is not still parked on it with no resume standing (then
+ * `deliverAnswers` delivers it, unless the run has asked again since). A person's answer is
+ * `source = person`, rendered under the operator's heading (D10); another party's is `answer`. The
+ * goal pass's backstop shape, like {@link routeStoredAnswerHandOffs}: one query, idempotent by
+ * {@link lateAnswerSourceKey}, no lock held. A question on a task outside any package is the
+ * inbox's to deliver (`apps/orchestrator/src/inbox.ts`), never routed here.
+ */
+export async function routeLateAnswers(deliveryId: string): Promise<void> {
+  const late = await prisma.$queryRaw<
+    { answerId: string; workspaceId: string; goalVersion: number; senderRunId: string; packageKey: string; question: string; answer: string; actor: string; taskStatus: string; handOffReopens: number }[]
+  >`
+    SELECT a.id AS "answerId", d."workspaceId", d."goalVersion", q."senderRunId", p.key AS "packageKey", q.body AS question, a.body AS answer, a.actor::text AS actor,
+      t.status::text AS "taskStatus", p."handOffReopens" AS "handOffReopens"
+    FROM "GoalDelivery" d
+    JOIN "WorkPackage" p ON p."workspaceId" = d."workspaceId" AND p."goalVersion" = d."goalVersion"
+    JOIN "Task" t ON t."workPackageId" = p.id
+    JOIN "SlaveMessage" q ON q."taskId" = t.id AND q.kind = 'question' AND q."closedReason" = 'timed_out'
+    JOIN "SlaveMessage" a ON a."replyToId" = q.id AND a.kind = 'answer' AND a."deliveredAt" IS NULL AND a."supersededAt" IS NULL
+    WHERE d.id = ${deliveryId}
+      AND q."senderRunId" IS NOT NULL
+      AND NOT (
+        EXISTS (SELECT 1 FROM "SlaveRun" r WHERE r.id = q."senderRunId" AND r.status = 'paused' AND r."pauseReason" = 'waiting_for_answer' AND r."resumeRequestedAt" IS NULL)
+        AND NOT EXISTS (SELECT 1 FROM "SlaveMessage" n WHERE n."senderRunId" = q."senderRunId" AND n.kind = 'question' AND n.seq > q.seq)
+      )
+      AND NOT EXISTS (SELECT 1 FROM "PackageHandOff" h WHERE h."workspaceId" = d."workspaceId" AND h."sourceKey" = 'late:' || a.id || ':0')
+    ORDER BY a."createdAt", a.id`
+  for (const row of late) {
+    // Final-wave residual: a finished asking package at its reopen cap reads no late answer -- its card
+    // says so (`lateAnswerFateOf` gives `unread`) and stays open; routing it would only make a
+    // conductor question (`reopenInLock`). Not routed, by the same rule.
+    if (handOffReopensSpent(row.taskStatus, row.handOffReopens)) continue
+    // One answer that throws is said and skipped; the next pass retries it (no row at `late:<id>:0`).
+    try {
+      await routeHandOffs({
+        workspaceId: row.workspaceId,
+        goalVersion: row.goalVersion,
+        source: row.actor === 'human' ? 'person' : 'answer',
+        sourceKey: lateAnswerSourceKey(row.answerId),
+        fromRunId: row.senderRunId,
+        // Nobody's own package: the asker's package is the target, never `own` (its run has moved on).
+        fromPackageKey: null,
+        items: [{ package: row.packageKey, change: lateAnswerChange(row.question, row.answer) }],
+      })
+    } catch (error) {
+      console.error(`[hand-off] answer ${row.answerId}: its late answer was not routed this pass:`, error)
+    }
+  }
+}
+
+/** Human cards plan B D4: the key a person's `give_work` is stored under; its one item is `person:<decisionId>:0`. */
+export function personHandOffSourceKey(decisionId: string): string {
+  return `person:${decisionId}`
+}
+
+/** Final review I2: the key a decision's hand-off to the ASKING package is stored under (a decision
+ *  on a question its run had already continued past); its one item is `person:<decisionId>:asker:0`. */
+export function personAskerHandOffSourceKey(decisionId: string): string {
+  return `person:${decisionId}:asker`
+}
+
+/**
+ * Human cards plan B D4: the goal pass's backstop for a person's hand-offs whose routing never
+ * landed (a busy delivery lock, or a crash, after the card committed) -- spec C2 "never dropped".
+ * Two kinds, one sweep: a `give_work`'s work (`person:<decisionId>:0`), and (final review I2) a
+ * decision's hand-off to the asking package of a question its run had already continued past
+ * (`personDecision.askerHandOff`, written in the claim; `person:<decisionId>:asker:0`). One query:
+ * the version's question cards a person decided (claimed `approved` or `rejected`), asked by a run,
+ * that carry either and lack its row. Idempotent by {@link personHandOffSourceKey} and
+ * {@link personAskerHandOffSourceKey}; must run with no lock held ({@link routeHandOffs}). The stored
+ * decision is read again by the one schema, and its text made inert as `decideCard` makes it.
+ */
+export async function routeStoredPersonHandOffs(deliveryId: string): Promise<void> {
+  const unrouted = await prisma.$queryRaw<{ id: string; workspaceId: string; goalVersion: number; personDecision: unknown; senderRunId: string; workUnrouted: boolean; askerUnrouted: boolean }[]>`
+    SELECT s.id, s."workspaceId", d."goalVersion", s."personDecision" AS "personDecision", m."senderRunId",
+      (s."personDecision" -> 'decision' ->> 'kind' = 'give_work'
+        AND NOT EXISTS (SELECT 1 FROM "PackageHandOff" h WHERE h."workspaceId" = d."workspaceId" AND h."sourceKey" = 'person:' || s.id || ':0')) AS "workUnrouted",
+      (jsonb_typeof(s."personDecision" -> 'askerHandOff') = 'object'
+        AND NOT EXISTS (SELECT 1 FROM "PackageHandOff" h WHERE h."workspaceId" = d."workspaceId" AND h."sourceKey" = 'person:' || s.id || ':asker:0')) AS "askerUnrouted"
+    FROM "GoalDelivery" d
+    JOIN "SupervisorDecision" s ON s."workspaceId" = d."workspaceId" AND s."personDecision" ->> 'goalVersion' = d."goalVersion"::text
+    JOIN "SlaveMessage" m ON m.id = s."subjectId"
+    WHERE d.id = ${deliveryId}
+      AND s.status IN ('approved', 'rejected')
+      AND m."senderRunId" IS NOT NULL
+      AND (
+        (s."personDecision" -> 'decision' ->> 'kind' = 'give_work'
+          AND NOT EXISTS (SELECT 1 FROM "PackageHandOff" h WHERE h."workspaceId" = d."workspaceId" AND h."sourceKey" = 'person:' || s.id || ':0'))
+        OR (jsonb_typeof(s."personDecision" -> 'askerHandOff') = 'object'
+          AND NOT EXISTS (SELECT 1 FROM "PackageHandOff" h WHERE h."workspaceId" = d."workspaceId" AND h."sourceKey" = 'person:' || s.id || ':asker:0'))
+      )
+    ORDER BY s."resolvedAt", s.id`
+  for (const row of unrouted) {
+    const stored = personDecisionSchema.safeParse(row.personDecision)
+    if (!stored.success) {
+      console.error(`[hand-off] card ${row.id}: its person's decision cannot be read -- not routed`)
+      continue
+    }
+    const route = (sourceKey: string, item: HandOffItem): Promise<unknown> =>
+      routeHandOffs({
+        workspaceId: row.workspaceId,
+        goalVersion: row.goalVersion,
+        source: 'person',
+        sourceKey,
+        fromRunId: row.senderRunId,
+        // Nobody's own package (plan B D4): the asker's own package is a real target.
+        fromPackageKey: null,
+        items: [item],
+      })
+    const { decision, askerHandOff } = stored.data
+    // One card that throws is said and skipped; the next pass retries it (no row at its key).
+    if (row.workUnrouted && decision.kind === 'give_work') {
+      const change = personText(decision.request, HANDOFF_CHANGE_MAX_CHARS)
+      try {
+        await route(personHandOffSourceKey(row.id), 'package' in decision.target ? { package: decision.target.package, change } : { path: decision.target.path, change })
+      } catch (error) {
+        console.error(`[hand-off] card ${row.id}: its person's hand-off was not routed this pass:`, error)
+      }
+    }
+    if (row.askerUnrouted && askerHandOff !== undefined) {
+      try {
+        await route(personAskerHandOffSourceKey(row.id), { package: askerHandOff.package, change: personText(askerHandOff.change, HANDOFF_CHANGE_MAX_CHARS) })
+      } catch (error) {
+        console.error(`[hand-off] card ${row.id}: its decision's hand-off to the asking package was not routed this pass:`, error)
+      }
+    }
+  }
+}
+
 /** Plan A D8: the row's event, once -- a replay finds it by `handOffId` and writes nothing. Called
  *  under the version lock and read on its `tx`, which sees every event committed before the grant. */
 async function announceHandOff(tx: Tx, row: HandOffRow, delivery: Delivery): Promise<void> {
@@ -415,7 +645,8 @@ export async function sendHandOffQuestions(workspaceId: string): Promise<void> {
     const run = await prisma.slaveRun.findUnique({ where: { id: row.fromRunId }, select: { taskId: true } })
     const sent = await sendMessage(row.fromRunId, {
       kind: 'question',
-      body: renderHandOffQuestion({ view: handOffView(row), reason: row.note ?? 'no target found' }),
+      // Final wave minor: a worker's late answer is named in the question, as in every other rendering.
+      body: renderHandOffQuestion({ view: (await handOffViews([row]))[0] ?? handOffView(row), reason: row.note ?? 'no target found' }),
       recipientRole: CONDUCTOR_ROLE,
       expectsReply: true,
       taskId: run?.taskId ?? null,
@@ -461,12 +692,12 @@ export async function reopenForHandOffs(deliveryId: string): Promise<void> {
 async function reopenInLock(tx: Tx, deliveryId: string): Promise<void> {
   const delivery = await tx.goalDelivery.findUniqueOrThrow({ where: { id: deliveryId } })
   const { workspaceId, goalVersion } = delivery
-  if (delivery.status === 'accepted' || delivery.status === 'abandoned') {
+  if (isHandOffVersionEnded(delivery.status)) {
     await expirePendingHandOffs(tx, workspaceId, goalVersion, delivery.status)
     return
   }
   const pending = await tx.packageHandOff.findMany({ where: { workspaceId, goalVersion, status: 'pending' }, orderBy: HAND_OFF_ORDER })
-  const mayReopen = delivery.status === 'integrating' && delivery.activeSmokeId === null && delivery.activeRunId === null
+  const mayReopen = delivery.status === HANDOFF_DELIVERING_STATUS && delivery.activeSmokeId === null && delivery.activeRunId === null
   for (const pkg of await packagesOf(tx, workspaceId, goalVersion)) {
     const mine = pending.filter((row) => row.toPackageKey === pkg.key)
     const task = pkg.tasks[0]
@@ -482,7 +713,8 @@ async function reopenInLock(tx: Tx, deliveryId: string): Promise<void> {
       })
     }
     if (mine.length === 0) continue
-    if (task === undefined || CANNOT_TAKE.has(task.status)) {
+    // `task === undefined` repeats the rule's first clause for the type narrowing below.
+    if (task === undefined || handOffRoute(delivery.status, task.status) === 'to_conductor') {
       await tx.packageHandOff.updateMany({
         where: { id: { in: mine.map((row) => row.id) }, status: 'pending' },
         data: { status: 'to_conductor', note: `the ${pkg.key} package cannot take it: its task is ${task?.status ?? 'gone'}` },
@@ -496,14 +728,17 @@ async function reopenInLock(tx: Tx, deliveryId: string): Promise<void> {
       await tx.packageHandOff.updateMany({ where: { id: { in: shown.map((row) => row.id) }, status: 'pending' }, data: { status: 'delivered' } })
     }
     if (unseen.length === 0 || !mayReopen) continue
-    if (pkg.handOffReopens >= HANDOFF_REOPENS_MAX) {
+    // `task.status` is `done` here; the rule a person's `give_work` is refused by before its claim.
+    if (handOffReopensSpent(task.status, pkg.handOffReopens)) {
       const chain = await tx.packageHandOff.findMany({
         // `reopenedAt`, not the status: a reopen whose run has finished is `delivered` (final review I2).
         where: { workspaceId, goalVersion, toPackageKey: pkg.key, reopenedAt: { not: null } },
         orderBy: HAND_OFF_ORDER,
-        select: { fromPackageKey: true },
+        select: { id: true, workspaceId: true, source: true, sourceKey: true, fromPackageKey: true, path: true, packageKey: true, change: true },
       })
-      const from = [...new Set(chain.map((row) => row.fromPackageKey ?? 'the conductor'))].join(', from ')
+      // Final wave minor: named as the requests' own lines name them -- a person's as the operator's,
+      // a worker's late answer by its seat -- not every package-less one as the conductor's.
+      const from = [...new Set((await handOffViews(chain, tx)).map(handOffFromName))].join(', from ')
       await tx.packageHandOff.updateMany({
         where: { id: { in: unseen.map((row) => row.id) }, status: 'pending' },
         data: {
@@ -515,7 +750,7 @@ async function reopenInLock(tx: Tx, deliveryId: string): Promise<void> {
     }
     // Task 2 ruling: the reason adds requests WHOLE while they fit; only those are delivered by this
     // reopen, and a reason that shows none reopens nothing.
-    const reason = renderHandOffRework(unseen.map(handOffView))
+    const reason = renderHandOffRework(await handOffViews(unseen, tx))
     if (reason.shownIds.length === 0) continue
     const reopen = pkg.handOffReopens + 1
     if (!(await goalEventWith(tx, workspaceId, 'task_rework', { handOffReopen: reopen }, { taskId: task.id }))) {

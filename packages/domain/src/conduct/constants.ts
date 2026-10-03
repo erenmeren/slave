@@ -124,6 +124,11 @@ export const SMOKE_STRANDED_GRACE_MS = 60_000
 export const HANDOFFS_PER_REPORT_MAX = 10
 export const HANDOFF_CHANGE_MAX_CHARS = 2000
 
+/** Human cards plan B D9: notes per report, and each note's length -- also the bound
+ *  `workspace.package_noted` stores, so a filed note (sanitised, then fitted) always fits its event. */
+export const NOTES_PER_REPORT_MAX = 10
+export const NOTE_MAX_CHARS = 1000
+
 /** A hand-off's change as `workspace.package_handed_off` carries it (head and tail kept). */
 export const HANDOFF_EVENT_CHANGE_MAX_CHARS = 500
 

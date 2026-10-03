@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import {
   handOffView,
+  handOffViews,
   listHandOffsFor,
   markHandOffsShown,
   readSkillBody,
@@ -48,6 +49,7 @@ import {
   requirementItemsSchema,
   stageOrder,
   type FittedSkillBodies,
+  type HandOffView,
   type Manifest,
   type RequirementItem,
   type Runbook,
@@ -770,11 +772,15 @@ async function packageSections(
   // saw it, and that stamp is what lets the next reopen pass settle it `delivered` once the task is
   // done. The rule is the line itself, not "the first run after the reopen": a reason a review or a
   // verification round wrote since no longer carries it, and the request is listed again.
-  const inReason = (row: StoredHandOff): boolean => row.status === 'reopened' && rejectionReason !== null && handOffShownIn(rejectionReason, handOffView(row))
+  // One set of views for both reads (final wave minor: a worker's late answer is named), so a line
+  // the rework reason holds is matched against the line this contract would print.
+  const views = new Map((await handOffViews(handOffs)).map((view) => [view.id, view] as const))
+  const viewOf = (row: StoredHandOff): HandOffView => views.get(row.id) ?? handOffView(row)
+  const inReason = (row: StoredHandOff): boolean => row.status === 'reopened' && rejectionReason !== null && handOffShownIn(rejectionReason, viewOf(row))
   const inRejection = handOffs.filter(inReason)
   const unseen = handOffs.filter((row) => row.status === 'pending' && row.shownInRunId === null)
   const seenAgain = handOffs.filter((row) => ((row.status === 'pending' && row.shownInRunId !== null) || row.status === 'reopened') && !inReason(row))
-  const asked = renderAskedOfYou([...unseen, ...seenAgain].map(handOffView))
+  const asked = renderAskedOfYou([...unseen, ...seenAgain].map(viewOf))
   // `workerLeads` reads in key order; the contract lists dependencies in `dependsOn` order, and so do their leads.
   const dependencyLeads = [...leads].sort((a, b) => pkg.dependsOn.indexOf(a.packageKey) - pkg.dependsOn.indexOf(b.packageKey))
   const text = renderPackageContract({

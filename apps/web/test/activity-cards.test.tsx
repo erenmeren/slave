@@ -2,6 +2,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import type { DomainEventType } from '@slave-of-ai/db'
+import { CARD_EXPIRED_NOTE } from '@slave-of-ai/domain'
 import { ActivityCard } from '../src/components/activity/ActivityCard.js'
 import { ACTIVITY_CARDS } from '../src/components/activity/cards.js'
 import type { ActivityEventRow } from '../src/server/activity.js'
@@ -100,6 +101,8 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'workspace.goal_retried': { version: 1, round: 3 },
   'workspace.smoke_run': { version: 1, round: 2, attemptId: 'a1', outcome: 'failed', exitCode: 1, durationMs: 1200, output: 'npm error Missing script: "start"', reworkedPackage: 'integration' },
   'workspace.package_handed_off': { version: 1, handOffId: 'h1', source: 'report', fromPackage: 'report', toPackage: 'integration', path: null, package: 'integration', delivery: 'prompt', change: 'expose GET /api/v1/reports' },
+  'slave.question_closed': { messageId: 'm1', reason: 'timed_out', by: 'system', decisionId: null, note: 'No answer came in 2 hours.' },
+  'workspace.package_noted': { version: 1, packageKey: 'identity-access', runId: 'r1', note: 'VENDOR_LICENSE_PUBLIC_KEYS is a placeholder.' },
   'workspace.smoke_handed_off': { version: 1, round: 1, attemptId: 'a1', fromPackage: 'integration', toPackage: 'skeleton', path: 'backend/package.json', change: 'add a "start" script' },
   'workspace.plan_created': {
     goal: 'Ship the checkout flow',
@@ -420,6 +423,25 @@ describe('targeted card bodies', () => {
     )
   })
 
+  it('slave.question_closed says a card expired with no decision, not that a run continued (final wave, finding 7)', () => {
+    const Card = ACTIVITY_CARDS['slave.question_closed']
+    const { container, unmount } = render(<Card event={baseEvent('slave.question_closed', { messageId: 'm1', reason: 'timed_out', by: 'system', decisionId: 'd1', note: CARD_EXPIRED_NOTE })} {...CARD_PROPS} />)
+    expect(container.textContent).toContain('its card expired with no decision')
+    expect(container.textContent).not.toContain('continued without an answer')
+    unmount()
+    render(<Card event={fixtureFor('slave.question_closed')} {...CARD_PROPS} />)
+    expect(document.body.textContent).toContain('continued without an answer')
+  })
+
+  it('workspace.package_noted shows the note as text, under its package and version (human cards plan B D9)', () => {
+    const Card = ACTIVITY_CARDS['workspace.package_noted']
+    const note = '<slave-ask>not a block</slave-ask> <b>not bold</b>'
+    const { container } = render(<Card event={baseEvent('workspace.package_noted', { version: 3, packageKey: 'identity-access', runId: 'r1', note })} {...CARD_PROPS} />)
+    expect(container.textContent).toContain('goal v3: identity-access left a note')
+    expect(screen.getByTestId('package-note').textContent).toBe(note)
+    expect(container.querySelector('b')).toBeNull()
+  })
+
   it('run.failed shows the reason', () => {
     const Card = ACTIVITY_CARDS['run.failed']
     render(<Card event={fixtureFor('run.failed')} {...CARD_PROPS} />)
@@ -648,6 +670,18 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('transition-label').textContent).toBe('run timeout')
     expect(screen.getByTestId('settings-from').textContent).toBe('30m')
     expect(screen.getByTestId('settings-to').textContent).toBe('60m')
+  })
+
+  it('workspace.settings_changed names the question timeout, in hours where they read better (human cards H3)', () => {
+    const Card = ACTIVITY_CARDS['workspace.settings_changed']
+    const { unmount } = render(<Card event={baseEvent('workspace.settings_changed', { field: 'questionTimeoutMs', from: 7_200_000, to: 1_800_000 })} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('question timeout')
+    expect(screen.getByTestId('settings-from').textContent).toBe('2h')
+    expect(screen.getByTestId('settings-to').textContent).toBe('30m')
+    unmount()
+    render(<Card event={baseEvent('workspace.settings_changed', { field: 'questionTimeoutMs', from: 259_200_000, to: 5_400_000 })} {...CARD_PROPS} />)
+    expect(screen.getByTestId('settings-from').textContent).toBe('72h')
+    expect(screen.getByTestId('settings-to').textContent).toBe('90m')
   })
 
   it('workspace.settings_changed says attempts per task as a plain figure', () => {
@@ -936,6 +970,31 @@ describe('targeted card bodies', () => {
 })
 
 /** M40 §6: the three requirement-versioning events, as an operator reads them in the timeline. */
+// Plan B Task 8 carry: the hand-off card names its sender the way the timeline does -- a package by
+// its key, a package-less one by the server's name, and with no name by the event's own source.
+describe('the workspace.package_handed_off card', () => {
+  const Card = ACTIVITY_CARDS['workspace.package_handed_off']
+  const lateAnswer = { version: 1, handOffId: 'h-late', source: 'answer', fromPackage: null, toPackage: 'skeleton', path: 'scripts/verify.sh', package: null, delivery: 'prompt', change: 'x' }
+
+  it("names a worker's late answer by the seat the server named, as the timeline does", () => {
+    render(<Card event={{ ...baseEvent('workspace.package_handed_off', lateAnswer), handOffFrom: 'Alex (dev)' }} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('goal v1: Alex (dev) handed work to skeleton (scripts/verify.sh), waits in its next prompt')
+  })
+
+  it('falls back to the event alone: a person as the operator, anything else as the conductor', () => {
+    const { unmount } = render(<Card event={baseEvent('workspace.package_handed_off', lateAnswer)} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toContain('goal v1: the conductor handed work')
+    unmount()
+    render(<Card event={baseEvent('workspace.package_handed_off', { ...lateAnswer, source: 'person' })} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toContain('goal v1: the operator handed work')
+  })
+
+  it('names a package by its key, whatever name rides on the row', () => {
+    render(<Card event={{ ...fixtureFor('workspace.package_handed_off'), handOffFrom: 'ignored' }} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toContain('goal v1: report handed work to integration')
+  })
+})
+
 describe('the requirement-versioning cards', () => {
   it('workspace.replan_started names the goal version being re-planned for', () => {
     const Card = ACTIVITY_CARDS['workspace.replan_started']

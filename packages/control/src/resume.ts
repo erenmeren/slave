@@ -32,6 +32,33 @@ export function resumeRefusal(runId: string, provider: ProviderKind): ControlRef
 }
 
 /**
+ * The workspace's refusal of ANY resume, or null: a durable halt, or a spent budget. `requestResume`
+ * asks it for each run; a pass resuming many runs (the question timeout pass) asks it once, outside
+ * its locks, and passes `budgetChecked` so the stats are not re-read under them for every run
+ * (final wave, finding 4). `haltedReason` is read again there either way: one row.
+ */
+export async function workspaceResumeRefusal(workspaceId: string): Promise<ControlRefusal | null> {
+  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true, haltedReason: true } })
+  if (workspace === null) return { kind: 'workspace_not_found', workspaceId }
+  if (workspace.haltedReason !== null) return { kind: 'workspace_halted', workspaceId, reason: workspace.haltedReason }
+  return budgetRefusal(workspaceId)
+}
+
+/** The spent-budget half of {@link workspaceResumeRefusal}. */
+async function budgetRefusal(workspaceId: string): Promise<ControlRefusal | null> {
+  // The other halt that refuses even a resume (H8 fix round 1, I1): the SAME set the tick's halt
+  // branch decides by, read from the whole breach list -- `decide()` names only the first halting
+  // breach, and the one that refuses a resume need not be it. Refused here rather than only at
+  // the daemon, for the durable halt's own reason: an intent recorded now would be carried out the
+  // moment somebody raised the budget, by a tick that cannot know it was asked against an empty
+  // purse. The set's other member, `emergency_stop`, is the halt check -- the durable column is
+  // what that breach is derived from -- so only the budget can reach this line.
+  const snapshot = await workspaceStats(workspaceId)
+  const refusing = breachRefusingResume(evaluateGuardrails(snapshot.limits, snapshot.stats))
+  return refusing?.guardrail === 'budget_exhausted' ? { kind: 'budget_exhausted', workspaceId, detail: refusing.detail } : null
+}
+
+/**
  * Records that someone wants this run continued — and nothing else.
  *
  * **The status stays `paused`, and that is the whole design.** The orphan sweep
@@ -62,6 +89,15 @@ export async function requestResume(
    * passes `'human'`, because it is one.
    */
   actor: 'human' | 'system' = 'human',
+  /** Human cards plan A D7: claim only when no intent stands (`resumeRequestedAt IS NULL`), so the
+   *  timeout pass and `deliverAnswers` write one resume between them; the loser is refused
+   *  `resume_already_requested`. Off by default: a person's Resume button still overwrites. */
+  options: {
+    readonly onlyIfNotRequested?: boolean
+    /** The caller asked {@link workspaceResumeRefusal} this pass and was not refused: the budget is
+     *  not read again (the halt still is). */
+    readonly budgetChecked?: boolean
+  } = {},
 ): Promise<Result<void, ControlRefusal>> {
   // An empty or whitespace-only message is the "say nothing" case, not a literal instruction: the
   // adapter would otherwise spawn the child with `-p ''` (see `updateQueuedMessage`'s doc comment
@@ -85,18 +121,9 @@ export async function requestResume(
     return err({ kind: 'workspace_halted', workspaceId: workspace.id, reason: workspace.haltedReason })
   }
 
-  // The other halt that refuses even a resume (H8 fix round 1, I1): the SAME set the tick's halt
-  // branch decides by, read from the whole breach list -- `decide()` names only the first halting
-  // breach, and the one that refuses a resume need not be it. Refused here rather than only at
-  // the daemon, for the durable halt's own reason above: an intent recorded now would be carried
-  // out the moment somebody raised the budget, by a tick that cannot know it was asked against an
-  // empty purse. The set's other member, `emergency_stop`, is the check above -- the durable
-  // column is what that breach is derived from -- so only the budget can reach this line.
-  const snapshot = await workspaceStats(workspace.id)
-  const refusing = breachRefusingResume(evaluateGuardrails(snapshot.limits, snapshot.stats))
-  if (refusing?.guardrail === 'budget_exhausted') {
-    return err({ kind: 'budget_exhausted', workspaceId: workspace.id, detail: refusing.detail })
-  }
+  // A spent budget refuses a resume too ({@link budgetRefusal}), unless the caller just checked.
+  const broke = options.budgetChecked === true ? null : await budgetRefusal(workspace.id)
+  if (broke !== null) return err(broke)
 
   // Ahead of the status and checkpoint checks on purpose: those two ask whether THIS run is in a
   // shape that can be resumed, and there is no point answering that for a runtime on which no run
@@ -140,10 +167,16 @@ export async function requestResume(
   // a single overwritable slot, and `null` here means "say nothing", not "say nothing instead of
   // what was already queued".
   const claimed = await prisma.slaveRun.updateMany({
-    where: { id: run.id, status: 'paused' },
+    where: { id: run.id, status: 'paused', ...(options.onlyIfNotRequested === true ? { resumeRequestedAt: null } : {}) },
     data: { resumeRequestedAt: new Date(), ...(message === null ? {} : { queuedMessage: message }) },
   })
   if (claimed.count === 0) {
+    // The claim lost on the intent, not the status: someone else's resume already stands. Told
+    // apart from `wrong_status` so the loser knows the run IS continuing, just not with its message.
+    if (options.onlyIfNotRequested === true) {
+      const now = await prisma.slaveRun.findUnique({ where: { id: run.id }, select: { status: true, resumeRequestedAt: true } })
+      if (now?.status === 'paused' && now.resumeRequestedAt !== null) return err({ kind: 'resume_already_requested', runId: run.id })
+    }
     return err({ kind: 'wrong_status', runId: run.id, status: run.status, needed: RESUMABLE_STATUSES })
   }
 

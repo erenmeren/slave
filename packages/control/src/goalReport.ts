@@ -2,17 +2,24 @@ import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   GOAL_REPORT_DENIALS_MAX,
   GOAL_REPORT_HANDOFFS_MAX,
+  GOAL_REPORT_NOTES_MAX,
+  NOTE_MAX_CHARS,
   actionSchema,
   err,
+  handOffFromName,
   ok,
+  personDecisionSchema,
+  personText,
   requirementItemsSchema,
   smokeStoppedByAbandon,
   type GoalReport,
   type GoalReportDenial,
   type GoalReportPackage,
+  type GoalReportPersonDecision,
   type GoalReportRequirement,
   type GoalReportRound,
   type GoalReportHandOff,
+  type GoalReportNote,
   type GoalReportSharedDecision,
   type GoalReportSmoke,
   type GoalReportState,
@@ -22,7 +29,7 @@ import {
 } from '@slave-of-ai/domain'
 import { loadVersionScope, seatNames, versionQuestions, versionSubject, versionTrail } from './goalReportTrail.js'
 import { versionSpend } from './goalReportSpend.js'
-import { recordedHandOffStatus } from './handOffs.js'
+import { handOffViews, recordedHandOffStatus } from './handOffs.js'
 import type { ControlRefusal } from './refusal.js'
 
 /** Plain `<` ordering (plan D7): the same on every machine, unlike `localeCompare`. */
@@ -161,12 +168,18 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
     prisma.packageHandOff.findMany({ where: { workspaceId, goalVersion }, orderBy: [{ createdAt: 'asc' }, { sourceKey: 'asc' }] }),
     prisma.goalDecision.findMany({ where: { workspaceId, goalVersion }, orderBy: [{ createdAt: 'asc' }, { titleKey: 'asc' }] }),
   ])
-  const handOffs = handOffRows.slice(0, GOAL_REPORT_HANDOFFS_MAX).map(
-    (row): GoalReportHandOff => ({
+  // Pre-flight F65: who a hand-off came from, named as the workers' prompts name it -- a person's
+  // request or late answer as the operator's, a worker's late answer by its seat, the Supervisor's as
+  // the conductor's (`handOffViews` reads the late answers' seats in one query).
+  const listed = handOffRows.slice(0, GOAL_REPORT_HANDOFFS_MAX)
+  const views = await handOffViews(listed)
+  const handOffs = listed.map(
+    (row, index): GoalReportHandOff => ({
       id: row.id,
       at: row.createdAt.toISOString(),
       source: row.source,
       fromPackage: row.fromPackageKey,
+      from: handOffFromName(views[index] ?? { id: row.id, from: row.fromPackageKey, path: row.path, packageKey: row.packageKey, change: row.change }),
       toPackage: row.toPackageKey,
       path: row.path,
       packageKey: row.packageKey,
@@ -175,6 +188,45 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
       note: row.note,
     }),
   )
+  // Human cards H1/H2 (plan B D3): what a person decided on a card about one of the version's
+  // questions, oldest first -- every claimed card (`approved` or `rejected`; a `failed` one's decision
+  // did not take). `personDecision` keeps the person's raw words (Task 3 carry): only its summary is
+  // reported, read back through `personText`, so no page or prompt reads a marker from it.
+  const decidedRows = await prisma.$queryRaw<{ resolvedAt: Date | null; createdAt: Date; subjectId: string; personDecision: unknown }[]>`
+    SELECT "resolvedAt", "createdAt", "subjectId", "personDecision" FROM "SupervisorDecision"
+    WHERE "workspaceId" = ${workspaceId} AND "personDecision" ->> 'goalVersion' = ${String(goalVersion)} AND status IN ('approved', 'rejected')
+    ORDER BY COALESCE("resolvedAt", "createdAt"), id`
+  const personDecisions = decidedRows.flatMap((row): GoalReportPersonDecision[] => {
+    // A row the schema cannot read is left out rather than trusted (`personDecisionSchema`'s rule).
+    const parsed = personDecisionSchema.safeParse(row.personDecision)
+    if (!parsed.success) return []
+    const summary = personText(parsed.data.summary, 500)
+    if (summary === '') return []
+    const grant = parsed.data.grant
+    return [{ at: (row.resolvedAt ?? row.createdAt).toISOString(), questionId: row.subjectId, kind: parsed.data.decision.kind, summary, grant: grant === undefined ? null : { path: grant.path, fromKey: grant.fromKey, toKey: grant.toKey } }]
+  })
+  // Human cards plan B D9: the notes the version's workers left, oldest first. A reworked run that
+  // reports the same note again repeats nothing a person needs: each package's identical note is
+  // listed once, at its first filing. The text was sanitised and fitted when filed; it is read back
+  // through `personText` all the same, so a row written any other way is inert here too.
+  const noteRows = await prisma.executionEvent.findMany({
+    where: { workspaceId, type: 'workspace_package_noted', payload: { path: ['version'], equals: goalVersion } },
+    orderBy: { seq: 'asc' },
+    select: { ts: true, payload: true },
+  })
+  const seenNotes = new Set<string>()
+  const allNotes = noteRows.flatMap((row): GoalReportNote[] => {
+    const p = (row.payload ?? {}) as Record<string, unknown>
+    const packageKey = p['packageKey']
+    const raw = p['note']
+    if (typeof packageKey !== 'string' || typeof raw !== 'string') return []
+    const text = personText(raw, NOTE_MAX_CHARS)
+    const key = JSON.stringify([packageKey, text])
+    if (text === '' || seenNotes.has(key)) return []
+    seenNotes.add(key)
+    return [{ at: row.ts.toISOString(), packageKey, text }]
+  })
+  const notes = allNotes.slice(0, GOAL_REPORT_NOTES_MAX)
   const decisions = decisionRows.map((row): GoalReportSharedDecision => ({ title: row.title, decision: row.decision, source: row.source, at: row.createdAt.toISOString() }))
   // Skeleton spec S9 (plan B D10): the denials of the version's runs -- its package tasks' and its verification runs'.
   const versionRuns = await prisma.slaveRun.findMany({
@@ -225,6 +277,7 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
         isIntegration: pkg.isIntegration,
         requirementKeys: pkg.requirementKeys,
         ownedPaths: pkg.ownedPaths,
+        releasedPaths: pkg.releasedPaths,
         dependsOn: pkg.dependsOn,
         persona: templateName.get(pkg.templateId) ?? null,
         seat: task?.assigneeId == null ? null : (names.get(task.assigneeId) ?? null),
@@ -313,6 +366,8 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
     ...smoke.map((attempt) => attempt.at),
     ...handOffs.map((h) => h.at),
     ...decisions.map((d) => d.at),
+    ...personDecisions.map((d) => d.at),
+    ...notes.map((n) => n.at),
     ...questions.flatMap((q) => [q.at, ...(q.answer === null ? [] : [q.answer.at])]),
     ...[delivery?.acceptedAt, delivery?.mergedAt].flatMap((at) => (at == null ? [] : [at.toISOString()])),
   ].sort(byText)
@@ -352,6 +407,9 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
     packages,
     verifier: scope.verifier,
     questions,
+    personDecisions,
+    notes,
+    notesOmitted: allNotes.length - notes.length,
     smoke,
     handOffs,
     handOffsOmitted: Math.max(0, handOffRows.length - GOAL_REPORT_HANDOFFS_MAX),

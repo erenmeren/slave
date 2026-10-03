@@ -262,6 +262,42 @@ describe('versionTrail', () => {
     expect(entries[0]).toEqual(expect.objectContaining({ detail: 'run pytest -k report', detailBy: 'model' }))
   })
 
+  it('names who a package-less hand-off came from: the operator, a worker by its seat, the conductor (pre-flight F65)', async (): Promise<void> => {
+    const s = await seed()
+    const late = await prisma.slaveMessage.create({ data: { workspaceId: s.workspaceId, slaveId: s.slaveId, threadId: 't', kind: 'answer', body: 'b', actor: 'slave' } })
+    const rows = [
+      { id: 'h-person', source: 'person' as const, sourceKey: 'person:c1:0' },
+      { id: 'h-late', source: 'answer' as const, sourceKey: `late:${late.id}:0` },
+      { id: 'h-conductor', source: 'answer' as const, sourceKey: 'answer:d1:0' },
+    ]
+    for (const row of rows) {
+      await prisma.packageHandOff.create({
+        data: { ...row, workspaceId: s.workspaceId, goalVersion: 1, fromRunId: 'r', fromPackageKey: null, toPackageKey: 'skeleton', change: 'c', fingerprint: row.id, status: 'pending' },
+      })
+      await appendEvent({
+        type: 'workspace.package_handed_off',
+        workspaceId: s.workspaceId,
+        actor: 'system',
+        payload: { version: 1, handOffId: row.id, source: row.source, fromPackage: null, toPackage: 'skeleton', path: null, package: 'skeleton', delivery: 'prompt', change: 'do it' },
+      })
+    }
+    // A row gone since: the event's own source still says a person's is the operator's.
+    await appendEvent({
+      type: 'workspace.package_handed_off',
+      workspaceId: s.workspaceId,
+      actor: 'system',
+      payload: { version: 1, handOffId: 'h-gone', source: 'person', fromPackage: null, toPackage: 'skeleton', path: null, package: 'skeleton', delivery: 'prompt', change: 'do it' },
+    })
+    const { entries } = await versionTrail(await loadVersionScope(s.workspaceId, 1), [])
+    expect(entries.map((e) => e.text)).toEqual([
+      'The operator handed work to skeleton (skeleton); it waits in its next prompt.',
+      'Alex Trail (backend) handed work to skeleton (skeleton); it waits in its next prompt.',
+      'The conductor handed work to skeleton (skeleton); it waits in its next prompt.',
+      'The operator handed work to skeleton (skeleton); it waits in its next prompt.',
+    ])
+    expect(entries.map((e) => e.detailBy)).toEqual(['person', 'model', 'model', 'person'])
+  })
+
   it('keeps the newest entries and counts the rest', async (): Promise<void> => {
     const s = await seed()
     for (let round = 1; round <= 4; round += 1) {
@@ -311,5 +347,28 @@ describe('versionQuestions', () => {
       expect.objectContaining({ id: asked.id, packageKey: 'pkg1', askedBy: 'Alex Trail', question: 'Header row?', answer: expect.objectContaining({ by: 'supervisor', text: 'Yes.' }) }),
       expect.objectContaining({ packageKey: 'pkg1', question: 'Quote all?', answer: null }),
     ])
+  })
+
+  it('says how each question closed, by whom in words, and how long it waited; its task links the report (human cards H1/H3)', async (): Promise<void> => {
+    const s = await seed()
+    const asked = new Date('2026-10-02T08:00:00.000Z')
+    const base = { workspaceId: s.workspaceId, taskId: s.taskOf[1], slaveId: s.slaveId, kind: 'question' as const, expectsReply: true, actor: 'slave' as const, createdAt: asked }
+    const timedOut = await prisma.slaveMessage.create({
+      data: { ...base, threadId: 't1', body: 'May I edit package.json?', closedAt: new Date('2026-10-02T10:00:00.000Z'), closedReason: 'timed_out', closedBy: 'system', closedNote: 'No answer came in 2 hours.' },
+    })
+    const dismissed = await prisma.slaveMessage.create({
+      data: { ...base, threadId: 't2', body: 'Which port?', closedAt: new Date('2026-10-02T09:00:00.000Z'), closedReason: 'dismissed', closedBy: 'operator', closedNote: null },
+    })
+    const open = await prisma.slaveMessage.create({ data: { ...base, threadId: 't3', body: 'Still open?' } })
+
+    const questions = await versionQuestions(await loadVersionScope(s.workspaceId, 1))
+    const byId = new Map(questions.map((q) => [q.id, q] as const))
+
+    expect(byId.get(timedOut.id)).toMatchObject({
+      taskId: s.taskOf[1],
+      closed: { at: '2026-10-02T10:00:00.000Z', reason: 'timed_out', by: 'system', note: 'No answer came in 2 hours.', waitedMs: 7_200_000 },
+    })
+    expect(byId.get(dismissed.id)?.closed).toEqual({ at: '2026-10-02T09:00:00.000Z', reason: 'dismissed', by: 'person', note: null, waitedMs: 3_600_000 })
+    expect(byId.get(open.id)?.closed).toBe(null)
   })
 })

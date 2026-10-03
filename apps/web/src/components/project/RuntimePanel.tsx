@@ -12,8 +12,8 @@ import { Button } from '../ui/Button'
 
 /**
  * The Settings tab's runtime panel (M24 §4, moved off the Overview card of the same shape): the
- * workspace's runtime and its spend ceiling, beside `GoalPanel`, plus the three dispatch limits
- * (run timeout, runs at once, attempts) underneath. H9 F8 made those editable: until then they were
+ * workspace's runtime and its spend ceiling, beside `GoalPanel`, plus the four dispatch limits
+ * (run timeout, runs at once, attempts, question timeout) underneath. H9 F8 made those editable: until then they were
  * shown read-only and nothing anywhere could write them.
  *
  * No optimistic state: every control on this page follows M11's rule that the server's next
@@ -54,6 +54,7 @@ export function RuntimePanel({
     readonly maxConcurrentRuns: number
     readonly runTimeoutMs: number
     readonly maxAttempts: number
+    readonly questionTimeoutMs: number
   }
 }): React.JSX.Element {
   const router = useRouter()
@@ -156,7 +157,7 @@ export function RuntimePanel({
           // Keyed on the SAVED figures, the `ProjectSettingsClient` idiom for the provider/budget
           // pair: a successful write refreshes the route, the key moves, and the drafts reseed from
           // what the server now holds. A refused write moves nothing, so what was typed stays.
-          key={`${String(limits.runTimeoutMs)}|${String(limits.maxConcurrentRuns)}|${String(limits.maxAttempts)}`}
+          key={`${String(limits.runTimeoutMs)}|${String(limits.maxConcurrentRuns)}|${String(limits.maxAttempts)}|${String(limits.questionTimeoutMs)}`}
           limits={limits}
           pending={pending}
           onSave={(patch) => void submit(`/api/w/${workspaceId}/limits`, patch, 'PATCH')}
@@ -222,22 +223,23 @@ export function RuntimePanel({
   )
 }
 
-type Limits = { readonly maxConcurrentRuns: number; readonly runTimeoutMs: number; readonly maxAttempts: number }
+type Limits = { readonly maxConcurrentRuns: number; readonly runTimeoutMs: number; readonly maxAttempts: number; readonly questionTimeoutMs: number }
 
 /** The order a refusal is looked for in -- the order the fields are drawn. An emptied field is
  *  `Number('')`, `0`, which every bound refuses, so an empty box is answered by its own rule. */
-const LIMIT_FIELDS: readonly WorkspaceLimitField[] = ['runTimeoutMs', 'maxConcurrentRuns', 'maxAttempts']
+const LIMIT_FIELDS: readonly WorkspaceLimitField[] = ['runTimeoutMs', 'maxConcurrentRuns', 'maxAttempts', 'questionTimeoutMs']
 
 /**
- * The three dispatch limits as one form (H9 F8): the timeout in MINUTES, the unit a person thinks
- * in and the one `set-limits --run-timeout-min` takes, converted to the column's milliseconds here.
+ * The four dispatch limits as one form (H9 F8, human cards H3): the timeouts in MINUTES, the unit a
+ * person thinks in and the one `set-limits --run-timeout-min` / `--question-timeout-min` take,
+ * converted to the column's milliseconds here.
  *
  * Checked before anything is sent, against the domain's own bounds and in the domain's own words --
  * the sentence `setWorkspaceLimits` would answer with, so a figure out of range reads the same
  * whether the panel caught it or the route did. `required` keeps an emptied field from taking the
  * budget field's third road in the browser, and `LIMIT_FIELDS` says what an empty box is answered with.
  *
- * All three go in every save. The verb writes and records only what MOVED, so re-sending the two
+ * All four go in every save. The verb writes and records only what MOVED, so re-sending the ones
  * nobody touched costs nothing and says nothing.
  */
 function LimitsForm({
@@ -254,6 +256,7 @@ function LimitsForm({
   const [timeoutMin, setTimeoutMin] = useState(String(limits.runTimeoutMs / 60_000))
   const [concurrent, setConcurrent] = useState(String(limits.maxConcurrentRuns))
   const [attempts, setAttempts] = useState(String(limits.maxAttempts))
+  const [questionMin, setQuestionMin] = useState(String(limits.questionTimeoutMs / 60_000))
 
   const field = (
     label: string,
@@ -293,6 +296,7 @@ function LimitsForm({
           runTimeoutMs: Number(timeoutMin) * 60_000,
           maxConcurrentRuns: Number(concurrent),
           maxAttempts: Number(attempts),
+          questionTimeoutMs: Number(questionMin) * 60_000,
         }
         const refused = LIMIT_FIELDS.find((name) => !isWorkspaceLimitAllowed(name, patch[name]))
         if (refused !== undefined) {
@@ -308,11 +312,15 @@ function LimitsForm({
       })}
       {field('runs at once', 'runtime-concurrency', 'runs at once', concurrent, setConcurrent, WORKSPACE_LIMIT_BOUNDS.maxConcurrentRuns)}
       {field('attempts', 'runtime-attempts', 'attempts per task', attempts, setAttempts, WORKSPACE_LIMIT_BOUNDS.maxAttempts)}
+      {field('question timeout (min)', 'runtime-question-timeout', 'question timeout in minutes', questionMin, setQuestionMin, {
+        min: WORKSPACE_LIMIT_BOUNDS.questionTimeoutMs.min / 60_000,
+        max: WORKSPACE_LIMIT_BOUNDS.questionTimeoutMs.max / 60_000,
+      })}
       <Button variant="primary" size="sm" type="submit" data-testid="runtime-limits-submit" disabled={pending}>
         set limits
       </Button>
       <p className="w-full font-mono text-[10px] text-text-3">
-        a longer timeout reaches a run already working; attempts reach tasks planned from now on
+        a longer timeout reaches a run already working; attempts reach tasks planned from now on; a run waiting on a question continues on its own after the question timeout
       </p>
     </form>
   )

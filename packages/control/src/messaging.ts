@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
-  type MessageKind, type Result, type SlaveMessageView, answerBar, err, isValidRecipient, ok,
+  CLOSED_BY_SYSTEM, storableText, type MessageKind, type Result, type SlaveMessageView, answerBar, err, isValidRecipient, ok,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { Principal } from './principal.js'
+import { afterAnswered, closeAnsweredIn, closedByOf, gateAnswerIn, type AnsweredClose } from './questions.js'
 import type { ControlRefusal } from './refusal.js'
 
 const SEND_TIMEOUT_MS = 5_000
@@ -173,8 +174,15 @@ export async function sendMessage(
         const seen = await tx.slaveMessage.findUnique({
           where: { workspaceId_idempotencyKey: { workspaceId, idempotencyKey: key } },
         })
-        if (seen !== null) return { replayed: true as const, row: seen }
+        if (seen !== null) return { replayed: true as const, row: seen, answered: null }
       }
+
+      // Final wave, finding 1: a worker's answer closes the question it replies to, as a person's
+      // does (`answerQuestion`), under the same lock and refusals (plan A D6) -- the Workspace row is
+      // held already, and `gateAnswerIn` adds the question row. A refusal here precedes the
+      // transaction's only write, so returning it commits nothing.
+      const gate = input.kind === 'answer' && replyToId !== null ? await gateAnswerIn(tx, workspaceId, replyToId) : null
+      if (gate?.kind === 'refused') return { refused: gate.refusal }
 
       const row = await tx.slaveMessage.create({
         data: {
@@ -194,11 +202,14 @@ export async function sendMessage(
           idempotencyKey: input.idempotencyKey !== undefined ? namespacedKey('send', input.idempotencyKey) : null,
         },
       })
-      return { replayed: false as const, row }
+      // Closed by `system`: a worker is no account (H1's `closedBy` is a user id or `system`).
+      const answered: AnsweredClose | null = gate?.kind === 'open' ? await closeAnsweredIn(tx, gate, CLOSED_BY_SYSTEM, new Date()) : null
+      return { replayed: false as const, row, answered }
     },
     { timeout: SEND_TIMEOUT_MS, maxWait: SEND_MAX_WAIT_MS },
   )
 
+  if ('refused' in outcome) return err(outcome.refused)
   if (!outcome.replayed) {
     await appendEvent({
       type: 'slave.message_sent',
@@ -218,6 +229,9 @@ export async function sendMessage(
         expectsReply: outcome.row.expectsReply,
       },
     })
+    // The card's retirement and the close's event, by the rule a person's answer follows (a late
+    // answer no run will read keeps its card open).
+    if (outcome.answered !== null) await afterAnswered(outcome.answered, 'system', null)
   }
 
   return ok(toView(outcome.row))
@@ -311,16 +325,22 @@ export const STORED_REPORT_QUESTION_KEY_PREFIX = namespacedKey('send', REPORT_QU
  * the answer box. Its answer is read by the seat's NEXT run on the task (`inbox.ts`), so it is
  * waited on until a reply lands; the idempotency key `report.ts` sends it under is the marker, since
  * no other path writes one with that prefix.
+ *
+ * Human cards H1: and it is not closed (`closedAt`).
  */
 export function stillPendingQuestion(waitingRunIds: string[]): {
   kind: 'question'
   expectsReply: true
+  closedAt: null
   replies: { none: Record<string, never> }
   AND: [{ OR: [{ senderRunId: { in: string[] } }, { senderRunId: { not: null }; idempotencyKey: { startsWith: string } }] }]
 } {
   return {
     kind: 'question' as const,
     expectsReply: true as const,
+    // Human cards H1: a closed question is pending nowhere -- the world, the inbox, the answer box
+    // and a re-address all read this one rule. A question with no close follows the rule below.
+    closedAt: null,
     replies: { none: {} },
     // Wrapped in AND so a caller's own `OR` (the inbox's recipient match) is not overwritten.
     AND: [
@@ -460,7 +480,10 @@ export async function answerQuestion(
   input: AnswerQuestionInput,
   origin: 'human' | 'system' = 'human',
 ): Promise<Result<SlaveMessageView, ControlRefusal>> {
-  if (input.body.trim() === '') return err({ kind: 'invalid_message_body' })
+  // Task 7 fix round 1: stored text never carries a NUL byte or a lone surrogate (Postgres refuses
+  // a NUL in `body`, 22021); checked for emptiness after, so an answer of NULs alone is empty.
+  const body = storableText(input.body)
+  if (body.trim() === '') return err({ kind: 'invalid_message_body' })
 
   const question = await prisma.slaveMessage.findUnique({ where: { id: questionId } })
   if (question === null) return err({ kind: 'message_not_found', messageId: questionId })
@@ -472,7 +495,7 @@ export async function answerQuestion(
   const generatedId = randomUUID()
   const key = namespacedKey(
     'answer',
-    input.idempotencyKey ?? `human:${questionId}:${createHash('sha256').update(input.body).digest('hex').slice(0, 16)}`,
+    input.idempotencyKey ?? `human:${questionId}:${createHash('sha256').update(body).digest('hex').slice(0, 16)}`,
   )
 
   const outcome = await prisma.$transaction(
@@ -485,7 +508,14 @@ export async function answerQuestion(
       const seen = await tx.slaveMessage.findUnique({
         where: { workspaceId_idempotencyKey: { workspaceId, idempotencyKey: key } },
       })
-      if (seen !== null) return { replayed: true as const, row: seen }
+      if (seen !== null) return { replayed: true as const, row: seen, answered: null }
+
+      // Human cards plan A D6 (`gateAnswerIn`): a question a person decided, dismissed or superseded
+      // takes no answer. Refused before anything is written, so returning is safe here (nothing to
+      // roll back). The question is locked Workspace-then-row (`lockCardQuestion`), so a close that
+      // commits meanwhile is seen here rather than answered over.
+      const gate = await gateAnswerIn(tx, workspaceId, question.id)
+      if (gate.kind === 'refused') return { refused: gate.refusal }
 
       const row = await tx.slaveMessage.create({
         data: {
@@ -501,17 +531,20 @@ export async function answerQuestion(
           threadId: question.threadId,
           replyToId: question.id,
           kind: 'answer',
-          body: input.body,
+          body,
           actor: origin,
           expectsReply: false,
           idempotencyKey: key,
         },
       })
-      return { replayed: false as const, row }
+      // Read as a question above; `not_a_question` only if the row vanished meanwhile, closing nothing.
+      const answered = gate.kind === 'open' ? await closeAnsweredIn(tx, gate, origin === 'human' ? closedByOf(input.principal) : CLOSED_BY_SYSTEM, new Date()) : null
+      return { replayed: false as const, row, answered }
     },
     { timeout: SEND_TIMEOUT_MS, maxWait: SEND_MAX_WAIT_MS },
   )
 
+  if ('refused' in outcome) return err(outcome.refused)
   if (!outcome.replayed) {
     await appendEvent({
       type: 'slave.message_sent',
@@ -532,6 +565,10 @@ export async function answerQuestion(
       },
       userId: input.principal?.userId ?? null,
     })
+    // Human cards H1 (plan A D5): an answer given directly -- the answer box, the CLI -- retires every
+    // open card about its question, as an approved answer card does. A late answer says where it
+    // goes, and one no run will read leaves the card open (Task 7 fix round 1, `answeredRetireReason`).
+    if (outcome.answered !== null) await afterAnswered(outcome.answered, origin, input.principal?.userId ?? null)
   }
 
   return ok(toView(outcome.row))

@@ -5,12 +5,11 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
 import { useHome } from '../../hooks/useHome'
 import { formatUsd } from '../../lib/realMoney'
-import { postControl } from '../../lib/postControl'
-import type { HomeSnapshot } from '../../server/home'
+import type { HomeNeedsYouItem, HomeSnapshot } from '../../server/home'
 import { KpiStrip } from '../analytics/KpiStrip'
 import type { CompanyRow } from '../CompanyManager'
 import { useMode } from '../mode/ModeProvider'
-import { NeedsYouRow } from '../project/NeedsYouBar'
+import { NeedsYouRow, answerNeedsYou, refusalStillListed, type NeedsYouRefusal, type NeedsYouVerdict } from '../project/NeedsYouBar'
 import { NewProjectDrawer } from '../projects/NewProjectDrawer'
 import { useHeaderAction } from '../shell/HeaderActionProvider'
 import { Button } from '../ui/Button'
@@ -67,7 +66,16 @@ export function HomeClient({
 
   const [newOpen, setNewOpen] = useState(searchParams.get('new') === '1')
   const [busyDecisionId, setBusyDecisionId] = useState<string | null>(null)
-  const [needsYouError, setNeedsYouError] = useState<string | null>(null)
+  const [needsYouRefusal, setNeedsYouRefusal] = useState<NeedsYouRefusal | null>(null)
+  const needsYouError = needsYouRefusal?.text ?? null
+  /** A card somebody else settled first (human cards spec §4): information, never the red band. */
+  const [needsYouNotice, setNeedsYouNotice] = useState<string | null>(null)
+  // Fix round 2, narrowed in Task 10: a fresh snapshot (the poll, a refresh) clears a refusal only
+  // once the row it refused is gone from the queue -- while that row is still listed the refusal is
+  // still true, and it stays until it is dismissed or the person acts again. The notice stays.
+  useEffect((): void => {
+    setNeedsYouRefusal((current) => (current === null || refusalStillListed(snapshot.needsYou, current) ? current : null))
+  }, [snapshot])
 
   // The header's primary action (M57 R7's idiom): a `Button`, not a bare `<button>`, PUSHED
   // through the URL rather than local-state-only -- the SAME `?new=1` mechanism
@@ -116,17 +124,20 @@ export function HomeClient({
     [searchParams, router],
   )
 
-  const answerNeedsYou = async (decisionId: string, verdict: 'approve' | 'reject'): Promise<void> => {
-    const item = needsYou.find((row) => row.decisionId === decisionId)
-    if (item === undefined) return
-    setBusyDecisionId(decisionId)
-    setNeedsYouError(null)
-    const result = await postControl(`/api/w/${item.workspaceId}/supervisor/decisions/${decisionId}/${verdict}`)
+  /** One click on a row (plan B Task 9): the shared {@link answerNeedsYou} -- a question card's
+   *  `send_answer` through the decide route -- then a fresh snapshot right away, whatever it said. */
+  const onNeedsYou = async (item: HomeNeedsYouItem, verdict: NeedsYouVerdict): Promise<void> => {
+    if (item.decisionId === null) return
+    setBusyDecisionId(item.decisionId)
+    setNeedsYouRefusal(null)
+    setNeedsYouNotice(null)
+    const result = await answerNeedsYou(item.workspaceId, item, verdict)
     setBusyDecisionId(null)
-    if (!result.ok) {
-      setNeedsYouError(result.error)
+    if (result.error !== null) {
+      setNeedsYouRefusal({ text: result.error, rowId: item.id, decisionId: item.decisionId })
       return
     }
+    setNeedsYouNotice(result.notice)
     router.refresh()
   }
 
@@ -139,14 +150,43 @@ export function HomeClient({
         </p>
       </header>
 
-      {needsYou.length > 0 && (
+      {/* Task 9 fix round 1: the section stays while a notice or a refusal is showing, so what the
+        * last decided card did is not lost with its row. */}
+      {(needsYou.length > 0 || needsYouNotice !== null || needsYouError !== null) && (
         <section
           data-testid="home-needs-you"
           className="rounded-surface border border-accent/35 bg-accent/10 px-3.5 py-2.5"
         >
           {needsYouError !== null && (
-            <p role="alert" data-testid="needs-you-error" className="type-meta mb-[var(--gap-1)] text-s-blocked">
-              {needsYouError}
+            <p className="type-meta mb-[var(--gap-1)] flex items-start gap-2 text-s-blocked">
+              <span role="alert" data-testid="needs-you-error" className="min-w-0 flex-1">
+                {needsYouError}
+              </span>
+              <button
+                type="button"
+                data-testid="needs-you-error-dismiss"
+                aria-label="dismiss this error"
+                onClick={() => setNeedsYouRefusal(null)}
+                className="shrink-0 text-t3 hover:text-t1"
+              >
+                ×
+              </button>
+            </p>
+          )}
+          {needsYouNotice !== null && (
+            <p className="type-meta mb-[var(--gap-1)] flex items-start gap-2 text-t2">
+              <span role="status" data-testid="needs-you-notice" className="min-w-0 flex-1">
+                {needsYouNotice}
+              </span>
+              <button
+                type="button"
+                data-testid="needs-you-notice-dismiss"
+                aria-label="dismiss this notice"
+                onClick={() => setNeedsYouNotice(null)}
+                className="shrink-0 text-t3 hover:text-t1"
+              >
+                ×
+              </button>
             </p>
           )}
           {/* I2 (final-review wave): unbounded, this list grows past Home's own `overflow-hidden`
@@ -158,7 +198,7 @@ export function HomeClient({
                 item={item}
                 workspaceName={item.workspaceName}
                 busy={busyDecisionId}
-                onAnswer={(decisionId, verdict) => void answerNeedsYou(decisionId, verdict)}
+                onAnswer={(_row, verdict) => void onNeedsYou(item, verdict)}
               />
             ))}
           </ScrollArea>

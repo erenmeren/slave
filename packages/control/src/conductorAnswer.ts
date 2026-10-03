@@ -1,5 +1,14 @@
-import { prisma } from '@slave-of-ai/db/client'
-import { GOAL_DECISIONS_MAX, decisionTitleKey, sanitisePersonText, storableText, type ConductorDraft } from '@slave-of-ai/domain'
+import { prisma, type Prisma } from '@slave-of-ai/db/client'
+import {
+  GOAL_DECISIONS_MAX,
+  SHARED_DECISION_TEXT_MAX_CHARS,
+  SHARED_DECISION_TITLE_MAX_CHARS,
+  decisionTitleKey,
+  sanitisePersonText,
+  storableText,
+  trimToFit,
+  type ConductorDraft,
+} from '@slave-of-ai/domain'
 import { routeAnswerHandOff } from './handOffs.js'
 import { isUniqueConstraintViolation } from './prisma-errors.js'
 
@@ -14,8 +23,61 @@ export interface ConductorOutcome {
   readonly handOff: ConductorHandOffOutcome
 }
 
-/** Refused inside the decision's transaction (constraint: a refusal there must throw to roll back). */
-class DecisionsAtCap extends Error {}
+/** Human cards plan B D6: why a shared decision was not written. Thrown, so a caller's transaction
+ *  rolls back (constraint: a refusal inside a transaction must throw). */
+export class GoalDecisionRefused extends Error {
+  constructor(
+    readonly why: 'empty' | 'at_cap' | 'title_taken',
+    message: string,
+  ) {
+    super(message)
+    this.name = 'GoalDecisionRefused'
+  }
+}
+
+/** The advisory lock a version's shared decisions are written under. Lock order for a person's card
+ *  (plan B D6): this lock, then the Workspace row, then the question row -- the conductor's writer
+ *  takes this lock and then, through the insert's foreign key, a share lock on the Workspace row, so
+ *  taking it after the Workspace row would deadlock against it. */
+export async function lockGoalDecisions(tx: Prisma.TransactionClient, workspaceId: string, goalVersion: number): Promise<void> {
+  await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtext(${`slaveofai:goal-decisions:${workspaceId}:v${String(goalVersion)}`}))`
+}
+
+/**
+ * Spec C3, human cards H2.5 (plan B D6): one shared decision, written inside `tx` under the version's
+ * advisory lock ({@link lockGoalDecisions}; re-taken as a no-op by a caller that holds it) -- the cap
+ * re-counted, the title's key looked up (not caught as a unique violation, which would poison `tx`).
+ * Text made storable and defused: it reaches every package's prompt; bounded again AFTER that
+ * (ruling F63: defusing can lengthen it). THROWS {@link GoalDecisionRefused}.
+ */
+export async function writeGoalDecisionIn(
+  tx: Prisma.TransactionClient,
+  input: {
+    readonly workspaceId: string
+    readonly goalVersion: number
+    readonly title: string
+    readonly decision: string
+    readonly source: 'conductor_answer' | 'person'
+    readonly questionId: string | null
+    readonly decisionId: string | null
+  },
+): Promise<void> {
+  const { workspaceId, goalVersion } = input
+  const title = trimToFit(sanitisePersonText(storableText(input.title)).trim(), SHARED_DECISION_TITLE_MAX_CHARS)
+  const text = trimToFit(sanitisePersonText(storableText(input.decision)).trim(), SHARED_DECISION_TEXT_MAX_CHARS)
+  if (title === '' || text === '') throw new GoalDecisionRefused('empty', 'a shared decision needs a title and a decision')
+  await lockGoalDecisions(tx, workspaceId, goalVersion)
+  if ((await tx.goalDecision.count({ where: { workspaceId, goalVersion } })) >= GOAL_DECISIONS_MAX) {
+    throw new GoalDecisionRefused('at_cap', `goal v${String(goalVersion)} already has ${String(GOAL_DECISIONS_MAX)} shared decisions`)
+  }
+  const titleKey = decisionTitleKey(title)
+  if ((await tx.goalDecision.findUnique({ where: { workspaceId_goalVersion_titleKey: { workspaceId, goalVersion, titleKey } }, select: { id: true } })) !== null) {
+    throw new GoalDecisionRefused('title_taken', `goal v${String(goalVersion)} already has a shared decision titled "${title}"`)
+  }
+  await tx.goalDecision.create({
+    data: { workspaceId, goalVersion, title, titleKey, decision: text, source: input.source, questionId: input.questionId, decisionId: input.decisionId },
+  })
+}
 
 /**
  * Supervisor-as-conductor plan B D7: what a conductor answer does beyond its text, once the answer
@@ -84,12 +146,11 @@ export async function applyConductorOutcome(input: {
 }
 
 /**
- * Spec C3: a conductor answer's new shared decision, written once. The text is the model's, made
- * storable and defused (F8: it reaches every package's prompt), and the key is read from the cleaned
- * title. Controller ruling F13: the version's cap is re-counted under a per-version advisory lock in
- * the same transaction as the insert -- the judging counted it too, but two answers of one batch can
- * both pass that count. A title the version already has (the unique key) is left alone and said: the
- * answer is out, and an answer never rewrites a decision.
+ * Spec C3: a conductor answer's new shared decision, written once ({@link writeGoalDecisionIn}).
+ * Controller ruling F13: the version's cap is re-counted under a per-version advisory lock in the
+ * same transaction as the insert -- the judging counted it too, but two answers of one batch can both
+ * pass that count. A title the version already has is left alone and said: the answer is out, and an
+ * answer never rewrites a decision.
  */
 async function recordAnswerDecision(input: {
   readonly workspaceId: string
@@ -99,37 +160,16 @@ async function recordAnswerDecision(input: {
   readonly title: string
   readonly decision: string
 }): Promise<ConductorDecisionOutcome> {
-  const { workspaceId, goalVersion } = input
-  const title = sanitisePersonText(storableText(input.title)).trim()
-  const text = sanitisePersonText(storableText(input.decision)).trim()
-  if (title === '' || text === '') return 'none'
   try {
-    await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtext(${`slaveofai:goal-decisions:${workspaceId}:v${String(goalVersion)}`}))`
-      if ((await tx.goalDecision.count({ where: { workspaceId, goalVersion } })) >= GOAL_DECISIONS_MAX) throw new DecisionsAtCap()
-      await tx.goalDecision.create({
-        data: {
-          workspaceId,
-          goalVersion,
-          title,
-          titleKey: decisionTitleKey(title),
-          decision: text,
-          source: 'conductor_answer',
-          questionId: input.questionId,
-          decisionId: input.decisionId,
-        },
-      })
-    })
+    await prisma.$transaction((tx) => writeGoalDecisionIn(tx, { ...input, source: 'conductor_answer' }))
     return 'recorded'
   } catch (error) {
-    if (error instanceof DecisionsAtCap) {
-      console.warn(`[conductor-answer] decision ${input.decisionId}: goal v${String(goalVersion)} already has ${String(GOAL_DECISIONS_MAX)} shared decisions; "${title}" was not added`)
-      return 'at_cap'
+    if (error instanceof GoalDecisionRefused) {
+      if (error.why !== 'empty') console.warn(`[conductor-answer] decision ${input.decisionId}: ${error.message}; "${input.title}" was not added`)
+      return error.why === 'empty' ? 'none' : error.why
     }
-    if (isUniqueConstraintViolation(error)) {
-      console.warn(`[conductor-answer] decision ${input.decisionId}: goal v${String(goalVersion)} already has a shared decision titled "${title}"; it was left as it is`)
-      return 'title_taken'
-    }
+    // A writer that does not take the advisory lock (the plan's own decisions) can still meet the unique key.
+    if (isUniqueConstraintViolation(error)) return 'title_taken'
     throw error
   }
 }

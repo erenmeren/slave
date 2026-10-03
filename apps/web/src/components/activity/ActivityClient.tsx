@@ -119,9 +119,12 @@ export function ActivityClient({
   // that never passed a `recent` prop (the digest view never does; neither does this file's own
   // pre-existing test suite) has no section to keep current and must not issue a request for one.
   const [refetchedRecent, setRefetchedRecent] = useState<RecentChanges | null>(null)
+  // Human cards spec §4: a card somebody else settled first wrote no event, so nothing above wakes;
+  // the timeline asks for the fresh queue itself, and each ask is one more read.
+  const [refreshAsked, setRefreshAsked] = useState(0)
   useEffect((): (() => void) | undefined => {
     if (recent === undefined) return undefined
-    if (newestSeq === null || newestSeq === mountSeqRef.current) return undefined
+    if (refreshAsked === 0 && (newestSeq === null || newestSeq === mountSeqRef.current)) return undefined
 
     let cancelled = false
     const timer = setTimeout((): void => {
@@ -143,7 +146,7 @@ export function ActivityClient({
       cancelled = true
       clearTimeout(timer)
     }
-  }, [workspaceId, newestSeq, recent])
+  }, [workspaceId, newestSeq, recent, refreshAsked])
   const recentView = refetchedRecent ?? recent ?? null
 
   // Controller ruling carried from Task 3/8, and re-aimed by M24 §2.2: Activity is the last of the
@@ -367,7 +370,12 @@ export function ActivityClient({
           <SectionLabel>Recent changes</SectionLabel>
           <ScrollArea>
             <div className="flex flex-col gap-5 pr-1">
-              <SupervisorTimeline workspaceId={workspaceId} entries={recentView.timeline} needsYou={recentView.needsYou} />
+              <SupervisorTimeline
+                workspaceId={workspaceId}
+                entries={recentView.timeline}
+                needsYou={recentView.needsYou}
+                onRefresh={() => setRefreshAsked((asked) => asked + 1)}
+              />
               <LiveEventsPanel workspaceId={workspaceId} events={recentView.liveEvents} />
               <MergeQueuePanel queue={recentView.mergeQueue} />
             </div>

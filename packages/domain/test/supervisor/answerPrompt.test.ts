@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildAnswerPrompt,
+  draftCarries,
   draftSchema,
   handoffSourceLines,
   parseAnswer,
@@ -360,5 +361,16 @@ describe('sourceSchema and draftSchema', () => {
       confidence: 'interpretation',
     })
     expect(parsed.success).toBe(true)
+  })
+})
+
+describe('draftCarries (final review I4)', () => {
+  const conductor = { basis: { requirements: [], packages: [], decisions: [] }, unverified: [], changes: 'none' as const }
+  it('names what a conductor draft carries beyond its words, and nothing for any other draft', () => {
+    expect(draftCarries(null)).toEqual({ decision: false, handOff: false })
+    expect(draftCarries({})).toEqual({ decision: false, handOff: false })
+    expect(draftCarries({ conductor: { ...conductor, newDecision: null, handOff: null } })).toEqual({ decision: false, handOff: false })
+    expect(draftCarries({ conductor: { ...conductor, newDecision: { title: 'Port', decision: '3000' }, handOff: null } })).toEqual({ decision: true, handOff: false })
+    expect(draftCarries({ conductor: { ...conductor, newDecision: null, handOff: { package: 'skeleton', change: 'x' } } })).toEqual({ decision: false, handOff: true })
   })
 })

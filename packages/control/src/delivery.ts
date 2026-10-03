@@ -54,7 +54,11 @@ export interface ConductorPackageView {
   readonly key: string
   readonly title: string
   readonly requirementKeys: readonly string[]
+  /** The globs and names the conductor (or a person's grant) gave it. */
   readonly ownedPaths: readonly string[]
+  /** Human cards H2.4 (plan B D5): files a person gave from it to another package. Its globs still
+   *  match them, but its ownership rule excludes them: it owns `ownedPaths` minus these. */
+  readonly releasedPaths: readonly string[]
   readonly isIntegration: boolean
   /** The seat `materialise` pinned this package's task to, or null for a task with no assignee
    *  (staffing failed after the plan was bought, or the row was hand-seeded). */
@@ -167,6 +171,7 @@ export async function conductorView(
         title: pkg.title,
         requirementKeys: pkg.requirementKeys,
         ownedPaths: pkg.ownedPaths,
+        releasedPaths: pkg.releasedPaths,
         isIntegration: pkg.isIntegration,
         // A seat name missing from the map is a dangling `assigneeId` -- the seat itself is gone
         // (a person deleted, `Slave` cascades with it) -- and that reads as no seat at all, not as

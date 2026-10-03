@@ -84,7 +84,7 @@ export async function requestChange(
   principal?: Principal,
   at: Date = new Date(),
   options: { readonly origin?: ExternalOrigin } = {},
-): Promise<Result<{ readonly version: number; readonly sha256: string; readonly goal: string }, ControlRefusal>> {
+): Promise<Result<GoalVersionWritten, ControlRefusal>> {
   if (request.trim() === '') return err({ kind: 'invalid_request' })
   return writeGoalVersion(
     workspaceId,
@@ -93,6 +93,32 @@ export async function requestChange(
     request.trim(),
     options.origin ?? null,
   )
+}
+
+/** A goal version as it was written: its number, its text's hash and the text. */
+export interface GoalVersionWritten {
+  readonly version: number
+  readonly sha256: string
+  readonly goal: string
+}
+
+/**
+ * Human cards plan B (ruling F53): {@link requestChange}'s write on a caller's transaction, so a
+ * person's "change a requirement" card can claim the card, close its question and write the version
+ * in ONE transaction -- a change the goal refuses then closes nothing. Takes the Workspace row lock
+ * (re-taken as a no-op when the caller holds it). Every refusal is returned BEFORE this function
+ * writes anything; a caller that has written before calling it must THROW on a refusal to roll its
+ * own writes back. Announce the version after the commit with {@link announceGoalVersion}.
+ */
+export async function requestChangeIn(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  request: string,
+  principal: Principal | undefined,
+  at: Date = new Date(),
+): Promise<Result<GoalVersionWritten, ControlRefusal>> {
+  if (request.trim() === '') return err({ kind: 'invalid_request' })
+  return writeGoalVersionIn(tx, workspaceId, (previous) => composeGoal(previous, request, at), principal, request.trim(), null)
 }
 
 /**
@@ -119,78 +145,98 @@ async function writeGoalVersion(
   request: string | null,
   // M54 R5. Null for every version a person set, which is every version before this milestone.
   origin: ExternalOrigin | null,
-): Promise<Result<{ readonly version: number; readonly sha256: string; readonly goal: string }, ControlRefusal>> {
-  const outcome = await prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
-    const workspace = await tx.workspace.findUnique({
-      where: { id: workspaceId },
-      select: { id: true, goal: true, goalVersion: true },
-    })
-    if (workspace === null) {
-      return { ok: false as const, error: { kind: 'workspace_not_found', workspaceId } as ControlRefusal }
-    }
+): Promise<Result<GoalVersionWritten, ControlRefusal>> {
+  const outcome = await prisma.$transaction((tx) => writeGoalVersionIn(tx, workspaceId, textOf, principal, request, origin))
+  if (!outcome.ok) return outcome
+  await announceGoalVersion(workspaceId, outcome.value, principal, request, origin)
+  return outcome
+}
 
-    const goal = textOf(workspace.goal)
-    if (goal.trim() === '') return { ok: false as const, error: { kind: 'invalid_goal' } as ControlRefusal }
-    const sha256 = goalSha256(goal)
-
-    // Erratum E5 (M40), decided INSIDE the lock so the version it compares against is the version
-    // the insert below would follow. Only the CURRENT version is compared, never the whole
-    // history: returning to an older wording is a real edit and must produce a real version,
-    // because a version is what the re-plan trigger counts. `goalVersion: 0` means no version was
-    // ever recorded, so there is nothing to be unchanged from.
-    const current =
-      workspace.goalVersion === 0
-        ? null
-        : await tx.goalVersion.findUnique({
-            where: { workspaceId_version: { workspaceId, version: workspace.goalVersion } },
-            select: { sha256: true, request: true },
-          })
-
-    // Spec erratum E27, and the reason this read happens inside the lock too: a person who presses
-    // "Tell the Supervisor" twice must not get two versions and two delta re-plans. Byte-equality
-    // against the NEWEST version's stored request only -- asking for the same change again after
-    // something else has been asked in between is a real request, and the trigger should fire for
-    // it. Checked before `goal_unchanged` because the composed text DOES differ (the entry is
-    // dated and appended): naming the goal would name the wrong thing.
-    if (request !== null && current !== null && current.request === request) {
-      return {
-        ok: false as const,
-        error: { kind: 'duplicate_request', workspaceId, version: workspace.goalVersion } as ControlRefusal,
-      }
-    }
-
-    if (current !== null && current.sha256 === sha256) {
-      return {
-        ok: false as const,
-        error: { kind: 'goal_unchanged', workspaceId, version: workspace.goalVersion } as ControlRefusal,
-      }
-    }
-
-    const version = workspace.goalVersion + 1
-    await tx.goalVersion.create({
-      data: {
-        workspaceId,
-        version,
-        text: goal,
-        sha256,
-        setByUserId: principal?.userId ?? null,
-        request,
-        // Spread, not `origin: origin ?? undefined`: a version a person set must carry NO `origin`
-        // key at all, so a reader can tell "nobody outside asked for this" from "something did and
-        // the column will not parse". The cast is the one `catalog.ts` and `supervisor.ts` already
-        // make for a validated structure going into a `Json` column.
-        ...(origin === null ? {} : { origin: origin as unknown as Prisma.InputJsonValue }),
-      },
-    })
-    await tx.workspace.update({
-      where: { id: workspaceId },
-      data: { goal, goalSetByUserId: principal?.userId ?? null, goalVersion: version },
-    })
-    return { ok: true as const, version, sha256, goal }
+/**
+ * The locked read, decision and two writes of {@link writeGoalVersion}, on `tx`. Every refusal is
+ * returned before the first write (so returning it commits nothing of this function's own); a caller
+ * that wrote earlier in `tx` must throw on one (human cards ruling F53).
+ */
+async function writeGoalVersionIn(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  textOf: (previous: string | null) => string,
+  principal: Principal | undefined,
+  request: string | null,
+  origin: ExternalOrigin | null,
+): Promise<Result<GoalVersionWritten, ControlRefusal>> {
+  await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
+  const workspace = await tx.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { id: true, goal: true, goalVersion: true },
   })
-  if (!outcome.ok) return err(outcome.error)
+  if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
 
+  const goal = textOf(workspace.goal)
+  if (goal.trim() === '') return err({ kind: 'invalid_goal' })
+  const sha256 = goalSha256(goal)
+
+  // Erratum E5 (M40), decided INSIDE the lock so the version it compares against is the version
+  // the insert below would follow. Only the CURRENT version is compared, never the whole
+  // history: returning to an older wording is a real edit and must produce a real version,
+  // because a version is what the re-plan trigger counts. `goalVersion: 0` means no version was
+  // ever recorded, so there is nothing to be unchanged from.
+  const current =
+    workspace.goalVersion === 0
+      ? null
+      : await tx.goalVersion.findUnique({
+          where: { workspaceId_version: { workspaceId, version: workspace.goalVersion } },
+          select: { sha256: true, request: true },
+        })
+
+  // Spec erratum E27, and the reason this read happens inside the lock too: a person who presses
+  // "Tell the Supervisor" twice must not get two versions and two delta re-plans. Byte-equality
+  // against the NEWEST version's stored request only -- asking for the same change again after
+  // something else has been asked in between is a real request, and the trigger should fire for
+  // it. Checked before `goal_unchanged` because the composed text DOES differ (the entry is
+  // dated and appended): naming the goal would name the wrong thing.
+  if (request !== null && current !== null && current.request === request) {
+    return err({ kind: 'duplicate_request', workspaceId, version: workspace.goalVersion })
+  }
+
+  if (current !== null && current.sha256 === sha256) {
+    return err({ kind: 'goal_unchanged', workspaceId, version: workspace.goalVersion })
+  }
+
+  const version = workspace.goalVersion + 1
+  await tx.goalVersion.create({
+    data: {
+      workspaceId,
+      version,
+      text: goal,
+      sha256,
+      setByUserId: principal?.userId ?? null,
+      request,
+      // Spread, not `origin: origin ?? undefined`: a version a person set must carry NO `origin`
+      // key at all, so a reader can tell "nobody outside asked for this" from "something did and
+      // the column will not parse". The cast is the one `catalog.ts` and `supervisor.ts` already
+      // make for a validated structure going into a `Json` column.
+      ...(origin === null ? {} : { origin: origin as unknown as Prisma.InputJsonValue }),
+    },
+  })
+  await tx.workspace.update({
+    where: { id: workspaceId },
+    data: { goal, goalSetByUserId: principal?.userId ?? null, goalVersion: version },
+  })
+  return ok({ version, sha256, goal })
+}
+
+/**
+ * After the commit of a goal version: its `workspace.goal_set` event and its memory. The event is
+ * appended exactly as `setGoal` always did (and may throw); the memory write never throws.
+ */
+export async function announceGoalVersion(
+  workspaceId: string,
+  outcome: GoalVersionWritten,
+  principal: Principal | undefined,
+  request: string | null,
+  origin: ExternalOrigin | null,
+): Promise<void> {
   await appendEvent({
     type: 'workspace.goal_set',
     workspaceId,
@@ -236,8 +282,6 @@ async function writeGoalVersion(
   } catch (error) {
     console.warn(`[memory] a goal change was not remembered: ${String(error)}`)
   }
-
-  return ok({ version: outcome.version, sha256: outcome.sha256, goal: outcome.goal })
 }
 
 /** One version of a workspace's goal as a reader sees it (M40 §4): the stored row, plus what

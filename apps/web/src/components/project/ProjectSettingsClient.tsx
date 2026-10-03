@@ -164,7 +164,7 @@ export function ProjectSettingsClient({
                 costBlindBudgeted={workspace.costBlindBudgeted}
                 autoMerge={workspace.autoMerge}
                 autonomy={workspace.supervisorAutonomy}
-                limits={{ maxConcurrentRuns: workspace.maxConcurrentRuns, runTimeoutMs: workspace.runTimeoutMs, maxAttempts: workspace.maxAttempts }}
+                limits={{ maxConcurrentRuns: workspace.maxConcurrentRuns, runTimeoutMs: workspace.runTimeoutMs, maxAttempts: workspace.maxAttempts, questionTimeoutMs: workspace.questionTimeoutMs }}
               />
             </section>
           )}

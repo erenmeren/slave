@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ProposalRow, actionText } from '../src/components/supervisor/ProposalRow.js'
+import { formatUtcMinute } from '../src/lib/format.js'
 import type { SupervisorView } from '../src/server/supervisor.js'
 
 /**
@@ -82,21 +83,31 @@ const question = (over?: Partial<Question>): Question => ({
   waitingOn: 'anyone with the product role',
   holders: 0,
   since: '2026-09-09T08:00:00.000Z',
+  goalVersion: null,
+  askerWaiting: true,
   ...over,
 })
 
 const onApprove = vi.fn()
 const onReject = vi.fn()
+const onDecide = vi.fn()
 
 beforeEach((): void => {
   onApprove.mockReset()
   onReject.mockReset()
+  onDecide.mockReset()
 })
 
 /** The row IS an `<li>`, so it is mounted inside the list its two call sites give it. */
 function renderRow(
   row: Decision,
-  over: { readonly questions?: readonly Question[]; readonly taskTitles?: Readonly<Record<string, string>> } = {},
+  over: {
+    readonly questions?: readonly Question[]
+    readonly taskTitles?: Readonly<Record<string, string>>
+    /** Human cards H2: the page can post to the decide route. */
+    readonly decide?: boolean
+    readonly busy?: boolean
+  } = {},
 ): void {
   render(
     <ul>
@@ -104,9 +115,10 @@ function renderRow(
         decision={row}
         questions={over.questions ?? [question()]}
         taskTitles={over.taskTitles ?? {}}
-        busy={false}
+        busy={over.busy ?? false}
         onApprove={onApprove}
         onReject={onReject}
+        {...(over.decide === true ? { onDecide } : {})}
       />
     </ul>,
   )
@@ -476,5 +488,209 @@ describe('a drafted answer', () => {
     const row = screen.getByTestId('supervisor-proposal')
     expect(row.getAttribute('data-source')).toBe('pool_person')
     expect(screen.getByTestId('supervisor-proposal-source').textContent).toBe('FROM THE POOL')
+  })
+})
+
+describe('a question card says how its question stands (human cards H1/H3)', () => {
+  const base = { messageId: 'm-1', body: 'q', goalVersion: 1, askerPackageKey: 'integration', askerRunId: 'r1', lateAnswerNote: null, lateAnswerFate: null, packages: [], offers: [] }
+  const timedOut = { reason: 'timed_out', at: '2026-10-02T10:00:00.000Z', by: 'system', byName: 'Slave', runContinued: true } as const
+
+  it('marks a card whose run continued without an answer, and one whose run cannot continue', () => {
+    renderRow(answerDecision({ card: { ...base, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'hand_off' } }))
+    expect(screen.getByTestId('card-question-state').textContent).toContain('continued without an answer')
+    expect(screen.getByTestId('card-question-state').textContent).toContain('integration package as a hand-off')
+    // Final wave: the settled notice's "YYYY-MM-DD HH:MM UTC", one formatter for both.
+    expect(screen.getByTestId('card-question-state').textContent).toContain('continued without an answer at 2026-10-02 10:00 UTC')
+    expect(formatUtcMinute(timedOut.at)).toBe('2026-10-02 10:00 UTC')
+  })
+
+  it('says a card expired with no decision, never that its run continued (final wave, finding 7)', () => {
+    renderRow(answerDecision({ card: { ...base, askerWaiting: false, closed: { ...timedOut, runContinued: false }, timeoutRefusal: null, lateAnswerFate: 'hand_off' } }))
+    expect(screen.getByTestId('card-question-state').textContent).toContain('The card expired with no decision at 2026-10-02 10:00 UTC')
+    expect(screen.getByTestId('card-question-state').textContent).not.toContain('continued')
+  })
+
+  it('says a parked run still waits, and why it cannot continue', () => {
+    renderRow(answerDecision({ card: { ...base, askerWaiting: true, closed: null, timeoutRefusal: 'workspace halted: emergency_stop' } }))
+    expect(screen.getByTestId('card-question-state').textContent).toContain('Still waiting')
+    expect(screen.getByTestId('card-question-state').textContent).toContain('cannot continue: workspace halted: emergency_stop')
+  })
+
+  it('names how, by whom and when a closed question closed', () => {
+    renderRow(answerDecision({ card: { ...base, askerWaiting: false, closed: { reason: 'dismissed', at: '2026-10-02T09:00:00.000Z', by: 'u1', byName: 'alice', runContinued: false }, timeoutRefusal: null } }))
+    expect(screen.getByTestId('card-question-state').textContent).toBe('Closed without an answer by alice at 2026-10-02 09:00 UTC.')
+  })
+
+  it('says a late answer no run will read, on the card that stays open for it', () => {
+    renderRow(answerDecision({ card: { ...base, askerPackageKey: null, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'unread', lateAnswerNote: 'The answer came after its run continued; no run will read it.' } }))
+    expect(screen.getByTestId('card-question-state').textContent).toContain('no run will read it')
+  })
+
+  it("says an answer given now reaches the task's next run when the task has no package", () => {
+    renderRow(answerDecision({ card: { ...base, askerPackageKey: null, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'next_run' } }))
+    expect(screen.getByTestId('card-question-state').textContent).toContain("reaches the task's next run")
+  })
+
+  it('says a decision reaches the asking package exactly when an answer would, and no run otherwise (final review I2)', () => {
+    renderRow(answerDecision({ card: { ...base, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'hand_off' } }))
+    expect(screen.getByTestId('card-question-state').textContent).toContain('an answer or a decision (not a dismissal) now reaches the integration package as a hand-off')
+    cleanup()
+    renderRow(answerDecision({ card: { ...base, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'unread' } }))
+    expect(screen.getByTestId('card-question-state').textContent).toContain('no run would read an answer or be told of a decision')
+    cleanup()
+    renderRow(answerDecision({ card: { ...base, askerPackageKey: null, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'next_run' } }))
+    expect(screen.getByTestId('card-question-state').textContent).toContain('a decision reaches no run')
+  })
+
+  it('shows nothing for a card with no question, or an open one nobody waits on', () => {
+    renderRow(decision({}))
+    expect(screen.queryByTestId('card-question-state')).toBeNull()
+  })
+})
+
+// ---- Human cards plan B, Task 7: a question card is decided, never approved blind ----------------
+
+describe('a question card offers its decisions (human cards H2, Plan A final review I7)', () => {
+  const card = {
+    messageId: 'm-1',
+    body: 'Which queue should retries land on?',
+    goalVersion: 1,
+    askerPackageKey: 'api',
+    askerRunId: 'r1',
+    askerWaiting: true,
+    closed: null,
+    timeoutRefusal: null,
+    lateAnswerNote: null,
+    lateAnswerFate: null,
+    packages: [{ key: 'api', title: 'The API', isIntegration: false }],
+    offers: ['send_answer', 'write_answer', 'give_work', 'give_file', 'record_decision', 'change_requirement', 'dismiss'],
+  } as const
+  const question = (over: Partial<Decision> = {}): Decision => answerDecision({ card: { ...card }, ...over })
+
+  it('shows an answer card\'s draft read-only beside its decisions, with no bare approve and no reject', () => {
+    renderRow(question(), { decide: true })
+
+    expect(screen.queryByTestId('supervisor-draft-body')).toBeNull()
+    expect(screen.getByTestId('supervisor-draft-text').textContent).toBe('Land them on the payments-retry queue.')
+    expect(screen.getByTestId('card-decisions')).toBeTruthy()
+    expect(screen.queryByTestId('supervisor-approve')).toBeNull()
+    expect(screen.queryByTestId('supervisor-reject')).toBeNull()
+    expect(screen.queryByTestId('supervisor-reject-reason')).toBeNull()
+    // No button on the card is an unlabelled "approve".
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).not.toContain('approve')
+  })
+
+  it('shows an earlier edit as the words "send this answer" sends, said once', () => {
+    renderRow(question({ draft: { ...answerDecision().draft!, editedBody: 'Use the retry topic.' } }), { decide: true })
+
+    expect(screen.getByTestId('supervisor-draft-text').textContent).toBe('Use the retry topic.')
+    expect(screen.getByTestId('supervisor-draft-edited').textContent).toBe('edited by a human')
+  })
+
+  it("leaves a conductor draft's what-applies to the decisions, not to an edit box that is not there (F61)", () => {
+    const conductor = { basis: { requirements: [], packages: [], decisions: [] }, unverified: [], changes: 'none' as const, newDecision: { title: 'Queues', decision: 'retries use payments-retry' }, handOff: null }
+    renderRow(question({ situationKind: 'conductor_question', draft: { ...answerDecision().draft!, conductor } }), { decide: true })
+
+    expect(screen.getByTestId('supervisor-draft-conductor-decision').textContent).toContain('Queues')
+    expect(screen.queryByTestId('supervisor-draft-conductor-edit-note')).toBeNull()
+    fireEvent.click(screen.getByTestId('card-decision-send_answer'))
+    expect(screen.getByTestId('card-decision-note').textContent).toContain('its shared decision applies')
+  })
+
+  it('sends a decision up as the decide route\'s body', () => {
+    renderRow(question(), { decide: true })
+
+    fireEvent.click(screen.getByTestId('card-decision-send_answer'))
+    fireEvent.click(screen.getByTestId('card-decide'))
+
+    expect(onDecide).toHaveBeenCalledWith({ kind: 'send_answer' })
+    expect(onApprove).not.toHaveBeenCalled()
+  })
+
+  it('gives an escalation card its decisions and no approve', () => {
+    renderRow(question({ action: { kind: 'escalate_to_human', summary: 'a person decides' }, draft: null }), { decide: true })
+
+    expect(screen.getByTestId('card-decisions')).toBeTruthy()
+    expect(screen.queryByTestId('supervisor-approve')).toBeNull()
+    expect(screen.queryByTestId('supervisor-reject')).toBeNull()
+  })
+
+  it.each([
+    { action: { kind: 'reassign_question', messageId: 'm-1', toSlaveId: 'Bo' } as const, words: 'approve: re-address question m-1 to Bo' },
+    {
+      action: { kind: 'hire_from_catalog', templateId: 'tpl1', capability: 'product', capabilityLabel: 'Product', name: 'Pat', rationale: 'x', temporary: false, engagementTaskId: null } as const,
+      words: 'approve: hire Pat from the catalog, for Product',
+    },
+  ])("keeps a re-address card's approve, labelled with the machine's own move (F55): $action.kind", ({ action, words }) => {
+    renderRow(question({ situationKind: 'unanswerable_question', action, draft: null, card: { ...card, offers: ['write_answer', 'dismiss'] } }), { decide: true })
+
+    const approve = screen.getByTestId('supervisor-approve')
+    expect(approve.textContent).toBe(words)
+    expect(screen.getByTestId('supervisor-approve-or-decide').textContent).toContain('sets this proposal aside')
+    expect(screen.getByTestId('card-decisions')).toBeTruthy()
+    fireEvent.click(approve)
+    expect(onApprove).toHaveBeenCalledTimes(1)
+    expect(onApprove).toHaveBeenCalledWith(undefined)
+  })
+
+  it('takes the labelled approve and every decision down while a request is in flight', () => {
+    renderRow(question({ situationKind: 'unanswerable_question', action: { kind: 'reassign_question', messageId: 'm-1', toSlaveId: 'Bo' }, draft: null }), { decide: true, busy: true })
+
+    expect((screen.getByTestId('supervisor-approve') as HTMLButtonElement).disabled).toBe(true)
+    for (const button of screen.getAllByTestId(/^card-decision-[a-z_]+$/u)) expect((button as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('shows no bare approve on a question card where the page cannot decide it', () => {
+    renderRow(question())
+
+    expect(screen.queryByTestId('supervisor-approve')).toBeNull()
+    expect(screen.queryByTestId('card-decisions')).toBeNull()
+  })
+
+  it('keeps approve and reject on a proposal that is no question card', () => {
+    renderRow(decision({}), { decide: true })
+
+    expect(screen.getByTestId('supervisor-approve').textContent).toBe('approve')
+    expect(screen.getByTestId('supervisor-reject')).toBeTruthy()
+    expect(screen.queryByTestId('card-decisions')).toBeNull()
+  })
+
+  it('renders a hostile draft on a question card as text, never as markup', () => {
+    renderRow(question({ draft: { ...answerDecision().draft!, body: '<img src=x onerror="boom()">' } }), { decide: true })
+
+    const text = screen.getByTestId('supervisor-draft-text')
+    expect(text.textContent).toBe('<img src=x onerror="boom()">')
+    expect(text.querySelector('img')).toBeNull()
+  })
+})
+
+// ---- Task 10 (d): a question card whose question is gone ------------------------------------------
+
+describe('a question card whose question no longer exists (Task 10 (d))', () => {
+  it('shows no approve, says the question is gone, and offers only to dismiss the card', () => {
+    // A deleted seat cascades its SlaveMessage; the pending card survives and `listDecisions` gives it `card: null`.
+    for (const row of [
+      answerDecision({ situationKind: 'conductor_question', card: null }),
+      decision({ situationKind: 'unanswerable_question', subjectId: 'm-gone', action: { kind: 'reassign_question', messageId: 'm-gone', toSlaveId: 's2' }, card: null }),
+    ]) {
+      renderRow(row, { decide: true })
+      expect(screen.queryByTestId('supervisor-approve')).toBeNull()
+      expect(screen.queryByTestId('supervisor-reject')).toBeNull()
+      expect(screen.queryByTestId('supervisor-draft-body')).toBeNull()
+      expect(screen.queryByTestId('card-decisions')).toBeNull()
+      expect(screen.getByTestId('card-question-gone').textContent).toContain('no longer exists')
+      fireEvent.click(screen.getByTestId('card-dismiss-gone'))
+      expect(onReject).toHaveBeenCalledWith('the question no longer exists')
+      expect(onApprove).not.toHaveBeenCalled()
+      cleanup()
+      onReject.mockReset()
+    }
+  })
+
+  it('keeps approve and reject on a machine card that is not about a question', () => {
+    renderRow(decision({ card: null }))
+    expect(screen.getByTestId('supervisor-approve')).toBeTruthy()
+    expect(screen.getByTestId('supervisor-reject')).toBeTruthy()
+    expect(screen.queryByTestId('card-question-gone')).toBeNull()
   })
 })

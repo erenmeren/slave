@@ -7,6 +7,9 @@ import {
   SITUATION_LABEL,
   SUPERVISOR_DEFAULT_PROVIDER,
   TIER_LABEL,
+  actionSchema,
+  isQuestionSituation,
+  type SituationKind,
   type ChatAttachment,
   type Tier,
 } from '@slave-of-ai/domain'
@@ -19,6 +22,7 @@ import type { SupervisorThread } from '../../server/supervisorThreads'
 import { ModelSelect } from '../ModelSelect'
 import { ProviderSelect } from '../ProviderSelect'
 import { Kbd } from '../ui/Kbd'
+import { actionText, machineMove } from './ProposalRow'
 
 /** Exactly what this panel reads off `GET /api/w/:id/supervisor` — the pending proposals, and
  *  nothing else. The full `SupervisorView` carries a report, recent decisions, questions and two
@@ -35,13 +39,17 @@ export interface PendingDecision {
    *  this card has no room to show one -- so it sends them to the surface that does instead of
    *  offering a one-click Approve over words nobody has seen. Optional, and a proposal that
    *  somehow arrives without it keeps the buttons, which is every other kind's behaviour. */
-  readonly action?: { readonly kind?: string }
+  readonly action?: { readonly kind?: string } & Readonly<Record<string, unknown>>
   /** The whole record, for `supervisor-decision-meta`'s `title` (spec erratum E18) — the four
    *  fields `SupervisorPanel.tsx:557` put there before this panel replaced it. Optional because a
    *  row written by an older build carries none. */
   readonly tier?: string
   readonly status?: string
   readonly decidedBy?: string
+  /** A question card's question as `listDecisions` read it: `null` when the question no longer
+   *  exists (Task 10 (d): a deleted seat cascades its message, and the card survives). Absent on a
+   *  row read without it, which is drawn as before. Read for that one fact only. */
+  readonly card?: unknown
 }
 
 /** One action a reply asked for (F R3), as the thread view carries it: the decision it became,
@@ -192,6 +200,18 @@ function DecisionCard({
   // so this card sends a person there rather than growing a second, smaller copy of it.
   const needsReading = decision?.action?.kind === 'answer_question'
   const situationKind = decision?.situationKind ?? OPERATOR_REQUEST
+  // Human cards Task 7 fix round 1 (Plan A final review I7): a card about a QUESTION is decided on the
+  // activity page, where its decisions render -- never with a bare Approve/Decline here. Only the
+  // machine's own re-addressing move keeps an approve, labelled with that move (ruling F55; the
+  // sentence `ProposalRow` writes, from the whole action when it reads as one).
+  // The cast is the question being asked of a stored string, as `situationLabel` asks it above.
+  const question = decision !== null && isQuestionSituation(situationKind as SituationKind)
+  // Task 10 (d): nothing to approve on a card whose question is gone -- the activity page's card
+  // says so and offers to dismiss it.
+  const questionGone = question && decision.card === null
+  const parsedAction = decision?.action === undefined ? null : actionSchema.safeParse(decision.action)
+  const move = parsedAction?.success === true && machineMove(parsedAction.data) ? actionText(parsedAction.data) : null
+  const decideHref = decision === null ? '' : `/w/${workspaceId}/activity#decision-${decision.id}`
   return (
     <div
       data-testid="supervisor-decision-card"
@@ -239,10 +259,45 @@ function DecisionCard({
             {decision.situation.summary ?? 'The Supervisor has proposed something.'}
           </p>
           <div className="mt-[10px] flex gap-[6px]">
-            {needsReading ? (
+            {questionGone ? (
+              <>
+                <span data-testid="supervisor-decision-question-gone" className="self-center text-[12px] text-t2">
+                  The question this card is about no longer exists.
+                </span>
+                <Link
+                  data-testid="supervisor-decision-decide"
+                  href={decideHref}
+                  className="rounded-card border border-line2 px-3 py-[6px] text-[12.5px] font-medium text-t1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                >
+                  Dismiss it on its card →
+                </Link>
+              </>
+            ) : question ? (
+              <>
+                {move !== null && (
+                  <button
+                    type="button"
+                    data-testid="supervisor-decision-approve"
+                    disabled={busy}
+                    onClick={() => onAnswer(decision.id, 'approve')}
+                    className="rounded-card border-0 bg-accent px-3 py-[6px] text-[12.5px] font-semibold text-accent-ink disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                  >
+                    {`Approve: ${move}`}
+                  </button>
+                )}
+                <Link
+                  data-testid="supervisor-decision-decide"
+                  href={decideHref}
+                  className="rounded-card border border-line2 px-3 py-[6px] text-[12.5px] font-medium text-t1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                >
+                  Decide the question →
+                </Link>
+              </>
+            ) : needsReading ? (
               <Link
                 data-testid="supervisor-decision-review"
-                href={`/w/${workspaceId}`}
+                // Ruling F17: the `#decision-` anchor exists only on the activity page.
+                href={decideHref}
                 className="rounded-card border border-line2 px-3 py-[6px] text-[12.5px] font-medium text-t1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               >
                 Review the draft →
@@ -327,6 +382,8 @@ export function SupervisorThreadPanel({
   const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
+  /** A card somebody else settled first (human cards spec §4): information, never the red band. */
+  const [noticeText, setNoticeText] = useState<string | null>(null)
   // R1/R8 (Task 7): the scope line's own switch. `null` until the view answers once -- `useShellFacts`
   // carries none of the Supervisor's settings (`hooks/useShellFacts.ts`'s own `sameFacts` list), so
   // this panel reads them off `GET /api/w/:id/supervisor` itself rather than growing a field onto a
@@ -620,10 +677,15 @@ export function SupervisorThreadPanel({
     // The last refusal is about the last act, not this one: a band that outlives what it described
     // is a band a person reads as being about the button they just pressed.
     setErrorText(null)
+    setNoticeText(null)
     const result = await postControl(`/api/w/${workspaceId}/supervisor/decisions/${decisionId}/${verdict}`)
     setBusy(false)
     if (result.ok) await load()
-    else setErrorText(result.error)
+    else if (result.notice !== null) {
+      // Human cards spec §4: somebody else settled it first -- who and when, then a fresh thread.
+      setNoticeText(result.notice)
+      await load()
+    } else setErrorText(result.error)
   }
   const onAnswer = (decisionId: string, verdict: 'approve' | 'reject'): void => void answer(decisionId, verdict)
 
@@ -874,6 +936,11 @@ export function SupervisorThreadPanel({
         {errorText !== null && (
           <span role="alert" data-testid="supervisor-request-error" className="text-[12.5px] text-s-blocked">
             {errorText}
+          </span>
+        )}
+        {noticeText !== null && (
+          <span role="status" data-testid="supervisor-request-notice" className="text-[12.5px] text-t2">
+            {noticeText}
           </span>
         )}
         {/* R14/I3: `rounded-[11px]` was the one hand-rolled radius left on this panel -- the field

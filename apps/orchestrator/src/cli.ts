@@ -193,6 +193,7 @@ import {
   displayName,
   domainLabel,
   filterFresh,
+  formatWait,
   grantsFor,
   manifestFor,
   observe,
@@ -712,15 +713,19 @@ const USAGE = `usage: orchestrator <command> [options]
                                        Turning it on stamps nothing that is already done: work
                                        merged by hand stays unstamped and still needs
                                        confirm-integration once, and the command says how much.
-  set-limits --workspace <id> [--run-timeout-min <n>] [--max-concurrent-runs <n>] [--max-attempts <n>]
+  set-limits --workspace <id> [--run-timeout-min <n>] [--max-concurrent-runs <n>] [--max-attempts <n>] [--question-timeout-min <n>]
                                        how long one run may work (5-180 minutes, default 30), how
-                                       many runs the project has at once (1-10, default 3) and how
-                                       many attempts a task gets (1-10, default 3). Refused with
-                                       no flag at all, and refused outright -- nothing written --
-                                       when any figure is out of range. A raised timeout reaches
-                                       a run that is already working; attempts reach tasks
-                                       planned from now on, and a task already on the board keeps
-                                       the ceiling it was planned with.
+                                       many runs the project has at once (1-10, default 3), how
+                                       many attempts a task gets (1-10, default 3) and how long a
+                                       run waits on an unanswered question (15-4320 minutes, default
+                                       120): past it the run continues on its safest assumption,
+                                       says which in its report, and the question closes as
+                                       continued without an answer. Refused with no flag at all,
+                                       and refused outright -- nothing written -- when any figure
+                                       is out of range. A raised timeout reaches a run that is
+                                       already working; attempts reach tasks planned from now on,
+                                       and a task already on the board keeps the ceiling it was
+                                       planned with.
 
   delete-slave --slave <id> [--yes]    delete the PERSON sitting in this seat, and every other
                                        project they are on. Omit --yes to see how many projects
@@ -3873,15 +3878,17 @@ export async function main(argv: readonly string[]): Promise<number> {
       return 0
     }
 
-    // H9 F8: the three dispatch limits, which had defaults since M2 and no writer -- a project
-    // whose runs need more than thirty minutes could only be helped by an UPDATE typed into psql.
+    // H9 F8: the dispatch limits, which had defaults since M2 and no writer -- a project whose runs
+    // need more than thirty minutes could only be helped by an UPDATE typed into psql. Human cards
+    // H3 added the fourth, the question timeout.
     case 'set-limits': {
       const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
       const timeoutText = flagText(flags, 'run-timeout-min')
       const concurrentText = flagText(flags, 'max-concurrent-runs')
       const attemptsText = flagText(flags, 'max-attempts')
-      if (timeoutText === undefined && concurrentText === undefined && attemptsText === undefined) {
-        throw new Error('one of --run-timeout-min, --max-concurrent-runs or --max-attempts is required')
+      const questionText = flagText(flags, 'question-timeout-min')
+      if (timeoutText === undefined && concurrentText === undefined && attemptsText === undefined && questionText === undefined) {
+        throw new Error('one of --run-timeout-min, --max-concurrent-runs, --max-attempts or --question-timeout-min is required')
       }
       // Handed on as numbers and NOT checked here: `setWorkspaceLimits` owns the bounds and the
       // sentence, so `--run-timeout-min 1.5` and `--max-attempts lots` (NaN) are told the same rule
@@ -3890,6 +3897,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         ...(timeoutText === undefined ? {} : { runTimeoutMs: Number(timeoutText) * 60_000 }),
         ...(concurrentText === undefined ? {} : { maxConcurrentRuns: Number(concurrentText) }),
         ...(attemptsText === undefined ? {} : { maxAttempts: Number(attemptsText) }),
+        ...(questionText === undefined ? {} : { questionTimeoutMs: Number(questionText) * 60_000 }),
       })
       if (!result.ok) throw new Error(refusalText(result.error))
       const { moved } = result.value
@@ -3897,9 +3905,11 @@ export async function main(argv: readonly string[]): Promise<number> {
         process.stdout.write(`nothing changed on ${workspaceId}: every limit given already reads that\n`)
         return 0
       }
-      const said = { runTimeoutMs: 'run timeout', maxConcurrentRuns: 'runs at once', maxAttempts: 'attempts per task' }
+      const said = { runTimeoutMs: 'run timeout', maxConcurrentRuns: 'runs at once', maxAttempts: 'attempts per task', questionTimeoutMs: 'question timeout' }
+      // Final wave: the question timeout in hours, as the settings-changed card says it ("4320 min"
+      // reads badly); the run timeout keeps its minutes.
       const figure = (field: keyof typeof said, value: number): string =>
-        field === 'runTimeoutMs' ? `${String(value / 60_000)} min` : String(value)
+        field === 'questionTimeoutMs' ? formatWait(value) : field === 'runTimeoutMs' ? `${String(value / 60_000)} min` : String(value)
       process.stdout.write(
         `limits updated on ${workspaceId}: ` +
           moved.map((move) => `${said[move.field]} ${figure(move.field, move.from)} to ${figure(move.field, move.to)}`).join(', ') +

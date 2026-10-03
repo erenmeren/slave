@@ -106,6 +106,8 @@ describe('parseActivityFilters', () => {
       'workspace.goal_set',
       'workspace.goal_waiting',
       'workspace.package_handed_off',
+      // Human cards plan B D9: a worker's note, beside its hand-offs.
+      'workspace.package_noted',
       'workspace.plan_created',
       // H4a: the planning retry cap given back for one goal version, beside the re-plan pair.
       'workspace.planning_reset',

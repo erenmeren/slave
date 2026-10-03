@@ -22,6 +22,14 @@ describe('ownershipRuleFor', () => {
     expect(rule !== null && isOwned(rule, 'src/report/table.py')).toBe(false)
   })
 
+  it('excludes a package\'s released paths from its own rule (human cards plan B D5)', () => {
+    const api = { key: 'api', ownedPaths: ['src/api/**'], releasedPaths: ['src/api/routes.ts'], isIntegration: false }
+    const rule = ownershipRuleFor(api, [api])
+    expect(rule).toEqual({ owned: ['src/api/**'], excluded: ['src/api/routes.ts'] })
+    expect(rule !== null && isOwned(rule, 'src/api/routes.ts')).toBe(false)
+    expect(rule !== null && isOwned(rule, 'src/api/other.ts')).toBe(true)
+  })
+
   it('does not govern a package that owns **', () => {
     expect(ownershipRuleFor({ key: 'main', ownedPaths: ['**'], isIntegration: false }, [])).toBeNull()
   })

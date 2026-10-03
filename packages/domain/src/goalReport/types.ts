@@ -5,6 +5,9 @@
  * re-derives any of it (plan D1). The web page, the Markdown export and the chat note render it.
  * Every timestamp is an ISO string (UTC), so the value crosses a route unchanged.
  */
+import type { QuestionCloseReason } from '../messaging/close.js'
+import type { CardDecisionKind } from '../supervisor/cardDecisions.js'
+
 /** `conducted_without_delivery` (final wave I1): a version conducted under Plans 2/3 -- a `conduct`
  *  decision and packages, but no `GoalDelivery` -- whose packages merge straight into the base
  *  branch. Plan 4a's conductor writes the delivery in the packages' own transaction, so a version
@@ -76,6 +79,9 @@ export interface GoalReportPackage {
   readonly isIntegration: boolean
   readonly requirementKeys: readonly string[]
   readonly ownedPaths: readonly string[]
+  /** Human cards H2.4 (plan B D5, ruling F50): files a person gave from this package to another.
+   *  Its globs still match them; its ownership rule excludes them. */
+  readonly releasedPaths: readonly string[]
   readonly dependsOn: readonly string[]
   /** The persona (catalogue template) the conductor named for it, or null if it was deleted. */
   readonly persona: string | null
@@ -134,6 +140,18 @@ export interface GoalReportQuestion {
   readonly askedBy: string | null
   readonly question: string
   readonly answer: { readonly at: string; readonly by: 'person' | 'supervisor' | 'slave'; readonly text: string } | null
+  /** The asking task: a question a run continued past links to it, because the assumption the run
+   *  made lives in that worker's own report (human cards H3). Null for a task-less question. */
+  readonly taskId: string | null
+  /** Human cards H1/H3: how the question stopped waiting, or null while it waits. `waitedMs` is from
+   *  the question to its close -- for `timed_out`, how long the run waited before it continued. */
+  readonly closed: {
+    readonly at: string
+    readonly reason: QuestionCloseReason
+    readonly by: 'person' | 'system'
+    readonly note: string | null
+    readonly waitedMs: number
+  } | null
 }
 
 /** Plan D5. `versionUsd` = `runsMeasuredUsd + conductorMeasuredUsd + conductorUnmeasuredCalls *
@@ -197,8 +215,12 @@ export interface GoalReportSmoke {
 export interface GoalReportHandOff {
   readonly id: string
   readonly at: string
-  readonly source: 'report' | 'answer'
+  readonly source: 'report' | 'answer' | 'person'
   readonly fromPackage: string | null
+  /** Who it came from, in words (pre-flight F65): the package's key, "the operator" for a person's
+   *  request or late answer, a worker's seat for its late answer, "the conductor" for the
+   *  Supervisor's -- `handOffFromName`, the name the workers' prompts give it. Raw: renderers escape it. */
+  readonly from: string
   readonly toPackage: string | null
   readonly path: string | null
   readonly packageKey: string | null
@@ -216,6 +238,29 @@ export interface GoalReportSharedDecision {
   readonly decision: string
   readonly source: 'conductor_plan' | 'conductor_answer' | 'person'
   readonly at: string
+}
+
+/** Human cards H2 (plan B D3): one decision a person took on a card about this version's questions. */
+export interface GoalReportPersonDecision {
+  readonly at: string
+  /** The question's `SlaveMessage` id. */
+  readonly questionId: string
+  readonly kind: CardDecisionKind
+  /** `personDecisionSummary`, built from the person's words and read back through `personText`
+   *  (inert, bounded): renderers still escape it. */
+  readonly summary: string
+  /** A file grant's move (H2.4): the file and the package it was taken from (null when nobody owned
+   *  it), and the one it went to. Null for every other decision. */
+  readonly grant: { readonly path: string; readonly fromKey: string | null; readonly toKey: string } | null
+}
+
+/** Human cards plan B D9: one note a package's worker left -- information that needed no decision. */
+export interface GoalReportNote {
+  /** When it was filed (its `workspace.package_noted` event). */
+  readonly at: string
+  readonly packageKey: string
+  /** The worker's words, sanitised and bounded when filed: renderers still escape them. */
+  readonly text: string
 }
 
 /** Skeleton spec S9 (plan B D10): one tool call the version's runs were refused. */
@@ -247,6 +292,14 @@ export interface GoalReport {
   readonly packages: readonly GoalReportPackage[]
   readonly verifier: string | null
   readonly questions: readonly GoalReportQuestion[]
+  /** What people decided on cards about the version's questions, oldest first (human cards H1/H2:
+   *  "Closing is a recorded decision, shown on the goal report"). */
+  readonly personDecisions: readonly GoalReportPersonDecision[]
+  /** The oldest `GOAL_REPORT_NOTES_MAX` notes the version's packages left, oldest first, each
+   *  package's identical note once (a reworked run reports it again) -- human cards plan B D9. */
+  readonly notes: readonly GoalReportNote[]
+  /** Notes past `GOAL_REPORT_NOTES_MAX`, left out. */
+  readonly notesOmitted: number
   /** Every smoke attempt of the version, oldest first. */
   readonly smoke: readonly GoalReportSmoke[]
   /** The oldest `GOAL_REPORT_HANDOFFS_MAX` hand-offs of the version, oldest first (expired ones too: they have no event). */

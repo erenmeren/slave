@@ -5,6 +5,7 @@ import {
   BREAKER_TRIP_LABEL,
   BROKER_OP_LABEL,
   BROKER_REFUSAL_LABEL,
+  CARD_EXPIRED_NOTE,
   GUARDRAIL_LABEL,
   MEMORY_SOURCE_KIND_LABEL,
   MEMORY_STATUS_LABEL,
@@ -21,9 +22,10 @@ import {
   type MemoryStatus,
   type MemoryType,
 } from '@slave-of-ai/domain'
-import { formatTimeout } from '../../lib/format'
+import { formatQuestionTimeout, formatTimeout, formatUtcMinute } from '../../lib/format'
 import { formatUsd } from '../../lib/realMoney'
 import { plural } from '../../lib/plural'
+import { handOffSender } from '../../lib/handOffSender'
 import { ActivityCard, type ActivityCardProps } from './ActivityCard'
 
 // Every payload field name below is copied verbatim from `packages/domain/src/events/schema.ts`
@@ -931,8 +933,11 @@ function WorkspacePackageHandedOffCard(props: ActivityCardProps): ReactElement {
     package: string | null
     delivery: string
     change: string
+    source: string
   }
-  const from = payload.fromPackage ?? 'the conductor'
+  // Plan B Task 8 carry: the timeline's own rule and the server's own name, so a worker's late
+  // answer reads as its seat here too, not "the conductor".
+  const from = handOffSender(props.event.payload, props.event.handOffFrom)
   const to = payload.toPackage ?? 'no package'
   const what = payload.path ?? payload.package
   return (
@@ -942,6 +947,44 @@ function WorkspacePackageHandedOffCard(props: ActivityCardProps): ReactElement {
         label={`goal v${String(payload.version)}: ${from} handed work to ${to}${what === null ? '' : ` (${what})`}, ${HAND_OFF_DELIVERY[payload.delivery] ?? payload.delivery}`}
       >
         {payload.change !== '' && <span data-testid="package-handoff-change">{payload.change}</span>}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+/**
+ * Human cards plan B D9: a worker's note -- information for a person, not a question, and never a
+ * card. `note` is the worker's words (sanitised when filed), rendered as a JSX child: text, never markup.
+ */
+function WorkspacePackageNotedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; packageKey: string; note: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="working" label={`goal v${String(payload.version)}: ${payload.packageKey} left a note`}>
+        <span data-testid="package-note">{payload.note}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+const QUESTION_CLOSED_WORDS: Readonly<Record<string, string>> = {
+  answered: 'answered',
+  decided: 'decided on a card',
+  dismissed: 'closed without an answer',
+  timed_out: 'continued without an answer',
+  superseded: 'superseded by a new goal version',
+}
+
+/** Human cards H1: a question stopped waiting. `note` is what the asker was told, quoted as a child. */
+function SlaveQuestionClosedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { reason: string; by: string; note: string | null }
+  const who = payload.by === 'system' ? 'Slave' : 'a person'
+  // Final wave, finding 7: a card's expiry closes `timed_out` too, but no run continued past it.
+  const words = payload.reason === 'timed_out' && payload.note === CARD_EXPIRED_NOTE ? 'timed out: its card expired with no decision' : (QUESTION_CLOSED_WORDS[payload.reason] ?? payload.reason)
+  return (
+    <ActivityCard {...props}>
+      <Transition tone={payload.reason === 'timed_out' ? 'warn' : 'working'} label={`question ${words} (${who})`}>
+        {payload.note !== null && <span data-testid="question-closed-note">{payload.note}</span>}
       </Transition>
     </ActivityCard>
   )
@@ -1018,6 +1061,7 @@ type SettingsField =
   | 'runTimeoutMs'
   | 'maxConcurrentRuns'
   | 'maxAttempts'
+  | 'questionTimeoutMs'
 
 /** M38 t2 widened this event to the Supervisor's two settings, so the label is a table rather
  *  than the ternary it was while there were only two fields. Task 6 review, "Also": `supervisorAutonomy`
@@ -1035,6 +1079,8 @@ const SETTINGS_LABEL: Record<SettingsField, string> = {
   runTimeoutMs: 'run timeout',
   maxConcurrentRuns: 'runs at once',
   maxAttempts: 'attempts per task',
+  // Human cards H3: how long a run waits on an unanswered question.
+  questionTimeoutMs: 'question timeout',
 }
 
 function WorkspaceSettingsChangedCard(props: ActivityCardProps): ReactElement {
@@ -1064,6 +1110,8 @@ function settingValue(field: SettingsField, value: string | number | boolean | n
   if (field === 'supervisorAutonomy') return String(value)
   // Milliseconds on the wire, the column's unit; a person reads `30m`, the Runtime panel's old format.
   if (field === 'runTimeoutMs') return typeof value === 'number' ? formatTimeout(value) : String(value)
+  // Hours where they read better (`2h`, `72h`), minutes otherwise (`90m`).
+  if (field === 'questionTimeoutMs') return typeof value === 'number' ? formatQuestionTimeout(value) : String(value)
   if (value === null) return field === 'provider' ? 'none' : 'no budget'
   return field === 'budgetUsd' ? `$${String(value)}` : String(value)
 }
@@ -1409,7 +1457,7 @@ function SupervisorProposedCard(props: ActivityCardProps): ReactElement {
           * minutes -- `expirePendingDecisions` runs per tick, so seconds are a precision the
           * deadline does not have. */}
         <span data-testid="supervisor-expires" className="font-mono">
-          {payload.expiresAt.slice(0, 16).replace('T', ' ')}
+          {formatUtcMinute(payload.expiresAt)}
         </span>
         {' \u00b7 '}
         <DecisionRef id={payload.decisionId} />
@@ -1817,6 +1865,8 @@ export const ACTIVITY_CARDS = {
   'workspace.smoke_run': WorkspaceSmokeRunCard,
   'workspace.smoke_handed_off': WorkspaceSmokeHandedOffCard,
   'workspace.package_handed_off': WorkspacePackageHandedOffCard,
+  'slave.question_closed': SlaveQuestionClosedCard,
+  'workspace.package_noted': WorkspacePackageNotedCard,
   'workspace.plan_created': WorkspacePlanCreatedCard,
   'workspace.replan_started': WorkspaceReplanStartedCard,
   'workspace.replanned': WorkspaceReplannedCard,

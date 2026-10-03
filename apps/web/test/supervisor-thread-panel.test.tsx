@@ -239,14 +239,65 @@ describe('the Supervisor panel', () => {
     render(<SupervisorThreadPanel workspaceId="w1" pending={answering} />)
     await waitFor(() => expect(screen.getByTestId('supervisor-decision-card')).toBeTruthy())
 
-    // The timeline's DECISION REQUIRED lane renders `ProposalRow`, which shows the question, the
-    // draft in an editable box and every source behind it.
-    expect(screen.getByTestId('supervisor-decision-review').getAttribute('href')).toBe('/w/w1')
+    // The activity page's DECISION REQUIRED lane renders `ProposalRow` with the card's decisions
+    // (human cards Task 7 fix round 1; ruling F17: the `#decision-` anchor lives only there).
+    expect(screen.getByTestId('supervisor-decision-decide').getAttribute('href')).toBe('/w/w1/activity#decision-d-1')
     expect(screen.queryByTestId('supervisor-decision-approve')).toBeNull()
     expect(screen.queryByTestId('supervisor-decision-decline')).toBeNull()
     // The two chips gate-m44 reads are untouched by the branch.
     expect(screen.getByTestId('supervisor-proposal-kind').getAttribute('title')).toBe('waiting_stale')
     expect(screen.getByTestId('supervisor-decision-meta')).toBeTruthy()
+  })
+
+  // Human cards Task 7 fix round 1 (Plan A final review I7, ruling F55): a QUESTION card here has no
+  // bare Approve/Decline -- it is decided where its decisions render; only the machine's own
+  // re-addressing move keeps an approve, labelled with that move.
+  it('gives an escalated question card a decide link and no Approve or Decline', async (): Promise<void> => {
+    const escalated: readonly PendingDecision[] = [
+      { id: 'd-7', situationKind: 'conductor_question', situation: { summary: 'a question to the conductor' }, status: 'pending', action: { kind: 'escalate_to_human', summary: 'a person decides' } },
+    ]
+    render(<SupervisorThreadPanel workspaceId="w1" pending={escalated} />)
+    await waitFor(() => expect(screen.getByTestId('supervisor-decision-card')).toBeTruthy())
+
+    expect(screen.getByTestId('supervisor-decision-decide').getAttribute('href')).toBe('/w/w1/activity#decision-d-7')
+    expect(screen.queryByTestId('supervisor-decision-approve')).toBeNull()
+    expect(screen.queryByTestId('supervisor-decision-decline')).toBeNull()
+    expect(screen.getByTestId('supervisor-decision-card').textContent).not.toMatch(/\bApprove\b(?!:)/u)
+  })
+
+  it("labels a re-address question card's approve with the move, beside the decide link", async (): Promise<void> => {
+    const readdress: readonly PendingDecision[] = [
+      { id: 'd-8', situationKind: 'unanswerable_question', situation: { summary: 'nobody holds product' }, status: 'pending', action: { kind: 'reassign_question', messageId: 'm-1', toSlaveId: 'Bo' } },
+    ]
+    render(<SupervisorThreadPanel workspaceId="w1" pending={readdress} />)
+    await waitFor(() => expect(screen.getByTestId('supervisor-decision-approve')).toBeTruthy())
+
+    expect(screen.getByTestId('supervisor-decision-approve').textContent).toBe('Approve: re-address question m-1 to Bo')
+    expect(screen.queryByTestId('supervisor-decision-decline')).toBeNull()
+    expect(screen.getByTestId('supervisor-decision-decide').getAttribute('href')).toBe('/w/w1/activity#decision-d-8')
+    act((): void => { screen.getByTestId('supervisor-decision-approve').click() })
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/supervisor/decisions/d-8/approve', expect.objectContaining({ method: 'POST' })))
+  })
+
+  it('offers no approve on a re-address card whose question no longer exists, only the way to its card (Task 10 (d))', async (): Promise<void> => {
+    const gone: readonly PendingDecision[] = [
+      { id: 'd-9', situationKind: 'unanswerable_question', situation: { summary: 'nobody holds product' }, status: 'pending', action: { kind: 'reassign_question', messageId: 'm-gone', toSlaveId: 'Bo' }, card: null },
+    ]
+    render(<SupervisorThreadPanel workspaceId="w1" pending={gone} />)
+    await waitFor(() => expect(screen.getByTestId('supervisor-decision-card')).toBeTruthy())
+
+    expect(screen.queryByTestId('supervisor-decision-approve')).toBeNull()
+    expect(screen.queryByTestId('supervisor-decision-decline')).toBeNull()
+    expect(screen.getByTestId('supervisor-decision-question-gone').textContent).toContain('no longer exists')
+    expect(screen.getByTestId('supervisor-decision-decide').getAttribute('href')).toBe('/w/w1/activity#decision-d-9')
+  })
+
+  it('keeps Approve and Decline on a card that is not about a question', async (): Promise<void> => {
+    render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
+    await waitFor(() => expect(screen.getByTestId('supervisor-decision-approve')).toBeTruthy())
+    expect(screen.getByTestId('supervisor-decision-approve').textContent).toBe('Approve')
+    expect(screen.getByTestId('supervisor-decision-decline').textContent).toBe('Decline')
+    expect(screen.queryByTestId('supervisor-decision-decide')).toBeNull()
   })
 
   it('approves through the EXISTING route', async (): Promise<void> => {

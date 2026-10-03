@@ -1,11 +1,8 @@
 import { TERMINAL } from '../task/state.js'
+import { QUESTION_SITUATION_KINDS } from './cards.js'
 import { observe } from './observe.js'
-import type { Situation, SituationKind } from './situations.js'
+import type { Situation } from './situations.js'
 import type { SupervisorWorld } from './world.js'
-
-/** The situation kinds that are about the mailbox -- a question waiting, one nobody can take, and
- *  (supervisor-as-conductor Plan B) one to the conductor. Every mailbox count below is over decisions on these. */
-const QUESTION_KINDS: readonly SituationKind[] = ['waiting_stale', 'unanswerable_question', 'conductor_question']
 
 /** The window `answeredBySupervisor24h` counts over, closed at both ends. */
 const DAY_MS = 24 * 3_600_000
@@ -84,7 +81,7 @@ export function summarise(world: SupervisorWorld): SupervisorReport {
   // question AND the action was an answer. A stored `answer_question` on any other situation kind
   // is a shape the catalogue never builds, and counting it would be trusting one field over two.
   const answerDecisions = decisions.filter(
-    (decision) => QUESTION_KINDS.includes(decision.situationKind) && decision.actionKind === 'answer_question',
+    (decision) => QUESTION_SITUATION_KINDS.includes(decision.situationKind) && decision.actionKind === 'answer_question',
   )
 
   return {

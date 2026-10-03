@@ -109,6 +109,18 @@ export interface Draft {
   readonly conductor?: ConductorDraft | undefined
 }
 
+/**
+ * What a draft carries beyond its words: a conductor draft's new shared decision and hand-off, each
+ * only when the draft really carries it. Sending the draft as drafted applies both (an edited draft
+ * applies neither -- `approveDecision`'s rule). One reading for the card's note and the needs-you
+ * row (final review I4: a row whose one click would apply either offers no one click).
+ */
+export function draftCarries(draft: Pick<Draft, 'conductor'> | null | undefined): { readonly decision: boolean; readonly handOff: boolean } {
+  const conductor = draft?.conductor
+  if (conductor === undefined) return { decision: false, handOff: false }
+  return { decision: conductor.newDecision !== null, handOff: conductor.handOff !== null }
+}
+
 /** Validates a `SupervisorDecision.draft` `Json` value at read, the way `actionSchema` validates
  *  the action beside it -- a hand-edited or pre-migration row must not crash the panel or the CLI. */
 export const draftSchema: z.ZodType<Draft, z.ZodTypeDef, unknown> = z.object({

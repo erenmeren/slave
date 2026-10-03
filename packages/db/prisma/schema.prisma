@@ -200,6 +200,9 @@ model Workspace {
   /// Skeleton spec S7: how long one smoke attempt may run before its process group is killed
   /// (15 minutes -- a Docker image build fits).
   smokeTimeoutMs Int @default(900000)
+  /// Human-cards spec H3 (plan A D12): how long a run paused on an unanswered question waits before it
+  /// continues on its own judgement -- 2 hours; 15 minutes to 72 hours (`WORKSPACE_LIMIT_BOUNDS`).
+  questionTimeoutMs Int @default(7200000)
 
   @@index([adoptedFromSimulationId])
 }
@@ -1467,6 +1470,9 @@ model WorkPackage {
   /// Supervisor-as-conductor spec C2 (plan A D5): how often other packages' hand-offs reopened this
   /// package's finished task in its goal version -- the loop guard stops at two.
   handOffReopens  Int      @default(0)
+  /// Human-cards spec H2 (plan B D5): literal paths a person gave from this package to another while it
+  /// owned them by a glob; `ownershipRuleFor` excludes them.
+  releasedPaths   String[] @default([])
   interface       String
   dependsOn       String[] @default([])
   isIntegration   Boolean  @default(false)
@@ -1500,6 +1506,8 @@ model RunReport {
 enum PackageHandOffSource {
   report
   answer
+  /// Human-cards plan A D9 / plan B: a person's decision on a card -- a late answer, or work given to a package.
+  person
 }
 
 /// Supervisor-as-conductor spec C2 (plan A D3-D7): what became of one hand-off. `pending` until a
@@ -2109,6 +2117,9 @@ model SupervisorDecision {
   /// `failed` rows that were never pending -- `filterFresh` cools those from `createdAt` instead.
   resolvedAt       DateTime?
   resolvedByUserId String?
+  /// Human-cards spec H2 (plan B D3): what a person decided on this question card, validated at read
+  /// by `personDecisionSchema`; null for a card approved or rejected the old way, and every machine card.
+  personDecision   Json?
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
@@ -2461,6 +2472,19 @@ model SlaveMessage {
   /// (and logging it, see `deliver.ts`) is what keeps §13's "no failure is silent" true here.
   /// Mutually exclusive with `deliveredAt` by construction: one is set, or the other, or neither.
   supersededAt     DateTime?
+  /// Human-cards spec H1 (plan A D1): when this question stopped waiting. Null is open, and a
+  /// question with no close follows the pre-H1 rule. The first close wins (`updateMany where
+  /// closedAt IS NULL`). Null on every row that is not a question.
+  closedAt         DateTime?
+  closedReason     QuestionCloseReason?
+  /// A user id, `operator` (a person with no account to name), or `system`.
+  closedBy         String?
+  /// What the asker is told when its run continues (`timed_out`, `dismissed`, `decided`,
+  /// `superseded`); null for `answered`, whose answer is what it is told.
+  closedNote       String?
+  /// Plan A D7: why the timeout pass could not continue the asking run (a halt, a spent budget);
+  /// cleared once it does.
+  timeoutRefusal   String?
   /// Monotonic, gap-permitted insertion order -- `createdAt`'s millisecond resolution is not fine
   /// enough to order two messages written in the same tick, the same reasoning
   /// `ExecutionEvent.seq` (packages/events/src/append.ts) already codifies for this codebase.
@@ -2487,6 +2511,15 @@ model SlaveMessage {
   /// order by `seq` inside a `senderRunId` filter, and none of the indexes above starts with
   /// `senderRunId`.
   @@index([senderRunId, seq])
+}
+
+/// Human-cards spec H1: why a question stopped waiting.
+enum QuestionCloseReason {
+  answered
+  decided
+  dismissed
+  timed_out
+  superseded
 }
 
 model Approval {
@@ -2575,6 +2608,12 @@ enum EventType {
   workspace_smoke_handed_off     @map("workspace.smoke_handed_off")
   /// Supervisor-as-conductor spec C2: a package's hand-off routed to the package that owns it.
   workspace_package_handed_off   @map("workspace.package_handed_off")
+  /// Human cards H1 (plan A D11): a question stopped waiting -- answered, decided on a card,
+  /// dismissed, past its timeout, or superseded by a new goal version.
+  slave_question_closed          @map("slave.question_closed")
+  /// Human cards plan B D9: one note from a package worker's report -- information a person
+  /// should know that needs no decision. The feed and the goal report, never a card.
+  workspace_package_noted        @map("workspace.package_noted")
   workspace_plan_created      @map("workspace.plan_created")
   /// M40 §2: the goal moved on a board that already had tasks, so the tick started a DELTA re-plan
   /// run (`workspace.replan_started`, whose `version` is the dedup key for "one re-plan per goal

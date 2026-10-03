@@ -3,10 +3,10 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { requestResume, runDirPathFor } from '@slave-of-ai/control'
+import { decideCard, requestResume, runDirPathFor, sendMessage } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { PACKAGE_WORKER_ROLE, globToRegExp, integrationBranchName, runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { CONDUCTOR_ROLE, PACKAGE_WORKER_ROLE, globToRegExp, isOwned, integrationBranchName, runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { ClaudeCodeAdapter, permissionsFilePathFor } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -191,6 +191,58 @@ describe('a package run is given its ownership', () => {
     expect(rule?.excluded).toHaveLength(2)
   })
 
+  it('excludes a file a person gave away from the package that gave it, for the gate and the audit alike (human cards plan B D5)', async (): Promise<void> => {
+    const c = await seedConducted()
+    const report = await seedPackage(c, 'report', ['src/report/**'])
+    await prisma.workPackage.updateMany({ where: { workspaceId: c.workspaceId, key: 'report' }, data: { releasedPaths: ['src/report/routes.ts'] } })
+    expect(await ownershipRuleForTask(report)).toEqual({ owned: ['src/report/**'], excluded: ['src/report/routes.ts'] })
+    expect((await permissionOwnership(report, '/w'))?.excluded).toEqual([source('src/report/routes.ts')])
+  })
+
+  it('enforces a file a person gave on a card at the next run: the gate and the audit move it from the old owner to the new (human cards H2.4)', async (): Promise<void> => {
+    const c = await seedConducted()
+    const report = await seedPackage(c, 'report', ['src/report/**'], { status: 'backlog' })
+    const config = await seedPackage(c, 'config', ['src/config.py'], { status: 'backlog' })
+    const integration = await seedPackage(c, 'integration', [], { isIntegration: true, status: 'backlog' })
+    await prisma.goalDelivery.create({ data: { workspaceId: c.workspaceId, goalVersion: 1, integrationBranch: 'slaveofai/goal-v1-x', baseCommit: 'a'.repeat(40) } })
+    // The integration package's run is parked on a question to the conductor, escalated to a person.
+    const seat = await prisma.task.findUniqueOrThrow({ where: { id: integration }, select: { assigneeId: true } })
+    const run = await prisma.slaveRun.create({ data: { slaveId: seat.assigneeId ?? '', taskId: integration, status: 'paused', pauseReason: 'waiting_for_answer', pausedAt: new Date(), provider: 'claude_code' } })
+    await prisma.task.update({ where: { id: integration }, data: { activeRunId: run.id, status: 'waiting' } })
+    const sent = await sendMessage(run.id, { kind: 'question', body: 'May config change src/report/routes.ts?', recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId: integration })
+    if (!sent.ok) throw new Error(JSON.stringify(sent.error))
+    const action = { kind: 'escalate_to_human', summary: 'a person decides' }
+    const card = await prisma.supervisorDecision.create({
+      data: {
+        workspaceId: c.workspaceId, situationKind: 'conductor_question', subjectId: sent.value.id,
+        situation: { kind: 'conductor_question', subjectId: sent.value.id, summary: 'q', facts: {} },
+        candidates: [{ action, tier: 'escalated', why: 'x' }], chosenIndex: 0, action, rationale: 'x', tier: 'escalated', status: 'pending', decidedBy: 'rules',
+      },
+    })
+    const path = 'src/report/routes.ts'
+    const owns = async (taskId: string): Promise<boolean> => {
+      const patterns = await permissionOwnership(taskId, '/w')
+      if (patterns === undefined) return false
+      const inOwned = patterns.owned === null || patterns.owned.some((s) => new RegExp(s, 'u').test(path))
+      return inOwned && !patterns.excluded.some((s) => new RegExp(s, 'u').test(path))
+    }
+    expect([await owns(report), await owns(config), await owns(integration)]).toEqual([true, false, false])
+
+    const decided = await decideCard(card.id, { kind: 'give_file', path, toPackage: 'config' })
+    expect(decided.ok).toBe(true)
+    expect(await ownershipRuleForTask(report)).toEqual({ owned: ['src/report/**'], excluded: [path] })
+    expect(await ownershipRuleForTask(config)).toEqual({ owned: ['src/config.py', path], excluded: [] })
+    // The gate's patterns, as the permissions file carries them: only the new owner may write it.
+    expect([await owns(report), await owns(config), await owns(integration)]).toEqual([false, true, false])
+    // The diff audit's own test (`auditOwnership`: `isOwned(ownershipRuleForTask(task), path)`): the
+    // old owner changing it is now foreign, the new owner's change is its own.
+    const audited = async (taskId: string): Promise<boolean> => {
+      const rule = await ownershipRuleForTask(taskId)
+      return rule !== null && isOwned(rule, path)
+    }
+    expect([await audited(report), await audited(config)]).toEqual([false, true])
+  })
+
   it('reads no rule for a plain task, a missing task, or a package that owns everything', async (): Promise<void> => {
     const plain = await seedPlainTask()
     expect(await ownershipRuleForTask(plain.taskId)).toBeNull()
@@ -265,6 +317,59 @@ describe('a package run is given its ownership', () => {
     expect(after.tokenHash).not.toBe(before.tokenHash)
     expect(after.ownership).toEqual({ worktreeRoot: realpathSync(checkpoint.worktreePath), owned: [source('src/report/**')], excluded: [] })
   }, 60_000)
+
+  it("lets a run parked on a question write a file a person gave its package on that question's card, once it resumes (final review I3)", async (): Promise<void> => {
+    const c = await seedConducted()
+    const report = await seedPackage(c, 'report', ['src/report/**'])
+    await seedPackage(c, 'config', ['src/config.py'], { status: 'backlog' })
+    await tick(depsFor(c.workspaceId, 'hook-deny'))
+    await drainPumps()
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: report, kind: 'implementation' } })
+    expect(run.status).toBe('paused')
+    // The report package's run asked the conductor and is parked on the question (its task keeps
+    // `activeRunId`), escalated to a person.
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { pauseReason: 'waiting_for_answer' } })
+    await prisma.task.update({ where: { id: report }, data: { status: 'waiting', activeRunId: run.id } })
+    const sent = await sendMessage(run.id, { kind: 'question', body: 'May I change src/config.py?', recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId: report })
+    if (!sent.ok) throw new Error(JSON.stringify(sent.error))
+    const action = { kind: 'escalate_to_human', summary: 'a person decides' }
+    const card = await prisma.supervisorDecision.create({
+      data: {
+        workspaceId: c.workspaceId, situationKind: 'conductor_question', subjectId: sent.value.id,
+        situation: { kind: 'conductor_question', subjectId: sent.value.id, summary: 'q', facts: {} },
+        candidates: [{ action, tier: 'escalated', why: 'x' }], chosenIndex: 0, action, rationale: 'x', tier: 'escalated', status: 'pending', decidedBy: 'rules',
+      },
+    })
+    const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: run.id } })
+    const permissionsPath = permissionsFilePathFor(dirname(checkpoint.pauseFlagPath))
+    const path = 'src/config.py'
+    const gateAllows = (verdict: Verdict): boolean => {
+      const ownership = verdict.ownership
+      if (ownership === undefined) return true
+      const inOwned = ownership.owned === null || ownership.owned.some((s) => new RegExp(s, 'u').test(path))
+      return inOwned && !ownership.excluded.some((s) => new RegExp(s, 'u').test(path))
+    }
+    const before = JSON.parse(readFileSync(permissionsPath, 'utf8')) as Verdict
+    expect(gateAllows(before)).toBe(false)
+
+    // The grant needs the version integrating with nothing claimed; the delivery row goes again
+    // before the daemon ticks, so the goal pass has no integration branch to look for.
+    const delivery = await prisma.goalDelivery.create({ data: { workspaceId: c.workspaceId, goalVersion: 1, integrationBranch: 'slaveofai/goal-v1-x', baseCommit: 'a'.repeat(40) } })
+    const decided = await decideCard(card.id, { kind: 'give_file', path, toPackage: 'report' })
+    expect(decided.ok).toBe(true)
+    await prisma.goalDelivery.delete({ where: { id: delivery.id } })
+
+    // The daemon continues the run with the decision's note; the resume rewrites its permissions file.
+    for (let i = 0; i < 3; i += 1) {
+      await tick(depsFor(c.workspaceId, 'env-echo'))
+      await drainPumps()
+      if ((JSON.parse(readFileSync(permissionsPath, 'utf8')) as Verdict).tokenHash !== before.tokenHash) break
+    }
+    const after = JSON.parse(readFileSync(permissionsPath, 'utf8')) as Verdict
+    expect(after.tokenHash).not.toBe(before.tokenHash)
+    expect(after.ownership?.owned).toEqual([source('src/report/**'), source(path)])
+    expect(gateAllows(after)).toBe(true)
+  }, 90_000)
 })
 
 /** The `m8-flow` fake, whose work run writes and commits `m8a-work.txt` at the worktree's root and

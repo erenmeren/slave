@@ -15,13 +15,14 @@ const bodySchema = z.object({
   runTimeoutMs: z.number().optional(),
   maxConcurrentRuns: z.number().optional(),
   maxAttempts: z.number().optional(),
+  questionTimeoutMs: z.number().optional(),
 })
 
-const BODY_ERROR = 'the body must be { "runTimeoutMs"?: number, "maxConcurrentRuns"?: number, "maxAttempts"?: number }'
+const BODY_ERROR = 'the body must be { "runTimeoutMs"?: number, "maxConcurrentRuns"?: number, "maxAttempts"?: number, "questionTimeoutMs"?: number }'
 
 /**
- * The project's three dispatch limits (H9 F8): how long a run may work, how many runs at once, and
- * how many attempts a task gets.
+ * The project's four dispatch limits (H9 F8, human cards H3): how long a run may work, how many runs
+ * at once, how many attempts a task gets, and how long a run waits on an unanswered question.
  *
  * PATCH, the Supervisor settings route's reason: each write replaces some fields of a workspace
  * that has many, and an absent field means "leave it alone". `workspaceControlResponse` gives the
@@ -46,6 +47,7 @@ export async function PATCH(
     ...(body.data.runTimeoutMs === undefined ? {} : { runTimeoutMs: body.data.runTimeoutMs }),
     ...(body.data.maxConcurrentRuns === undefined ? {} : { maxConcurrentRuns: body.data.maxConcurrentRuns }),
     ...(body.data.maxAttempts === undefined ? {} : { maxAttempts: body.data.maxAttempts }),
+    ...(body.data.questionTimeoutMs === undefined ? {} : { questionTimeoutMs: body.data.questionTimeoutMs }),
   }
   return workspaceControlResponse(workspaceId, () => setWorkspaceLimits(workspaceId, patch, gate.principal ?? undefined))
 }

@@ -537,6 +537,10 @@ export interface SupervisorPlanPackage {
   readonly title: string
   readonly requirementKeys: readonly string[]
   readonly ownedPaths: readonly string[]
+  /** Human cards plan B D5 (pre-flight F50): the files a person gave from this package to another.
+   *  Its ownership rule excludes them, so a hand-off on one resolves to the new owner, and the
+   *  prompt says so -- the conductor never tells a worker the old owner still owns a given file. */
+  readonly releasedPaths: readonly string[]
   readonly isIntegration: boolean
   readonly interface: string
   readonly dependsOn: readonly string[]

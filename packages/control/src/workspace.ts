@@ -179,6 +179,8 @@ export interface WorkspaceLimitsPatch {
   readonly runTimeoutMs?: number
   readonly maxConcurrentRuns?: number
   readonly maxAttempts?: number
+  /** Milliseconds, a whole number of minutes -- how long a run waits on an unanswered question (human cards H3). */
+  readonly questionTimeoutMs?: number
 }
 
 /** One limit that moved: the `workspace.settings_changed` payload, handed back so a caller can say it. */
@@ -189,8 +191,9 @@ export interface WorkspaceLimitMove {
 }
 
 /**
- * Sets any of the project's three dispatch limits (H9 F8): how long a run may work, how many runs
- * the project has at once, and how many attempts a task gets.
+ * Sets any of the project's four dispatch limits (H9 F8, human cards H3): how long a run may work,
+ * how many runs the project has at once, how many attempts a task gets, and how long a run waits
+ * on an unanswered question.
  *
  * `Workspace.runTimeoutMs` had no writer at all -- no verb, no route, the Runtime panel showed it
  * read-only -- so a project whose tasks legitimately take longer than thirty minutes could only be
@@ -208,6 +211,8 @@ export interface WorkspaceLimitMove {
  * - `maxAttempts` is COPIED onto a task when the task is planned (`Task.maxAttempts`), so it reaches
  *   tasks planned from now on only. A task already on the board keeps the ceiling it was created
  *   with, and `retry-task` is what moves that one.
+ * - `questionTimeoutMs` is read by the tick's timeout pass, so it reaches every waiting run on the
+ *   next tick.
  *
  * No transaction and no lock, `setWorkspaceBudget`'s shape: three integers on one row, and two
  * people racing to set them leave whatever the last writer said.
@@ -220,7 +225,7 @@ export async function setWorkspaceLimits(
   patch: WorkspaceLimitsPatch,
   principal?: Principal,
 ): Promise<Result<{ readonly moved: readonly WorkspaceLimitMove[] }, ControlRefusal>> {
-  const fields: readonly WorkspaceLimitField[] = ['runTimeoutMs', 'maxConcurrentRuns', 'maxAttempts']
+  const fields: readonly WorkspaceLimitField[] = ['runTimeoutMs', 'maxConcurrentRuns', 'maxAttempts', 'questionTimeoutMs']
   for (const field of fields) {
     const value = patch[field]
     if (value !== undefined && !isWorkspaceLimitAllowed(field, value)) return err({ kind: 'invalid_limit', field })
@@ -228,7 +233,7 @@ export async function setWorkspaceLimits(
 
   const workspace = await prisma.workspace.findUnique({
     where: { id: workspaceId },
-    select: { runTimeoutMs: true, maxConcurrentRuns: true, maxAttempts: true },
+    select: { runTimeoutMs: true, maxConcurrentRuns: true, maxAttempts: true, questionTimeoutMs: true },
   })
   if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
 

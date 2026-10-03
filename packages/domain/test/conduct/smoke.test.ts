@@ -95,6 +95,11 @@ describe('smokeHandOffTarget (plan B D11)', () => {
     expect(smokeHandOffTarget('Dockerfile', [{ key: 'skeleton', ownedPaths: ['backend/'], isIntegration: false }])).toBeNull()
     expect(smokeHandOffTarget('backend/x.json', [{ key: 'skeleton', ownedPaths: ['backend/'], isIntegration: false }])).toBe('skeleton')
   })
+  it('is null for a path a person gave away from the skeleton (human cards plan B D5)', () => {
+    const skeleton = { key: 'skeleton', ownedPaths: ['backend/*.json'], releasedPaths: ['backend/x.json'], isIntegration: false }
+    expect(smokeHandOffTarget('backend/x.json', [skeleton])).toBeNull()
+    expect(smokeHandOffTarget('backend/y.json', [skeleton])).toBe('skeleton')
+  })
   it('is null for a path a third package owns -- the pinned case', () => {
     expect(smokeHandOffTarget('backend/src/api/server.ts', packages)).toBeNull()
   })

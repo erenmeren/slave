@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { renderGoalReportMarkdown } from '../../src/goalReport/markdown.js'
+import { continuedWithoutAnswer, renderGoalReportMarkdown } from '../../src/goalReport/markdown.js'
+import { CARD_EXPIRED_NOTE } from '../../src/messaging/close.js'
 import type { GoalReport, GoalReportPackage, GoalReportRequirement, GoalReportSmoke } from '../../src/goalReport/types.js'
 
 function requirement(over: Partial<GoalReportRequirement> = {}): GoalReportRequirement {
@@ -21,6 +22,7 @@ function pkg(over: Partial<GoalReportPackage> = {}): GoalReportPackage {
     isIntegration: false,
     requirementKeys: ['R1'],
     ownedPaths: ['src/report/**'],
+    releasedPaths: [],
     dependsOn: [],
     persona: 'Backend Engineer',
     seat: 'Alex',
@@ -100,6 +102,9 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
     smoke: [],
     handOffs: [],
     handOffsOmitted: 0,
+    personDecisions: [],
+    notes: [],
+    notesOmitted: 0,
     decisions: [],
     deniedToolCalls: [],
     deniedToolCallsOmitted: 0,
@@ -216,8 +221,8 @@ describe('renderGoalReportMarkdown', () => {
     const md = renderGoalReportMarkdown(
       report({
         questions: [
-          { id: 'q1', at: '2026-09-29T10:02:00.000Z', packageKey: 'report', askedBy: 'Alex', question: 'CSV header row?', answer: { at: '2026-09-29T10:03:00.000Z', by: 'supervisor', text: 'Yes, one header row.' } },
-          { id: 'q2', at: '2026-09-29T10:02:30.000Z', packageKey: 'report', askedBy: null, question: 'Quote all?', answer: null },
+          { id: 'q1', at: '2026-09-29T10:02:00.000Z', packageKey: 'report', askedBy: 'Alex', taskId: null, closed: null, question: 'CSV header row?', answer: { at: '2026-09-29T10:03:00.000Z', by: 'supervisor', text: 'Yes, one header row.' } },
+          { id: 'q2', at: '2026-09-29T10:02:30.000Z', packageKey: 'report', askedBy: null, taskId: null, closed: null, question: 'Quote all?', answer: null },
         ],
       }),
     )
@@ -226,12 +231,70 @@ describe('renderGoalReportMarkdown', () => {
     expect(md).toContain('  Not answered.')
   })
 
+  it('says how each question closed, and how long a run waited before it continued (human cards H1/H3)', () => {
+    const q = { id: 'm1', at: '2026-10-02T08:00:00.000Z', packageKey: 'integration', askedBy: 'Ivo', taskId: 't1', question: 'May I edit package.json?', answer: null }
+    const md = renderGoalReportMarkdown(
+      report({
+        questions: [
+          { ...q, closed: { at: '2026-10-02T10:00:00.000Z', reason: 'timed_out', by: 'system', note: 'No answer came in 2 hours.', waitedMs: 7_200_000 } },
+          { ...q, id: 'm2', closed: { at: '2026-10-02T09:00:00.000Z', reason: 'dismissed', by: 'person', note: null, waitedMs: 3_600_000 } },
+          { ...q, id: 'm3', closed: null },
+        ],
+      }),
+    )
+    expect(md).toContain('  Closed: continued without an answer after 2 hours (Slave, 2026-10-02T10:00:00.000Z).')
+    expect(md).toContain('  Closed: closed without an answer (a person, 2026-10-02T09:00:00.000Z).')
+    expect(md.match(/Closed:/g)).toHaveLength(2)
+  })
+
+  it('lists each question a run continued past without an answer: the question, the wait and the task whose report names the assumption (human cards H3)', () => {
+    const base = { at: '2026-10-02T08:00:00.000Z', packageKey: 'integration', askedBy: 'Ivo', answer: null }
+    const timedOut = { at: '2026-10-02T10:00:00.000Z', reason: 'timed_out', by: 'system', note: null, waitedMs: 7_200_000 } as const
+    const md = renderGoalReportMarkdown(
+      report({
+        workspaceId: 'ws1',
+        questions: [
+          { ...base, id: 'm1', taskId: 't1', question: 'May I edit *package.json*?', closed: timedOut },
+          { ...base, id: 'm2', taskId: null, question: 'Which port?', closed: { ...timedOut, waitedMs: 5_400_000 } },
+          { ...base, id: 'm3', taskId: 't3', question: 'Dismissed one', closed: { ...timedOut, reason: 'dismissed', by: 'person' } },
+        ],
+      }),
+    )
+    const section = md.slice(md.indexOf('## Runs that continued without an answer'), md.indexOf('## Questions'))
+    expect(section).toContain('- 2026-10-02T08:00:00.000Z · integration (Ivo) waited 2 hours, then continued on its own assumption:')
+    expect(section).toContain('  > May I edit \\*package.json\\*?')
+    expect(section).toContain("  The assumption is in the worker's report on task t1.")
+    expect(section).not.toContain('](')
+    expect(section).toContain('waited 1 hour 30 minutes')
+    expect(section).toContain("  The assumption is in the worker's report.")
+    expect(section).not.toContain('Dismissed one')
+    expect(renderGoalReportMarkdown(report())).not.toContain('## Runs that continued without an answer')
+  })
+
+  it('words a card\'s expiry truthfully and never lists it under the runs that continued (final wave, finding 7)', () => {
+    const q = { at: '2026-10-02T08:00:00.000Z', packageKey: 'integration', askedBy: 'Ivo', taskId: 't1', answer: null }
+    const md = renderGoalReportMarkdown(
+      report({
+        questions: [
+          { ...q, id: 'm1', question: 'Expired card', closed: { at: '2026-10-03T08:00:00.000Z', reason: 'timed_out', by: 'system', note: CARD_EXPIRED_NOTE, waitedMs: 86_400_000 } },
+          { ...q, id: 'm2', question: 'Timed out', closed: { at: '2026-10-02T10:00:00.000Z', reason: 'timed_out', by: 'system', note: 'No answer came in 2 hours.', waitedMs: 7_200_000 } },
+        ],
+      }),
+    )
+    expect(md).toContain('  Closed: the card expired with no decision (Slave, 2026-10-03T08:00:00.000Z).')
+    const section = md.slice(md.indexOf('## Runs that continued without an answer'), md.indexOf('## Questions'))
+    expect(section).toContain('waited 2 hours')
+    expect(section).not.toContain('waited 1 day')
+    expect(section).not.toContain('24 hours')
+    expect(continuedWithoutAnswer(report({ questions: [{ ...q, id: 'm1', question: 'x', closed: { at: 'x', reason: 'timed_out', by: 'system', note: CARD_EXPIRED_NOTE, waitedMs: 1 } }] }))).toEqual([])
+  })
+
   it('puts a blank line between the quoted question and its attribution line, so a lazy blockquote continuation cannot swallow it', () => {
     const md = renderGoalReportMarkdown(
       report({
         questions: [
-          { id: 'q1', at: '2026-09-29T10:02:00.000Z', packageKey: 'report', askedBy: 'Alex', question: 'CSV header row?', answer: { at: '2026-09-29T10:03:00.000Z', by: 'supervisor', text: 'Yes, one header row.' } },
-          { id: 'q2', at: '2026-09-29T10:02:30.000Z', packageKey: 'report', askedBy: null, question: 'Quote all?', answer: null },
+          { id: 'q1', at: '2026-09-29T10:02:00.000Z', packageKey: 'report', askedBy: 'Alex', taskId: null, closed: null, question: 'CSV header row?', answer: { at: '2026-09-29T10:03:00.000Z', by: 'supervisor', text: 'Yes, one header row.' } },
+          { id: 'q2', at: '2026-09-29T10:02:30.000Z', packageKey: 'report', askedBy: null, taskId: null, closed: null, question: 'Quote all?', answer: null },
         ],
       }),
     )
@@ -247,6 +310,50 @@ describe('renderGoalReportMarkdown', () => {
     const notAskedIdx = lines.indexOf('- 2026-09-29T10:02:30.000Z · report asked:')
     expect(notAskedIdx).toBeGreaterThan(-1)
     expect(lines.slice(notAskedIdx, notAskedIdx + 4)).toEqual(['- 2026-09-29T10:02:30.000Z · report asked:', '  > Quote all?', '', '  Not answered.'])
+  })
+
+  it('lists what a person decided on cards (human cards H2)', () => {
+    const md = renderGoalReportMarkdown(
+      report({
+        personDecisions: [
+          { at: '2026-10-03T09:00:00.000Z', questionId: 'm1', kind: 'give_file', summary: 'gave src/api/routes.ts to the web package', grant: { path: 'src/api/routes.ts', fromKey: 'api', toKey: 'web' } },
+          { at: '2026-10-03T09:05:00.000Z', questionId: 'm2', kind: 'dismiss', summary: 'dismissed the question: <b>not</b> needed', grant: null },
+        ],
+      }),
+    )
+    expect(md).toContain('## Decided on cards')
+    expect(md).toContain('- 2026-10-03T09:00:00.000Z · gave src/api/routes.ts to the web package (taken from the api package)')
+    expect(md).toContain('- 2026-10-03T09:05:00.000Z · dismissed the question: &lt;b&gt;not&lt;/b&gt; needed')
+    expect(md.indexOf('## Decided on cards')).toBeGreaterThan(md.indexOf('## Questions'))
+    expect(md.indexOf('## Decided on cards')).toBeLessThan(md.lastIndexOf('\n---\n'))
+    expect(renderGoalReportMarkdown(report())).toContain('## Decided on cards\n\nNothing was decided on a card.')
+  })
+
+  it('lists the notes the packages left, quoted, after "Decided on cards" (human cards plan B D9, F15)', () => {
+    const md = renderGoalReportMarkdown(
+      report({
+        notes: [
+          { at: '2026-10-03T09:10:00.000Z', packageKey: 'identity-access', text: 'VENDOR_LICENSE_PUBLIC_KEYS is a placeholder.\nThe vendor runs the keygen offline.' },
+          { at: '2026-10-03T09:12:00.000Z', packageKey: 'web', text: '# not a heading <b>not bold</b>' },
+        ],
+        notesOmitted: 2,
+      }),
+    )
+    const lines = md.split('\n')
+    const first = lines.indexOf('- 2026-10-03T09:10:00.000Z · identity-access noted:')
+    expect(first).toBeGreaterThan(-1)
+    expect(lines.slice(first, first + 3)).toEqual(['- 2026-10-03T09:10:00.000Z · identity-access noted:', '  > VENDOR\\_LICENSE\\_PUBLIC\\_KEYS is a placeholder.', '  > The vendor runs the keygen offline.'])
+    expect(md).toContain('  > \\# not a heading &lt;b&gt;not bold&lt;/b&gt;')
+    expect(md).toContain('- … and 2 more, not listed.')
+    expect(md.indexOf('## Notes from the packages')).toBeGreaterThan(md.indexOf('## Decided on cards'))
+    expect(md.indexOf('## Notes from the packages')).toBeLessThan(md.lastIndexOf('\n---\n'))
+    expect(renderGoalReportMarkdown(report())).toContain('## Notes from the packages\n\nNo package left a note.')
+  })
+
+  it('says which files a person gave away from a package (ruling F50)', () => {
+    const md = renderGoalReportMarkdown(report({ packages: [pkg({ releasedPaths: ['src/report/routes.ts'] })] }))
+    expect(md).toContain('- Owns: src/report/\\*\\*\n- Given by a person to another package: src/report/routes.ts')
+    expect(renderGoalReportMarkdown(report())).not.toContain('Given by a person')
   })
 
   it('writes the stop reason and the merge git refused where they exist', () => {
@@ -361,7 +468,7 @@ describe('renderGoalReportMarkdown', () => {
   })
   describe('hand-offs and shared decisions (spec C2, C3)', () => {
     const handOff = {
-      id: 'h1', at: '2026-10-01T10:00:00.000Z', source: 'report' as const, fromPackage: 'report', toPackage: 'skeleton',
+      id: 'h1', at: '2026-10-01T10:00:00.000Z', source: 'report' as const, fromPackage: 'report', from: 'report', toPackage: 'skeleton',
       path: 'scripts/verify.sh', packageKey: null, change: 'run pytest <b>-k</b> report', status: 'reopened' as const, note: null,
     }
     it("lists each hand-off with where it went, escaping the worker's words", () => {
@@ -372,6 +479,20 @@ describe('renderGoalReportMarkdown', () => {
       expect(md).toContain('- report → skeleton (scripts/verify.sh), reopened for it: run pytest &lt;b&gt;-k&lt;/b&gt; report')
       expect(md).toContain('asked the conductor (no target found')
       expect(md).not.toContain('<b>')
+    })
+    it('names who a package-less hand-off came from: the operator, a worker by its seat, the conductor (pre-flight F65)', () => {
+      const md = renderGoalReportMarkdown(
+        report({
+          handOffs: [
+            { ...handOff, id: 'p', source: 'person', fromPackage: null, from: 'the operator', change: 'add a start script' },
+            { ...handOff, id: 'w', source: 'answer', fromPackage: null, from: 'Ivo (Implementer)', change: 'rename it' },
+            { ...handOff, id: 'c', source: 'answer', fromPackage: null, from: 'the conductor', change: 'pin node' },
+          ],
+        }),
+      )
+      expect(md).toContain('- the operator → skeleton (scripts/verify.sh), reopened for it: add a start script')
+      expect(md).toContain('- Ivo \\(Implementer\\) → skeleton')
+      expect(md).toContain('- the conductor → skeleton')
     })
     it('lists the shared decisions with who made them', () => {
       const md = renderGoalReportMarkdown(report({ decisions: [{ title: 'API field naming', decision: 'camelCase', source: 'conductor_plan', at: '2026-10-01T10:00:00.000Z' }] }))

@@ -6,6 +6,7 @@ import { EXTERNAL_EVENT_KINDS } from '../external/request.js'
 import { GOAL_REPORT_FILES_MAX } from '../goalReport/constants.js'
 import { MEMORY_SCOPES, MEMORY_SOURCE_KINDS, MEMORY_STATUSES, MEMORY_TYPES } from '../memory/types.js'
 import { ACTION_KINDS, DECIDERS, TIERS } from '../supervisor/actions.js'
+import { QUESTION_CLOSE_REASONS } from '../messaging/close.js'
 import { SITUATION_KINDS } from '../supervisor/situations.js'
 
 const envelope = {
@@ -593,7 +594,7 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     payload: z.object({
       version: z.number().int().positive(),
       handOffId: z.string().min(1),
-      source: z.enum(['report', 'answer']),
+      source: z.enum(['report', 'answer', 'person']),
       fromPackage: z.string().min(1).nullable(),
       toPackage: z.string().min(1).nullable(),
       path: z.string().min(1).max(500).nullable(),
@@ -602,6 +603,29 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       // `HANDOFF_EVENT_CHANGE_MAX_CHARS`, spelled here the way this file spells every stored bound.
       change: z.string().max(500),
     }),
+  }),
+  // Human-cards spec H1 (plan A D11): a question stopped waiting -- answered, decided on a card,
+  // dismissed, past its timeout, or superseded by a new goal version. `by` is a user id, `operator`
+  // or `system`; `note` is the head of what the asker continues with.
+  z.object({
+    ...envelope,
+    type: z.literal('slave.question_closed'),
+    payload: z.object({
+      messageId: z.string().min(1),
+      reason: z.enum(QUESTION_CLOSE_REASONS),
+      by: z.string().min(1).max(200),
+      decisionId: z.string().min(1).nullable(),
+      // `QUESTION_CLOSED_EVENT_NOTE_MAX_CHARS`, spelled here the way this file spells every stored bound.
+      note: z.string().max(500).nullable(),
+    }),
+  }),
+  // Human cards plan B D9: one note from a package worker's report -- information, not a question.
+  // No Supervisor rule reads it and it raises no card. `note` is sanitised and fitted before it is
+  // appended; `NOTE_MAX_CHARS`, spelled here the way this file spells every stored bound.
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.package_noted'),
+    payload: z.object({ version: z.number().int().positive(), packageKey: z.string().min(1).max(40), runId: z.string().min(1), note: z.string().min(1).max(1000) }),
   }),
   // M40 §4: `cancelTask` took a task off the board -- an operator's own call, or an approved
   // `stale_task` proposal. `goalVersion` is the task's own stamp (null for a hand-made task), so
@@ -664,9 +688,10 @@ export const executionEventSchema = z.discriminatedUnion('type', [
      * changed about this project" gets one stream, and `null` on either end is a real value
      * (the installation default, which is what an unset column means).
      *
-     * H9 F8 adds the three dispatch limits `setWorkspaceLimits` is the first writer of --
-     * `runTimeoutMs` (milliseconds on both ends, the column's own unit), `maxConcurrentRuns` and
-     * `maxAttempts` -- one event per limit that moved, on the terms every field above set.
+     * H9 F8 adds three of the dispatch limits `setWorkspaceLimits` writes -- `runTimeoutMs`
+     * (milliseconds on both ends, the column's own unit), `maxConcurrentRuns` and `maxAttempts` --
+     * one event per limit that moved, on the terms every field above set. Human cards H3 adds the
+     * fourth, `questionTimeoutMs`, on the same terms.
      */
     payload: z.object({
       field: z.enum([
@@ -681,6 +706,7 @@ export const executionEventSchema = z.discriminatedUnion('type', [
         'runTimeoutMs',
         'maxConcurrentRuns',
         'maxAttempts',
+        'questionTimeoutMs',
       ]),
       from: z.union([z.string(), z.number(), z.boolean(), z.null()]),
       to: z.union([z.string(), z.number(), z.boolean(), z.null()]),

@@ -85,6 +85,16 @@ function needsYouItem(over: Partial<HomeNeedsYouItem> = {}): HomeNeedsYouItem {
     taskId: 't1',
     decisionId: null,
     messageId: null,
+    goalVersion: null,
+    blocking: true,
+    groupKey: 'task:t1',
+    mergedIds: [],
+    merged: [],
+    oneClick: false,
+    questionCard: false,
+    draftPreview: null,
+    draftPreviewCut: false,
+    draftAlso: null,
     workspaceId: 'w1',
     workspaceName: 'Checkout Platform',
     ...over,
@@ -173,6 +183,138 @@ describe('HomeClient', () => {
   it('renders one needs-you-row per cross-project item', () => {
     renderHome()
     expect(screen.getAllByTestId('needs-you-row')).toHaveLength(2)
+  })
+
+  // Human cards H4 / pre-flight F56 and F64: Home draws the strip's row, so a question card here has
+  // no bare Approve or Reject either -- its one click is send_answer through the decide route.
+  it('offers no Approve or Reject on a question card, and posts its one click to the decide route, naming the card in what it shows', async (): Promise<void> => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, outcome: { decision: { kind: 'send_answer' }, summary: 'sent the drafted answer' } }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const answerCard = needsYouItem({
+      kind: 'decision',
+      id: 'd2',
+      decisionId: 'd2',
+      taskId: null,
+      title: 'Waiting on an answer: Which gateway?',
+      href: '/w/w1/activity#decision-d2',
+      goalVersion: 2,
+      groupKey: 'question:m2',
+      oneClick: true,
+      questionCard: true,
+    })
+    const escalation = needsYouItem({ ...answerCard, id: 'd3', decisionId: 'd3', href: '/w/w1/activity#decision-d3', oneClick: false })
+    renderHome(snapshot({ needsYou: [answerCard, escalation] }))
+
+    const [first, second] = screen.getAllByTestId('needs-you-row')
+    expect(second?.querySelector('[data-testid="needs-you-approve"]')).toBeNull()
+    expect(second?.querySelector('[data-testid="needs-you-open"]')?.getAttribute('href')).toBe('/w/w1/activity#decision-d3')
+    for (const row of [first, second]) {
+      expect(row?.querySelector('[data-testid="needs-you-reject"]')).toBeNull()
+      const words = [...(row?.querySelectorAll('button') ?? [])].map((button) => button.textContent?.trim().toLowerCase())
+      expect(words).not.toContain('approve')
+    }
+
+    await act(async () => {
+      fireEvent.click(within(first as HTMLElement).getByTestId('needs-you-approve'))
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/supervisor/decisions/d2/decide', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'send_answer' }),
+    })
+    expect(screen.getByTestId('needs-you-notice').textContent).toBe('Waiting on an answer: Which gateway? — sent the drafted answer')
+    expect(routerRefresh).toHaveBeenCalledTimes(1)
+  })
+
+  // Task 9 fix round 1: the decided card was the last row, the refreshed snapshot is empty, and
+  // what it did is still on screen.
+  it('keeps the outcome of the last decided card when the refreshed queue is empty', async (): Promise<void> => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, outcome: { decision: { kind: 'send_answer' }, summary: 'sent the drafted answer' } }), { status: 200 })))
+    const answerCard = needsYouItem({ kind: 'decision', id: 'd2', decisionId: 'd2', taskId: null, title: 'Waiting on an answer: Which gateway?', href: '/w/w1/activity#decision-d2', oneClick: true, questionCard: true, draftPreview: 'Use Stripe.' })
+    const view = renderHome(snapshot({ needsYou: [answerCard] }))
+    expect(screen.getByTestId('needs-you-draft').textContent).toBe('Sends: “Use Stripe.”')
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('needs-you-approve'))
+    })
+    // The refresh brings back an empty queue.
+    view.rerender(
+      <ModeProvider>
+        <ModeProbe />
+        <HeaderActionProvider>
+          <HeaderActionSlot />
+          <HomeClient initial={snapshot({ needsYou: [] })} companies={companies} />
+        </HeaderActionProvider>
+      </ModeProvider>,
+    )
+
+    expect(screen.queryByTestId('needs-you-row')).toBeNull()
+    expect(screen.getByTestId('needs-you-notice').textContent).toBe('Waiting on an answer: Which gateway? — sent the drafted answer')
+  })
+
+  // Fix round 2: a refusal on Home is dismissible, and a fresh snapshot clears it -- while a notice stays.
+  it('dismisses a refusal, and a fresh snapshot clears one', async (): Promise<void> => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'the decision was already answered' }), { status: 409 })))
+    const machine = needsYouItem({ kind: 'decision', id: 'd5', decisionId: 'd5', taskId: null, title: 'No reviewer: nobody holds reviewer', oneClick: true, blocking: false })
+    const view = renderHome(snapshot({ needsYou: [machine] }))
+    const tree = (initial: HomeSnapshot): React.JSX.Element => (
+      <ModeProvider>
+        <ModeProbe />
+        <HeaderActionProvider>
+          <HeaderActionSlot />
+          <HomeClient initial={initial} companies={companies} />
+        </HeaderActionProvider>
+      </ModeProvider>
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('needs-you-approve'))
+    })
+    expect(screen.getByTestId('needs-you-error').textContent).toBe('the decision was already answered')
+    fireEvent.click(screen.getByTestId('needs-you-error-dismiss'))
+    expect(screen.queryByTestId('needs-you-error')).toBeNull()
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('needs-you-approve'))
+    })
+    expect(screen.getByTestId('needs-you-error')).toBeTruthy()
+    view.rerender(tree(snapshot({ needsYou: [] })))
+    expect(screen.queryByTestId('needs-you-error')).toBeNull()
+    expect(screen.queryByTestId('home-needs-you')).toBeNull()
+  })
+
+  // Plan B Task 10 (Task 9 carry): a fresh snapshot that still lists the refused row -- on its own or
+  // merged into another -- keeps the refusal; only one without that row clears it.
+  it('keeps a refusal through a snapshot that still lists its row, and clears it once the row is gone', async (): Promise<void> => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'the decision was already answered' }), { status: 409 })))
+    const machine = needsYouItem({ kind: 'decision', id: 'd5', decisionId: 'd5', taskId: null, title: 'No reviewer: nobody holds reviewer', oneClick: true, blocking: false })
+    const other = needsYouItem({ id: 't7', taskId: 't7', title: 'Wire the webhook — blocked' })
+    const view = renderHome(snapshot({ needsYou: [machine] }))
+    const tree = (initial: HomeSnapshot): React.JSX.Element => (
+      <ModeProvider>
+        <ModeProbe />
+        <HeaderActionProvider>
+          <HeaderActionSlot />
+          <HomeClient initial={initial} companies={companies} />
+        </HeaderActionProvider>
+      </ModeProvider>
+    )
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('needs-you-approve'))
+    })
+    expect(screen.getByTestId('needs-you-error').textContent).toBe('the decision was already answered')
+
+    // The poll comes back with the refused row still there, and something new beside it.
+    view.rerender(tree(snapshot({ needsYou: [machine, other] })))
+    expect(screen.getByTestId('needs-you-error').textContent).toBe('the decision was already answered')
+    // Merged into another row's subject: still listed, still true.
+    view.rerender(tree(snapshot({ needsYou: [{ ...other, mergedIds: ['d5'], merged: [machine] }] })))
+    expect(screen.getByTestId('needs-you-error').textContent).toBe('the decision was already answered')
+    // Gone, though the list is not empty: the refusal goes with it.
+    view.rerender(tree(snapshot({ needsYou: [other] })))
+    expect(screen.queryByTestId('needs-you-error')).toBeNull()
+    expect(screen.getAllByTestId('needs-you-row')).toHaveLength(1)
   })
 
   it('wraps the needs-you queue in a ScrollArea capped at 30dvh, so 30 items scroll inside Home instead of growing it (I2)', () => {

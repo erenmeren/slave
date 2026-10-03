@@ -5,21 +5,78 @@ import { useEffect, useRef, useState } from 'react'
 import type { NeedsYouItem } from '../../server/needsYou'
 import { useShellFacts } from '../../hooks/useShellFacts'
 import { formatAge } from '../../lib/format'
-import { postControl } from '../../lib/postControl'
+import { aboutCard, postControl, postDecision } from '../../lib/postControl'
 import { Button } from '../ui/Button'
 import { Chip } from '../ui/Chip'
 import { LiveDot } from '../ui/LiveDot'
 import { ScrollArea } from '../ui/ScrollArea'
 
+/** What one click on a needs-you row does: a machine card's approve or reject, or `send_answer` on
+ *  a question card that offers it (pre-flight F56). */
+export type NeedsYouVerdict = 'approve' | 'reject' | 'send_answer'
+
+/**
+ * One click on a needs-you row, posted (plan B Task 9): a machine card through its approve/reject
+ * route, a question card's `send_answer` through the decide route -- so the person's decision is
+ * recorded and reported (spec H1), never the bare approve. Shared by the strip and Home, which draw
+ * the same row. Returns what to show: the outcome or a settled-first notice (each named by the card
+ * it is about), or the refusal.
+ */
+export async function answerNeedsYou(
+  workspaceId: string,
+  item: NeedsYouItem,
+  verdict: NeedsYouVerdict,
+): Promise<{ readonly notice: string | null; readonly error: string | null }> {
+  const url = `/api/w/${workspaceId}/supervisor/decisions/${item.decisionId ?? item.id}`
+  if (verdict === 'send_answer') {
+    const result = await postDecision(`${url}/decide`, { kind: 'send_answer' })
+    if (result.ok) return { notice: result.summary === null ? null : aboutCard(item.title, result.summary), error: null }
+    return result.notice !== null ? { notice: aboutCard(item.title, result.notice), error: null } : { notice: null, error: result.error }
+  }
+  const result = await postControl(`${url}/${verdict}`)
+  if (result.ok) return { notice: null, error: null }
+  return result.notice !== null ? { notice: aboutCard(item.title, result.notice), error: null } : { notice: null, error: result.error }
+}
+
+/** What a conductor draft applies besides its words, as the row says it. */
+function draftAlsoWords(also: NonNullable<NeedsYouItem['draftAlso']>): string {
+  if (also.decision && also.handOff) return 'records a shared decision and hands work to a package'
+  return also.decision ? 'records a shared decision' : 'hands work to a package'
+}
+
+/** A refusal, and the row it refused: the card the person clicked. */
+export interface NeedsYouRefusal {
+  readonly text: string
+  readonly rowId: string
+  readonly decisionId: string | null
+}
+
+/**
+ * Whether a fresh list still holds the row a refusal was about -- as a row of its own, or merged
+ * into another row. Plan B Task 10 (Task 9 carry): a refresh clears a refusal only when its row is
+ * gone (or the list is empty); while the row is still there the refusal is still true, and it stays
+ * until it is dismissed or the person acts again -- a poll seconds later must not take it away
+ * before it is read. Shared by the strip and Home.
+ */
+export function refusalStillListed(items: readonly NeedsYouItem[], refusal: NeedsYouRefusal): boolean {
+  const same = (item: NeedsYouItem): boolean => item.id === refusal.rowId || (refusal.decisionId !== null && item.decisionId === refusal.decisionId)
+  return items.some((item) => same(item) || item.merged.some(same))
+}
+
 /**
  * One `needs-you-row` (M61 R7/Task 6, spec erratum E8), pulled out of this bar so Home's own
  * cross-project queue (Task 8) can draw the SAME row rather than a second copy of it: the
- * `data-kind`, the title link, the age and the decision's Approve/Reject pair are all exactly what
- * this bar has always rendered.
+ * `data-kind`, the title link, the age and the decision's actions are all exactly what this bar
+ * renders.
  *
  * `workspaceName` is the one thing Home's queue needs that this bar never has: this bar is already
- * scoped to one project, so its own callers pass nothing and the chip is absent, byte-identical to
- * before this extraction.
+ * scoped to one project, so its own callers pass nothing and the chip is absent.
+ *
+ * Human cards H4 (plan B Task 9): the row names its goal version, says when it blocks that version
+ * (`data-blocking`, and in words, not by colour alone), and says how many items merged into it, each
+ * one link away. One click only where `oneClick` holds: a machine card keeps Approve and Reject; a
+ * question card offers "Send this answer" only when the card offers `send_answer`, never Reject
+ * ("dismiss and close" is one of the card's decisions), and always a "decide" link to the card.
  */
 export function NeedsYouRow({
   item,
@@ -32,7 +89,7 @@ export function NeedsYouRow({
    *  `NeedsYouBar`'s own project-scoped queue. */
   readonly workspaceName?: string
   readonly busy: string | null
-  readonly onAnswer: (decisionId: string, verdict: 'approve' | 'reject') => void
+  readonly onAnswer: (item: NeedsYouItem, verdict: NeedsYouVerdict) => void
 }): React.JSX.Element {
   // Hydration-mismatch fix (final-review wave, T11 minor promoted): `formatAge` reads `Date.now()`,
   // which is a different instant on the server (render time) and the client (hydrate time) --
@@ -41,43 +98,139 @@ export function NeedsYouRow({
   // later, same idiom, same reason.
   const [mounted, setMounted] = useState(false)
   useEffect((): void => setMounted(true), [])
+  const isDecision = item.kind === 'decision' && item.decisionId !== null
+  const disabled = busy !== null && busy === item.decisionId
+  const decideLink = (
+    <Link
+      data-testid="needs-you-open"
+      href={item.href}
+      title={`decide: ${item.title}`}
+      className="type-meta text-t1 underline"
+    >
+      decide
+    </Link>
+  )
   return (
-    // A `<div>`, not a `<Link>` (review fix round 1, Important 1): a decision row's Approve/
-    // Reject are real `<button>`s, and nesting a button inside an anchor is invalid HTML the
-    // Task 6 version got away with only because nothing on the row was ever clicked but the
-    // row itself. The title is the row's own link now; the buttons are its siblings.
-    <div data-testid="needs-you-row" data-kind={item.kind} className="type-meta flex items-center gap-2">
-      <LiveDot tone="waiting" />
-      {workspaceName !== undefined && (
-        <Chip testId="needs-you-project" tone="waiting">
-          {workspaceName}
-        </Chip>
+    // A `<div>`, not a `<Link>` (review fix round 1, Important 1): a decision row's buttons are
+    // real `<button>`s, and nesting a button inside an anchor is invalid HTML. The title is the
+    // row's first link; the buttons are its siblings.
+    <div
+      data-testid="needs-you-row"
+      data-kind={item.kind}
+      data-blocking={item.blocking ? 'true' : 'false'}
+      className="type-meta flex flex-col gap-[2px]"
+    >
+      <div className="flex items-center gap-2">
+        <LiveDot tone={item.blocking ? 'blocked' : 'waiting'} />
+        {workspaceName !== undefined && (
+          <Chip testId="needs-you-project" tone="waiting">
+            {workspaceName}
+          </Chip>
+        )}
+        {item.goalVersion !== null && (
+          <Chip testId="needs-you-version" title={`goal version ${String(item.goalVersion)}`}>
+            {`v${String(item.goalVersion)}`}
+          </Chip>
+        )}
+        <Link href={item.href} className="min-w-0 flex-1 truncate text-t1 hover:underline">
+          {item.title}
+        </Link>
+        {item.blocking && (
+          <span data-testid="needs-you-blocking" className="shrink-0 font-medium text-s-blocked">
+            {item.goalVersion === null ? 'blocking' : `blocking v${String(item.goalVersion)}`}
+          </span>
+        )}
+        <span className="shrink-0 text-t3">{mounted ? formatAge(item.since) : ''}</span>
+        {isDecision && item.questionCard && (
+          <span className="flex flex-none items-center gap-[6px]">
+            {item.oneClick && (
+              <Button
+                variant="primary"
+                size="sm"
+                data-testid="needs-you-approve"
+                data-verdict="send_answer"
+                disabled={disabled}
+                onClick={() => onAnswer(item, 'send_answer')}
+              >
+                Send this answer
+              </Button>
+            )}
+            {decideLink}
+          </span>
+        )}
+        {isDecision && !item.questionCard && item.oneClick && (
+          <span className="flex flex-none gap-[6px]">
+            <Button
+              variant="primary"
+              size="sm"
+              data-testid="needs-you-approve"
+              disabled={disabled}
+              onClick={() => onAnswer(item, 'approve')}
+            >
+              Approve
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid="needs-you-reject"
+              disabled={disabled}
+              onClick={() => onAnswer(item, 'reject')}
+            >
+              Reject
+            </Button>
+          </span>
+        )}
+        {isDecision && !item.questionCard && !item.oneClick && <span className="flex flex-none">{decideLink}</span>}
+      </div>
+      {item.questionCard && item.draftPreview !== null && (
+        // Task 9 fix rounds 1-2: the words "Send this answer" sends, ALL of them, as text -- a person
+        // must not send what they cannot see. Bounded by the server (`DRAFT_PREVIEW_MAX_CHARS`); a
+        // longer draft is cut, says so, and has no one click: it is read and sent on the card.
+        <div className="ml-[14px] flex flex-col gap-[2px] text-t2">
+          <p data-testid="needs-you-draft" className="whitespace-pre-wrap break-words">
+            {`${item.draftPreviewCut ? 'The draft begins' : item.draftAlso !== null ? 'The draft says' : 'Sends'}: “${item.draftPreview}”`}
+          </p>
+          {item.draftAlso !== null && (
+            // Final-wave residual (I4): no one click here, and the row says why -- sending the draft
+            // as drafted applies more than its words.
+            <p data-testid="needs-you-draft-also" className="text-t1">
+              {`Sending it as drafted also ${draftAlsoWords(item.draftAlso)}: read all of it on the card (decide).`}
+            </p>
+          )}
+          {item.draftPreviewCut && (
+            <p data-testid="needs-you-draft-cut" className="text-t1">
+              The answer is longer than this: read all of it on the card (decide) before it is sent.
+            </p>
+          )}
+        </div>
       )}
-      <Link href={item.href} className="min-w-0 flex-1 truncate text-t1 hover:underline">
-        {item.title}
-      </Link>
-      <span className="shrink-0 text-t3">{mounted ? formatAge(item.since) : ''}</span>
-      {item.kind === 'decision' && item.decisionId !== null && (
-        <span className="flex flex-none gap-[6px]">
-          <Button
-            variant="primary"
-            size="sm"
-            data-testid="needs-you-approve"
-            disabled={busy === item.decisionId}
-            onClick={() => onAnswer(item.decisionId as string, 'approve')}
-          >
-            Approve
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            data-testid="needs-you-reject"
-            disabled={busy === item.decisionId}
-            onClick={() => onAnswer(item.decisionId as string, 'reject')}
-          >
-            Reject
-          </Button>
-        </span>
+      {item.merged.length > 0 && (
+        // Merging never hides something a person has to do (spec H4): how many, and each one link away.
+        <details data-testid="needs-you-merged" data-count={item.merged.length} className="ml-[14px] text-t2">
+          <summary className="cursor-pointer">
+            {`+${String(item.merged.length)} more on this subject`}
+          </summary>
+          <ul className="mt-[2px] flex flex-col gap-[2px]">
+            {item.merged.map((member) => (
+              <li
+                key={`${member.kind}-${member.id}`}
+                data-kind={member.kind}
+                data-blocking={member.blocking ? 'true' : 'false'}
+                className="flex items-center gap-2"
+              >
+                <Link href={member.href} className="min-w-0 truncate text-t2 hover:underline">
+                  {member.title}
+                </Link>
+                {member.blocking && (
+                  // Task 9 fix round 1: a member that blocks says so in the list, as the row does.
+                  <span data-testid="needs-you-merged-blocking" className="shrink-0 font-medium text-s-blocked">
+                    {member.goalVersion === null ? 'blocking' : `blocking v${String(member.goalVersion)}`}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
     </div>
   )
@@ -104,7 +257,8 @@ const NEEDS_YOU_REFETCH_MS = 5_000
  * `/api/w/:id/supervisor/decisions/:id/(approve|reject)` route, `needs-you-approve`/
  * `needs-you-reject`, and the same shared `needs-you-error` line. It refetches directly on success
  * rather than waiting for the throttled poll: the row it just answered must not sit there stale
- * for up to `NEEDS_YOU_REFETCH_MS`.
+ * for up to `NEEDS_YOU_REFETCH_MS`. A question card's one click is `send_answer` on the decide
+ * route instead (plan B Task 9, pre-flight F56), and what it did is shown in `needs-you-notice`.
  */
 export function NeedsYouBar({
   workspaceId,
@@ -115,7 +269,10 @@ export function NeedsYouBar({
 }): React.JSX.Element | null {
   const [items, setItems] = useState<readonly NeedsYouItem[]>(initial)
   const [busy, setBusy] = useState<string | null>(null)
-  const [errorText, setErrorText] = useState<string | null>(null)
+  const [refusal, setRefusal] = useState<NeedsYouRefusal | null>(null)
+  const errorText = refusal?.text ?? null
+  /** A card somebody else settled first (human cards spec §4): information, never the red band. */
+  const [noticeText, setNoticeText] = useState<string | null>(null)
   const shellFacts = useShellFacts(workspaceId)
   const lastFetchedAt = useRef(0)
 
@@ -127,12 +284,24 @@ export function NeedsYouBar({
     setItems(initial)
   }, [initial])
 
+  // Fix round 2: a notice stays until it is dismissed or the person acts again -- a re-render of the
+  // layout (the refresh that empties the list included) does not take it away. Another PROJECT's
+  // bar is a different conversation, so a workspace switch does.
+  useEffect((): void => {
+    setNoticeText(null)
+    setRefusal(null)
+  }, [workspaceId])
+
   const load = async (): Promise<void> => {
     try {
       const response = await fetch(`/api/w/${workspaceId}/needs-you`)
       if (!response.ok) return
       const next = (await response.json()) as readonly NeedsYouItem[]
       setItems(next)
+      // Fix round 2, narrowed in Task 10: a refresh clears a refusal only once the row it refused is
+      // gone -- a red line with nothing left to act on is noise, but one still about a listed row
+      // stays until it is dismissed or the person acts again.
+      setRefusal((current) => (current === null || refusalStillListed(next, current) ? current : null))
     } catch {
       // Keep the list we have -- a bar that empties itself because one poll failed is worse
       // than one that is a few seconds stale (`ProjectSwitcher.tsx`'s own rule).
@@ -155,30 +324,64 @@ export function NeedsYouBar({
     // alone and is recreated every render; depending on it would defeat the throttle above.
   }, [workspaceId, shellFacts])
 
-  /** Copied off the deleted `NeedsYouCard.tsx`'s own `answer` -- same route, same "no optimistic
-   *  removal, the refusal belongs to the attempt that earned it" rule. It DOES refetch on success
-   *  now, though (unlike the old card, which rode the page's own stream): this bar has no stream
-   *  of its own to ride, so the row it just answered has to be asked for directly. */
-  const answer = async (decisionId: string, verdict: 'approve' | 'reject'): Promise<void> => {
-    setBusy(decisionId)
-    setErrorText(null)
-    const result = await postControl(`/api/w/${workspaceId}/supervisor/decisions/${decisionId}/${verdict}`)
+  /** Copied off the deleted `NeedsYouCard.tsx`'s own `answer` -- "no optimistic removal, the
+   *  refusal belongs to the attempt that earned it" -- through {@link answerNeedsYou}. It refetches
+   *  right after every settled click: this bar has no stream of its own to ride, so the row it just
+   *  answered has to be asked for directly (plan B Task 9 carry: no wait for the next poll). */
+  const answer = async (item: NeedsYouItem, verdict: NeedsYouVerdict): Promise<void> => {
+    if (item.decisionId === null) return
+    setBusy(item.decisionId)
+    setRefusal(null)
+    setNoticeText(null)
+    const result = await answerNeedsYou(workspaceId, item, verdict)
     setBusy(null)
-    if (!result.ok) {
-      setErrorText(result.error)
+    if (result.error !== null) {
+      setRefusal({ text: result.error, rowId: item.id, decisionId: item.decisionId })
       return
     }
+    // Human cards spec §4: somebody else settled it first -- who and when -- or what the decision
+    // did; either way named by its card, then a fresh list.
+    setNoticeText(result.notice)
     lastFetchedAt.current = Date.now()
     await load()
   }
 
-  if (items.length === 0) return null
+  // Task 9 fix round 1: what the last decided card did (or who settled it first) outlives its row --
+  // the bar stays up while a notice or a refusal is showing, even with nothing left to list.
+  if (items.length === 0 && noticeText === null && errorText === null) return null
 
   return (
     <section data-testid="needs-you" className="rounded-surface border border-accent/35 bg-accent/10 px-3.5 py-2.5">
       {errorText !== null && (
-        <p role="alert" data-testid="needs-you-error" className="type-meta mb-[var(--gap-1)] text-s-blocked">
-          {errorText}
+        <p className="type-meta mb-[var(--gap-1)] flex items-start gap-2 text-s-blocked">
+          <span role="alert" data-testid="needs-you-error" className="min-w-0 flex-1">
+            {errorText}
+          </span>
+          <button
+            type="button"
+            data-testid="needs-you-error-dismiss"
+            aria-label="dismiss this error"
+            onClick={() => setRefusal(null)}
+            className="shrink-0 text-t3 hover:text-t1"
+          >
+            ×
+          </button>
+        </p>
+      )}
+      {noticeText !== null && (
+        <p className="type-meta mb-[var(--gap-1)] flex items-start gap-2 text-t2">
+          <span role="status" data-testid="needs-you-notice" className="min-w-0 flex-1">
+            {noticeText}
+          </span>
+          <button
+            type="button"
+            data-testid="needs-you-notice-dismiss"
+            aria-label="dismiss this notice"
+            onClick={() => setNoticeText(null)}
+            className="shrink-0 text-t3 hover:text-t1"
+          >
+            ×
+          </button>
         </p>
       )}
       {/* I2 (final-review wave): unbounded, this list grows past the strip's own `overflow-hidden`
@@ -189,7 +392,7 @@ export function NeedsYouBar({
             key={`${item.kind}-${item.id}`}
             item={item}
             busy={busy}
-            onAnswer={(decisionId, verdict) => void answer(decisionId, verdict)}
+            onAnswer={(row, verdict) => void answer(row, verdict)}
           />
         ))}
       </ScrollArea>

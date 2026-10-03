@@ -1,5 +1,7 @@
 import { prisma } from '@slave-of-ai/db/client'
+import { BLOCKING_TASK_STATUS, buildNeedsYou, mayHaveBlockingRow, type NeedsYouItem } from './needsYou'
 import {
+  BLOCKING_SITUATION_KINDS,
   needsYou,
   userWorkspaceStatus,
   type TaskStatus,
@@ -25,6 +27,10 @@ export interface SidebarProject {
   /** The WORD, for `title` and for a screen reader (`docs/ia.md` rule 3). */
   readonly statusLabel: string
   readonly needsYouCount: number
+  /** Human cards H4 (Task 9 fix round 1 ruling): the number of rows the project's needs-you queue
+   *  marks blocking -- the queue's own rule, counted on its own beside `needsYouCount`: what stops a
+   *  goal version and a person can act on, not merely what waits. */
+  readonly blockingCount: number
   readonly tasksActive: number
 }
 
@@ -35,7 +41,7 @@ const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'mer
 /**
  * Every project a person can reach, with the one word and the one number the tree draws.
  *
- * FOUR QUERIES, and deliberately not `listProjects()` (plan erratum E3): that function is the
+ * SIX QUERIES, and deliberately not `listProjects()` (plan erratum E3): that function is the
  * PROJECTS PAGE's read model — six grouped reads plus a `findMany` with a nested include of every
  * team's every slave, returning spend, avatars and per-status task counts — and this one runs in
  * the ROOT layout, which means on every page in the product. What the tree draws is a name, a dot
@@ -48,7 +54,29 @@ const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'mer
  * this reader nor `listProjects` makes, and `buildNeedsYou` is the fuller answer on the Overview.
  */
 export async function buildSidebarTree(): Promise<readonly SidebarProject[]> {
-  const [workspaces, taskGroups, unintegratedDoneGroups, pendingDecisionGroups] = await Promise.all([
+  return (await readSidebar()).tree
+}
+
+/** The tree, plus the needs-you queue of every project whose blocking count had to be read off it
+ *  -- so Home, which lists those very queues, never builds one twice. */
+export interface SidebarRead {
+  readonly tree: readonly SidebarProject[]
+  readonly queues: ReadonlyMap<string, readonly NeedsYouItem[]>
+}
+
+/**
+ * {@link buildSidebarTree}'s read, keeping the queues it built (Task 9 fix round 1).
+ *
+ * `blockingCount` IS the number of blocking rows the project's needs-you queue shows (ruling: one
+ * queue, one definition) -- so it is read off `buildNeedsYou` itself, never a second formula. That
+ * read walks the Supervisor's world, so it is made ONLY for a project that can have a blocking row
+ * at all: a blocked task, a pending `goal_needs_human` / `task_blocked_human` card, or a run parked
+ * on a question (every other blocking row needs one of the three -- a question card or a bare
+ * question blocks only while its asker is parked). Three grouped reads find those projects for every
+ * project at once; a project with none of the three costs nothing more, and reads 0.
+ */
+export async function readSidebar(now: Date = new Date()): Promise<SidebarRead> {
+  const [workspaces, taskGroups, unintegratedDoneGroups, pendingDecisionGroups, parkedRunGroups, blockingCardGroups] = await Promise.all([
     prisma.workspace.findMany({
       where: { archivedAt: null },
       select: { id: true, name: true, haltedReason: true, autoMerge: true, archivedAt: true },
@@ -70,14 +98,60 @@ export async function buildSidebarTree(): Promise<readonly SidebarProject[]> {
       where: { status: 'pending' },
       _count: { _all: true },
     }),
+    // Human cards H4: which projects CAN have a blocking row -- a run parked on its question, and
+    // the two cards that stop a version on their own (a blocked task is in `taskGroups` above). Two
+    // grouped reads, ONE each for every project; the count itself is the queue's.
+    prisma.$queryRaw<{ workspaceId: string; n: bigint }[]>`
+      SELECT t."workspaceId", COUNT(*)::bigint AS n
+      FROM "SlaveRun" r JOIN "Slave" s ON s.id = r."slaveId" JOIN "Team" t ON t.id = s."teamId"
+      WHERE r.status = 'paused' AND r."pauseReason" = 'waiting_for_answer'
+      GROUP BY t."workspaceId"`,
+    prisma.supervisorDecision.groupBy({
+      by: ['workspaceId'],
+      where: { status: 'pending', situationKind: { in: [...BLOCKING_SITUATION_KINDS] } },
+      _count: { _all: true },
+    }),
   ])
 
   const unintegratedDoneOf = (workspaceId: string): number =>
     unintegratedDoneGroups.find((group) => group.workspaceId === workspaceId)?._count._all ?? 0
   const pendingDecisionsOf = (workspaceId: string): number =>
     pendingDecisionGroups.find((group) => group.workspaceId === workspaceId)?._count._all ?? 0
+  const blockedTasksOf = (workspaceId: string): number =>
+    taskGroups.find((group) => group.workspaceId === workspaceId && group.status === BLOCKING_TASK_STATUS)?._count._all ?? 0
+  const blockingCardsOf = (workspaceId: string): number =>
+    blockingCardGroups.find((group) => group.workspaceId === workspaceId)?._count._all ?? 0
+  const parkedRunsOf = (workspaceId: string): number =>
+    Number(parkedRunGroups.find((group) => group.workspaceId === workspaceId)?.n ?? 0n)
 
-  return workspaces.map((workspace) => {
+  const candidates = workspaces.filter((workspace) =>
+    mayHaveBlockingRow({ blockedTasks: blockedTasksOf(workspace.id), blockingCards: blockingCardsOf(workspace.id), parkedRuns: parkedRunsOf(workspace.id) }),
+  )
+  // Fix round 2: each project's queue on its own. This read runs in the ROOT layout, so one project
+  // whose world will not load must not take every page of every project down with it: its failure
+  // is logged, its queue is absent, and its count falls back to the one that needs no world.
+  const built = await Promise.all(
+    candidates.map(async (workspace): Promise<readonly [string, readonly NeedsYouItem[]] | null> => {
+      try {
+        return [workspace.id, await buildNeedsYou(workspace.id, now)] as const
+      } catch (cause) {
+        console.error(`sidebar: the needs-you queue of project ${workspace.id} could not be built; its blocking count falls back to its blocked tasks and blocking cards`, cause)
+        return null
+      }
+    }),
+  )
+  const queues = new Map(built.filter((entry): entry is readonly [string, readonly NeedsYouItem[]] => entry !== null))
+  const failed = new Set(candidates.filter((_, index) => built[index] === null).map((workspace) => workspace.id))
+  const blockingOf = (workspaceId: string): number => {
+    // The fallback, for a queue that could not be read: what blocks with no world read -- blocked
+    // tasks and the blocking cards. It may count a blocked task and its card twice, and it misses a
+    // parked question; it is shown only while the queue itself cannot be read.
+    if (failed.has(workspaceId)) return blockedTasksOf(workspaceId) + blockingCardsOf(workspaceId)
+    // A project `mayHaveBlockingRow` ruled out has no queue read and no blocking row.
+    return (queues.get(workspaceId) ?? []).filter((row) => row.blocking).length
+  }
+
+  const tree = workspaces.map((workspace): SidebarProject => {
     let needsYouCount = 0
     let tasksActive = 0
     for (const group of taskGroups) {
@@ -110,7 +184,9 @@ export async function buildSidebarTree(): Promise<readonly SidebarProject[]> {
       status: status.state,
       statusLabel: status.label,
       needsYouCount,
+      blockingCount: blockingOf(workspace.id),
       tasksActive,
     }
   })
+  return { tree, queues }
 }

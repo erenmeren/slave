@@ -4,22 +4,28 @@ import {
   DECISION_SOURCE_LABEL,
   GOAL_REPORT_ANSWERED_BY,
   GOAL_REPORT_AUTHOR_WORDS,
+  GOAL_REPORT_CLOSED_BY,
   GOAL_REPORT_STATE_LABEL,
   acceptedCommitText,
+  continuedWithoutAnswer,
   evidenceAnchor,
   evidenceCut,
   formatReportUsd,
   handOffStatusLabel,
   integratedWhere,
   noPackagesLabel,
+  questionClosedWords,
+  questionTaskHref,
   reportCaveats,
   shortCommit,
   smokeOutcomeLabel,
+  formatWait,
   unverifiedRequirementLabel,
   type GoalReport,
   type GoalReportState,
   type GoalReportVerdictStatus,
 } from '@slave-of-ai/domain'
+import { formatUtcMinute } from '../../lib/format'
 import { Alert } from '../ui/Alert'
 import { Panel } from '../ui/Panel'
 import { ScrollArea } from '../ui/ScrollArea'
@@ -57,6 +63,7 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
   const d = report.delivery
   const caveats = reportCaveats(report)
   const base = `/w/${report.workspaceId}`
+  const continued = continuedWithoutAnswer(report)
   const verified = (report.requirements ?? []).filter((item) => item.verdict !== null)
   const latestSmoke = report.smoke.at(-1)
   return (
@@ -253,7 +260,7 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
           <ul className="flex flex-col gap-1 text-[13px] text-t2">
             {report.handOffs.map((h) => (
               <li key={h.id} data-testid="goal-report-handoff">
-                {h.fromPackage ?? 'the conductor'} → {h.toPackage ?? 'no package'}
+                {h.from} → {h.toPackage ?? 'no package'}
                 {(h.path ?? h.packageKey) !== null && (
                   <>
                     {' '}
@@ -331,6 +338,11 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
             <p>
               Owns: <span className="font-mono text-[12px]">{pkg.ownedPaths.join(', ')}</span>
             </p>
+            {pkg.releasedPaths.length > 0 && (
+              <p>
+                Given by a person to another package: <span className="font-mono text-[12px]">{pkg.releasedPaths.join(', ')}</span>
+              </p>
+            )}
             {pkg.dependsOn.length > 0 && <p>Depends on: {pkg.dependsOn.join(', ')}</p>}
             <p>
               Task: {pkg.taskStatus ?? 'none'}
@@ -433,6 +445,34 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
         </ol>
       </Panel>
 
+      {continued.length > 0 && (
+        <Panel title="Runs that continued without an answer">
+          {continued.map((q) => (
+            <div key={q.id} data-testid="goal-report-continued" className="text-[13px] text-t2">
+              <p>
+                <span className="font-mono text-[11.5px] text-t3">{q.at}</span> {q.packageKey ?? 'A worker'}
+                {q.askedBy !== null && ` (${q.askedBy})`} waited {formatWait(q.closed.waitedMs)}, then continued on its own assumption:
+              </p>
+              <pre className={PRE}>{q.question}</pre>
+              <p className="text-t3">
+                The assumption is in the worker&apos;s report
+                {q.taskId === null ? (
+                  '.'
+                ) : (
+                  <>
+                    :{' '}
+                    <Link href={questionTaskHref(report.workspaceId, q.taskId)} className="text-accent" data-testid="goal-report-continued-link">
+                      the task
+                    </Link>
+                    .
+                  </>
+                )}
+              </p>
+            </div>
+          ))}
+        </Panel>
+      )}
+
       <Panel title="Questions">
         {report.questions.length === 0 && <p className="text-[13px] text-t2">No questions were asked.</p>}
         {report.questions.map((q) => (
@@ -452,8 +492,56 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
                 <pre className={PRE}>{q.answer.text}</pre>
               </>
             )}
+            {q.closed !== null && q.closed.reason !== 'answered' && (
+              <p data-testid="goal-report-question-closed" className="text-t3">
+                Closed: {questionClosedWords(q.closed)} ({GOAL_REPORT_CLOSED_BY[q.closed.by]}, {q.closed.at})
+              </p>
+            )}
           </div>
         ))}
+      </Panel>
+
+      {/* Human cards H1/H2: every decision a person took on a card -- closing is a recorded decision.
+        * The summary is built from the person's words: a JSX child, like every other quote. */}
+      <Panel title="Decided on cards">
+        {report.personDecisions.length === 0 ? (
+          <p className="text-[13px] text-t2">Nothing was decided on a card.</p>
+        ) : (
+          <ul className="flex flex-col gap-1 text-[13px] text-t2">
+            {report.personDecisions.map((d, index) => (
+              <li key={`${d.questionId}-${String(index)}`}>
+                <p data-testid="goal-report-person-decision">
+                  <span className="font-mono text-[11.5px] text-t3">{formatUtcMinute(d.at)}</span> {d.summary}
+                  {d.grant?.fromKey != null && ` (taken from the ${d.grant.fromKey} package)`}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
+
+      {/* Human cards plan B D9 (pre-flight F15: after "Decided on cards"): what the workers said a
+        * person should know that needed no decision. A worker's words: a JSX child, never markup. */}
+      <Panel title="Notes from the packages">
+        {report.notes.length === 0 ? (
+          <p className="text-[13px] text-t2">No package left a note.</p>
+        ) : (
+          <ul className="flex flex-col gap-1 text-[13px] text-t2">
+            {report.notes.map((n, index) => (
+              <li key={`${n.packageKey}-${String(index)}`}>
+                <p data-testid="goal-report-note">
+                  <span className="font-mono text-[11.5px] text-t3">{formatUtcMinute(n.at)}</span> {n.packageKey} noted:{' '}
+                  <span className="whitespace-pre-wrap break-words">{n.text}</span>
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+        {report.notesOmitted > 0 && (
+          <p data-testid="goal-report-notes-omitted" className="text-[12.5px] text-t3">
+            … and {String(report.notesOmitted)} more, not listed.
+          </p>
+        )}
       </Panel>
 
       <p className="text-[12px] text-t3">Built from Slave&apos;s records of this goal version. Quoted text is marked with who wrote it.</p>

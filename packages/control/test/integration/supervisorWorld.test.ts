@@ -2370,9 +2370,10 @@ describe('loadSupervisorWorld -- goal versions and their verification (Conductor
     expect(world.questions.map((q) => q.messageId).sort()).toEqual([asked.get('live'), ask.value.id].sort())
   })
 
-  // Supervisor-as-conductor plan B D8 (spec C5, OBS-9): a finished task's report question that was
-  // decided about -- answered, or sent to a person -- is not pending for the conductor path any more.
-  it('drops a done task\'s report question once it was decided about, and keeps an undecided one and a live task\'s (conductor C5)', async (): Promise<void> => {
+  // Human cards plan A D4: the C5 filter is closing now -- a decided question is closed when it is
+  // decided, and a closed question is pending nowhere. A settled decision with no close (only a row
+  // written by hand) no longer hides a question; the migration closed every such row that existed.
+  it('drops a closed question and keeps an open one, whatever decisions are on record (human cards D4)', async (): Promise<void> => {
     const fixture = await seed()
     const worker = await seat(fixture, 'Wes', ['implementer'])
     await delivery(fixture, 1, { status: 'integrating' })
@@ -2386,19 +2387,17 @@ describe('loadSupervisorWorld -- goal versions and their verification (Conductor
       return sent.value.id
     }
     const done = await task('done')
-    const rejected = await ask(done, 'rejected once')
-    const undecided = await ask(done, 'never decided')
-    const refused = await ask(done, 'its verb refused')
-    const live = await ask(await task('rework'), 'decided, task live')
-    // Final wave I2: a card still waiting on a person keeps its question, so the card can show it.
-    const awaiting = await ask(done, 'its card is pending')
-    for (const [subjectId, status] of [[rejected, 'rejected'], [live, 'rejected'], [refused, 'failed'], [awaiting, 'pending']] as const) {
-      await prisma.supervisorDecision.create({
-        data: { workspaceId: fixture.workspaceId, situationKind: 'conductor_question', subjectId, situation: {}, candidates: [], chosenIndex: 0, action: { kind: 'escalate_to_human', summary: 'x' }, rationale: 'x', tier: 'escalated', status, decidedBy: 'rules' },
-      })
+    const closed = await ask(done, 'closed by a person')
+    const open = await ask(done, 'never decided')
+    const live = await ask(await task('rework'), 'task live, open')
+    await prisma.slaveMessage.update({ where: { id: closed }, data: { closedAt: new Date(), closedReason: 'dismissed', closedBy: 'u1' } })
+    // C5's own mechanics on the open question of a done task -- a settled (rejected) card and a
+    // pending one -- no longer hide it: only a close does (Task 3 carry).
+    for (const status of ['rejected', 'pending'] as const) {
+      await prisma.supervisorDecision.create({ data: { workspaceId: fixture.workspaceId, situationKind: 'conductor_question', subjectId: open, situation: {}, candidates: [], chosenIndex: 0, action: { kind: 'escalate_to_human', summary: 'x' }, rationale: 'x', tier: 'escalated', status, decidedBy: 'rules' } })
     }
     const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
-    expect(world.questions.map((q) => q.messageId).sort()).toEqual([undecided, refused, live, awaiting].sort())
+    expect(world.questions.map((q) => q.messageId).sort()).toEqual([open, live].sort())
     // A report question's run has finished: it is never parked on it.
     expect(world.questions.every((q) => !q.askerWaiting)).toBe(true)
   })
@@ -2460,6 +2459,21 @@ describe('loadSupervisorWorld -- goal versions and their verification (Conductor
     expect(world.questions.find((q) => q.messageId === routed.value.id)?.fromHandOffRouting).toBe(true)
     expect(world.questions.find((q) => q.messageId === reported.value.id)?.fromHandOffRouting).toBe(false)
     expect(world.conductorPlans[0]?.packages).toEqual([expect.objectContaining({ key: 'report', handOffReopens: 2 })])
+  })
+
+  // Human cards plan B D5 (pre-flight F50): the conductor's plan carries the files a person gave away.
+  it('loads each package\'s released paths into the conductor\'s plan (human cards plan B D5)', async (): Promise<void> => {
+    const fixture = await seed()
+    const worker = await seat(fixture, 'Wes', ['implementer'])
+    await delivery(fixture, 1, { status: 'integrating' })
+    const pkg = await prisma.workPackage.create({ data: { workspaceId: fixture.workspaceId, goalVersion: 1, key: 'report', title: 'Report', requirementKeys: ['R1'], ownedPaths: ['r/**'], releasedPaths: ['r/routes.ts'], interface: '', templateId: 't-backend' } })
+    const taskId = (await prisma.task.create({ data: { workspaceId: fixture.workspaceId, title: 'Report', description: 'x', status: 'rework', requiredRole: 'implementer', maxAttempts: 3, assigneeId: worker, workPackageId: pkg.id, goalVersion: 1 } })).id
+    const run = await prisma.slaveRun.create({ data: { slaveId: worker, taskId, status: 'succeeded', kind: 'implementation' } })
+    const asked = await sendMessage(run.id, { kind: 'question', body: 'who owns r/routes.ts?', recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId, idempotencyKey: reportQuestionKey(run.id, 0) })
+    if (!asked.ok) throw new Error('send failed')
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.conductorPlans[0]?.packages).toEqual([expect.objectContaining({ key: 'report', ownedPaths: ['r/**'], releasedPaths: ['r/routes.ts'] })])
   })
 
   // Final wave M5: the batched prompt labels whose words each earlier answer is.

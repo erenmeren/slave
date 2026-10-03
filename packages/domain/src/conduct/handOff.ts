@@ -4,6 +4,7 @@ import { sanitisePersonText } from '../handoff/contract.js'
 import {
   ASKED_OF_YOU_MAX_CHARS,
   HANDOFF_CHANGE_MAX_CHARS,
+  HANDOFF_REOPENS_MAX,
   HANDOFF_PROMPT_ITEM_MAX_CHARS,
   SHARED_DECISIONS_PROMPT_MAX_CHARS,
   SHARED_DECISION_TEXT_MAX_CHARS,
@@ -79,6 +80,9 @@ export interface HandOffOwner {
   readonly key: string
   readonly ownedPaths: readonly string[]
   readonly isIntegration: boolean
+  /** Human cards plan B D5: the files a person gave from this package to another, which its rule
+   *  excludes -- a select that drops them would route a given file back to its old owner. */
+  readonly releasedPaths?: readonly string[]
 }
 
 export type HandOffTarget =
@@ -113,6 +117,52 @@ export function resolveHandOff(item: HandOffItem, fromPackageKey: string | null,
   return key === fromPackageKey ? { kind: 'own' } : { kind: 'package', key }
 }
 
+/** A target task in one of these can take no more work: a hand-off to it becomes a conductor question. */
+export const HANDOFF_CANNOT_TAKE: ReadonlySet<string> = new Set(['failed', 'cancelled'])
+
+/** The delivery statuses a version has ended in: a hand-off stored now is `expired` (plan A D4),
+ *  and a pending one is expired on the move (`expirePendingHandOffs`). Accepted counts whether or
+ *  not the branch is merged yet -- with auto-merge off that can last indefinitely. */
+export const HANDOFF_VERSION_ENDED: ReadonlySet<string> = new Set(['accepted', 'abandoned'])
+
+/** {@link HANDOFF_VERSION_ENDED} as a type guard, for the callers that name the end. */
+export function isHandOffVersionEnded(status: string): status is 'accepted' | 'abandoned' {
+  return HANDOFF_VERSION_ENDED.has(status)
+}
+
+/** The one delivery status in which a package is reopened for a hand-off (`reopenInLock`'s
+ *  `mayReopen`) or shown it in its next prompt. */
+export const HANDOFF_DELIVERING_STATUS = 'integrating'
+
+/** What becomes of a hand-off to a package ({@link handOffRoute}). `held`: stored pending, shown to
+ *  no run while the version is verifying or waiting on a person -- read only if the version returns
+ *  to integrating, and expired unread if it is accepted first. */
+export type HandOffRoute = 'to_conductor' | 'expired' | 'delivered' | 'held'
+
+/**
+ * Final wave round 2 (finding I5): the one rule for where a hand-off to a package goes, from its
+ * version's delivery status (null: a version conducted before Plan 4a wrote deliveries) and the
+ * target task's status (undefined: no task). `routeHandOffs` and `reopenInLock` store and move rows
+ * by it, and a late answer's card says "goes to the package as a hand-off" only when it is
+ * `delivered`, so the card and the routing cannot drift apart.
+ */
+export function handOffRoute(versionStatus: string | null, taskStatus: string | undefined): HandOffRoute {
+  if (taskStatus === undefined || HANDOFF_CANNOT_TAKE.has(taskStatus)) return 'to_conductor'
+  if (versionStatus !== null && isHandOffVersionEnded(versionStatus)) return 'expired'
+  return versionStatus === null || versionStatus === HANDOFF_DELIVERING_STATUS ? 'delivered' : 'held'
+}
+
+/**
+ * Human cards plan B, final review I1: a finished package already reopened {@link HANDOFF_REOPENS_MAX}
+ * times by hand-offs takes no new work -- `reopenInLock` turns its next unseen request into a
+ * conductor question naming the chain. The one rule: `reopenInLock` applies it, and a person's
+ * `give_work` is refused by it before the card is claimed, so a card never says a package will do
+ * what nobody does.
+ */
+export function handOffReopensSpent(taskStatus: string | undefined, handOffReopens: number): boolean {
+  return taskStatus === 'done' && handOffReopens >= HANDOFF_REOPENS_MAX
+}
+
 /**
  * Plan A D6: the same request from the same source to the same target, however it is spaced or
  * cased. `goalSha256`, the domain's own hash: `packages/domain` must not import `node:crypto`.
@@ -131,10 +181,29 @@ export interface HandOffView {
   readonly path: string | null
   readonly packageKey: string | null
   readonly change: string
+  /** Human cards plan A D10: a person's request (`source = person`), rendered under its own heading. */
+  readonly fromOperator?: boolean
+  /** Final wave minor: who a request from no package came from when it was not the conductor -- a
+   *  worker's late answer, named by its seat ("another worker" when the answer row is gone with it).
+   *  Ignored when `from` names a package or `fromOperator` is set. */
+  readonly fromWorker?: string
+}
+
+/** Human cards plan A D10: the heading a person's requests sit under -- the operator's words, unlike
+ *  the workers' requests below {@link HANDOFF_TRUST_LINE}: a decision on a card, or an answer typed
+ *  into the answer box that arrived late (final wave minor). Still sanitised and bounded like any
+ *  stored text, and still to be done only in the package's own files. */
+export const OPERATOR_HANDOFF_HEADING = 'From the operator (a person answered or decided this; do it in your own files):'
+
+/** Who a hand-off is from, as its line, the "more requests" line and the loop guard's note name it. */
+export function handOffFromName(view: HandOffView): string {
+  if (view.fromOperator === true) return 'the operator'
+  if (view.from !== null) return sanitisePersonText(storableText(view.from))
+  return view.fromWorker === undefined ? 'the conductor' : sanitisePersonText(storableText(view.fromWorker))
 }
 
 function itemLine(view: HandOffView): string {
-  const from = view.from === null ? 'the conductor' : sanitisePersonText(storableText(view.from))
+  const from = handOffFromName(view)
   const where = view.path === null ? '' : ` (${sanitisePersonText(storableText(view.path))})`
   const change = trimToFit(sanitisePersonText(storableText(view.change).replace(/\s+/gu, ' ').trim()), HANDOFF_PROMPT_ITEM_MAX_CHARS)
   return `- from ${from}${where}: ${change}`
@@ -174,10 +243,30 @@ function fitItems(head: string, items: readonly HandOffView[], tail: readonly st
   }
   const rest = items.slice(shownIds.length)
   if (rest.length > 0) {
-    const keys = [...new Set(rest.map((view) => (view.from === null ? 'the conductor' : sanitisePersonText(storableText(view.from)))))].join(', ')
+    const keys = [...new Set(rest.map(handOffFromName))].join(', ')
     lines.push(`${String(rest.length)} more requests from ${keys} wait for your next run.`)
   }
   return { text: [head, ...lines, ...tail].join('\n'), shownIds }
+}
+
+/**
+ * Plan A D10: a person's items first, under {@link OPERATOR_HANDOFF_HEADING}, then the workers' under
+ * `workerHead`, then `tail`; each part fitted whole by {@link fitItems} within what the part before it
+ * left. A block with no operator item is byte-identical to `fitItems(workerHead, items, tail, budget)`.
+ * `operatorOnlyLead` opens a block of a person's items alone -- the line `workerHead` would have
+ * carried that is not the workers' trust line (final wave, finding 8: a rework still says the
+ * package was finished).
+ */
+function fitBlocks(workerHead: string, items: readonly HandOffView[], tail: readonly string[], budget: number, operatorOnlyLead: string | null = null): HandOffBlock {
+  const operator = items.filter((view) => view.fromOperator === true)
+  const workers = items.filter((view) => view.fromOperator !== true)
+  if (operator.length === 0) return fitItems(workerHead, workers, tail, budget)
+  const operatorHead = workers.length === 0 && operatorOnlyLead !== null ? `${operatorOnlyLead}
+${OPERATOR_HANDOFF_HEADING}` : OPERATOR_HANDOFF_HEADING
+  const first = fitItems(operatorHead, operator, workers.length === 0 ? tail : [], budget)
+  if (workers.length === 0) return first
+  const second = fitItems(workerHead, workers, tail, Math.max(0, budget - first.text.length))
+  return { text: `${first.text}\n${second.text}`, shownIds: [...first.shownIds, ...second.shownIds] }
 }
 
 /**
@@ -190,7 +279,7 @@ export const HANDOFF_TRUST_LINE =
 /** Plan A D9: the "Asked of your package" block of a contract; empty when nothing was asked. */
 export function renderAskedOfYou(items: readonly HandOffView[]): HandOffBlock {
   if (items.length === 0) return { text: '', shownIds: [] }
-  return fitItems(
+  return fitBlocks(
     `${HANDOFF_TRUST_LINE}\nAsked of your package by other packages (do each one that is right, in your own files; if one is not right, say why in your report):`,
     items,
     [],
@@ -200,11 +289,12 @@ export function renderAskedOfYou(items: readonly HandOffView[]): HandOffBlock {
 
 /** Plan A D4: the rework reason when hand-offs reopen a finished package. */
 export function renderHandOffRework(items: readonly HandOffView[]): HandOffBlock {
-  return fitItems(
+  return fitBlocks(
     `${HANDOFF_TRUST_LINE}\nYour package was finished, and other packages have since asked it for these changes:`,
     items,
     ['Make each change that is right, in your own files, and say in your report why you left any out. Then finish as your instructions describe.'],
     VERIFICATION_REWORK_MAX_CHARS - 400,
+    'Your package was finished, and has since been asked for these changes:',
   )
 }
 
@@ -214,7 +304,7 @@ export function renderHandOffRework(items: readonly HandOffView[]): HandOffBlock
  */
 export function renderHandOffQuestion(input: { readonly view: HandOffView; readonly reason: string }): string {
   const target = input.view.path !== null ? ` in ${sanitisePersonText(storableText(input.view.path))}` : input.view.packageKey !== null ? ` of the ${sanitisePersonText(storableText(input.view.packageKey))} package` : ''
-  const from = input.view.from === null ? 'the conductor' : `the ${sanitisePersonText(storableText(input.view.from))} package`
+  const from = input.view.from !== null && input.view.fromOperator !== true ? `the ${sanitisePersonText(storableText(input.view.from))} package` : handOffFromName(input.view)
   return [
     `A hand-off from ${from} was not delivered: ${sanitisePersonText(storableText(input.reason))}.`,
     `It asks for a change${target}: ${trimToFit(sanitisePersonText(storableText(input.view.change).replace(/\s+/gu, ' ').trim()), HANDOFF_CHANGE_MAX_CHARS)}`,

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { everyPackageIntegrated, expirePendingHandOffs, goalEventSaid, goalEventWith, reopenForHandOffs, routeStoredHandOffs, settleGoalEvidence, withDeliveryLock } from '@slave-of-ai/control'
+import { ROUTED_DELIVERY_WHERE, everyPackageIntegrated, expirePendingHandOffs, goalEventSaid, goalEventWith, reopenForHandOffs, routeStoredHandOffs, settleGoalEvidence, withDeliveryLock } from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import { VERIFICATION_REASON_MAX_CHARS, VERIFICATION_RUN_RETRY_CAP, handMergeInstruction, type GuardrailKind } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
@@ -78,10 +78,7 @@ export async function runGoalPass(deps: TickDeps, options: GoalPassOptions): Pro
   }
 
   const open = await prisma.goalDelivery.findMany({
-    where: {
-      workspaceId,
-      OR: [{ status: 'integrating' }, { status: 'verifying' }, { status: 'accepted', mergedAt: null, mergeError: null }],
-    },
+    where: { workspaceId, ...ROUTED_DELIVERY_WHERE },
     orderBy: { goalVersion: 'asc' },
     select: { id: true },
   })

@@ -79,6 +79,7 @@ export const TYPES_BY_KIND = {
     'run.stopped',
     'slave.message_sent',
     'slave.message_reassigned',
+    'slave.question_closed',
   ],
   guardrails: ['guardrail.tripped'],
   // The workspace's own lifecycle -- the goal, the plan it became, the company later assigned to
@@ -115,6 +116,9 @@ export const TYPES_BY_KIND = {
     'workspace.smoke_run',
     'workspace.smoke_handed_off',
     'workspace.package_handed_off',
+    // Human cards plan B D9: a worker's note, beside its hand-offs -- what a person reading "what
+    // happened in this project" should know, which needs no decision.
+    'workspace.package_noted',
     'workspace.plan_created',
     // M40 t1: a goal change on a non-empty board starts a delta re-plan, and both ends of that are
     // workspace lifecycle for the same reason `workspace.plan_created` is -- neither carries a

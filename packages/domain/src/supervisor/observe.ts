@@ -11,6 +11,7 @@ import { recommendRunbooks } from '../runbook/recommend.js'
 import { holdsRole } from '../scheduler/assign.js'
 import { hasStartableWork } from '../scheduler/decide.js'
 import { TERMINAL } from '../task/state.js'
+import { isQuestionSituation } from './cards.js'
 import { isStaffableTask } from './candidates.js'
 import { readsAsPlatform } from './diagnosis.js'
 import {
@@ -454,7 +455,7 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
   for (const question of world.questions) {
     // Supervisor-as-conductor spec C4 (plan B D1): the conductor's role is held by nobody by design,
     // so a question to it is not "unanswerable" -- it is the conductor's to answer from the plan, at
-    // once. A parked asker that has waited past the threshold is ALSO made visible (spec C5, D2).
+    // once. Human cards plan A D3: a parked asker is not raised again as `waiting_stale`. The question has one card, and its wait ends at the project's question timeout.
     if (question.recipientRole === CONDUCTOR_ROLE) {
       add({
         kind: 'conductor_question',
@@ -462,14 +463,6 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
         summary: `A question to the conductor${question.goalVersion === null ? '' : ` about goal v${String(question.goalVersion)}`} waits for an answer from the plan.`,
         facts: { ...questionFacts(question, world), goalVersion: question.goalVersion, askerWaiting: question.askerWaiting },
       })
-      if (question.askerWaiting && world.now - question.createdAt > WAITING_STALE_MS) {
-        add({
-          kind: 'waiting_stale',
-          subjectId: question.messageId,
-          summary: `A run has waited ${String(Math.floor((world.now - question.createdAt) / 60_000))} minutes for the conductor's answer.`,
-          facts: questionFacts(question, world),
-        })
-      }
       continue
     }
     if (!questionHasRecipient(world, question)) {
@@ -843,17 +836,36 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
 export function filterFresh(situations: readonly Situation[], world: SupervisorWorld): readonly Situation[] {
   const key = (kind: SituationKind, subjectId: string): string => `${kind} ${subjectId}`
   const blocked = new Set<string>()
-  for (const decision of world.decisions) {
+  // Human cards H1 (plan A D2): a question has at most one open card, whatever kind raised it.
+  const openQuestions = new Set<string>()
+  // Final wave, finding 2: and one cooldown, whatever kind raised it -- its latest card's, of any
+  // question kind, so re-addressing an `unanswerable_question` card does not let `waiting_stale`
+  // raise a card on the same question on the next tick. `recordDecision` reads the same latest row.
+  const latestOnQuestion = new Map<string, (typeof world.decisions)[number]>()
+  const cools = (decision: (typeof world.decisions)[number]): boolean => {
     const anchor = decision.resolvedAt ?? decision.createdAt
     // M51 R3: the per-kind override, defaulting to the standing fifteen minutes. The `pending`
     // clause is unchanged and is checked first: an OPEN decision blocks its key however long it has
     // been open, whatever the cooldown says, because a second proposal about a question a human is
     // still looking at is the thing the cooldown exists to stop.
     const cooldownMs = COOLDOWN_BY_KIND[decision.situationKind] ?? COOLDOWN_MS
-    const cooling = decision.status === 'pending' || world.now - anchor <= cooldownMs
-    if (cooling) blocked.add(key(decision.situationKind, decision.subjectId))
+    return decision.status === 'pending' || world.now - anchor <= cooldownMs
   }
-  return situations.filter((situation) => !blocked.has(key(situation.kind, situation.subjectId)))
+  for (const decision of world.decisions) {
+    if (isQuestionSituation(decision.situationKind)) {
+      if (decision.status === 'pending') openQuestions.add(decision.subjectId)
+      const seen = latestOnQuestion.get(decision.subjectId)
+      if (seen === undefined || decision.createdAt > seen.createdAt) latestOnQuestion.set(decision.subjectId, decision)
+      continue
+    }
+    if (cools(decision)) blocked.add(key(decision.situationKind, decision.subjectId))
+  }
+  const coolingQuestions = new Set([...latestOnQuestion].flatMap(([subjectId, latest]) => (cools(latest) ? [subjectId] : [])))
+  return situations.filter((situation) =>
+    isQuestionSituation(situation.kind)
+      ? !openQuestions.has(situation.subjectId) && !coolingQuestions.has(situation.subjectId)
+      : !blocked.has(key(situation.kind, situation.subjectId)),
+  )
 }
 
 /**

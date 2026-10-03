@@ -24,6 +24,18 @@ export async function settleGoalEvidence(workspaceId: string, goalVersion: numbe
   for (const task of tasks) await settleTaskEvidence(task.id, { kind: 'integration', integrated: true })
 }
 
+/** How a caller of {@link withDeliveryLock} waits for it. */
+export interface DeliveryLockOptions {
+  /**
+   * Human cards (Task 5 carry): the longest any lock wait in the transaction may take -- the delivery
+   * lock first of all -- before Postgres cancels it (`lock_timeout`, SQLSTATE 55P03, read by
+   * `isLockTimeout`). Absent, a waiter waits out the holder, as the goal pass must: a person's
+   * request cannot, because a Prisma transaction's own `timeout` does not cancel a statement
+   * blocked on a lock, so it would wait through the holder's whole merge and only then fail.
+   */
+  readonly lockWaitMs?: number
+}
+
 /**
  * Serialises everything that decides a delivery's once-only facts (`goal_accepted`, the final
  * merge, `goal_merged`, the abandonment) across overlapping callers -- a CLI `tick` beside a live
@@ -41,9 +53,17 @@ export async function settleGoalEvidence(workspaceId: string, goalVersion: numbe
  * Lives here, not in the orchestrator's goal pass, because the person's verbs below must take the
  * SAME lock under the same key, and `packages/control` cannot import from `apps/orchestrator`.
  */
-export async function withDeliveryLock<T>(deliveryId: string, work: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+export async function withDeliveryLock<T>(
+  deliveryId: string,
+  work: (tx: Prisma.TransactionClient) => Promise<T>,
+  options: DeliveryLockOptions = {},
+): Promise<T> {
+  const { lockWaitMs } = options
+  if (lockWaitMs !== undefined && !(Number.isInteger(lockWaitMs) && lockWaitMs > 0)) throw new RangeError(`withDeliveryLock: lockWaitMs must be a positive integer, not ${String(lockWaitMs)}`)
   return prisma.$transaction(
     async (tx) => {
+      // `set_config(..., true)` is `SET LOCAL` with a bound value: it ends with this transaction.
+      if (lockWaitMs !== undefined) await tx.$queryRaw`SELECT set_config('lock_timeout', ${`${String(lockWaitMs)}ms`}, true)`
       await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtext(${`slaveofai:goal-delivery:${deliveryId}`}))`
       return work(tx)
     },

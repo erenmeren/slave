@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { err, ok, type Result } from '../result.js'
-import { HANDOFFS_PER_REPORT_MAX } from './constants.js'
+import { HANDOFFS_PER_REPORT_MAX, NOTE_MAX_CHARS, NOTES_PER_REPORT_MAX } from './constants.js'
 import { SLAVE_REPORT_TAG } from './contract.js'
 import { readHandOffItem, type ReportedHandOff } from './handOff.js'
 import { storableJsonReviver } from './storable.js'
@@ -19,6 +19,9 @@ export interface SlaveReport {
    *  package must do. Routed by ownership when the report is filed (`routeHandOffs`). An item that
    *  does not read is kept in its place as an `UnreadableHandOff` (final review M4). */
   readonly handOffs: readonly ReportedHandOff[]
+  /** Human cards plan B D9: what a person should know that needs no decision -- the feed and the
+   *  report, never a card. The worker's raw words: filing sanitises each before it is stored. */
+  readonly notes: readonly string[]
   /** User ruling 2026-09-30 (plan B D11): a smoke rework's claim that its fix is in a file another
    *  package owns -- a path and what must change there. A claim only: `handOffSmokeRework` checks it. */
   readonly handOff?: { readonly path: string; readonly change: string } | undefined
@@ -48,6 +51,10 @@ const reportSchema = z.object({
   // Final review M4: the list is the report's; each item is read on its own (`readHandOffItem`), so
   // one malformed item becomes a conductor question instead of refusing the whole report.
   handOffs: z.array(z.unknown()).max(HANDOFFS_PER_REPORT_MAX).default([]).transform((items) => items.map(readHandOffItem)),
+  // Human cards plan B D9: absent in every report written before this plan (and in one from a worker
+  // with nothing to note), which reads as none. Bounded like `questions`, and refused like them: a
+  // list that breaks the bounds sends the report back, so a note is never silently cut or dropped.
+  notes: z.array(z.string().trim().min(1).max(NOTE_MAX_CHARS)).max(NOTES_PER_REPORT_MAX).default([]),
   // User ruling 2026-09-30 (skeleton-and-smoke plan B D11): a smoke rework's structured hand-off --
   // the file another package owns that the fix needs, and what must change in it. The bounds are
   // `workspace.smoke_handed_off`'s, so a filed claim always fits its event.

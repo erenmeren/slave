@@ -12,8 +12,11 @@ import {
   BROKER_REFUSAL_LABEL,
   EXTERNAL_SOURCE_LABEL,
   WORKSPACE_LIMIT_RULE,
+  closerWords,
+  resolverWords,
   type BrokerRefusalReason,
   type ExternalSource,
+  type QuestionCloseReason,
   type WorkspaceLimitField,
 } from '@slave-of-ai/domain'
 import { sectors } from '@slave-of-ai/simulation'
@@ -28,6 +31,10 @@ export type ControlRefusal =
       readonly needed: readonly string[]
     }
   | { readonly kind: 'workspace_halted'; readonly workspaceId: string; readonly reason: string }
+  /** Human cards plan A D7: `requestResume(…, { onlyIfNotRequested })` found an intent already
+   *  standing -- the timeout pass and `deliverAnswers` race to one resume, and this is the loser.
+   *  409 by `refusalStatus`'s suffix rule. */
+  | { readonly kind: 'resume_already_requested'; readonly runId: string }
   /** `admitRun` on an archived project (M27 §3.3): nothing dispatches for it until `restore-workspace`. */
   | { readonly kind: 'workspace_archived'; readonly workspaceId: string }
   /** `archiveWorkspace` on a project that is already archived (M27 §3.2). */
@@ -497,6 +504,9 @@ export type ControlRefusal =
    *  has stopped waiting for one (`stillPendingQuestion`'s definition, shared with the worker's own
    *  inbox). Re-addressing it would put a settled question in a second worker's inbox. */
   | { readonly kind: 'question_answered'; readonly messageId: string }
+  /** Human cards plan A D6: the question was closed -- decided, dismissed or superseded -- before
+   *  this answer reached it, so nothing was written. `by` is a user id, `operator` or `system`. */
+  | { readonly kind: 'question_closed'; readonly messageId: string; readonly reason: QuestionCloseReason; readonly by: string; readonly at: string }
   /**
    * M39 t2: the worker named cannot answer this question, so moving it there would only hide it.
    *
@@ -531,7 +541,27 @@ export type ControlRefusal =
   /** M38 t2: the decision exists but has already left `pending` -- approved, rejected, expired,
    *  applied at birth, or failed. `status` is what it is NOW, which is the whole answer to "why
    *  can I not approve this": someone (or `expirePendingDecisions`) got there first. */
-  | { readonly kind: 'decision_not_pending'; readonly decisionId: string; readonly status: string }
+  | {
+      readonly kind: 'decision_not_pending'
+      readonly decisionId: string
+      readonly status: string
+      /** Human cards spec §4: when, and by whom (null: by Slave), the card was taken first. Optional,
+       *  so every other writer of the kind keeps compiling. */
+      readonly resolvedAt?: string | null
+      readonly resolvedByUserId?: string | null
+    }
+  /** Human cards plan B D1: `decideCard` was given a body `cardDecisionSchema` does not read (or an
+   *  answer that is empty once made storable). `reason` is the schema's own words. */
+  | { readonly kind: 'invalid_card_decision'; readonly reason: string }
+  /** Plan B: `decideCard` on a card that is not about a question -- a machine card keeps approve and
+   *  reject (spec H2). */
+  | { readonly kind: 'card_not_a_question'; readonly decisionId: string }
+  /** Plan B D7: the decision is not one this card offers (`cardOffers`) -- a drafted answer with no
+   *  draft, an answer no run would read, a decision on a closed question. */
+  | { readonly kind: 'card_decision_not_offered'; readonly decisionId: string; readonly decision: string }
+  /** Plan B: the decision fits the card but cannot be carried out; `reason` is a whole sentence.
+   *  Nothing was written. */
+  | { readonly kind: 'card_decision_refused'; readonly decisionId: string; readonly reason: string }
   /**
    * M38 t2: the Supervisor is already on this situation key (spec §1, "idempotent and quiet").
    * Either an open `pending` proposal is waiting on a human, or the last decision for the key
@@ -638,6 +668,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return `no run with id ${refusal.runId}`
     case 'wrong_status':
       return `run ${refusal.runId} is ${refusal.status}; this needs one of: ${refusal.needed.join(', ')}`
+    case 'resume_already_requested':
+      return `run ${refusal.runId} already has a resume waiting: the first one stands`
     case 'workspace_halted':
       return (
         `this workspace is halted (${refusal.reason}). Nothing will run until an operator retracts ` +
@@ -953,6 +985,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return `message ${refusal.messageId} is not a question: there is nothing to re-address`
     case 'question_answered':
       return `question ${refusal.messageId} is no longer waiting on an answer`
+    case 'question_closed':
+      return `question ${refusal.messageId} was closed (${refusal.reason.replace('_', ' ')}) by ${closerWords(refusal.by)} at ${refusal.at}: nothing was written`
     case 'reassign_not_permitted':
       return `question ${refusal.messageId} cannot be re-addressed to slave ${refusal.slaveId}: ${refusal.reason}`
     case 'draft_missing':
@@ -964,7 +998,15 @@ export function refusalText(refusal: ControlRefusal): string {
     case 'decision_not_found':
       return `no supervisor decision with id ${refusal.decisionId}`
     case 'decision_not_pending':
-      return `supervisor decision ${refusal.decisionId} is ${refusal.status}, not pending: there is nothing left to approve or reject`
+      return `supervisor decision ${refusal.decisionId} is ${refusal.status}, not pending${refusal.resolvedAt == null ? '' : ` (resolved by ${resolverWords(refusal.status, refusal.resolvedByUserId ?? null)} at ${refusal.resolvedAt})`}: there is nothing left to approve or reject`
+    case 'invalid_card_decision':
+      return `that is not a decision a card can carry: ${refusal.reason}`
+    case 'card_not_a_question':
+      return `supervisor decision ${refusal.decisionId} is not about a question: approve or reject it`
+    case 'card_decision_not_offered':
+      return `supervisor decision ${refusal.decisionId} does not offer "${refusal.decision.replace('_', ' ')}"`
+    case 'card_decision_refused':
+      return `the decision was refused, and nothing was changed: ${refusal.reason}`
     case 'supervisor_cooldown':
       return `the supervisor has already decided ${refusal.situationKind} for ${refusal.subjectId}; the next decision on it can be made after ${refusal.untilTs}`
     case 'supervisor_disabled':

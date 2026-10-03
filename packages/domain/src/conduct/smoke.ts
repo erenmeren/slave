@@ -111,7 +111,13 @@ export function handOffPath(path: string): string | null {
  */
 export function smokeHandOffTarget(
   path: string,
-  packages: readonly { readonly key: string; readonly ownedPaths: readonly string[]; readonly isIntegration: boolean }[],
+  packages: readonly {
+    readonly key: string
+    readonly ownedPaths: readonly string[]
+    readonly isIntegration: boolean
+    /** Human cards plan B D5: files a person gave away, which the skeleton's rule then excludes. */
+    readonly releasedPaths?: readonly string[]
+  }[],
 ): string | null {
   const literal = handOffPath(path)
   if (literal === null) return null

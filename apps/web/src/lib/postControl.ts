@@ -39,6 +39,33 @@ export async function sendControl(
   // of a worker that has many, which is the verb HTTP has for that.
   options: { method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: Record<string, unknown> },
 ): Promise<string | null> {
+  return (await sendControlFull(url, options))?.error ?? null
+}
+
+/** A refusal, with the `notice` a decision route adds when somebody else settled the card first
+ *  (human cards spec §4): information to show, not an error -- null on every other refusal. */
+export interface ControlFailure {
+  readonly error: string
+  readonly notice: string | null
+}
+
+/** {@link sendControl} with the refusal's `notice` kept: for a surface that can be told a card or
+ *  a question was settled by somebody else first. */
+export async function sendControlFull(
+  url: string,
+  options: { method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: Record<string, unknown> },
+): Promise<ControlFailure | null> {
+  const sent = await sendControlAnswer(url, options, false)
+  return sent.ok ? null : sent.failure
+}
+
+/** {@link sendControlFull}, keeping a success's body when `readAnswer` asks for it (the decide
+ *  route's `outcome`, plan B Task 9 carry); every other caller reads no success body at all. */
+async function sendControlAnswer(
+  url: string,
+  options: { method: 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: Record<string, unknown> },
+  readAnswer: boolean,
+): Promise<{ readonly ok: true; readonly data: unknown } | { readonly ok: false; readonly failure: ControlFailure }> {
   try {
     const response =
       options.body === undefined
@@ -48,25 +75,62 @@ export async function sendControl(
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(options.body),
           })
-    if (response.ok) return null
+    if (response.ok) return { ok: true, data: readAnswer ? await response.json().catch(() => null) : null }
     // An expired or missing session anywhere in the app lands on the login page instead of a red
     // band that never clears (M20 spec §3.4). Every control surface dials this one function
     // (M19 C4), so this is the one place -- `onUnauthorized` is the shared four lines, pulled out
     // so a control surface that cannot use `sendControl` (`ProjectsPanel`) still gets it.
     if (response.status === 401) onUnauthorized()
     const data: unknown = await response.json().catch(() => null)
-    return errorMessage(data, response.status)
+    return { ok: false, failure: { error: errorMessage(data, response.status), notice: noticeOf(data) } }
   } catch (cause) {
-    return cause instanceof Error ? cause.message : String(cause)
+    return { ok: false, failure: { error: cause instanceof Error ? cause.message : String(cause), notice: null } }
   }
+}
+
+function noticeOf(data: unknown): string | null {
+  if (data === null || typeof data !== 'object') return null
+  const value = (data as { notice?: unknown }).notice
+  return typeof value === 'string' ? value : null
 }
 
 export async function postControl(
   url: string,
   body?: Record<string, unknown>,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const error = await sendControl(url, body === undefined ? { method: 'POST' } : { method: 'POST', body })
-  return error === null ? { ok: true } : { ok: false, error }
+): Promise<{ ok: true } | { ok: false; error: string; notice: string | null }> {
+  const failure = await sendControlFull(url, body === undefined ? { method: 'POST' } : { method: 'POST', body })
+  return failure === null ? { ok: true } : { ok: false, error: failure.error, notice: failure.notice }
+}
+
+/**
+ * A person's decision on a question card, posted to the decide route (plan B Task 9 carry): the
+ * route answers `{ ok: true, outcome: { decision, summary } }`, and the `summary` -- what the
+ * decision did, e.g. that a hand-off waits until the version integrates again -- is what a page
+ * shows the person, since the card it decided leaves the list on the refresh that follows.
+ * `postControl`'s contract otherwise: refusals carry `error` and, for a card settled first, `notice`.
+ */
+export async function postDecision(
+  url: string,
+  body: Record<string, unknown>,
+): Promise<{ ok: true; summary: string | null } | { ok: false; error: string; notice: string | null }> {
+  const sent = await sendControlAnswer(url, { method: 'POST', body }, true)
+  if (!sent.ok) return { ok: false, error: sent.failure.error, notice: sent.failure.notice }
+  return { ok: true, summary: summaryOf(sent.data) }
+}
+
+function summaryOf(data: unknown): string | null {
+  if (data === null || typeof data !== 'object') return null
+  const outcome = (data as { outcome?: unknown }).outcome
+  if (outcome === null || typeof outcome !== 'object') return null
+  const summary = (outcome as { summary?: unknown }).summary
+  return typeof summary === 'string' && summary !== '' ? summary : null
+}
+
+/** A notice or an outcome, named by the card it is about (plan B Task 9 carry): the list re-orders
+ *  and the card leaves it on the refresh, so a bare "Already closed by alice" would no longer say
+ *  which card. */
+export function aboutCard(cardTitle: string, text: string): string {
+  return `${cardTitle} — ${text}`
 }
 
 /**

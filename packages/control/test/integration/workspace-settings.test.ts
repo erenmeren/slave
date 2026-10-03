@@ -254,6 +254,14 @@ describe('the workspace settings verbs', () => {
       expect(await events()).toEqual(result.value.moved)
     })
 
+    it('sets the question timeout and says so once (human cards H3)', async (): Promise<void> => {
+      const moved = await setWorkspaceLimits(fixture.workspace.id, { questionTimeoutMs: 30 * 60_000 })
+      expect(moved.ok && moved.value.moved).toEqual([{ field: 'questionTimeoutMs', from: 7_200_000, to: 1_800_000 }])
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })).questionTimeoutMs).toBe(1_800_000)
+      const refused = await setWorkspaceLimits(fixture.workspace.id, { questionTimeoutMs: 60_000 })
+      expect(!refused.ok && refused.error).toEqual({ kind: 'invalid_limit', field: 'questionTimeoutMs' })
+    })
+
     it('writes and says nothing for a limit the patch leaves out or restates', async (): Promise<void> => {
       const result = await setWorkspaceLimits(fixture.workspace.id, { maxConcurrentRuns: 3, maxAttempts: 2 })
 

@@ -1,4 +1,4 @@
-import { applyDecision, recordDecision, refusalText, retireAnsweredWaitingStale } from '@slave-of-ai/control'
+import { applyDecision, recordDecision, refusalText, retireQuestionCards } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
   CONDUCT_PER_CALL_CAP_USD,
@@ -263,7 +263,8 @@ async function record(input: ConductorPassInput, tally: Tally, situation: Situat
     now: input.now,
   })
   if (!recorded.ok) {
-    if (recorded.error.kind === 'supervisor_cooldown') tally.skippedCooldown += 1
+    // Human cards H1: a question closed meanwhile is as quiet as a cooling key.
+    if (recorded.error.kind === 'supervisor_cooldown' || recorded.error.kind === 'question_closed') tally.skippedCooldown += 1
     else console.warn(`[conductor-answer] ${situation.subjectId} was not recorded: ${refusalText(recorded.error)}`)
     return
   }
@@ -282,6 +283,6 @@ async function record(input: ConductorPassInput, tally: Tally, situation: Situat
   if (choice.draft === undefined) return
   tally.answered += 1
   tally.answeredIds.add(situation.subjectId)
-  // Task 2 carry: the wait a `waiting_stale` escalation was raised about is over once the answer is out.
-  await retireAnsweredWaitingStale(input.workspaceId, situation.subjectId, input.now)
+  // Human cards H1: the answer closed the question, so no other card about it stays open.
+  await retireQuestionCards(input.workspaceId, situation.subjectId, 'The question was answered.', input.now, recorded.value.id)
 }

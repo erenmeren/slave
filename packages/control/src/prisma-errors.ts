@@ -79,3 +79,17 @@ function readDriverAdapterConstraintFields(meta: object): string[] {
 export function isTransactionTimeout(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2028'
 }
+
+/**
+ * `true` when Postgres cancelled a lock wait under `lock_timeout` (SQLSTATE 55P03,
+ * `lock_not_available`). A raw query surfaces it as P2010 with the code on the driver adapter's
+ * cause (`meta.driverAdapterError.cause.code`, captured from this client): {@link isTransactionTimeout}
+ * cannot stand in for it -- a Prisma transaction's own timeout does not cancel a statement waiting
+ * on a lock, so the waiter waits out the holder and only then fails P2028.
+ */
+export function isLockTimeout(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 'P2010' || !('meta' in error)) return false
+  const meta = (error as { meta?: { driverAdapterError?: { cause?: { code?: unknown; originalCode?: unknown } } } }).meta
+  const cause = meta?.driverAdapterError?.cause
+  return cause?.code === '55P03' || cause?.originalCode === '55P03'
+}

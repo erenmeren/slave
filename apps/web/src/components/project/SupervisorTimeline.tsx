@@ -7,7 +7,7 @@ import { LANE_LABEL, TIMELINE_LANES, type TimelineLane } from '@slave-of-ai/doma
 // reaches the client bundle. The same rule `supervisor/ProposalRow.tsx` states for `SupervisorView`.
 import type { NeedsYouItem } from '../../server/needsYou'
 import type { TimelineEntry } from '../../server/timeline'
-import { postControl } from '../../lib/postControl'
+import { aboutCard, postControl, postDecision } from '../../lib/postControl'
 import { ProposalRow } from '../supervisor/ProposalRow'
 import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
@@ -67,10 +67,14 @@ export function SupervisorTimeline({
   workspaceId,
   entries,
   needsYou,
+  onRefresh,
 }: {
   readonly workspaceId: string
   readonly entries: readonly TimelineEntry[]
   readonly needsYou: readonly NeedsYouItem[]
+  /** Asks the page for a fresh queue. A card somebody else settled first writes nothing, so no
+   *  event wakes the page's stream: the row asks instead (human cards spec §4). */
+  readonly onRefresh?: () => void
 }): React.JSX.Element {
   /** Empty means ALL -- a filter nobody has touched hides nothing. */
   const [lanes, setLanes] = useState<ReadonlySet<TimelineLane>>(new Set())
@@ -78,12 +82,17 @@ export function SupervisorTimeline({
    *  unblocking a task are two independent acts on two independent rows. */
   const [busyId, setBusyId] = useState<string | null>(null)
   const [errors, setErrors] = useState<Readonly<Record<string, string>>>({})
+  /** A card somebody else settled first, by row: information, not a refusal of this person's act. */
+  const [notices, setNotices] = useState<Readonly<Record<string, string>>>({})
   const [answers, setAnswers] = useState<Readonly<Record<string, string>>>({})
 
   const decisionEntries = entries.filter((entry) => entry.decision !== null)
-  const questions = needsYou.filter((item) => item.kind === 'question' && item.messageId !== null)
-  const blocked = needsYou.filter((item) => item.kind === 'blocked_task' && item.taskId !== null)
-  const integrate = needsYou.filter((item) => item.kind === 'integrate')
+  // Every item of a merged row (human cards H4): the needs-you row leads here, and this is where
+  // each of them -- a task merged into its card's row included -- is acted on.
+  const queue = needsYou.flatMap((item) => [item, ...item.merged])
+  const questions = queue.filter((item) => item.kind === 'question' && item.messageId !== null)
+  const blocked = queue.filter((item) => item.kind === 'blocked_task' && item.taskId !== null)
+  const integrate = queue.filter((item) => item.kind === 'integrate')
 
   /**
    * A pending decision the QUEUE knows about and the timeline's own entries do not (fix round 1,
@@ -97,7 +106,7 @@ export function SupervisorTimeline({
    * approve, and a button with nothing behind it is worse than an honest pointer.
    */
   const shownDecisionIds = new Set(decisionEntries.map((entry) => entry.decision?.id))
-  const strandedDecisions = needsYou.filter(
+  const strandedDecisions = queue.filter(
     (item) => item.kind === 'decision' && item.decisionId !== null && !shownDecisionIds.has(item.decisionId),
   )
 
@@ -115,18 +124,57 @@ export function SupervisorTimeline({
     if (entry.taskId !== null && entry.taskTitle !== null) taskTitles[entry.taskId] = entry.taskTitle
   }
 
+  /** The rows on the page now, by the ids `send`/`decide` key their notices by. */
+  const liveRows = new Set<string>([
+    ...decisionEntries.flatMap((entry) => (entry.decision === null ? [] : [`decision-${entry.decision.id}`])),
+    ...questions.map((item) => `question-${item.messageId ?? ''}`),
+    ...blocked.map((item) => `blocked-${item.taskId ?? ''}`),
+  ])
+
+  /** Task 9 fix round 1: a new action clears the acting row's old notice, and every notice whose
+   *  row has left the page -- a decided card's outcome is read once, not stacked for ever. */
+  const clearNotices = (rowId: string): void => {
+    setNotices((was) => Object.fromEntries(Object.entries(was).filter(([id]) => id !== rowId && liveRows.has(id))))
+  }
+
   /** One row's write. Returns whether it landed, so a row with a box of its own can clear it on
    *  success and keep it on a refusal (fix round 1, minor 5). */
-  const send = async (rowId: string, url: string, body?: Record<string, unknown>): Promise<boolean> => {
+  const send = async (rowId: string, url: string, body?: Record<string, unknown>, about?: string): Promise<boolean> => {
     setBusyId(rowId)
     setErrors((was) => {
       const { [rowId]: _gone, ...rest } = was
       return rest
     })
+    clearNotices(rowId)
     const result = await postControl(url, body)
-    if (!result.ok) setErrors((was) => ({ ...was, [rowId]: result.error }))
+    if (!result.ok && result.notice !== null) {
+      // Human cards spec §4: who settled it and when, then a fresh queue -- not a red band. Named
+      // by its card (plan B Task 9 carry): the refresh takes the row it was about away.
+      const notice = about === undefined ? result.notice : aboutCard(about, result.notice)
+      setNotices((was) => ({ ...was, [rowId]: notice }))
+      onRefresh?.()
+    } else if (!result.ok) setErrors((was) => ({ ...was, [rowId]: result.error }))
     setBusyId(null)
     return result.ok
+  }
+
+  /** A person's decision on a question card (plan B Task 9 carry): what it did is shown, named by
+   *  its card, and the queue is asked for again at once rather than at the next stream event -- the
+   *  card it decided leaves the list. A card settled first is a notice and a refresh, as in `send`. */
+  const decide = async (rowId: string, url: string, body: Record<string, unknown>, about: string): Promise<void> => {
+    setBusyId(rowId)
+    setErrors((was) => {
+      const { [rowId]: _gone, ...rest } = was
+      return rest
+    })
+    clearNotices(rowId)
+    const result = await postDecision(url, body)
+    if (result.ok || result.notice !== null) {
+      const text = result.ok ? result.summary : result.notice
+      if (text !== null) setNotices((was) => ({ ...was, [rowId]: aboutCard(about, text) }))
+      onRefresh?.()
+    } else setErrors((was) => ({ ...was, [rowId]: result.error }))
+    setBusyId(null)
   }
 
   /** Send an answer, and empty the box only if it was actually written. */
@@ -159,6 +207,12 @@ export function SupervisorTimeline({
     // No gutter of its own any more: `OverviewClient`'s Recent changes section owns the page's
     // 24px padding, and a second copy here indented the timeline out of line with every band.
     <div data-testid="supervisor-timeline" className="flex flex-col gap-3">
+      {/* Above the queue, not beside a row: the refresh that follows takes the settled row away. */}
+      {Object.entries(notices).map(([rowId, notice]) => (
+        <span key={rowId} role="status" data-testid="timeline-notice" className="text-[11px] text-text-2">
+          {notice}
+        </span>
+      ))}
       {waiting > 0 && (
         <section data-testid="timeline-decisions">
           <Panel>
@@ -185,8 +239,11 @@ export function SupervisorTimeline({
                     // The same two envelopes `SupervisorPanel` sends: no body at all unless the
                     // operator rewrote the draft, and a blank reason is no reason rather than an
                     // empty one.
-                    onApprove={(body) => void send(rowId, `${url}/approve`, body === undefined ? undefined : { body })}
-                    onReject={(reason) => void send(rowId, `${url}/reject`, reason.trim() === '' ? {} : { reason })}
+                    onApprove={(body) => void send(rowId, `${url}/approve`, body === undefined ? undefined : { body }, entry.title)}
+                    onReject={(reason) => void send(rowId, `${url}/reject`, reason.trim() === '' ? {} : { reason }, entry.title)}
+                    // Human cards H2: a question card's decision, posted as the decide route's body;
+                    // its outcome shown and the queue refreshed at once (plan B Task 9 carry).
+                    onDecide={(body) => void decide(rowId, `${url}/decide`, body, entry.title)}
                   />
                   {error !== null && <li>{error}</li>}
                 </ul>

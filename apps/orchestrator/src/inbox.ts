@@ -51,7 +51,8 @@ export async function inboxSection(slaveId: string, taskId: string | null = null
     return null
   }
   const answers = taskId === null ? [] : await reportAnswers(slaveId, taskId)
-  if (pending.value.length === 0 && answers.length === 0) return null
+  const late = taskId === null ? [] : await lateAnswers(slaveId, taskId)
+  if (pending.value.length === 0 && answers.length === 0 && late.length === 0) return null
 
   const questionLines: string[] = []
   if (pending.value.length > 0) {
@@ -111,11 +112,38 @@ export async function inboxSection(slaveId: string, taskId: string | null = null
           '---',
         ]
 
-  const text = [...questionLines, ...(questionLines.length > 0 && answerLines.length > 0 ? [''] : []), ...answerLines].join('\n')
+  // Human cards plan A D9, a task outside any package: an answer that came after the run continued on
+  // its own assumption (the question timed out) woke nobody, and no package exists to hand it off to
+  // -- the seat's next run on the task is where it lands, as a report question's answer does above.
+  const lateLines =
+    late.length === 0
+      ? []
+      : [
+          'ANSWERS THAT CAME AFTER YOU CONTINUED WITHOUT THEM',
+          '',
+          'An earlier run on this task asked these, waited, and continued on its own assumption. The answers arrived later.',
+          '',
+          ...late.map(
+            (row) =>
+              `- you asked: ${neutraliseMarkers(row.question).replaceAll('\n', '\n  ')}\n  answer: ${neutraliseMarkers(row.answer).replaceAll('\n', '\n  ')}`,
+          ),
+          '',
+          'Check your work against each answer, and change what it changes.',
+          '',
+          '---',
+        ]
+
+  const text = [questionLines, answerLines, lateLines]
+    .filter((lines) => lines.length > 0)
+    .map((lines) => lines.join('\n'))
+    .join('\n\n')
   return {
     kind: 'inbox',
     text,
-    source: { kind: 'inbox', messageIds: [...pending.value.map((message) => message.id), ...answers.map((row) => row.answerId)] },
+    source: {
+      kind: 'inbox',
+      messageIds: [...pending.value.map((message) => message.id), ...answers.map((row) => row.answerId), ...late.map((row) => row.answerId)],
+    },
   }
 }
 
@@ -134,6 +162,37 @@ async function reportAnswers(
       taskId,
       recipientSlaveId: slaveId,
       replyTo: { slaveId, kind: 'question', idempotencyKey: { startsWith: STORED_REPORT_QUESTION_KEY_PREFIX } },
+    },
+    orderBy: { seq: 'asc' },
+    select: { id: true, body: true, replyTo: { select: { body: true } } },
+  })
+  return rows.map((row) => ({ answerId: row.id, question: row.replyTo?.body ?? '', answer: row.body }))
+}
+
+/**
+ * Human cards plan A D9: the late answers to questions THIS seat asked on THIS task, when the task is
+ * outside any package (a package task's late answer is a hand-off, `routeLateAnswers`). Late: the
+ * question closed `timed_out` and the answer was neither delivered (a resume would have carried it)
+ * nor superseded. A report question's answer is {@link reportAnswers}' to show, not repeated here.
+ */
+async function lateAnswers(
+  slaveId: string,
+  taskId: string,
+): Promise<readonly { readonly answerId: string; readonly question: string; readonly answer: string }[]> {
+  const rows = await prisma.slaveMessage.findMany({
+    where: {
+      kind: 'answer',
+      taskId,
+      deliveredAt: null,
+      supersededAt: null,
+      task: { workPackageId: null },
+      replyTo: {
+        slaveId,
+        kind: 'question',
+        closedReason: 'timed_out',
+        // A null key is not a report question (`NOT startsWith` alone would drop it in SQL).
+        OR: [{ idempotencyKey: null }, { NOT: { idempotencyKey: { startsWith: STORED_REPORT_QUESTION_KEY_PREFIX } } }],
+      },
     },
     orderBy: { seq: 'asc' },
     select: { id: true, body: true, replyTo: { select: { body: true } } },

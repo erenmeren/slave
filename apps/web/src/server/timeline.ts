@@ -24,6 +24,8 @@ import {
   type TimelineSubject,
 } from '@slave-of-ai/domain'
 import { readableEventType } from '../lib/eventLabels'
+import { handOffSender } from '../lib/handOffSender'
+import { packageLessHandOffNames } from './handOffNames'
 import { buildNeedsYou, type NeedsYouItem } from './needsYou'
 
 /** How many organisational events one timeline page reads. */
@@ -126,6 +128,7 @@ export async function buildSupervisorTimeline(
   ])
 
   const titles: Record<string, string> = Object.fromEntries(tasks.map((task) => [task.id, task.title]))
+  const handOffFrom = await packageLessHandOffNames(workspaceId, rows)
   const decisionById = new Map(decisions.map((decision) => [decision.id, decision]))
 
   const entries: TimelineEntry[] = []
@@ -174,7 +177,7 @@ export async function buildSupervisorTimeline(
       lane,
       laneLabel: LANE_LABEL[lane],
       at: row.ts.toISOString(),
-      title: titleFor(type, payload, titles),
+      title: titleFor(type, payload, titles, handOffFrom),
       detail: detailFor(type, payload),
       taskId: row.taskId,
       taskTitle: row.taskId === null ? null : (titles[row.taskId] ?? null),
@@ -187,8 +190,9 @@ export async function buildSupervisorTimeline(
   }
 
   // The DECISION REQUIRED lane's live half: the same queue the brief's tile counts, so the number
-  // and the list can never disagree (spec R2's "each with its existing inline action").
-  for (const item of waiting) {
+  // and the list can never disagree (spec R2's "each with its existing inline action"). Every item
+  // of a merged row, not only its head (human cards H4): this lane is where each is acted on.
+  for (const item of waiting.flatMap((row) => [row, ...row.merged])) {
     const subject = SUBJECT_BY_ITEM_KIND[item.kind]
     if (subject === null) continue
     const lane = laneFor(subject)
@@ -250,6 +254,7 @@ function titleFor(
   type: DomainEventType,
   payload: Record<string, unknown>,
   titles: Readonly<Record<string, string>>,
+  handOffFrom: ReadonlyMap<string, string>,
 ): string {
   switch (type) {
     case 'workspace.goal_set': {
@@ -369,12 +374,27 @@ function titleFor(
       const to = payload['toPackage']
       return `goal v${typeof version === 'number' ? String(version) : '?'}: smoke fix handed to ${typeof to === 'string' ? to : '?'}`
     }
-    // Supervisor-as-conductor spec C2: one package handed work to another.
+    // Supervisor-as-conductor spec C2: one package handed work to another. A package-less one is
+    // named by `packageLessHandOffNames` (pre-flight F65); a row that is gone falls back to the
+    // event's own source -- a person's as the operator's, any other as the conductor's.
     case 'workspace.package_handed_off': {
       const version = payload['version']
-      const from = payload['fromPackage']
       const to = payload['toPackage']
-      return `goal v${typeof version === 'number' ? String(version) : '?'}: ${typeof from === 'string' ? from : 'the conductor'} handed work to ${typeof to === 'string' ? to : 'no package'}`
+      const handOffId = payload['handOffId']
+      const who = handOffSender(payload, typeof handOffId === 'string' ? handOffFrom.get(handOffId) : undefined)
+      return `goal v${typeof version === 'number' ? String(version) : '?'}: ${who} handed work to ${typeof to === 'string' ? to : 'no package'}`
+    }
+    // Human cards H1: a question stopped waiting. Every underscore (pre-flight F68): `timed_out`
+    // reads "timed out", and a later reason with two underscores would not keep its second.
+    case 'slave.question_closed': {
+      const reason = payload['reason']
+      return `question ${typeof reason === 'string' ? reason.replaceAll('_', ' ') : 'closed'}`
+    }
+    // Human cards plan B D9: a worker's note -- information, never a card. Its words are the detail.
+    case 'workspace.package_noted': {
+      const version = payload['version']
+      const packageKey = payload['packageKey']
+      return `goal v${typeof version === 'number' ? String(version) : '?'}: ${typeof packageKey === 'string' ? packageKey : 'a package'} left a note`
     }
     // M48 R5/R7: a runbook adopted, or stopped. The payload's `title` is not a field this event
     // carries, so without a case of its own it would read as its own type name on the PLAN CHANGE
@@ -509,6 +529,8 @@ function detailFor(type: DomainEventType, payload: Record<string, unknown>): str
     const version = payload['version']
     return typeof version === 'number' ? `v${String(version)}` : null
   }
+  // Human cards plan B D9: a note's own words, as a JSX child like every other quoted detail.
+  if (type === 'workspace.package_noted' && typeof payload['note'] === 'string' && payload['note'] !== '') return payload['note']
   for (const field of ['goal', 'body', 'reason', 'branch', 'summary'] as const) {
     const value = payload[field]
     if (typeof value === 'string' && value !== '') return value

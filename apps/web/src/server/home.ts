@@ -4,7 +4,7 @@ import { buildAnalytics, type Kpi } from './analytics'
 import { loadHappeningRows } from './happeningRows'
 import { buildNeedsYou, type NeedsYouItem } from './needsYou'
 import { listProjects, type ProjectRow } from './org'
-import { buildSidebarTree } from './sidebar'
+import { readSidebar } from './sidebar'
 
 /** How often `useHome` polls `GET /api/home` while the tab is visible (M61 R11). */
 export const HOME_POLL_MS = 10_000
@@ -40,9 +40,9 @@ export interface HomeSnapshot {
   /** `listProjects`' own rows, verbatim (plan erratum E4) -- Home's list is the SAME read model
    *  the deleted Projects page used, not a second projection of it. */
   readonly projects: readonly ProjectRow[]
-  /** Oldest first (the thing that has waited longest is the thing to do), across every project
-   *  that has something pending -- `buildNeedsYou`'s own order, merged rather than re-sorted by a
-   *  different rule. */
+  /** Human cards H4 (plan B D8): what blocks a goal version first, then the oldest, across every
+   *  project that has something pending -- each project's rows exactly as `buildNeedsYou` built
+   *  them (merged per subject, with their versions), the same queue the strip and the Overview read. */
   readonly needsYou: readonly HomeNeedsYouItem[]
   /** Newest first -- `loadHappeningRows`' own order (`seq desc`), across every visible project. */
   readonly feed: readonly HappeningNowItem[]
@@ -74,7 +74,7 @@ export interface HomeSnapshot {
  * the list.
  *
  * `needsYou` is gathered only for a project `buildSidebarTree` already says has something pending
- * (`needsYouCount > 0`): `buildNeedsYou` makes its own handful of reads per project, and asking it
+ * (`needsYouCount > 0`, or `blockingCount > 0`): `buildNeedsYou` makes its own handful of reads per project, and asking it
  * for every project on every Home load -- most of which have nothing waiting -- would be a query
  * fan-out with no payoff. `nameOf.has(row.id)` guards a race between the two reads (a project
  * archived between them) rather than trusting the sidebar's own archived filter alone.
@@ -89,22 +89,33 @@ export async function buildHomeSnapshot(
   // it on every tick regardless of mode; `includeKpis` (default false) is what the poll now passes
   // only in developer mode, and simple mode's `kpis: []` costs nothing.
   const includeKpis = options.includeKpis ?? false
-  const [projects, tree, analytics] = await Promise.all([
+  const [projects, { tree, queues: built }, analytics] = await Promise.all([
     listProjects({ includeArchived: options.includeArchived ?? false }),
-    buildSidebarTree(),
+    readSidebar(now),
     includeKpis ? buildAnalytics(null) : Promise.resolve(null),
   ])
   const nameOf = new Map(projects.map((project) => [project.id, project.name]))
   const ids = [...nameOf.keys()]
 
-  const hot = tree.filter((row) => row.needsYouCount > 0 && nameOf.has(row.id))
+  // A blocking count alone also asks (human cards H4): a run parked on a question nobody but a
+  // person can answer is on the queue with no task or decision behind the needs-you count. The count
+  // is the queue's own, so a run parked on a question a slave can answer never makes Home ask.
+  const hot = tree.filter((row) => (row.needsYouCount > 0 || row.blockingCount > 0) && nameOf.has(row.id))
   const queues = await Promise.all(
     hot.map(async (row): Promise<readonly HomeNeedsYouItem[]> => {
-      const items = await buildNeedsYou(row.id, now)
-      return items.map((item) => ({ ...item, workspaceId: row.id, workspaceName: row.name }))
+      // The sidebar already built this project's queue when it had to count its blocking rows.
+      // Fix round 2: a queue that cannot be built leaves its project without rows -- logged, never
+      // a Home that fails for everyone.
+      try {
+        const items = built.get(row.id) ?? (await buildNeedsYou(row.id, now))
+        return items.map((item) => ({ ...item, workspaceId: row.id, workspaceName: row.name }))
+      } catch (cause) {
+        console.error(`home: the needs-you queue of project ${row.id} could not be built; it is listed without rows`, cause)
+        return []
+      }
     }),
   )
-  const needsYou = queues.flat().sort((a, b) => Date.parse(a.since) - Date.parse(b.since))
+  const needsYou = queues.flat().sort((a, b) => Number(b.blocking) - Number(a.blocking) || Date.parse(a.since) - Date.parse(b.since))
 
   const weekAgo = new Date(now.getTime() - 7 * 86_400_000)
   const [rows, finishedThisWeek, liveSeats, seatCount] = await Promise.all([

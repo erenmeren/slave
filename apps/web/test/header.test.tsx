@@ -38,8 +38,8 @@ afterEach((): void => {
 })
 
 const PROJECTS = [
-  { id: 'w1', name: 'Checkout rewrite', archived: false, status: 'working' as const, statusLabel: 'WORKING', needsYouCount: 0, tasksActive: 5 },
-  { id: 'w2', name: 'Billing', archived: false, status: 'idle' as const, statusLabel: 'IDLE', needsYouCount: 0, tasksActive: 0 },
+  { id: 'w1', name: 'Checkout rewrite', archived: false, status: 'working' as const, statusLabel: 'WORKING', needsYouCount: 0, blockingCount: 0, tasksActive: 5 },
+  { id: 'w2', name: 'Billing', archived: false, status: 'idle' as const, statusLabel: 'IDLE', needsYouCount: 0, blockingCount: 0, tasksActive: 0 },
 ]
 
 /** A FRESH element every call, deliberately: `rerender` with the same element object is a React

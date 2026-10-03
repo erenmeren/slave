@@ -178,11 +178,16 @@ async function deliverToOneRun(run: {
     // An operator's answer IS a human intervention; another slave's answer is not one, and the
     // event log must not file it under a person who was never there.
     answer.actor === 'human' ? 'human' : 'system',
+    // Human cards plan A D7: the timeout pass (`questionTimeout.ts`) claims the same way, so an
+    // answer and a timeout in one window write one intent between them.
+    { onlyIfNotRequested: true },
   )
   if (!requested.ok) {
     // Released, not left claimed: a halted workspace or a runtime that cannot resume is a state an
     // operator clears, and an answer stamped delivered by a refused resume would never be tried
-    // again once they had.
+    // again once they had. A resume that lost to the timeout pass (human cards plan A D7) is
+    // released the same way, and the goal pass routes the answer to the asking package
+    // (`routeLateAnswers`).
     await prisma.slaveMessage.updateMany({ where: { id: answer.id }, data: { deliveredAt: null } })
     console.warn(`[deliver] run ${run.id} could not be resumed with answer ${answer.id}: ${requested.error.kind}`)
     return null

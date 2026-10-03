@@ -1,10 +1,12 @@
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  CLOSED_BY_SYSTEM,
   GOAL_REPORT_DETAIL_MAX_CHARS,
   GOAL_REPORT_TRAIL_MAX,
   type GOAL_REPORT_ANSWERED_BY,
   SITUATION_LABEL,
+  handOffFromName,
   smokeRecordedAs,
   smokeStoppedByAbandon,
   trimEvidence,
@@ -13,7 +15,7 @@ import {
   type GoalReportTrailEntry,
   type SituationKind,
 } from '@slave-of-ai/domain'
-import { recordedHandOffStatus } from './handOffs.js'
+import { handOffViews, recordedHandOffStatus } from './handOffs.js'
 
 /** What every part of a version's report is scoped by: its package tasks (with the package key
  *  and the current seat), its delivery, and its verifier (plan D6). */
@@ -126,6 +128,8 @@ function eventDraft(
   mergedBySlave: boolean,
   stoppedByAbandon: boolean,
   handOffStatus: string | null,
+  /** Who a hand-off came from, as its row names it (`handOffFromName`); null when the row is gone. */
+  handOffFrom: string | null,
 ): Draft | null {
   const on = pkg === null ? '' : `${pkg}: `
   switch (type) {
@@ -184,11 +188,15 @@ function eventDraft(
         own: "it is the reporter's own package",
         question: 'no package could take it, so the conductor was asked',
       }
+      // Pre-flight F65: a hand-off from no package is the operator's, a worker's late answer (named by
+      // its seat) or the conductor's -- as the row names it; with the row gone, the event's source.
+      const person = str(p, 'source') === 'person'
+      const from = str(p, 'fromPackage') ?? handOffFrom ?? (person ? 'the operator' : 'the conductor')
       return {
-        text: `${str(p, 'fromPackage') ?? 'The conductor'} handed work to ${str(p, 'toPackage') ?? 'no package'}${what === null ? '' : ` (${what})`}; ${went[str(p, 'delivery') ?? ''] ?? 'routed'}.`,
-        // `detailBy: 'model'`: the change is the worker's own words.
+        text: `${from.startsWith('the ') ? `The ${from.slice(4)}` : from} handed work to ${str(p, 'toPackage') ?? 'no package'}${what === null ? '' : ` (${what})`}; ${went[str(p, 'delivery') ?? ''] ?? 'routed'}.`,
+        // The change is the worker's own words (`model`), or the person's.
         detail: str(p, 'change'),
-        detailBy: 'model',
+        detailBy: person ? 'person' : 'model',
       }
     }
     case 'workspace.verification_started':
@@ -360,13 +368,10 @@ export async function versionTrail(
   // Plan A Task 8: a hand-off event's reopen has happened only when its row says `reopened` -- or,
   // once the reopen run finished, `delivered` with `reopenedAt` (final review I2).
   const handOffIds = events.flatMap((row) => (row.type === 'workspace_package_handed_off' ? [str((row.payload ?? {}) as Payload, 'handOffId')] : [])).filter((id): id is string => id !== null)
-  const statusOfHandOff = new Map(
-    handOffIds.length === 0
-      ? []
-      : (await prisma.packageHandOff.findMany({ where: { workspaceId, id: { in: handOffIds } }, select: { id: true, status: true, reopenedAt: true } })).map(
-          (r) => [r.id, recordedHandOffStatus<string>(r)] as const,
-        ),
-  )
+  const handOffRows = handOffIds.length === 0 ? [] : await prisma.packageHandOff.findMany({ where: { workspaceId, id: { in: handOffIds } } })
+  const statusOfHandOff = new Map(handOffRows.map((r) => [r.id, recordedHandOffStatus<string>(r)] as const))
+  const handOffNames = await handOffViews(handOffRows)
+  const fromOfHandOff = new Map(handOffRows.map((r, index) => [r.id, handOffNames[index] === undefined ? null : handOffFromName(handOffNames[index])] as const))
   for (const row of events) {
     const type = DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? (row.type as DomainEventType)
     const pkg = row.taskId === null ? null : (keyOf.get(row.taskId) ?? null)
@@ -375,7 +380,7 @@ export async function versionTrail(
     // An attempt row that is gone ends, at the latest, when its event was written.
     const endedAt = attemptId === null ? null : endedAtOf.has(attemptId) ? (endedAtOf.get(attemptId) ?? null) : row.ts
     const stopped = attemptId !== null && smokeStoppedByAbandon({ endedAt, sentBack: str(payload, 'reworkedPackage') !== null }, abandonedAt)
-    const draft = eventDraft(type, payload, pkg, mergesInto, row.taskId === null || !handMerged.has(row.taskId), stopped, statusOfHandOff.get(str(payload, 'handOffId') ?? '') ?? null)
+    const draft = eventDraft(type, payload, pkg, mergesInto, row.taskId === null || !handMerged.has(row.taskId), stopped, statusOfHandOff.get(str(payload, 'handOffId') ?? '') ?? null, fromOfHandOff.get(str(payload, 'handOffId') ?? '') ?? null)
     if (draft === null) continue
     if (type === 'workspace.conducted') {
       const fallback = (row.payload as Payload)['fallback'] === true
@@ -415,7 +420,8 @@ export async function versionTrail(
  *  the words live there once), and total over the `Actor` enum, so a new actor fails the build. */
 const ANSWERED_BY: Readonly<Record<'human' | 'system' | 'slave', keyof typeof GOAL_REPORT_ANSWERED_BY>> = { human: 'person', system: 'supervisor', slave: 'slave' }
 
-/** Every question on the version's package tasks, oldest first, with its first answer (plan D6).
+/** Every question on the version's package tasks, oldest first, with its first answer and its
+ *  close (plan D6; human cards H1/H3).
  *  Who answered comes from the answer row's `actor`: `human` is a person, `system` the Supervisor's
  *  sourced answer path, `slave` a seat's `<slave-answer>`. */
 export async function versionQuestions(scope: VersionScope): Promise<readonly GoalReportQuestion[]> {
@@ -429,6 +435,10 @@ export async function versionQuestions(scope: VersionScope): Promise<readonly Go
       slaveId: true,
       body: true,
       createdAt: true,
+      closedAt: true,
+      closedReason: true,
+      closedBy: true,
+      closedNote: true,
       replies: { where: { kind: 'answer' }, orderBy: { seq: 'asc' }, take: 1, select: { body: true, actor: true, createdAt: true } },
     },
   })
@@ -448,6 +458,19 @@ export async function versionQuestions(scope: VersionScope): Promise<readonly Go
               at: answer.createdAt.toISOString(),
               by: ANSWERED_BY[answer.actor],
               text: trimEvidence(answer.body, GOAL_REPORT_DETAIL_MAX_CHARS),
+            },
+      taskId: row.taskId,
+      // Human cards H1/H3: who closed it is a person or Slave -- the report names no account. No
+      // `closedBy` is Slave, as `closerWords` reads it (fix round 1).
+      closed:
+        row.closedAt === null || row.closedReason === null
+          ? null
+          : {
+              at: row.closedAt.toISOString(),
+              reason: row.closedReason,
+              by: row.closedBy === null || row.closedBy === CLOSED_BY_SYSTEM ? 'system' : 'person',
+              note: row.closedNote === null ? null : trimEvidence(row.closedNote, GOAL_REPORT_DETAIL_MAX_CHARS),
+              waitedMs: row.closedAt.getTime() - row.createdAt.getTime(),
             },
     }
   })

@@ -365,12 +365,10 @@ describe('observe -- unanswerable_question', () => {
     expect(situations[0]?.facts).toMatchObject({ goalVersion: 1, askerWaiting: false })
   })
 
-  it('also raises waiting_stale for a run parked on the conductor for more than 30 minutes, never for a report question (spec C5)', () => {
+  it('never raises waiting_stale for a question to the conductor: one card per question (human cards H1, plan A D3)', () => {
     const old = NOW - WAITING_STALE_MS - 60_000
     const parked = observe(world({ questions: [question({ createdAt: old, recipientRole: 'conductor', askerWaiting: true })] }))
-    expect(keys(parked)).toEqual([['waiting_stale', 'm1'], ['conductor_question', 'm1']])
-    const reported = observe(world({ questions: [question({ createdAt: old, recipientRole: 'conductor', askerWaiting: false })] }))
-    expect(keys(reported)).toEqual([['conductor_question', 'm1']])
+    expect(keys(parked)).toEqual([['conductor_question', 'm1']])
   })
 
   it('reports a question addressed to a slave that is not in the workspace', () => {
@@ -787,6 +785,15 @@ describe('observe -- goal_needs_human and verification_failed (Conductor Plan 4b
     expect(filterFresh(observe(w), w)).toEqual([])
   })
 
+  it('holds every question kind of a question that has an open card (human cards H1)', () => {
+    const w = world({
+      questions: [question({ createdAt: NOW - WAITING_STALE_MS - 60_000, recipientRole: 'security' })],
+      decisions: [decision({ situationKind: 'waiting_stale', subjectId: 'm1', status: 'pending', tier: 'escalated', createdAt: NOW - 60 * 60_000 })],
+    })
+    expect(keys(observe(w))).toEqual([['unanswerable_question', 'm1']])
+    expect(filterFresh(observe(w), w)).toEqual([])
+  })
+
   it('stays silent once a new round is under way, while verifying, and for a round that failed nothing', () => {
     expect(observe(world({ goalDeliveries: [goalDelivery({ round: 2, latestVerification: verdict(1, ['R1', 'R3']) })] }))).toEqual([])
     expect(observe(world({ goalDeliveries: [goalDelivery({ status: 'verifying', latestVerification: verdict(1, ['R1']) })] }))).toEqual([])
@@ -948,6 +955,21 @@ describe('filterFresh', () => {
       decisions: [decision({ situationKind: 'task_blocked_human', subjectId: 't1', status: 'pending', tier: 'proposed' })],
     })
     expect(keys(filterFresh(observe(w), w))).toEqual([['review_cap_blocked', 't1']])
+  })
+
+  // Final wave, finding 2: a question cools as one key, by its latest card of any question kind.
+  it('cools every question kind on a question by its latest card: a re-addressed unanswerable card holds back waiting_stale', () => {
+    const stale = { kind: 'waiting_stale' as const, subjectId: 'm1', summary: 'x', facts: {} }
+    const approved = decision({ situationKind: 'unanswerable_question', subjectId: 'm1', status: 'approved', tier: 'proposed', createdAt: NOW - 20 * 60_000, resolvedAt: NOW - 60_000 })
+    const w = world({ decisions: [approved] })
+    expect(filterFresh([stale], w)).toEqual([])
+    // An older waiting_stale card long cooled does not free it: the latest card is the one that counts.
+    const older = decision({ situationKind: 'waiting_stale', subjectId: 'm1', status: 'expired', tier: 'escalated', createdAt: NOW - 3 * COOLDOWN_MS, resolvedAt: NOW - 2 * COOLDOWN_MS })
+    expect(filterFresh([stale], world({ decisions: [older, approved] }))).toEqual([])
+    // Past the latest card's cooldown the question is free again, and another question never was held.
+    const cooled = world({ decisions: [{ ...approved, resolvedAt: NOW - COOLDOWN_MS - 1 }] })
+    expect(filterFresh([stale], cooled)).toHaveLength(1)
+    expect(filterFresh([{ ...stale, subjectId: 'm2' }], w)).toHaveLength(1)
   })
 })
 

@@ -19,6 +19,21 @@ describe('renderPackageContract', () => {
     expect(text).toContain('Do not create or change any other file')
   })
 
+  it('names the files a person gave away (human cards plan B D5)', () => {
+    const text = renderPackageContract({
+      pkg: { key: 'api', title: 'A', ownedPaths: ['src/api/**'], isIntegration: false, interface: '', releasedPaths: ['src/api/routes.ts'] },
+      requirements: [],
+      dependencies: [],
+      verifyCommands: GATE,
+    })
+    expect(text).toContain('Files you own:\n- src/api/**\nGiven by a person to another package (no longer yours):\n- src/api/routes.ts')
+  })
+
+  it('says nothing of given files when the package gave none', () => {
+    const text = renderPackageContract({ pkg: { key: 'api', title: 'A', ownedPaths: ['src/api/**'], isIntegration: false, interface: '', releasedPaths: [] }, requirements: [], dependencies: [], verifyCommands: GATE })
+    expect(text).not.toContain('Given by a person')
+  })
+
   it('tells the integration package it owns every unowned file', () => {
     const text = renderPackageContract({ pkg: { key: 'integration', title: 'I', ownedPaths: [], isIntegration: true, interface: '' }, requirements: [], dependencies: [], verifyCommands: GATE })
     expect(text).toContain('every file no other package owns')
@@ -174,6 +189,22 @@ describe('renderReportProtocol', () => {
     expect(text).toContain('"R2"')
     expect(text).toContain('one entry per workflow step (3)')
     expect(text).toContain('done|partial|not_done')
+  })
+
+  it('tells a worker that information for a person is a note, never a question (plan B D9)', () => {
+    const text = renderReportProtocol(['R1'], 0)
+    expect(text).toContain('"notes":[]')
+    expect(text).toContain('- "notes": what a person should know that needs no decision')
+    expect(text).toContain('never put one in "questions" or "handOffs"')
+    expect(text).toContain('at most 10, each at most 1000 characters')
+  })
+
+  it('tells a worker nobody answers or acts on a note, so a decision is asked and a change is handed off (plan B Task 8 carry)', () => {
+    const text = renderReportProtocol(['R1'], 0)
+    const notes = text.split('\n').find((line) => line.startsWith('- "notes"')) ?? ''
+    expect(notes).toContain('nobody answers or acts on a note')
+    expect(notes).toContain('if something must be decided, ask it in "questions"')
+    expect(notes).toContain('if another package must change something, hand it off in "handOffs"')
   })
 })
 
