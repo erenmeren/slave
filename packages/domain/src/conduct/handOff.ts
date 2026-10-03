@@ -4,6 +4,7 @@ import { sanitisePersonText } from '../handoff/contract.js'
 import {
   ASKED_OF_YOU_MAX_CHARS,
   HANDOFF_CHANGE_MAX_CHARS,
+  HANDOFF_REOPENS_MAX,
   HANDOFF_PROMPT_ITEM_MAX_CHARS,
   SHARED_DECISIONS_PROMPT_MAX_CHARS,
   SHARED_DECISION_TEXT_MAX_CHARS,
@@ -149,6 +150,17 @@ export function handOffRoute(versionStatus: string | null, taskStatus: string | 
   if (taskStatus === undefined || HANDOFF_CANNOT_TAKE.has(taskStatus)) return 'to_conductor'
   if (versionStatus !== null && isHandOffVersionEnded(versionStatus)) return 'expired'
   return versionStatus === null || versionStatus === HANDOFF_DELIVERING_STATUS ? 'delivered' : 'held'
+}
+
+/**
+ * Human cards plan B, final review I1: a finished package already reopened {@link HANDOFF_REOPENS_MAX}
+ * times by hand-offs takes no new work -- `reopenInLock` turns its next unseen request into a
+ * conductor question naming the chain. The one rule: `reopenInLock` applies it, and a person's
+ * `give_work` is refused by it before the card is claimed, so a card never says a package will do
+ * what nobody does.
+ */
+export function handOffReopensSpent(taskStatus: string | undefined, handOffReopens: number): boolean {
+  return taskStatus === 'done' && handOffReopens >= HANDOFF_REOPENS_MAX
 }
 
 /**

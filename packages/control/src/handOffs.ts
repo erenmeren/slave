@@ -10,6 +10,7 @@ import {
   handOffFromName,
   handOffFingerprint,
   handOffItemSchema,
+  handOffReopensSpent,
   handOffRoute,
   isHandOffVersionEnded,
   lateAnswerChange,
@@ -88,8 +89,22 @@ async function withVersionLock<T>(deliveryId: string | null, workspaceId: string
   return deliveryId === null ? prisma.$transaction(locked, { maxWait: 10_000, timeout: 30_000 }) : withDeliveryLock(deliveryId, locked)
 }
 
-/** The version's packages with their one task (plan A D2: the oldest, as every rework path reads it). */
-async function packagesOf(tx: Tx, workspaceId: string, goalVersion: number) {
+/** One package of a version as {@link packagesOf} reads it. */
+export interface VersionPackage {
+  readonly id: string
+  readonly key: string
+  readonly ownedPaths: readonly string[]
+  readonly releasedPaths: readonly string[]
+  readonly isIntegration: boolean
+  readonly handOffReopens: number
+  /** Its one task (plan A D2), or none. */
+  readonly tasks: readonly { readonly id: string; readonly status: string; readonly attempt: number }[]
+}
+
+/** The version's packages with their one task (plan A D2: the oldest, as every rework path reads it).
+ *  Exported for a person's `give_work` (final review M4): the card reads the packages as the routing
+ *  and the reopen pass read them, so the three cannot judge one package differently. */
+export async function packagesOf(tx: Pick<Tx, 'workPackage'>, workspaceId: string, goalVersion: number): Promise<readonly VersionPackage[]> {
   return tx.workPackage.findMany({
     where: { workspaceId, goalVersion },
     orderBy: { key: 'asc' },
@@ -680,7 +695,8 @@ async function reopenInLock(tx: Tx, deliveryId: string): Promise<void> {
       await tx.packageHandOff.updateMany({ where: { id: { in: shown.map((row) => row.id) }, status: 'pending' }, data: { status: 'delivered' } })
     }
     if (unseen.length === 0 || !mayReopen) continue
-    if (pkg.handOffReopens >= HANDOFF_REOPENS_MAX) {
+    // `task.status` is `done` here; the rule a person's `give_work` is refused by before its claim.
+    if (handOffReopensSpent(task.status, pkg.handOffReopens)) {
       const chain = await tx.packageHandOff.findMany({
         // `reopenedAt`, not the status: a reopen whose run has finished is `delivered` (final review I2).
         where: { workspaceId, goalVersion, toPackageKey: pkg.key, reopenedAt: { not: null } },

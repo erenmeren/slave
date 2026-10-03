@@ -3,7 +3,7 @@
  * the question in one transaction; a refusal writes nothing.
  */
 import { prisma } from '@slave-of-ai/db/client'
-import { ANSWER_MAX_CHARS, CONDUCTOR_ROLE } from '@slave-of-ai/domain'
+import { ANSWER_MAX_CHARS, CONDUCTOR_ROLE, HANDOFF_REOPENS_MAX } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { CARD_BUSY_REASON, CardRefused, claimAndClose, decideCard, inCardTransaction, type PendingCard } from '../../src/cards.js'
 import { GoalDecisionRefused, lockGoalDecisions, writeGoalDecisionIn } from '../../src/conductorAnswer.js'
@@ -401,6 +401,26 @@ describe('decideCard: work, decisions, requirements (human cards H2.3, H2.5, H2.
     expect(await prisma.slaveMessage.count({ where: { workspaceId: f.workspaceId, kind: 'question' } })).toBe(1)
     expect((await questionOf(f)).closedAt).toBeNull()
     expect(await cardOf(f)).toMatchObject({ status: 'pending', personDecision: null })
+  })
+
+  it('refuses work for a finished package already reopened to its cap, before the claim; one below the cap takes it (final review I1)', async () => {
+    const f = await seedCard()
+    // The skeleton is done and was reopened HANDOFF_REOPENS_MAX times: `reopenInLock` would turn a
+    // new request into a conductor question, so the card must not say the skeleton will do it.
+    await prisma.workPackage.updateMany({ where: { workspaceId: f.workspaceId, key: 'skeleton' }, data: { handOffReopens: HANDOFF_REOPENS_MAX } })
+    for (const target of [{ package: 'skeleton' }, { path: 'backend/package.json' }]) {
+      const refused = await decideCard(f.cardId, { kind: 'give_work', target, request: 'add the start script' }, { userId: 'u1' })
+      expect(!refused.ok && refused.error).toMatchObject({ kind: 'card_decision_refused', decisionId: f.cardId })
+      expect(!refused.ok && refusalText(refused.error)).toContain(`the skeleton package has finished and was already reopened ${String(HANDOFF_REOPENS_MAX)} times`)
+    }
+    expect(await prisma.packageHandOff.count()).toBe(0)
+    expect((await questionOf(f)).closedAt).toBeNull()
+    expect(await cardOf(f)).toMatchObject({ status: 'pending', personDecision: null })
+    // One below the cap: the work is taken, and the skeleton is reopened for it.
+    await prisma.workPackage.updateMany({ where: { workspaceId: f.workspaceId, key: 'skeleton' }, data: { handOffReopens: HANDOFF_REOPENS_MAX - 1 } })
+    const taken = await decideCard(f.cardId, { kind: 'give_work', target: { package: 'skeleton' }, request: 'add the start script' }, { userId: 'u1' })
+    expect(taken.ok && taken.value.summary).toBe('gave the skeleton package work: add the start script')
+    expect(await prisma.packageHandOff.findMany()).toMatchObject([{ toPackageKey: 'skeleton', status: 'reopened' }])
   })
 
   it('holds work for a version that is verifying, and says so (ruling F38)', async () => {

@@ -3,10 +3,12 @@ import {
   ANSWER_MAX_CHARS,
   CLOSED_BY_SYSTEM,
   HANDOFF_CHANGE_MAX_CHARS,
+  HANDOFF_REOPENS_MAX,
   actionSchema,
   cardDecisionSchema,
   decidedResumeMessage,
   draftSchema,
+  handOffReopensSpent,
   handOffRoute,
   isQuestionSituation,
   personDecisionSummary,
@@ -28,7 +30,7 @@ import { appendEvent } from '@slave-of-ai/events'
 import { GoalDecisionRefused, lockGoalDecisions, writeGoalDecisionIn } from './conductorAnswer.js'
 import { announceGoalVersion, requestChangeIn } from './goal.js'
 import { withDeliveryLock } from './goalDelivery.js'
-import { personHandOffSourceKey, routeHandOffs } from './handOffs.js'
+import { packagesOf, personHandOffSourceKey, routeHandOffs } from './handOffs.js'
 import { answerQuestion } from './messaging.js'
 import type { Principal } from './principal.js'
 import {
@@ -416,28 +418,27 @@ async function giveWork(
   if (version === null || askerRunId === null) return refusedCard(card, 'the question belongs to no goal version with packages, or no run asked it')
   const [delivery, packages] = await Promise.all([
     prisma.goalDelivery.findUnique({ where: { workspaceId_goalVersion: { workspaceId: card.workspaceId, goalVersion: version } }, select: { status: true } }),
-    prisma.workPackage.findMany({
-      where: { workspaceId: card.workspaceId, goalVersion: version },
-      orderBy: { key: 'asc' },
-      select: {
-        key: true,
-        ownedPaths: true,
-        releasedPaths: true,
-        isIntegration: true,
-        // Plan A D2: a package's one task is its oldest, as `routeHandOffs` reads it.
-        tasks: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: 1, select: { status: true } },
-      },
-    }),
+    // Review M4: the packages as the routing and the reopen pass read them (`packagesOf`).
+    packagesOf(prisma, card.workspaceId, version),
   ])
   const request = personText(decision.request, HANDOFF_CHANGE_MAX_CHARS)
   if (request === '') return err({ kind: 'invalid_card_decision', reason: 'the request is empty' })
   const item = 'package' in decision.target ? { package: decision.target.package, change: request } : { path: decision.target.path, change: request }
   const resolved = resolveHandOff(item, null, packages)
   if (resolved.kind !== 'package') return refusedCard(card, resolved.kind === 'none' ? resolved.reason : 'no package can take it')
-  const taskStatus = packages.find((pkg) => pkg.key === resolved.key)?.tasks[0]?.status
+  const targetPackage = packages.find((pkg) => pkg.key === resolved.key)
+  const taskStatus = targetPackage?.tasks[0]?.status
   const route = handOffRoute(delivery?.status ?? null, taskStatus)
   if (route === 'to_conductor') return refusedCard(card, `the ${resolved.key} package cannot take work: its task is ${taskStatus ?? 'gone'}`)
   if (route === 'expired') return refusedCard(card, `goal v${String(version)} was ${delivery?.status ?? 'ended'}: none of its packages takes work any more`)
+  // Final review I1: a finished package at its reopen cap would get the request as a conductor
+  // question (`reopenInLock`), not as work -- refused here, with the routes a person still has.
+  if (handOffReopensSpent(taskStatus, targetPackage?.handOffReopens ?? 0)) {
+    return refusedCard(
+      card,
+      `the ${resolved.key} package has finished and was already reopened ${String(HANDOFF_REOPENS_MAX)} times in goal v${String(version)} by hand-offs, so it takes no more work: answer the question, give a file to another package, or change the requirement instead`,
+    )
+  }
   const target = { packageKey: resolved.key, askerPackageKey: card.question.askerPackageKey }
   const summary = `${personDecisionSummary(decision, target)}${route === 'held' ? HELD_NOTE : ''}`
   const input: ClaimInput = {

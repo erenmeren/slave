@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   handOffFingerprint,
   handOffItemSchema,
+  handOffReopensSpent,
   handOffRoute,
   handOffShownIn,
   HANDOFF_TRUST_LINE,
@@ -268,6 +269,16 @@ describe("a worker's late answer (final wave minor: named by its seat, not as th
     const reason = renderHandOffRework([peer]).text
     expect(handOffShownIn(reason, peer)).toBe(true)
     expect(handOffShownIn(reason, { ...conductor, id: peer.id, change: peer.change })).toBe(false)
+  })
+})
+
+describe('handOffReopensSpent (human cards plan B, final review I1)', () => {
+  it('is spent only for a finished package at the cap', () => {
+    expect(handOffReopensSpent('done', 2)).toBe(true)
+    expect(handOffReopensSpent('done', 3)).toBe(true)
+    expect(handOffReopensSpent('done', 1)).toBe(false)
+    expect(handOffReopensSpent('running', 5)).toBe(false)
+    expect(handOffReopensSpent(undefined, 5)).toBe(false)
   })
 })
 

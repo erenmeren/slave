@@ -5,6 +5,7 @@ import {
   ANSWER_MAX_CHARS,
   CARD_PATH_MAX_CHARS,
   HANDOFF_CHANGE_MAX_CHARS,
+  HANDOFF_REOPENS_MAX,
   PERSON_CARD_TEXT_MAX_CHARS,
   SHARED_DECISION_TEXT_MAX_CHARS,
   SHARED_DECISION_TITLE_MAX_CHARS,
@@ -79,7 +80,7 @@ function noteFor(kind: CardDecisionKind, card: QuestionCard, draft: Draft | null
     case 'write_answer':
       return `Sends your words as the answer${extras === null || edited ? '' : `; the draft's ${extras.includes(' and ') ? 'decision and hand-off do' : `${extras} does`} not apply`}.${late}`
     case 'give_work':
-      return `The package that owns it is asked for the change (reopened if it has finished)${card.askerWaiting ? '; the waiting run is told it is that package’s to make, or to make it itself when the work is its own package’s' : ''}. Name a package, or a file whose owner gets the work.`
+      return `The package that owns it is asked for the change (reopened if it has finished; refused for a finished package already reopened ${String(HANDOFF_REOPENS_MAX)} times)${card.askerWaiting ? '; the waiting run is told it is that package’s to make, or to make it itself when the work is its own package’s' : ''}. Name a package, or a file whose owner gets the work.`
     case 'give_file':
       return "Moves one file to another package -- the only way a file changes owner -- and the goal report records it. It takes effect at that package's next run; refused while either package is running or the version is being verified."
     case 'record_decision':
