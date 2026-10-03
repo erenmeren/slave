@@ -106,6 +106,47 @@ describe('one queue, one set of numbers (human cards H4)', () => {
     expect(home.map((row) => [row.kind, row.blocking])).toEqual([['question', true]])
   })
 
+  // Task 9 fix round 1 (ruling I2): the sidebar's count IS the queue's blocking rows. Case A: a
+  // blocked task whose card is review_cap_blocked or task_failed, or that has no card, is a blocking
+  // row -- the sidebar counts it too.
+  it('counts a blocked task as blocking whatever card it has, or none (case A)', async (): Promise<void> => {
+    const { workspaceId } = await seedWorkspace({ autoMerge: false })
+    const capped = await task(workspaceId, { title: 'Capped', status: 'blocked', goalVersion: 1 })
+    const failed = await task(workspaceId, { title: 'Failed', status: 'blocked', goalVersion: 1 })
+    await task(workspaceId, { title: 'Uncarded', status: 'blocked', goalVersion: 1 })
+    await card(workspaceId, 'review_cap_blocked', capped, new Date(Date.UTC(2026, 9, 3, 8, 0)))
+    await card(workspaceId, 'task_failed', failed, new Date(Date.UTC(2026, 9, 3, 8, 5)))
+
+    const sidebar = (await buildSidebarTree()).find((row) => row.id === workspaceId)
+    const strip = await buildNeedsYou(workspaceId)
+    const home = (await buildHomeSnapshot()).needsYou.filter((item) => item.workspaceId === workspaceId)
+
+    expect(strip.filter((row) => row.blocking)).toHaveLength(3)
+    expect(sidebar?.blockingCount).toBe(3)
+    expect(home.filter((row) => row.blocking)).toHaveLength(3)
+  })
+
+  // Case B: a run parked on a question a SLAVE can answer is the fleet waiting on itself -- nothing a
+  // person can act on, so no blocking count, no row, and Home lists nothing for the project.
+  it('does not count a run parked on a question a slave can answer (case B)', async (): Promise<void> => {
+    const fixture = await seedWorkspace({ autoMerge: false })
+    const person = await prisma.person.create({ data: { name: 'Bianca' } })
+    await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'dev', runtimeRoles: ['dev'], personId: person.id } })
+    const asking = await task(fixture.workspaceId, { title: 'Pick the gateway', status: 'waiting', goalVersion: 1 })
+    const run = await prisma.slaveRun.create({ data: { slaveId: fixture.slaveId, taskId: asking, kind: 'planning', status: 'paused', pauseReason: 'waiting_for_answer' } })
+    await prisma.slaveMessage.create({
+      data: { workspaceId: fixture.workspaceId, slaveId: fixture.slaveId, taskId: asking, senderRunId: run.id, threadId: 't', kind: 'question', body: 'Which gateway?', actor: 'slave', expectsReply: true, recipientRole: 'dev' },
+    })
+
+    const sidebar = (await buildSidebarTree()).find((row) => row.id === fixture.workspaceId)
+    const strip = await buildNeedsYou(fixture.workspaceId)
+    const home = await buildHomeSnapshot()
+
+    expect(strip).toEqual([])
+    expect(sidebar?.blockingCount).toBe(0)
+    expect(home.needsYou.filter((item) => item.workspaceId === fixture.workspaceId)).toEqual([])
+  })
+
   it('counts nothing for an empty queue', async (): Promise<void> => {
     const { workspaceId } = await seedWorkspace({ autoMerge: false })
 

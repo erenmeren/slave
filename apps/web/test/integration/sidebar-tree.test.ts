@@ -128,8 +128,9 @@ describe('buildSidebarTree', () => {
     expect(row?.tasksActive).toBe(2)
   })
 
-  // Human cards H4 (plan B D8): runs parked on an open question plus pending goal_needs_human and
-  // task_blocked_human cards -- counted on their own, per project; any other card does not count.
+  // Human cards H4 (Task 9 fix round 1 ruling): the blocking rows of the project's own queue --
+  // counted on their own, per project. A run parked on no question it could be answered on, and a
+  // card that blocks nothing, do not count.
   it('counts what blocks a goal version on its own, per project', async (): Promise<void> => {
     const blocked = await seedProject('Blocked')
     const other = await seedProject('Other')
@@ -147,7 +148,9 @@ describe('buildSidebarTree', () => {
 
     const byName = new Map((await buildSidebarTree()).map((row) => [row.name, row]))
 
-    expect(byName.get('Blocked')?.blockingCount).toBe(3)
+    // The goal_needs_human card and the task_blocked_human card: two blocking rows. The parked run
+    // waits on no question, so the queue shows nothing for it.
+    expect(byName.get('Blocked')?.blockingCount).toBe(2)
     expect(byName.get('Blocked')?.needsYouCount).toBe(3)
     expect(byName.get('Other')?.blockingCount).toBe(0)
   })

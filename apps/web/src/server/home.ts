@@ -4,7 +4,7 @@ import { buildAnalytics, type Kpi } from './analytics'
 import { loadHappeningRows } from './happeningRows'
 import { buildNeedsYou, type NeedsYouItem } from './needsYou'
 import { listProjects, type ProjectRow } from './org'
-import { buildSidebarTree } from './sidebar'
+import { readSidebar } from './sidebar'
 
 /** How often `useHome` polls `GET /api/home` while the tab is visible (M61 R11). */
 export const HOME_POLL_MS = 10_000
@@ -89,20 +89,22 @@ export async function buildHomeSnapshot(
   // it on every tick regardless of mode; `includeKpis` (default false) is what the poll now passes
   // only in developer mode, and simple mode's `kpis: []` costs nothing.
   const includeKpis = options.includeKpis ?? false
-  const [projects, tree, analytics] = await Promise.all([
+  const [projects, { tree, queues: built }, analytics] = await Promise.all([
     listProjects({ includeArchived: options.includeArchived ?? false }),
-    buildSidebarTree(),
+    readSidebar(now),
     includeKpis ? buildAnalytics(null) : Promise.resolve(null),
   ])
   const nameOf = new Map(projects.map((project) => [project.id, project.name]))
   const ids = [...nameOf.keys()]
 
   // A blocking count alone also asks (human cards H4): a run parked on a question nobody but a
-  // person can answer is on the queue with no task or decision behind the needs-you count.
+  // person can answer is on the queue with no task or decision behind the needs-you count. The count
+  // is the queue's own, so a run parked on a question a slave can answer never makes Home ask.
   const hot = tree.filter((row) => (row.needsYouCount > 0 || row.blockingCount > 0) && nameOf.has(row.id))
   const queues = await Promise.all(
     hot.map(async (row): Promise<readonly HomeNeedsYouItem[]> => {
-      const items = await buildNeedsYou(row.id, now)
+      // The sidebar already built this project's queue when it had to count its blocking rows.
+      const items = built.get(row.id) ?? (await buildNeedsYou(row.id, now))
       return items.map((item) => ({ ...item, workspaceId: row.id, workspaceName: row.name }))
     }),
   )
