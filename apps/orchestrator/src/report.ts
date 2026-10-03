@@ -1,6 +1,7 @@
 import { isTransactionTimeout, isUniqueConstraintViolation, refusalText, reportQuestionKey, routeHandOffs, sendMessage, type RouteHandOffsInput } from '@slave-of-ai/control'
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
-import { CONDUCTOR_ROLE, parseSlaveReport } from '@slave-of-ai/domain'
+import { CONDUCTOR_ROLE, NOTE_MAX_CHARS, parseSlaveReport, personText } from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
 import { joinRunOutput } from './runOutput.js'
 import { rejectRunBack } from './runs.js'
 import { handOffSmokeRework } from './smoke.js'
@@ -14,7 +15,8 @@ import { handOffSmokeRework } from './smoke.js'
  * Replayable, like `verifyConcludedRun` that calls it: the same run concluded twice finds its
  * report already stored (the `runId` unique index answers P2002) and treats it as filed, and each
  * question carries an idempotency key per run and position, so a replay that completes an
- * interrupted first pass sends only what that pass did not.
+ * interrupted first pass sends only what that pass did not. Its notes are appended the same way:
+ * once per note ({@link appendNotes}).
  */
 export async function fileRunReport(
   run: { readonly id: string; readonly slaveId: string },
@@ -65,6 +67,9 @@ export async function fileRunReport(
       console.error(`[report] run ${run.id}: question ${String(index + 1)} was not sent -- ${refusalText(sent.error)}`)
     }
   }
+  // Human cards plan B D9: a note is information, not a question -- the feed and the report, never a
+  // message or a card.
+  if (parsed.value.notes.length > 0) await appendNotes(run, task, { goalVersion: pkg.goalVersion, key: pkg.key }, parsed.value.notes)
   // Plan B D11 (user ruling 2026-09-30): a smoke rework's hand-off, checked against package
   // ownership inside -- a claim that does not hold changes nothing, and never fails this run.
   if (parsed.value.handOff !== undefined) await handOffSmokeRework(run, task, parsed.value.handOff)
@@ -83,6 +88,39 @@ export async function fileRunReport(
     })
   }
   return true
+}
+
+/**
+ * Human cards plan B D9: one `workspace.package_noted` per note of the run's report, in the report's
+ * order. Pre-flight F58: the replay guard is per NOTE -- the run's notes already on record are the
+ * first ones of this same report (appends are serialised and made in order, and a run's report is
+ * its own fixed text), so a replay writes only the notes after them: a conclusion replayed whole
+ * writes none twice, one interrupted mid-loop finishes, and a report with three notes (two of them
+ * identical, even) writes three. Each note is sanitised (markers, routing literals, control
+ * characters) BEFORE it is fitted to `NOTE_MAX_CHARS` (`personText`), so sanitising can never push
+ * it past the event's bound.
+ */
+async function appendNotes(
+  run: { readonly id: string; readonly slaveId: string },
+  task: { readonly id: string; readonly workspaceId: string },
+  pkg: { readonly goalVersion: number; readonly key: string },
+  notes: readonly string[],
+): Promise<void> {
+  const filed = await prisma.executionEvent.count({ where: { runId: run.id, type: 'workspace_package_noted' } })
+  for (const note of notes.slice(filed)) {
+    // Never empty: the parser already dropped control characters and refused a blank note, and
+    // sanitising only replaces characters, so every note is filed and the count above stays a prefix.
+    const text = personText(note, NOTE_MAX_CHARS)
+    await appendEvent({
+      type: 'workspace.package_noted',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      slaveId: run.slaveId,
+      runId: run.id,
+      actor: 'slave',
+      payload: { version: pkg.goalVersion, packageKey: pkg.key, runId: run.id, note: text },
+    })
+  }
 }
 
 /** How many times filing tries a routing that a busy lock or a starved pool refused (P2028). */
