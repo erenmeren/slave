@@ -99,6 +99,8 @@ export interface PackageContractInput {
     readonly interface: string
     /** The shared-directory prefixes this package owns (skeleton spec S3); absent reads as none. */
     readonly registrations?: readonly PackageRegistration[]
+    /** Human cards plan B D5: files a person gave to another package; absent reads as none. */
+    readonly releasedPaths?: readonly string[]
   }
   readonly requirements: readonly RequirementItem[]
   readonly dependencies: readonly { readonly key: string; readonly interface: string }[]
@@ -168,6 +170,7 @@ export function renderPackageContract(input: PackageContractInput): string {
     '',
     'Files you own:',
     ...input.pkg.ownedPaths.map((g) => `- ${g}`),
+    ...((input.pkg.releasedPaths ?? []).length === 0 ? [] : ['Given by a person to another package (no longer yours):', ...(input.pkg.releasedPaths ?? []).map((path) => `- ${path}`)]),
     ...(input.pkg.isIntegration ? ['- every file no other package owns'] : []),
     ...HAND_OFF_RULE_LINES,
   ]

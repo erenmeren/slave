@@ -52,6 +52,16 @@ describe('resolveHandOff', () => {
     }
     expect(resolveHandOff({ package: 'billing', change: 'x' }, 'report', packages)).toEqual({ kind: 'none', reason: 'no package has the key "billing"' })
   })
+  it('gives a file a person moved to its new owner, not the package that released it (human cards plan B D5)', () => {
+    // Key order, as every caller reads them: the released owner comes before the new one.
+    const granted = [
+      { key: 'integration', ownedPaths: [], releasedPaths: [], isIntegration: true },
+      { key: 'report', ownedPaths: ['backend/src/report/**'], releasedPaths: ['backend/src/report/routes.ts'], isIntegration: false },
+      { key: 'web', ownedPaths: ['web/**', 'backend/src/report/routes.ts'], releasedPaths: [], isIntegration: false },
+    ]
+    expect(resolveHandOff({ path: 'backend/src/report/routes.ts', change: 'x' }, 'report', granted)).toEqual({ kind: 'package', key: 'web' })
+    expect(resolveHandOff({ path: 'backend/src/report/a.ts', change: 'x' }, 'report', granted)).toEqual({ kind: 'own' })
+  })
   it('never calls a conductor answer (no reporter) own', () => {
     expect(resolveHandOff({ package: 'report', change: 'x' }, null, packages)).toEqual({ kind: 'package', key: 'report' })
   })

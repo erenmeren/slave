@@ -19,6 +19,21 @@ describe('renderPackageContract', () => {
     expect(text).toContain('Do not create or change any other file')
   })
 
+  it('names the files a person gave away (human cards plan B D5)', () => {
+    const text = renderPackageContract({
+      pkg: { key: 'api', title: 'A', ownedPaths: ['src/api/**'], isIntegration: false, interface: '', releasedPaths: ['src/api/routes.ts'] },
+      requirements: [],
+      dependencies: [],
+      verifyCommands: GATE,
+    })
+    expect(text).toContain('Files you own:\n- src/api/**\nGiven by a person to another package (no longer yours):\n- src/api/routes.ts')
+  })
+
+  it('says nothing of given files when the package gave none', () => {
+    const text = renderPackageContract({ pkg: { key: 'api', title: 'A', ownedPaths: ['src/api/**'], isIntegration: false, interface: '', releasedPaths: [] }, requirements: [], dependencies: [], verifyCommands: GATE })
+    expect(text).not.toContain('Given by a person')
+  })
+
   it('tells the integration package it owns every unowned file', () => {
     const text = renderPackageContract({ pkg: { key: 'integration', title: 'I', ownedPaths: [], isIntegration: true, interface: '' }, requirements: [], dependencies: [], verifyCommands: GATE })
     expect(text).toContain('every file no other package owns')

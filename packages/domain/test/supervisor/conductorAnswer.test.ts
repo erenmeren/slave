@@ -43,11 +43,18 @@ describe('buildConductorAnswerPrompt', () => {
     expect(prompt).toContain('R1: csv mode')
     expect(prompt).toContain('report -- Report modes')
     expect(prompt).toContain('owns: backend/src/report/**')
+    expect(prompt).not.toContain('given by a person')
     expect(prompt).toContain('integration (integration) -- Integrate the packages')
     expect(prompt).toContain('"API field naming": camelCase JSON fields')
     expect(prompt).toContain('Q: Where do routes go?')
     expect(prompt).toContain('R0 partial: no start script')
     expect(prompt).toContain('report -> skeleton (reopened): run pytest -k report')
+  })
+
+  it('says which files a person gave away from a package, so the conductor never names the old owner (human cards plan B D5)', () => {
+    const moved = conductorPlan({ packages: plan.packages.map((pkg) => (pkg.key === 'report' ? { ...pkg, releasedPaths: ['backend/src/report/routes.ts'] } : pkg)) })
+    const text = buildConductorAnswerPrompt({ goal: 'Ship reports.', plan: moved, questions, profile: null })
+    expect(text).toContain('    owns: backend/src/report/**\n    given by a person to another package (no longer its): backend/src/report/routes.ts')
   })
 
   it('final wave M5: labels each earlier answer with its source, the conductor or a person', () => {
@@ -160,6 +167,15 @@ describe('the controller rulings on the batched answer', () => {
       expect(judged.tier, String(taskStatus)).toBe('proposed')
       expect(judged.rationale).toContain('integration')
     }
+  })
+
+  it('routes an answer\'s hand-off on a file a person moved to its new owner (human cards plan B D5)', () => {
+    const web = { key: 'web', title: 'Web', requirementKeys: [], ownedPaths: ['web/**', 'backend/src/report/x.ts'], releasedPaths: [], isIntegration: false, interface: '', dependsOn: [], taskStatus: 'done', handOffReopens: 0 }
+    const moved = conductorPlan({
+      packages: [...plan.packages.map((pkg) => (pkg.key === 'report' ? { ...pkg, releasedPaths: ['backend/src/report/x.ts'], handOffReopens: HANDOFF_REOPENS_MAX } : pkg)), web],
+    })
+    // The report package is at its reopen cap; the file is web's now (after report in key order), so nothing holds it.
+    expect(judgeConductorAnswer(answer({ handOff: { path: 'backend/src/report/x.ts', change: 'y' } }), moved, { halted: false, fromHandOffRouting: false }).tier).toBe('applied')
   })
 
   it('final wave I1: holds a hand-off to a done package already reopened HANDOFF_REOPENS_MAX times', () => {

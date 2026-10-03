@@ -191,6 +191,14 @@ describe('a package run is given its ownership', () => {
     expect(rule?.excluded).toHaveLength(2)
   })
 
+  it('excludes a file a person gave away from the package that gave it, for the gate and the audit alike (human cards plan B D5)', async (): Promise<void> => {
+    const c = await seedConducted()
+    const report = await seedPackage(c, 'report', ['src/report/**'])
+    await prisma.workPackage.updateMany({ where: { workspaceId: c.workspaceId, key: 'report' }, data: { releasedPaths: ['src/report/routes.ts'] } })
+    expect(await ownershipRuleForTask(report)).toEqual({ owned: ['src/report/**'], excluded: ['src/report/routes.ts'] })
+    expect((await permissionOwnership(report, '/w'))?.excluded).toEqual([source('src/report/routes.ts')])
+  })
+
   it('reads no rule for a plain task, a missing task, or a package that owns everything', async (): Promise<void> => {
     const plain = await seedPlainTask()
     expect(await ownershipRuleForTask(plain.taskId)).toBeNull()

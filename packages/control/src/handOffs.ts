@@ -64,7 +64,6 @@ const HAND_OFF_ORDER = [{ createdAt: 'asc' as const }, { sourceKey: 'asc' as con
 /** The statuses a request is "on record" in, for the per-version dedup (plan A D6). */
 const ON_RECORD = ['pending', 'reopened', 'delivered'] as const
 
-
 /** Thrown inside the lock when a guarded move lost its race: rolls every move of the pass back. */
 class HandOffMoved extends Error {}
 
@@ -95,6 +94,8 @@ async function packagesOf(tx: Tx, workspaceId: string, goalVersion: number) {
       id: true,
       key: true,
       ownedPaths: true,
+      // Human cards plan B D5: a given file routes to its new owner, never back to the one that gave it.
+      releasedPaths: true,
       isIntegration: true,
       handOffReopens: true,
       tasks: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: 1, select: { id: true, status: true, attempt: true } },

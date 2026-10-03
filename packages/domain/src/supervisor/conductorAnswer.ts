@@ -79,6 +79,7 @@ export function buildConductorAnswerPrompt(input: {
     ...plan.packages.flatMap((p) => [
       `  ${safe(p.key, 40)}${p.isIntegration ? ' (integration)' : ''} -- ${safe(p.title, 200)}; its task is ${p.taskStatus ?? 'gone'}`,
       `    owns: ${safe(p.ownedPaths.join(', '), 2000)}`,
+      ...(p.releasedPaths.length === 0 ? [] : [`    given by a person to another package (no longer its): ${safe(p.releasedPaths.join(', '), 2000)}`]),
       `    requirements: ${p.requirementKeys.length === 0 ? 'none' : safe(p.requirementKeys.join(', '), 400)}; depends on: ${p.dependsOn.length === 0 ? 'nothing' : safe(p.dependsOn.join(', '), 400)}`,
       ...(p.interface.trim() === '' ? [] : [`    provides and uses: ${safe(p.interface, 1500)}`]),
     ]),

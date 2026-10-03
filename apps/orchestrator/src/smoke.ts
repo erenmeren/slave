@@ -474,7 +474,7 @@ export async function handOffSmokeRework(
       const packages = await tx.workPackage.findMany({
         where: { workspaceId: delivery.workspaceId, goalVersion: delivery.goalVersion },
         orderBy: { key: 'asc' },
-        select: { key: true, ownedPaths: true, isIntegration: true, tasks: { orderBy: { createdAt: 'asc' }, take: 1, select: { id: true, status: true, attempt: true } } },
+        select: { key: true, ownedPaths: true, releasedPaths: true, isIntegration: true, tasks: { orderBy: { createdAt: 'asc' }, take: 1, select: { id: true, status: true, attempt: true } } },
       })
       const from = packages.find((pkg) => pkg.tasks[0]?.id === task.id)
       const toKey = smokeHandOffTarget(path, packages)

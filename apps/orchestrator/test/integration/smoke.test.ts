@@ -738,6 +738,17 @@ describe('the smoke hand-off (plan B D11, user ruling 2026-09-30)', () => {
     await drainPumps()
   }, 60_000)
 
+  it('does not hand off a file a person gave away from the skeleton (human cards plan B D5)', async (): Promise<void> => {
+    const f = await seed(FAILING)
+    await prisma.workPackage.updateMany({ where: { workspaceId: f.workspaceId, key: 'skeleton' }, data: { releasedPaths: ['skeleton/package.json'] } })
+    await startSmoke(f.deliveryId)
+    await drainPumps()
+    await fileRework(f, 'integration', integrationReport({ path: 'skeleton/package.json', change: 'add a "start" script' }))
+    expect(await handOffs(f)).toEqual([])
+    expect(await taskStatus(f.taskOf.skeleton)).toBe('done')
+    expect((await attemptsOf(f))[0]?.handOffTaskId).toBeNull()
+  }, 60_000)
+
   it('does nothing for no handOff, an unowned or refused path, or a report that is not integration\'s', async (): Promise<void> => {
     const f = await seed(FAILING)
     await startSmoke(f.deliveryId)

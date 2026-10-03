@@ -79,6 +79,9 @@ export interface HandOffOwner {
   readonly key: string
   readonly ownedPaths: readonly string[]
   readonly isIntegration: boolean
+  /** Human cards plan B D5: the files a person gave from this package to another, which its rule
+   *  excludes -- a select that drops them would route a given file back to its old owner. */
+  readonly releasedPaths?: readonly string[]
 }
 
 export type HandOffTarget =

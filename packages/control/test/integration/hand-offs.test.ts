@@ -70,6 +70,19 @@ describe('routeHandOffs', () => {
     expect(routed.map((e) => (e.payload as { delivery: string }).delivery)).toEqual(['prompt', 'rework'])
   })
 
+  it('routes a file a person gave away to its new owner, not back to the package that gave it (human cards plan B D5)', async () => {
+    const f = await seed({ skeleton: 'done', report: 'running', integration: 'ready' })
+    // A person gave src/report/routes.ts from report to web (a package after report in key order).
+    await prisma.workPackage.updateMany({ where: { workspaceId: f.workspaceId, key: 'report' }, data: { releasedPaths: ['src/report/routes.ts'] } })
+    await prisma.workPackage.create({ data: { workspaceId: f.workspaceId, goalVersion: 1, key: 'web', title: 'web', requirementKeys: [], ownedPaths: ['src/web/**', 'src/report/routes.ts'], interface: '', isIntegration: false, templateId: 'tpl' } })
+    await route(f, [{ path: 'src/report/routes.ts', change: 'add the export route' }, { path: 'src/report/csv.ts', change: 'mine' }])
+    const stored = await rows(f)
+    expect(stored.map((row) => [row.path, row.toPackageKey])).toEqual([
+      ['src/report/routes.ts', 'web'],
+      ['src/report/csv.ts', 'report'],
+    ])
+  })
+
   it('routes a replayed report once: one row, one event, one reopen', async () => {
     const f = await seed({ skeleton: 'done', report: 'running', integration: 'ready' })
     const items = [{ path: 'scripts/verify.sh', change: 'run pytest -k report' }]

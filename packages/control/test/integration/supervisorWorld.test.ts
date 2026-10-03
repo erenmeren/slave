@@ -2461,6 +2461,21 @@ describe('loadSupervisorWorld -- goal versions and their verification (Conductor
     expect(world.conductorPlans[0]?.packages).toEqual([expect.objectContaining({ key: 'report', handOffReopens: 2 })])
   })
 
+  // Human cards plan B D5 (pre-flight F50): the conductor's plan carries the files a person gave away.
+  it('loads each package\'s released paths into the conductor\'s plan (human cards plan B D5)', async (): Promise<void> => {
+    const fixture = await seed()
+    const worker = await seat(fixture, 'Wes', ['implementer'])
+    await delivery(fixture, 1, { status: 'integrating' })
+    const pkg = await prisma.workPackage.create({ data: { workspaceId: fixture.workspaceId, goalVersion: 1, key: 'report', title: 'Report', requirementKeys: ['R1'], ownedPaths: ['r/**'], releasedPaths: ['r/routes.ts'], interface: '', templateId: 't-backend' } })
+    const taskId = (await prisma.task.create({ data: { workspaceId: fixture.workspaceId, title: 'Report', description: 'x', status: 'rework', requiredRole: 'implementer', maxAttempts: 3, assigneeId: worker, workPackageId: pkg.id, goalVersion: 1 } })).id
+    const run = await prisma.slaveRun.create({ data: { slaveId: worker, taskId, status: 'succeeded', kind: 'implementation' } })
+    const asked = await sendMessage(run.id, { kind: 'question', body: 'who owns r/routes.ts?', recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId, idempotencyKey: reportQuestionKey(run.id, 0) })
+    if (!asked.ok) throw new Error('send failed')
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.conductorPlans[0]?.packages).toEqual([expect.objectContaining({ key: 'report', ownedPaths: ['r/**'], releasedPaths: ['r/routes.ts'] })])
+  })
+
   // Final wave M5: the batched prompt labels whose words each earlier answer is.
   it('labels each earlier answer: the conductor\'s (sent by a tick, or approved unedited) or a person\'s (final wave M5)', async (): Promise<void> => {
     const fixture = await seed()
