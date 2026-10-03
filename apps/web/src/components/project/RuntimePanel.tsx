@@ -239,7 +239,7 @@ const LIMIT_FIELDS: readonly WorkspaceLimitField[] = ['runTimeoutMs', 'maxConcur
  * whether the panel caught it or the route did. `required` keeps an emptied field from taking the
  * budget field's third road in the browser, and `LIMIT_FIELDS` says what an empty box is answered with.
  *
- * All three go in every save. The verb writes and records only what MOVED, so re-sending the two
+ * All four go in every save. The verb writes and records only what MOVED, so re-sending the ones
  * nobody touched costs nothing and says nothing.
  */
 function LimitsForm({
