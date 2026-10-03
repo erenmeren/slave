@@ -17,7 +17,7 @@ vi.mock('../src/server/shell', () => ({
 
 // M61 R7/Task 6: the layout now seeds `CommandStrip`'s needs-you queue alongside the facts above.
 vi.mock('../src/server/needsYou', () => ({
-  buildNeedsYou: vi.fn(async (id: string) => (id === 'w1' ? [{ kind: 'decision', id: 'd-1', title: 'x', href: '/w/w1', since: '2026-09-19T09:00:00.000Z', taskId: null, decisionId: 'd-1', messageId: null, goalVersion: null, blocking: false, groupKey: 'no_reviewer:reviewer', mergedIds: [], merged: [], oneClick: true, questionCard: false }] : [])),
+  buildNeedsYou: vi.fn(async (id: string) => (id === 'w1' ? [{ kind: 'decision', id: 'd-1', title: 'x', href: '/w/w1', since: '2026-09-19T09:00:00.000Z', taskId: null, decisionId: 'd-1', messageId: null, goalVersion: null, blocking: false, groupKey: 'no_reviewer:reviewer', mergedIds: [], merged: [], oneClick: true, questionCard: false, draftPreview: null }] : [])),
 }))
 
 vi.mock('next/navigation', () => ({

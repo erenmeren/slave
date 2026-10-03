@@ -29,6 +29,7 @@ const DECISION: NeedsYouItem = {
   merged: [],
   oneClick: true,
   questionCard: false,
+  draftPreview: null,
 }
 
 const BLOCKED: NeedsYouItem = {
@@ -47,6 +48,7 @@ const BLOCKED: NeedsYouItem = {
   merged: [],
   oneClick: false,
   questionCard: false,
+  draftPreview: null,
 }
 
 /** A question card offering `send_answer` (human cards H4, pre-flight F56): one labelled click. */
@@ -272,8 +274,57 @@ describe('NeedsYouBar', () => {
         fireEvent.click(screen.getByTestId('needs-you-approve'))
       })
 
-      await waitFor(() => expect(screen.queryByTestId('needs-you')).toBeNull())
+      // Fix round 1: the list refetched empty, and the notice outlives the last row.
+      await waitFor(() => expect(screen.queryByTestId('needs-you-row')).toBeNull())
       expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/needs-you')
+      expect(screen.getByTestId('needs-you-notice').textContent).toBe('Waiting on an answer: Which gateway? — Already closed by alice at 2026-10-03 08:00 UTC.')
+      // Dismissed, the empty bar goes.
+      fireEvent.click(screen.getByTestId('needs-you-notice-dismiss'))
+      expect(screen.queryByTestId('needs-you')).toBeNull()
+    })
+
+    it("keeps what the last decided card did on screen when the list refreshes empty (fix round 1)", async (): Promise<void> => {
+      fetchMock.mockImplementation(async (input: unknown) => {
+        if (String(input).endsWith('/decide')) {
+          return new Response(JSON.stringify({ ok: true, outcome: { decision: { kind: 'send_answer' }, summary: 'sent the drafted answer' } }), { status: 200 })
+        }
+        return new Response(JSON.stringify([]), { status: 200 })
+      })
+      render(<NeedsYouBar workspaceId="w1" initial={[ANSWER_CARD]} />)
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('needs-you-approve'))
+      })
+
+      await waitFor(() => expect(screen.queryByTestId('needs-you-row')).toBeNull())
+      expect(screen.getByTestId('needs-you-notice').textContent).toBe('Waiting on an answer: Which gateway? — sent the drafted answer')
+      expect(screen.getByTestId('needs-you-notice').getAttribute('role')).toBe('status')
+    })
+
+    it('shows the draft the one click sends, as text, and none on a row without that one click (fix round 1)', () => {
+      const { unmount } = render(<NeedsYouRow item={{ ...ANSWER_CARD, draftPreview: 'Use Stripe.' }} busy={null} onAnswer={() => {}} />)
+      expect(screen.getByTestId('needs-you-draft').textContent).toBe('Sends: “Use Stripe.”')
+      unmount()
+      render(<NeedsYouRow item={{ ...ESCALATION_CARD, draftPreview: 'Use Stripe.' }} busy={null} onAnswer={() => {}} />)
+      expect(screen.queryByTestId('needs-you-draft')).toBeNull()
+    })
+
+    it('renders a hostile draft inert', () => {
+      render(<NeedsYouRow item={{ ...ANSWER_CARD, draftPreview: '<img src=x onerror=alert(1)><script>alert(2)</script>' }} busy={null} onAnswer={() => {}} />)
+      const draft = screen.getByTestId('needs-you-draft')
+      expect(draft.querySelector('img')).toBeNull()
+      expect(draft.querySelector('script')).toBeNull()
+      expect(draft.textContent).toContain('<img src=x onerror=alert(1)>')
+    })
+
+    it('marks each blocking member of a merged row (fix round 1)', () => {
+      const blocking: NeedsYouItem = { ...BLOCKED, id: 't-9', taskId: 't-9', goalVersion: 1, blocking: true }
+      const quiet: NeedsYouItem = { ...DECISION, id: 'd-8', decisionId: 'd-8', blocking: false }
+      render(<NeedsYouRow item={{ ...DECISION, blocking: true, mergedIds: ['t-9', 'd-8'], merged: [blocking, quiet] }} busy={null} onAnswer={() => {}} />)
+      const members = [...screen.getByTestId('needs-you-merged').querySelectorAll('li')]
+      expect(members.map((li) => li.getAttribute('data-blocking'))).toEqual(['true', 'false'])
+      expect(members[0]?.querySelector('[data-testid="needs-you-merged-blocking"]')?.textContent).toBe('blocking v1')
+      expect(members[1]?.querySelector('[data-testid="needs-you-merged-blocking"]')).toBeNull()
     })
 
     it('keeps the named notice visible while the list still has rows', async (): Promise<void> => {

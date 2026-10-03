@@ -1,6 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { buildNeedsYou } from '../../src/server/needsYou.js'
+import { DRAFT_PREVIEW_MAX_CHARS, buildNeedsYou } from '../../src/server/needsYou.js'
 import {
   seedPendingDecision,
   seedTask,
@@ -235,6 +235,19 @@ describe('buildNeedsYou: one queue per goal version (human cards H4)', () => {
     ])
   })
 
+  it('bounds the draft a row previews, cut on a whole character (fix round 1)', async (): Promise<void> => {
+    const fixture = await seedWorkspace({ autoMerge: false })
+    const question = await seedUnanswerableQuestion(fixture, { body: 'long?' })
+    const long = `${'é'.repeat(DRAFT_PREVIEW_MAX_CHARS)}tail`
+    await card(fixture.workspaceId, { situationKind: 'conductor_question', subjectId: question.messageId, createdAt: at(1), action: { kind: 'answer_question', messageId: question.messageId }, draftBody: long })
+
+    const [row] = await buildNeedsYou(fixture.workspaceId)
+
+    expect([...(row?.draftPreview ?? '')]).toHaveLength(DRAFT_PREVIEW_MAX_CHARS)
+    expect(row?.draftPreview?.endsWith('…')).toBe(true)
+    expect(row?.draftPreview?.includes('tail')).toBe(false)
+  })
+
   it('puts project-level items after every version', async (): Promise<void> => {
     const { workspaceId } = await seedWorkspace({ autoMerge: false })
     const project = await seedPendingDecision(workspaceId, { subjectId: 'reviewer' })
@@ -279,6 +292,8 @@ describe('buildNeedsYou: one queue per goal version (human cards H4)', () => {
     const byId = new Map(items.map((item) => [item.id, item]))
 
     expect([byId.get(draftlessCard)?.oneClick, byId.get(draftedCard)?.oneClick, byId.get(readdressCard)?.oneClick]).toEqual([false, true, false])
+    // Fix round 1: the words the one click sends ride on its row; none where there is no one click.
+    expect([byId.get(draftlessCard)?.draftPreview, byId.get(draftedCard)?.draftPreview, byId.get(readdressCard)?.draftPreview]).toEqual([null, 'Use Stripe.', null])
     expect(items.every((item) => item.questionCard)).toBe(true)
     expect(items).toHaveLength(3)
   })

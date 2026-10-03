@@ -157,6 +157,14 @@ export function NeedsYouRow({
         )}
         {isDecision && !item.questionCard && !item.oneClick && <span className="flex flex-none">{decideLink}</span>}
       </div>
+      {item.questionCard && item.oneClick && item.draftPreview !== null && (
+        // Task 9 fix round 1: the words "Send this answer" sends, as text -- a person must not send
+        // what they cannot see. Bounded by the server (`DRAFT_PREVIEW_MAX_CHARS`); the whole draft
+        // is on the card behind "decide".
+        <p data-testid="needs-you-draft" className="ml-[14px] line-clamp-2 break-words text-t2">
+          {`Sends: “${item.draftPreview}”`}
+        </p>
+      )}
       {item.merged.length > 0 && (
         // Merging never hides something a person has to do (spec H4): how many, and each one link away.
         <details data-testid="needs-you-merged" data-count={item.merged.length} className="ml-[14px] text-t2">
@@ -165,10 +173,21 @@ export function NeedsYouRow({
           </summary>
           <ul className="mt-[2px] flex flex-col gap-[2px]">
             {item.merged.map((member) => (
-              <li key={`${member.kind}-${member.id}`} data-kind={member.kind}>
-                <Link href={member.href} className="truncate text-t2 hover:underline">
+              <li
+                key={`${member.kind}-${member.id}`}
+                data-kind={member.kind}
+                data-blocking={member.blocking ? 'true' : 'false'}
+                className="flex items-center gap-2"
+              >
+                <Link href={member.href} className="min-w-0 truncate text-t2 hover:underline">
                   {member.title}
                 </Link>
+                {member.blocking && (
+                  // Task 9 fix round 1: a member that blocks says so in the list, as the row does.
+                  <span data-testid="needs-you-merged-blocking" className="shrink-0 font-medium text-s-blocked">
+                    {member.goalVersion === null ? 'blocking' : `blocking v${String(member.goalVersion)}`}
+                  </span>
+                )}
               </li>
             ))}
           </ul>
@@ -223,6 +242,8 @@ export function NeedsYouBar({
   // only, so a prop change after mount needs this effect to actually take.
   useEffect((): void => {
     setItems(initial)
+    // A fresh read from the layout (a navigation, a workspace switch): an old notice is not news.
+    setNoticeText(null)
   }, [initial])
 
   const load = async (): Promise<void> => {
@@ -275,7 +296,9 @@ export function NeedsYouBar({
     await load()
   }
 
-  if (items.length === 0) return null
+  // Task 9 fix round 1: what the last decided card did (or who settled it first) outlives its row --
+  // the bar stays up while a notice or a refusal is showing, even with nothing left to list.
+  if (items.length === 0 && noticeText === null && errorText === null) return null
 
   return (
     <section data-testid="needs-you" className="rounded-surface border border-accent/35 bg-accent/10 px-3.5 py-2.5">
@@ -285,8 +308,19 @@ export function NeedsYouBar({
         </p>
       )}
       {noticeText !== null && (
-        <p role="status" data-testid="needs-you-notice" className="type-meta mb-[var(--gap-1)] text-t2">
-          {noticeText}
+        <p className="type-meta mb-[var(--gap-1)] flex items-start gap-2 text-t2">
+          <span role="status" data-testid="needs-you-notice" className="min-w-0 flex-1">
+            {noticeText}
+          </span>
+          <button
+            type="button"
+            data-testid="needs-you-notice-dismiss"
+            aria-label="dismiss this notice"
+            onClick={() => setNoticeText(null)}
+            className="shrink-0 text-t3 hover:text-t1"
+          >
+            ×
+          </button>
         </p>
       )}
       {/* I2 (final-review wave): unbounded, this list grows past the strip's own `overflow-hidden`

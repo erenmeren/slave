@@ -143,7 +143,9 @@ export function HomeClient({
         </p>
       </header>
 
-      {needsYou.length > 0 && (
+      {/* Task 9 fix round 1: the section stays while a notice or a refusal is showing, so what the
+        * last decided card did is not lost with its row. */}
+      {(needsYou.length > 0 || needsYouNotice !== null || needsYouError !== null) && (
         <section
           data-testid="home-needs-you"
           className="rounded-surface border border-accent/35 bg-accent/10 px-3.5 py-2.5"
@@ -154,8 +156,19 @@ export function HomeClient({
             </p>
           )}
           {needsYouNotice !== null && (
-            <p role="status" data-testid="needs-you-notice" className="type-meta mb-[var(--gap-1)] text-t2">
-              {needsYouNotice}
+            <p className="type-meta mb-[var(--gap-1)] flex items-start gap-2 text-t2">
+              <span role="status" data-testid="needs-you-notice" className="min-w-0 flex-1">
+                {needsYouNotice}
+              </span>
+              <button
+                type="button"
+                data-testid="needs-you-notice-dismiss"
+                aria-label="dismiss this notice"
+                onClick={() => setNeedsYouNotice(null)}
+                className="shrink-0 text-t3 hover:text-t1"
+              >
+                ×
+              </button>
             </p>
           )}
           {/* I2 (final-review wave): unbounded, this list grows past Home's own `overflow-hidden`

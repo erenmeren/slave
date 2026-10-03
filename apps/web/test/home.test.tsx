@@ -92,6 +92,7 @@ function needsYouItem(over: Partial<HomeNeedsYouItem> = {}): HomeNeedsYouItem {
     merged: [],
     oneClick: false,
     questionCard: false,
+    draftPreview: null,
     workspaceId: 'w1',
     workspaceName: 'Checkout Platform',
     ...over,
@@ -222,6 +223,32 @@ describe('HomeClient', () => {
     })
     expect(screen.getByTestId('needs-you-notice').textContent).toBe('Waiting on an answer: Which gateway? — sent the drafted answer')
     expect(routerRefresh).toHaveBeenCalledTimes(1)
+  })
+
+  // Task 9 fix round 1: the decided card was the last row, the refreshed snapshot is empty, and
+  // what it did is still on screen.
+  it('keeps the outcome of the last decided card when the refreshed queue is empty', async (): Promise<void> => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, outcome: { decision: { kind: 'send_answer' }, summary: 'sent the drafted answer' } }), { status: 200 })))
+    const answerCard = needsYouItem({ kind: 'decision', id: 'd2', decisionId: 'd2', taskId: null, title: 'Waiting on an answer: Which gateway?', href: '/w/w1/activity#decision-d2', oneClick: true, questionCard: true, draftPreview: 'Use Stripe.' })
+    const view = renderHome(snapshot({ needsYou: [answerCard] }))
+    expect(screen.getByTestId('needs-you-draft').textContent).toBe('Sends: “Use Stripe.”')
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('needs-you-approve'))
+    })
+    // The refresh brings back an empty queue.
+    view.rerender(
+      <ModeProvider>
+        <ModeProbe />
+        <HeaderActionProvider>
+          <HeaderActionSlot />
+          <HomeClient initial={snapshot({ needsYou: [] })} companies={companies} />
+        </HeaderActionProvider>
+      </ModeProvider>,
+    )
+
+    expect(screen.queryByTestId('needs-you-row')).toBeNull()
+    expect(screen.getByTestId('needs-you-notice').textContent).toBe('Waiting on an answer: Which gateway? — sent the drafted answer')
   })
 
   it('wraps the needs-you queue in a ScrollArea capped at 30dvh, so 30 items scroll inside Home instead of growing it (I2)', () => {

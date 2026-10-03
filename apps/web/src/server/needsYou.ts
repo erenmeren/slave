@@ -73,6 +73,22 @@ export interface NeedsYouItem {
   /** The row is a question card (Plan A D13): its one click is `send_answer` through the decide
    *  route, and it has no Reject -- "dismiss and close" is one of the card's decisions. */
   readonly questionCard: boolean
+  /** Task 9 fix round 1: the words a question card's one click would send -- the draft as a person
+   *  edited it, else as drafted (what `send_answer` sends) -- cut to {@link DRAFT_PREVIEW_MAX_CHARS}.
+   *  A person must not send words they cannot see. Null on every row without that one click. */
+  readonly draftPreview: string | null
+}
+
+/** How much of a draft a needs-you row shows beside its one click: enough to recognise the answer;
+ *  the whole of it is on the card, one link away. */
+export const DRAFT_PREVIEW_MAX_CHARS = 280
+
+/** The draft `send_answer` would send, cut to the preview's bound on a whole character. */
+function draftPreviewOf(draft: DecisionView['draft']): string | null {
+  const body = draft?.editedBody ?? draft?.body ?? null
+  if (body === null) return null
+  const chars = [...body]
+  return chars.length <= DRAFT_PREVIEW_MAX_CHARS ? body : `${chars.slice(0, DRAFT_PREVIEW_MAX_CHARS - 1).join('')}…`
 }
 
 /** One item before the queue is built: everything but what the merge decides. */
@@ -186,6 +202,7 @@ export async function buildNeedsYou(
       groupKey: groupKeyFor({ kind, situationKind: null, subjectId: task.id, taskId: task.id }),
       oneClick: false,
       questionCard: false,
+      draftPreview: null,
     })
   }
 
@@ -214,6 +231,7 @@ export async function buildNeedsYou(
       // card's own. A machine card keeps its approve.
       oneClick: card === null || card.offers.includes('send_answer'),
       questionCard: card !== null,
+      draftPreview: card !== null && card.offers.includes('send_answer') ? draftPreviewOf(decision.draft) : null,
     })
   }
 
@@ -243,6 +261,7 @@ export async function buildNeedsYou(
         groupKey: groupKeyFor({ kind: 'question', situationKind: null, subjectId: question.messageId, taskId: null }),
         oneClick: false,
         questionCard: false,
+        draftPreview: null,
       })
     }
   }

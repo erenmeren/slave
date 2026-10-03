@@ -71,6 +71,7 @@ const ITEMS: readonly NeedsYouItem[] = [
     merged: [],
     oneClick: true,
     questionCard: false,
+    draftPreview: null,
   },
   {
     kind: 'blocked_task',
@@ -88,6 +89,7 @@ const ITEMS: readonly NeedsYouItem[] = [
     merged: [],
     oneClick: false,
     questionCard: false,
+    draftPreview: null,
   },
 ]
 
