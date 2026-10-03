@@ -94,6 +94,7 @@ function needsYouItem(over: Partial<HomeNeedsYouItem> = {}): HomeNeedsYouItem {
     questionCard: false,
     draftPreview: null,
     draftPreviewCut: false,
+    draftAlso: null,
     workspaceId: 'w1',
     workspaceName: 'Checkout Platform',
     ...over,

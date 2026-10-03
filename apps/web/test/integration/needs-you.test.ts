@@ -330,6 +330,12 @@ describe('buildNeedsYou: one queue per goal version (human cards H4)', () => {
 
     expect([byId.get(withDecision)?.oneClick, byId.get(withHandOff)?.oneClick, byId.get(plain)?.oneClick]).toEqual([false, false, true])
     expect([byId.get(withDecision)?.questionCard, byId.get(withHandOff)?.questionCard]).toEqual([true, true])
+    // Final-wave residual: the row says what else sending it applies.
+    expect([byId.get(withDecision)?.draftAlso, byId.get(withHandOff)?.draftAlso, byId.get(plain)?.draftAlso]).toEqual([
+      { decision: true, handOff: false },
+      { decision: false, handOff: true },
+      null,
+    ])
   })
 
   it('offers no one click on a question card whose question is gone, and still lists it as a question card (Task 10 (d))', async (): Promise<void> => {

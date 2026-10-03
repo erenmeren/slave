@@ -38,6 +38,12 @@ export async function answerNeedsYou(
   return result.notice !== null ? { notice: aboutCard(item.title, result.notice), error: null } : { notice: null, error: result.error }
 }
 
+/** What a conductor draft applies besides its words, as the row says it. */
+function draftAlsoWords(also: NonNullable<NeedsYouItem['draftAlso']>): string {
+  if (also.decision && also.handOff) return 'records a shared decision and hands work to a package'
+  return also.decision ? 'records a shared decision' : 'hands work to a package'
+}
+
 /** A refusal, and the row it refused: the card the person clicked. */
 export interface NeedsYouRefusal {
   readonly text: string
@@ -182,8 +188,15 @@ export function NeedsYouRow({
         // longer draft is cut, says so, and has no one click: it is read and sent on the card.
         <div className="ml-[14px] flex flex-col gap-[2px] text-t2">
           <p data-testid="needs-you-draft" className="whitespace-pre-wrap break-words">
-            {`${item.draftPreviewCut ? 'The draft begins' : 'Sends'}: “${item.draftPreview}”`}
+            {`${item.draftPreviewCut ? 'The draft begins' : item.draftAlso !== null ? 'The draft says' : 'Sends'}: “${item.draftPreview}”`}
           </p>
+          {item.draftAlso !== null && (
+            // Final-wave residual (I4): no one click here, and the row says why -- sending the draft
+            // as drafted applies more than its words.
+            <p data-testid="needs-you-draft-also" className="text-t1">
+              {`Sending it as drafted also ${draftAlsoWords(item.draftAlso)}: read all of it on the card (decide).`}
+            </p>
+          )}
           {item.draftPreviewCut && (
             <p data-testid="needs-you-draft-cut" className="text-t1">
               The answer is longer than this: read all of it on the card (decide) before it is sent.

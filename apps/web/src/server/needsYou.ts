@@ -82,6 +82,10 @@ export interface NeedsYouItem {
   /** Fix round 2: the draft is longer than {@link draftPreview}. Such a row has NO one click -- the
    *  person reads the whole answer on the card ("decide") before it is sent. */
   readonly draftPreviewCut: boolean
+  /** Final-wave residual (with I4): what sending the draft as drafted applies besides its words -- a
+   *  conductor draft's shared decision and hand-off (`draftCarries`); null when it carries neither or
+   *  the row shows no draft. Such a row has no one click, and says why. */
+  readonly draftAlso: { readonly decision: boolean; readonly handOff: boolean } | null
 }
 
 /**
@@ -236,6 +240,7 @@ export async function buildNeedsYou(
       questionCard: false,
       draftPreview: null,
       draftPreviewCut: false,
+      draftAlso: null,
     })
   }
 
@@ -274,6 +279,7 @@ export async function buildNeedsYou(
       questionCard: onQuestion,
       draftPreview: preview?.text ?? null,
       draftPreviewCut: preview?.cut ?? false,
+      draftAlso: preview !== null && carriesMore(decision.draft) ? draftCarries(decision.draft) : null,
     })
   }
 
@@ -305,6 +311,7 @@ export async function buildNeedsYou(
         questionCard: false,
         draftPreview: null,
         draftPreviewCut: false,
+        draftAlso: null,
       })
     }
   }

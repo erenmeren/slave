@@ -73,6 +73,7 @@ const ITEMS: readonly NeedsYouItem[] = [
     questionCard: false,
     draftPreview: null,
     draftPreviewCut: false,
+    draftAlso: null,
   },
   {
     kind: 'blocked_task',
@@ -92,6 +93,7 @@ const ITEMS: readonly NeedsYouItem[] = [
     questionCard: false,
     draftPreview: null,
     draftPreviewCut: false,
+    draftAlso: null,
   },
 ]
 

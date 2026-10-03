@@ -31,6 +31,7 @@ const DECISION: NeedsYouItem = {
   questionCard: false,
   draftPreview: null,
   draftPreviewCut: false,
+  draftAlso: null,
 }
 
 const BLOCKED: NeedsYouItem = {
@@ -51,6 +52,7 @@ const BLOCKED: NeedsYouItem = {
   questionCard: false,
   draftPreview: null,
   draftPreviewCut: false,
+  draftAlso: null,
 }
 
 /** A question card offering `send_answer` (human cards H4, pre-flight F56): one labelled click. */
@@ -423,6 +425,21 @@ describe('NeedsYouBar', () => {
       // Another project's bar starts clean.
       view.rerender(<NeedsYouBar workspaceId="w2" initial={[]} />)
       expect(screen.queryByTestId('needs-you')).toBeNull()
+    })
+
+    it('says what else a conductor draft applies, on a row with no one click (final-wave residual, I4)', () => {
+      const { unmount } = render(<NeedsYouRow item={{ ...ANSWER_CARD, oneClick: false, draftPreview: 'Use Stripe.', draftAlso: { decision: true, handOff: true } }} busy={null} onAnswer={() => {}} />)
+      expect(screen.getByTestId('needs-you-draft').textContent).toBe('The draft says: “Use Stripe.”')
+      expect(screen.getByTestId('needs-you-draft-also').textContent).toBe('Sending it as drafted also records a shared decision and hands work to a package: read all of it on the card (decide).')
+      expect(screen.queryByTestId('needs-you-approve')).toBeNull()
+      expect(screen.getByTestId('needs-you-open').getAttribute('href')).toBe(ANSWER_CARD.href)
+      unmount()
+      const { unmount: again } = render(<NeedsYouRow item={{ ...ANSWER_CARD, oneClick: false, draftPreview: 'Use Stripe.', draftAlso: { decision: false, handOff: true } }} busy={null} onAnswer={() => {}} />)
+      expect(screen.getByTestId('needs-you-draft-also').textContent).toContain('also hands work to a package:')
+      again()
+      render(<NeedsYouRow item={{ ...ANSWER_CARD, draftPreview: 'Use Stripe.' }} busy={null} onAnswer={() => {}} />)
+      expect(screen.queryByTestId('needs-you-draft-also')).toBeNull()
+      expect(screen.getByTestId('needs-you-draft').textContent).toBe('Sends: “Use Stripe.”')
     })
 
     it('renders a hostile draft inert', () => {
