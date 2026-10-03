@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ProposalRow, actionText } from '../src/components/supervisor/ProposalRow.js'
 import { formatUtcMinute } from '../src/lib/format.js'
@@ -529,6 +529,17 @@ describe('a question card says how its question stands (human cards H1/H3)', () 
   it("says an answer given now reaches the task's next run when the task has no package", () => {
     renderRow(answerDecision({ card: { ...base, askerPackageKey: null, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'next_run' } }))
     expect(screen.getByTestId('card-question-state').textContent).toContain("reaches the task's next run")
+  })
+
+  it('says a decision reaches the asking package exactly when an answer would, and no run otherwise (final review I2)', () => {
+    renderRow(answerDecision({ card: { ...base, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'hand_off' } }))
+    expect(screen.getByTestId('card-question-state').textContent).toContain('an answer or a decision (not a dismissal) now reaches the integration package as a hand-off')
+    cleanup()
+    renderRow(answerDecision({ card: { ...base, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'unread' } }))
+    expect(screen.getByTestId('card-question-state').textContent).toContain('no run would read an answer or be told of a decision')
+    cleanup()
+    renderRow(answerDecision({ card: { ...base, askerPackageKey: null, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'next_run' } }))
+    expect(screen.getByTestId('card-question-state').textContent).toContain('a decision reaches no run')
   })
 
   it('shows nothing for a card with no question, or an open one nobody waits on', () => {

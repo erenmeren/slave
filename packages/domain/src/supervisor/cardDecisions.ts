@@ -58,7 +58,15 @@ export interface PersonDecision {
   readonly summary: string
   /** A file grant's move, as it was made. */
   readonly grant?: { readonly path: string; readonly fromKey: string | null; readonly toKey: string } | undefined
+  /** Final review I2 (spec H3): a decision taken on a question its run had already continued past,
+   *  routed to the asking package as a `person` hand-off -- written in the claim, under the
+   *  question's lock, only when `handOffRoute` would deliver it there (the late answer's fate
+   *  `hand_off`), so the goal pass's backstop routes exactly what the decision promised. */
+  readonly askerHandOff?: { readonly package: string; readonly change: string } | undefined
 }
+
+/** The bound on {@link PersonDecision.summary}. */
+export const PERSON_DECISION_SUMMARY_MAX_CHARS = 500
 
 /** Plan B D3: `SupervisorDecision.personDecision` read back -- a row that fails it is reported as unreadable, never trusted. */
 export const personDecisionSchema: z.ZodType<PersonDecision, z.ZodTypeDef, unknown> = z.object({
@@ -66,8 +74,9 @@ export const personDecisionSchema: z.ZodType<PersonDecision, z.ZodTypeDef, unkno
   goalVersion: z.number().int().positive().nullable(),
   by: z.string().min(1).max(200),
   at: z.string().min(1),
-  summary: z.string().min(1).max(500),
+  summary: z.string().min(1).max(PERSON_DECISION_SUMMARY_MAX_CHARS),
   grant: z.object({ path: z.string().min(1), fromKey: z.string().nullable(), toKey: z.string().min(1) }).optional(),
+  askerHandOff: z.object({ package: z.string().min(1), change: z.string().min(1).max(HANDOFF_CHANGE_MAX_CHARS) }).optional(),
 })
 
 /**

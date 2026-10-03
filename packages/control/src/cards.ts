@@ -12,14 +12,17 @@ import {
   handOffRoute,
   isQuestionSituation,
   personDecisionSummary,
+  PERSON_DECISION_SUMMARY_MAX_CHARS,
   personText,
   planFileGrant,
   registrationsSchema,
   resolveHandOff,
   storableJsonReviver,
+  trimToFit,
   type Action,
   type CardDecision,
   type CardDecisionKind,
+  type LateAnswerFate,
   type PersonDecision,
   type QuestionCloseReason,
   type Result,
@@ -30,7 +33,7 @@ import { appendEvent } from '@slave-of-ai/events'
 import { GoalDecisionRefused, lockGoalDecisions, writeGoalDecisionIn } from './conductorAnswer.js'
 import { announceGoalVersion, requestChangeIn } from './goal.js'
 import { withDeliveryLock } from './goalDelivery.js'
-import { packagesOf, personHandOffSourceKey, routeHandOffs } from './handOffs.js'
+import { packagesOf, personAskerHandOffSourceKey, personHandOffSourceKey, routeHandOffs } from './handOffs.js'
 import { answerQuestion } from './messaging.js'
 import type { Principal } from './principal.js'
 import {
@@ -89,6 +92,40 @@ export interface ClaimInput {
   /** The close to write; null writes none. A `timed_out` question is not closed again (plan A D1). */
   readonly close: { readonly reason: QuestionCloseReason; readonly note: string | null } | null
   readonly now: Date
+  /**
+   * Final review I2 (spec H3): what the asking package is handed if its run had already continued
+   * past the question when the claim is made -- the decided resume message (`message`), `itself`
+   * for work given to the asking package (that work is its hand-off), or null/absent for a decision
+   * that tells it nothing (an answer, which is delivered as itself; a dismissal).
+   */
+  readonly toAsker?: { readonly kind: 'message'; readonly text: string } | { readonly kind: 'itself' } | null
+}
+
+/** What {@link claimAndClose} wrote. */
+export interface Claimed {
+  /** The close it wrote, or null when it wrote none (no close asked for, or the question had already timed out). */
+  readonly close: CloseQuestionInput | null
+  /** The decision as stored: on a question its run had already continued past, its summary says
+   *  where the decision went, and `askerHandOff` holds what is routed to the asking package. */
+  readonly personDecision: PersonDecision
+}
+
+/**
+ * Final review I2 (spec H3, ruling): a decision on a question whose run had already continued past
+ * it -- planned, or the timeout winning the same tick -- reaches the asking package as a `person`
+ * hand-off when `handOffRoute` would deliver it there (`lateAnswerFate` `hand_off`, the rule the
+ * card's note is written by), and otherwise reaches nobody. The summary says which, so the outcome
+ * a person reads is true either way. Read under the question's lock, before the claim writes it.
+ */
+function lateDecision(input: ClaimInput, fate: LateAnswerFate): PersonDecision {
+  const { question } = input.card
+  const asker = question.askerPackageKey
+  const toAsker = input.toAsker ?? null
+  const reaches = fate === 'hand_off' && toAsker !== null && asker !== null && question.askerRunId !== null && question.goalVersion !== null
+  const suffix = reaches ? `; the run had already continued, so the ${asker} package gets it as a hand-off` : '; the run had already continued and was not told'
+  const summary = `${trimToFit(input.personDecision.summary, PERSON_DECISION_SUMMARY_MAX_CHARS - suffix.length)}${suffix}`
+  const askerHandOff = reaches && toAsker.kind === 'message' ? { package: asker, change: personText(toAsker.text, HANDOFF_CHANGE_MAX_CHARS) } : undefined
+  return { ...input.personDecision, summary, ...(askerHandOff === undefined ? {} : { askerHandOff }) }
 }
 
 /**
@@ -117,18 +154,22 @@ const isAnswer = (decision: CardDecision): boolean => decision.kind === 'send_an
  * a second person deciding the same card is told the card was taken (who, when), not that its
  * question closed.
  */
-export async function claimAndClose(tx: Prisma.TransactionClient, input: ClaimInput): Promise<CloseQuestionInput | null> {
+export async function claimAndClose(tx: Prisma.TransactionClient, input: ClaimInput): Promise<Claimed> {
   const { card } = input
   const question = await lockCardQuestion(tx, card.workspaceId, card.subjectId)
   // Before the first write: a throw here and a return would both commit nothing.
   if (question === null) throw new CardRefused({ kind: 'message_not_found', messageId: card.subjectId })
+  // Under the lock, before the claim: where a decision on a question its run continued past goes
+  // (final review I2) -- also when the timeout closed it after `decideCard` read the card open.
+  const fate = question.closedReason === 'timed_out' ? await lateAnswerFate(tx, card.subjectId) : null
+  const personDecision = fate !== null && !isAnswer(input.personDecision.decision) ? lateDecision(input, fate) : input.personDecision
   const claimed = await tx.supervisorDecision.updateMany({
     where: { id: card.id, status: 'pending' },
     data: {
       status: input.status,
       resolvedAt: input.now,
       resolvedByUserId: input.principal?.userId ?? null,
-      personDecision: input.personDecision as unknown as Prisma.InputJsonValue,
+      personDecision: personDecision as unknown as Prisma.InputJsonValue,
     },
   })
   if (claimed.count === 0) {
@@ -140,34 +181,38 @@ export async function claimAndClose(tx: Prisma.TransactionClient, input: ClaimIn
   if (question.closedAt !== null && question.closedReason !== null && question.closedReason !== 'timed_out') {
     throw new CardRefused({ kind: 'question_closed', messageId: card.subjectId, reason: question.closedReason, by: question.closedBy ?? CLOSED_BY_SYSTEM, at: question.closedAt.toISOString() })
   }
-  if (question.closedReason === 'timed_out') {
+  if (fate !== null) {
     // Ruling F37, under the lock: a late answer no run would read is not offered -- the delivery may
     // have moved since `decideCard` read the card.
-    if (isAnswer(input.personDecision.decision) && (await lateAnswerFate(tx, card.subjectId)) === 'unread') {
+    if (isAnswer(input.personDecision.decision) && fate === 'unread') {
       throw new CardRefused({ kind: 'card_decision_not_offered', decisionId: card.id, decision: input.personDecision.decision.kind })
     }
-    return null
+    // The first close stands (plan A D1): a timed-out question is not closed again.
+    return { close: null, personDecision }
   }
-  if (input.close === null) return null
+  if (input.close === null) return { close: null, personDecision }
   const close: CloseQuestionInput = { messageId: card.subjectId, reason: input.close.reason, by: closedByOf(input.principal), note: input.close.note, decisionId: card.id }
   if (!(await closeQuestionIn(tx, close, input.now))) throw new CardRefused({ kind: 'question_answered', messageId: card.subjectId })
-  return close
+  return { close, personDecision }
 }
 
 /**
- * After the commit: the card's event, the question's, and the other cards about it retired. Ruling
+ * After the commit: the card's event, the question's, the other cards about it retired, and (final
+ * review I2) the decision's hand-off to an asking package whose run had already continued. Ruling
  * F54: each step is said and swallowed -- the decision is committed, so a throw here would report it
  * as failed (and a retry would meet `decision_not_pending`); the tick's `retireClosedQuestionCards`
- * is the backstop for a card left open.
+ * is the backstop for a card left open, and the goal pass's `routeStoredPersonHandOffs` for a
+ * hand-off that was not routed.
  */
-export async function afterClaim(card: PendingCard, input: ClaimInput, close: CloseQuestionInput | null): Promise<void> {
+export async function afterClaim(card: PendingCard, input: ClaimInput, claimed: Claimed): Promise<void> {
   const userId = input.principal?.userId ?? null
+  const { close, personDecision } = claimed
   try {
     await appendEvent({
       type: 'supervisor.resolved',
       workspaceId: card.workspaceId,
       actor: 'human',
-      payload: { decisionId: card.id, outcome: input.status, reason: `A person decided: ${input.personDecision.summary}` },
+      payload: { decisionId: card.id, outcome: input.status, reason: `A person decided: ${personDecision.summary}` },
       userId,
     })
   } catch (error) {
@@ -176,7 +221,7 @@ export async function afterClaim(card: PendingCard, input: ClaimInput, close: Cl
   if (close !== null) {
     try {
       const question = await prisma.slaveMessage.findUniqueOrThrow({ where: { id: card.subjectId }, select: { workspaceId: true, taskId: true, slaveId: true } })
-      await announceQuestionClosed(question, { ...close, note: input.personDecision.summary }, 'human', userId)
+      await announceQuestionClosed(question, { ...close, note: personDecision.summary }, 'human', userId)
     } catch (error) {
       console.error(`[cards] decision ${card.id}: its question's close event was not written:`, error)
     }
@@ -185,6 +230,25 @@ export async function afterClaim(card: PendingCard, input: ClaimInput, close: Cl
     await retireQuestionCards(card.workspaceId, card.subjectId, 'A person decided the question on another card.', input.now, card.id)
   } catch (error) {
     console.error(`[cards] decision ${card.id}: the other cards about its question were not retired:`, error)
+  }
+  const toAsker = personDecision.askerHandOff
+  const { goalVersion, askerRunId } = card.question
+  if (toAsker !== undefined && goalVersion !== null && askerRunId !== null) {
+    try {
+      // After the commit, with no lock held (`routeHandOffs`'s rule); idempotent by its key.
+      await routeHandOffs({
+        workspaceId: card.workspaceId,
+        goalVersion,
+        source: 'person',
+        sourceKey: personAskerHandOffSourceKey(card.id),
+        fromRunId: askerRunId,
+        // Nobody's own package: the asker's run has moved on, so its package is a real target.
+        fromPackageKey: null,
+        items: [{ package: toAsker.package, change: toAsker.change }],
+      })
+    } catch (error) {
+      console.error(`[cards] decision ${card.id}: its hand-off to the asking package waits for the next goal pass:`, error)
+    }
   }
 }
 
@@ -287,11 +351,14 @@ export async function decideCard(decisionId: string, raw: unknown, principal?: P
         personDecision: record(),
         close: { reason: 'dismissed', note: decidedResumeMessage(decision, { packageKey: null, askerPackageKey: question.askerPackageKey }) },
         now,
+        // A dismissal tells a run that has moved on nothing: it is not reopened to hear that its
+        // question was closed without an answer (final review I2; reported as a reading of H3).
+        toAsker: null,
       }
       const claimed = await inCardTransaction(card.id, () => prisma.$transaction((tx) => claimAndClose(tx, input)))
       if (!claimed.ok) return claimed
       await afterClaim(card, input, claimed.value)
-      return ok({ decision: decision.kind, summary: input.personDecision.summary })
+      return ok({ decision: decision.kind, summary: claimed.value.personDecision.summary })
     }
     case 'give_work':
     case 'record_decision':
@@ -359,8 +426,8 @@ async function decideAnswer(
     }
     return answered
   }
-  await afterClaim(card, input, null)
-  return ok({ decision: decision.kind, summary: personDecision.summary })
+  await afterClaim(card, input, claimed.value)
+  return ok({ decision: decision.kind, summary: claimed.value.personDecision.summary })
 }
 
 /** Ruling F38: what a held hand-off's summary adds -- the version is not integrating, so no run reads it yet. */
@@ -449,6 +516,8 @@ async function giveWork(
     // Ruling F57: work given to the asker's own package is worded as its work to do.
     close: { reason: 'decided', note: decidedResumeMessage(decision, target) },
     now,
+    // Final review I2: work given to the asking package reaches it as that very hand-off.
+    toAsker: resolved.key === card.question.askerPackageKey ? { kind: 'itself' } : { kind: 'message', text: decidedResumeMessage(decision, target) },
   }
   const claimed = await inCardTransaction(card.id, () => prisma.$transaction((tx) => claimAndClose(tx, input)))
   if (!claimed.ok) return claimed
@@ -467,7 +536,7 @@ async function giveWork(
     // Said and swallowed: the decision is committed; the goal pass routes it (`routeStoredPersonHandOffs`).
     console.error(`[cards] card ${card.id}: its hand-off waits for the next goal pass:`, error)
   }
-  return ok({ decision: decision.kind, summary })
+  return ok({ decision: decision.kind, summary: claimed.value.personDecision.summary })
 }
 
 /**
@@ -499,8 +568,9 @@ async function recordSharedDecision(
     personDecision: record(),
     close: { reason: 'decided', note: decidedResumeMessage(decision, { packageKey: null, askerPackageKey: card.question.askerPackageKey }) },
     now,
+    toAsker: { kind: 'message', text: decidedResumeMessage(decision, { packageKey: null, askerPackageKey: card.question.askerPackageKey }) },
   }
-  let claimed: Result<CloseQuestionInput | null, ControlRefusal>
+  let claimed: Result<Claimed, ControlRefusal>
   try {
     claimed = await inCardTransaction(card.id, () =>
       prisma.$transaction(async (tx) => {
@@ -523,7 +593,7 @@ async function recordSharedDecision(
   }
   if (!claimed.ok) return claimed
   await afterClaim(card, input, claimed.value)
-  return ok({ decision: decision.kind, summary: input.personDecision.summary })
+  return ok({ decision: decision.kind, summary: claimed.value.personDecision.summary })
 }
 
 /**
@@ -553,6 +623,7 @@ async function changeRequirement(
     personDecision: record(),
     close: { reason: 'superseded', note: decidedResumeMessage(decision, { packageKey: null, askerPackageKey: card.question.askerPackageKey }) },
     now,
+    toAsker: { kind: 'message', text: decidedResumeMessage(decision, { packageKey: null, askerPackageKey: card.question.askerPackageKey }) },
   }
   const claimed = await inCardTransaction(card.id, () =>
     prisma.$transaction(async (tx) => {
@@ -569,7 +640,7 @@ async function changeRequirement(
   } catch (error) {
     console.error(`[cards] card ${card.id}: goal v${String(claimed.value.changed.version)}'s event was not written:`, error)
   }
-  return ok({ decision: decision.kind, summary: input.personDecision.summary })
+  return ok({ decision: decision.kind, summary: claimed.value.close.personDecision.summary })
 }
 
 /**
@@ -643,6 +714,7 @@ async function giveFile(
         personDecision: record(plan.ok ? { grant: { path: plan.value.path, fromKey: plan.value.fromKey, toKey: plan.value.toKey } } : {}),
         close: { reason: 'decided', note: decidedResumeMessage(decision, { packageKey: decision.toPackage, askerPackageKey: card.question.askerPackageKey }) },
         now,
+        toAsker: { kind: 'message', text: decidedResumeMessage(decision, { packageKey: decision.toPackage, askerPackageKey: card.question.askerPackageKey }) },
       }
       const close = await claimAndClose(tx, input)
       // From here on the claim is written: every refusal THROWS.
@@ -674,5 +746,5 @@ async function giveFile(
   )
   if (!done.ok) return done
   await afterClaim(card, done.value.input, done.value.close)
-  return ok({ decision: decision.kind, summary: done.value.input.personDecision.summary })
+  return ok({ decision: decision.kind, summary: done.value.close.personDecision.summary })
 }

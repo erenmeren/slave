@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import {
   ANSWER_MAX_CHARS,
@@ -255,6 +255,35 @@ describe('CardDecisions (human cards H2)', () => {
     renderCard({ card: { askerWaiting: false, closed: timedOut, lateAnswerFate: 'hand_off' } })
     choose('write_answer')
     expect(note()).toContain('reaches the integration package as a hand-off')
+  })
+
+  it('says, beside each decision on a timed-out card, whether it reaches the asking package -- by the late answer\'s fate (final review I2)', () => {
+    renderCard({ card: { askerWaiting: false, closed: timedOut, lateAnswerFate: 'hand_off' } })
+    for (const kind of ['give_work', 'give_file', 'record_decision', 'change_requirement']) {
+      choose(kind)
+      expect(note()).toContain('The run continued without an answer; the integration package gets it as a hand-off.')
+    }
+    choose('dismiss')
+    expect(note()).toContain('the run is not told')
+    expect(note()).not.toContain('gets it as a hand-off')
+    cleanup()
+    renderCard({ card: { askerWaiting: false, closed: timedOut, lateAnswerFate: 'unread', offers: ['give_work', 'give_file', 'record_decision', 'change_requirement', 'dismiss'] } })
+    for (const kind of ['give_work', 'give_file', 'record_decision', 'change_requirement', 'dismiss']) {
+      choose(kind)
+      expect(note()).toContain('The run continued without an answer; the run is not told.')
+      expect(note()).not.toContain('hand-off.')
+    }
+  })
+
+  it('says a requirement change leaves a timed-out question closed as it timed out (M6)', () => {
+    renderCard({ card: { askerWaiting: false, closed: timedOut, lateAnswerFate: 'hand_off' } })
+    choose('change_requirement')
+    expect(note()).toContain('the question stays closed as it timed out (the first close stands)')
+    expect(note()).not.toContain('superseded')
+    cleanup()
+    renderCard()
+    choose('change_requirement')
+    expect(note()).toContain('this question is closed as superseded')
   })
 
   it("says an answer now reaches the task's next run when the asker has no package", () => {

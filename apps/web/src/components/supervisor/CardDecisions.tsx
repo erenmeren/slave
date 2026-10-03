@@ -34,14 +34,31 @@ const LABEL: Readonly<Record<CardDecisionKind, string>> = {
 
 /**
  * Spec H3: where an answer or a decision taken now on a question its run continued past goes -- the
- * one sentence the card's question state and its decisions both end with (ruling F37: the late
- * answer's fate as Plan A reads it, never the asker's package alone). Moved here from `ProposalRow`,
- * which imports it, so the two cannot say different things.
+ * one sentence the card's question state ends with (ruling F37: the late answer's fate as Plan A
+ * reads it, never the asker's package alone). Final review I2: a decision other than a dismissal
+ * reaches the asking package as a hand-off exactly when an answer would (`decideCard` routes it by
+ * the same fate, read again under the question's lock), and otherwise reaches no run. Moved here from
+ * `ProposalRow`, which imports it, so the two cannot say different things.
  */
 export function whereItGoes(card: QuestionCard): string {
-  if (card.lateAnswerFate === 'next_run') return "; an answer now reaches the task's next run, if it has one."
-  if (card.lateAnswerFate === 'unread') return '; no run would read an answer.'
-  return card.askerPackageKey === null ? '; an answer stays in its thread.' : `; a decision now reaches the ${card.askerPackageKey} package as a hand-off.`
+  if (card.lateAnswerFate === 'next_run') return "; an answer now reaches the task's next run, if it has one; a decision reaches no run."
+  if (card.lateAnswerFate === 'unread') return '; no run would read an answer or be told of a decision.'
+  if (card.lateAnswerFate === 'hand_off') return `; an answer or a decision (not a dismissal) now reaches the ${card.askerPackageKey ?? 'asking'} package as a hand-off.`
+  return '; an answer stays in its thread.'
+}
+
+/** Final review I2: what one decision taken now on a question its run continued past reaches -- the
+ *  per-decision half of {@link whereItGoes}, by the same fate. */
+function lateReach(kind: CardDecisionKind, card: QuestionCard): string {
+  const pkg = card.askerPackageKey ?? 'asking'
+  if (kind === 'send_answer' || kind === 'write_answer') {
+    if (card.lateAnswerFate === 'hand_off') return `; the answer reaches the ${pkg} package as a hand-off.`
+    if (card.lateAnswerFate === 'next_run') return "; the answer reaches the task's next run, if it has one."
+    return '; no run would read it.'
+  }
+  // A dismissal reopens nobody to say the question was closed.
+  if (kind === 'dismiss' || card.lateAnswerFate !== 'hand_off') return '; the run is not told.'
+  return `; the ${pkg} package gets it as a hand-off.`
 }
 
 /** What a draft adds beyond its words when it is sent as it is: a conductor draft's shared decision
@@ -60,6 +77,12 @@ function extrasWords(extras: { readonly decision: boolean; readonly handOff: boo
   return null
 }
 
+/** What giving a file does, and when it is refused. */
+function giveFileNote(card: QuestionCard): string {
+  void card
+  return "Moves one file to another package -- the only way a file changes owner -- and the goal report records it. It takes effect at that package's next run; refused while either package is running or the version is being verified."
+}
+
 /**
  * What choosing a decision will do -- the sentence the spec asks each card to say (H2), said before
  * anything is sent. Rulings F43/F61: the send note names a draft's decision and hand-off only when the
@@ -69,10 +92,8 @@ function extrasWords(extras: { readonly decision: boolean; readonly handOff: boo
 function noteFor(kind: CardDecisionKind, card: QuestionCard, draft: Draft | null): string {
   const extras = extrasWords(draftExtras(draft))
   const edited = draft?.editedBody !== undefined
-  const late =
-    card.closed?.reason === 'timed_out'
-      ? ` ${card.closed.runContinued ? 'The run continued without an answer' : 'The card expired with no decision'}${whereItGoes(card)}`
-      : ''
+  const timedOut = card.closed?.reason === 'timed_out'
+  const late = timedOut ? ` ${card.closed?.runContinued === true ? 'The run continued without an answer' : 'The card expired with no decision'}${lateReach(kind, card)}` : ''
   switch (kind) {
     case 'send_answer':
       if (edited) return `Sends the drafted answer as a person edited it${extras === null ? '' : `; as it was edited, the draft's ${extras} do not apply`}.${late}`
@@ -80,14 +101,16 @@ function noteFor(kind: CardDecisionKind, card: QuestionCard, draft: Draft | null
     case 'write_answer':
       return `Sends your words as the answer${extras === null || edited ? '' : `; the draft's ${extras.includes(' and ') ? 'decision and hand-off do' : `${extras} does`} not apply`}.${late}`
     case 'give_work':
-      return `The package that owns it is asked for the change (reopened if it has finished; refused for a finished package already reopened ${String(HANDOFF_REOPENS_MAX)} times)${card.askerWaiting ? '; the waiting run is told it is that package’s to make, or to make it itself when the work is its own package’s' : ''}. Name a package, or a file whose owner gets the work.`
+      return `The package that owns it is asked for the change (reopened if it has finished; refused for a finished package already reopened ${String(HANDOFF_REOPENS_MAX)} times)${card.askerWaiting ? '; the waiting run is told it is that package’s to make, or to make it itself when the work is its own package’s' : ''}. Name a package, or a file whose owner gets the work.${late}`
     case 'give_file':
-      return "Moves one file to another package -- the only way a file changes owner -- and the goal report records it. It takes effect at that package's next run; refused while either package is running or the version is being verified."
+      return `${giveFileNote(card)}${late}`
     case 'record_decision':
-      return `Adds a shared decision to ${card.goalVersion === null ? 'this goal version' : `goal v${String(card.goalVersion)}`}: every later contract of that version carries it.`
+      return `Adds a shared decision to ${card.goalVersion === null ? 'this goal version' : `goal v${String(card.goalVersion)}`}: every later contract of that version carries it.${late}`
     case 'change_requirement':
-      return 'Opens a new goal version from your change, planned anew; this question is closed as superseded.'
+      // M6: on a question its run continued past, the timeout's close stands.
+      return `Opens a new goal version from your change, planned anew; ${timedOut ? 'the question stays closed as it timed out (the first close stands)' : 'this question is closed as superseded'}.${late}`
     case 'dismiss':
+      if (timedOut) return `Settles the card without an answer; the question stays closed as it timed out.${late}`
       return card.askerWaiting
         ? 'Closes the question without an answer; the waiting run continues on its safest assumption, told your reason.'
         : 'Closes the question without an answer; no run is waiting on it.'

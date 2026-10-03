@@ -8,7 +8,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { CARD_BUSY_REASON, CardRefused, claimAndClose, decideCard, inCardTransaction, type PendingCard } from '../../src/cards.js'
 import { GoalDecisionRefused, lockGoalDecisions, writeGoalDecisionIn } from '../../src/conductorAnswer.js'
 import { withDeliveryLock } from '../../src/goalDelivery.js'
-import { routeStoredHandOffs } from '../../src/handOffs.js'
+import { handOffView, routeStoredHandOffs } from '../../src/handOffs.js'
 import { sendMessage } from '../../src/messaging.js'
 import { loadQuestionCards } from '../../src/questions.js'
 import { refusalText } from '../../src/refusal.js'
@@ -640,15 +640,128 @@ describe('decideCard on a question its run continued past (ruling F37)', () => {
     expect((await cardOf(f)).status).toBe('approved')
   })
 
-  it('dismisses without closing the question again', async () => {
+  it('dismisses without closing the question again, and says the run was not told', async () => {
     const f = await seedCard()
     await timeOut(f)
-    expect((await decideCard(f.cardId, { kind: 'dismiss', reason: 'moot' }, { userId: 'u1' })).ok).toBe(true)
+    const dismissed = await decideCard(f.cardId, { kind: 'dismiss', reason: 'moot' }, { userId: 'u1' })
+    expect(dismissed.ok && dismissed.value.summary).toBe('dismissed the question: moot; the run had already continued and was not told')
     expect(await questionOf(f)).toMatchObject({ closedReason: 'timed_out', closedBy: 'system' })
     expect((await cardOf(f)).status).toBe('rejected')
     expect(await closeEvents(f)).toBe(0)
+    // A dismissal reopens nobody to tell it the question was closed.
+    expect(await prisma.packageHandOff.count()).toBe(0)
+  })
+
+  it('routes a decision to the asking package as a person\'s hand-off when it would be delivered there (final review I2)', async () => {
+    const f = await seedCard()
+    await timeOut(f)
+    const [view] = await listDecisions(f.workspaceId, { pending: true })
+    expect(view?.card?.lateAnswerFate).toBe('hand_off')
+    const decided = await decideCard(f.cardId, { kind: 'record_decision', title: 'Start command', text: 'npm start' }, { userId: 'u1' })
+    expect(decided.ok && decided.value.summary).toBe('recorded the shared decision "Start command"; the run had already continued, so the integration package gets it as a hand-off')
+    const rows = await prisma.packageHandOff.findMany()
+    expect(rows).toMatchObject([{ source: 'person', sourceKey: `person:${f.cardId}:asker:0`, toPackageKey: 'integration', fromPackageKey: null, fromRunId: f.runId, packageKey: 'integration', status: 'pending' }])
+    expect(rows[0]?.change).toContain('A person recorded a shared decision for your goal version: "Start command" -- npm start')
+    // Rendered under the operator's heading, not the workers' trust line.
+    expect(handOffView(rows[0] ?? { id: '', fromPackageKey: null, path: null, packageKey: null, change: '' }).fromOperator).toBe(true)
+    // The first close stands.
+    expect(await questionOf(f)).toMatchObject({ closedReason: 'timed_out', closedBy: 'system' })
+    expect((await cardOf(f)).personDecision).toMatchObject({ askerHandOff: { package: 'integration' }, summary: 'recorded the shared decision "Start command"; the run had already continued, so the integration package gets it as a hand-off' })
+  })
+
+  it('routes work given to another package and tells the asking package; work given to the asking package is its one hand-off (final review I2)', async () => {
+    const f = await seedCard()
+    await timeOut(f)
+    const other = await decideCard(f.cardId, { kind: 'give_work', target: { package: 'api' }, request: 'expose GET /health' }, { userId: 'u1' })
+    expect(other.ok && other.value.summary).toBe('gave the api package work: expose GET /health; the run had already continued, so the integration package gets it as a hand-off')
+    expect(await prisma.packageHandOff.findMany({ orderBy: { sourceKey: 'asc' }, select: { sourceKey: true, toPackageKey: true } })).toEqual([
+      { sourceKey: `person:${f.cardId}:0`, toPackageKey: 'api' },
+      { sourceKey: `person:${f.cardId}:asker:0`, toPackageKey: 'integration' },
+    ])
+
+    await prisma.$executeRawUnsafe(TRUNCATE)
+    const g = await seedCard()
+    await timeOut(g)
+    const own = await decideCard(g.cardId, { kind: 'give_work', target: { package: 'integration' }, request: 'add the start script yourself' }, { userId: 'u1' })
+    expect(own.ok && own.value.summary).toBe('gave the integration package work: add the start script yourself; the run had already continued, so the integration package gets it as a hand-off')
+    expect(await prisma.packageHandOff.findMany({ select: { sourceKey: true, toPackageKey: true } })).toEqual([{ sourceKey: `person:${g.cardId}:0`, toPackageKey: 'integration' }])
+  })
+
+  it('routes nothing and says the run was not told when no run of the asking package would read it (final review I2)', async () => {
+    const f = await seedCard()
+    await timeOut(f)
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'verifying' } })
+    const [view] = await listDecisions(f.workspaceId, { pending: true })
+    expect(view?.card?.lateAnswerFate).toBe('unread')
+    const decided = await decideCard(f.cardId, { kind: 'record_decision', title: 'Start command', text: 'npm start' }, { userId: 'u1' })
+    expect(decided.ok && decided.value.summary).toBe('recorded the shared decision "Start command"; the run had already continued and was not told')
+    expect(await prisma.packageHandOff.count()).toBe(0)
+    expect((await cardOf(f)).personDecision).not.toHaveProperty('askerHandOff')
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'integrating' } })
+    await routeStoredHandOffs(f.deliveryId)
+    expect(await prisma.packageHandOff.count()).toBe(0)
+  })
+
+  it('says the run had already continued when the timeout wins while the person decides (final review I2, the same-tick race)', async () => {
+    const f = await seedCard()
+    // The card is read with its question open; the timeout pass closes it before the card's transaction.
+    const decided = await withTimeoutFirst(f, () => decideCard(f.cardId, { kind: 'change_requirement', request: 'The product must start with npm start.' }, { userId: 'u1' }))
+    expect(decided.ok && decided.value.summary).toBe('changed a requirement: The product must start with npm start.; the run had already continued, so the integration package gets it as a hand-off')
+    // M6: the first close stands -- the question is not closed again as superseded.
+    expect(await questionOf(f)).toMatchObject({ closedReason: 'timed_out', closedBy: 'system' })
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })).goalVersion).toBe(2)
+    const rows = await prisma.packageHandOff.findMany()
+    expect(rows).toMatchObject([{ sourceKey: `person:${f.cardId}:asker:0`, toPackageKey: 'integration', goalVersion: 1 }])
+    expect(rows[0]?.change).toContain('A person changed the requirements in answer to your question')
+
+    await prisma.$executeRawUnsafe(TRUNCATE)
+    const g = await seedCard()
+    await prisma.goalDelivery.update({ where: { id: g.deliveryId }, data: { status: 'verifying' } })
+    const dismissed = await withTimeoutFirst(g, () => decideCard(g.cardId, { kind: 'dismiss', reason: null }, { userId: 'u1' }))
+    expect(dismissed.ok && dismissed.value.summary).toBe('dismissed the question; the run had already continued and was not told')
+    expect(await questionOf(g)).toMatchObject({ closedReason: 'timed_out' })
+  })
+
+  it('routes the asking package\'s hand-off exactly once between the post-commit routing and the goal pass (final review I2)', async () => {
+    const f = await seedCard()
+    await timeOut(f)
+    expect((await decideCard(f.cardId, { kind: 'give_file', path: 'src/api/routes.ts', toPackage: 'skeleton' }, { userId: 'u1' })).ok).toBe(true)
+    const key = `person:${f.cardId}:asker:0`
+    expect(await prisma.packageHandOff.count({ where: { sourceKey: key } })).toBe(1)
+    await routeStoredHandOffs(f.deliveryId)
+    expect(await prisma.packageHandOff.count({ where: { sourceKey: key } })).toBe(1)
+    // A post-commit routing that never landed: the goal pass routes it, once, however often it runs.
+    await prisma.packageHandOff.deleteMany()
+    await Promise.all([routeStoredHandOffs(f.deliveryId), routeStoredHandOffs(f.deliveryId)])
+    await routeStoredHandOffs(f.deliveryId)
+    expect(await prisma.packageHandOff.findMany({ select: { sourceKey: true, toPackageKey: true, source: true, fromRunId: true } })).toEqual([
+      { sourceKey: key, toPackageKey: 'integration', source: 'person', fromRunId: f.runId },
+    ])
   })
 })
+
+/**
+ * Runs `decide` with the fixture's question timed out between `decideCard`'s unlocked read and its
+ * card transaction (the timeout pass winning the same tick). The shared client's `$transaction` is
+ * replaced by an assigned wrapper, restored in `finally` (not `vi.spyOn`).
+ */
+async function withTimeoutFirst<T>(f: CardFixture, decide: () => Promise<T>): Promise<T> {
+  const client = prisma as unknown as { $transaction: (...args: unknown[]) => Promise<unknown> }
+  const original = client.$transaction
+  let fired = false
+  client.$transaction = async (...args: unknown[]) => {
+    if (!fired) {
+      fired = true
+      await timeOut(f)
+    }
+    return original.apply(prisma, args)
+  }
+  try {
+    return await decide()
+  } finally {
+    client.$transaction = original
+  }
+}
 
 describe('listDecisions: a question card offers its decisions (plan B D7)', () => {
   beforeEach(async () => {

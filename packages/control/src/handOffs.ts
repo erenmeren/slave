@@ -3,7 +3,6 @@ import {
   CONDUCTOR_ROLE,
   HANDOFF_CHANGE_MAX_CHARS,
   HANDOFF_EVENT_CHANGE_MAX_CHARS,
-  cardDecisionSchema,
   displayName,
   HANDOFF_DELIVERING_STATUS,
   HANDOFF_REOPENS_MAX,
@@ -14,6 +13,7 @@ import {
   handOffRoute,
   isHandOffVersionEnded,
   lateAnswerChange,
+  personDecisionSchema,
   personText,
   renderHandOffQuestion,
   renderHandOffRework,
@@ -527,48 +527,76 @@ export function personHandOffSourceKey(decisionId: string): string {
   return `person:${decisionId}`
 }
 
+/** Final review I2: the key a decision's hand-off to the ASKING package is stored under (a decision
+ *  on a question its run had already continued past); its one item is `person:<decisionId>:asker:0`. */
+export function personAskerHandOffSourceKey(decisionId: string): string {
+  return `person:${decisionId}:asker`
+}
+
 /**
- * Human cards plan B D4: the goal pass's backstop for a person's `give_work` whose routing never
+ * Human cards plan B D4: the goal pass's backstop for a person's hand-offs whose routing never
  * landed (a busy delivery lock, or a crash, after the card committed) -- spec C2 "never dropped".
- * One query: the version's question cards a person decided with `give_work` (claimed `approved` or
- * `rejected`), asked by a run, with no row at `person:<decisionId>:0`. Idempotent by
- * {@link personHandOffSourceKey}; must run with no lock held ({@link routeHandOffs}). The stored
- * decision is read again by the one schema, and its request made inert as `decideCard` makes it.
+ * Two kinds, one sweep: a `give_work`'s work (`person:<decisionId>:0`), and (final review I2) a
+ * decision's hand-off to the asking package of a question its run had already continued past
+ * (`personDecision.askerHandOff`, written in the claim; `person:<decisionId>:asker:0`). One query:
+ * the version's question cards a person decided (claimed `approved` or `rejected`), asked by a run,
+ * that carry either and lack its row. Idempotent by {@link personHandOffSourceKey} and
+ * {@link personAskerHandOffSourceKey}; must run with no lock held ({@link routeHandOffs}). The stored
+ * decision is read again by the one schema, and its text made inert as `decideCard` makes it.
  */
 export async function routeStoredPersonHandOffs(deliveryId: string): Promise<void> {
-  const unrouted = await prisma.$queryRaw<{ id: string; workspaceId: string; goalVersion: number; decision: unknown; senderRunId: string }[]>`
-    SELECT s.id, s."workspaceId", d."goalVersion", s."personDecision" -> 'decision' AS decision, m."senderRunId"
+  const unrouted = await prisma.$queryRaw<{ id: string; workspaceId: string; goalVersion: number; personDecision: unknown; senderRunId: string; workUnrouted: boolean; askerUnrouted: boolean }[]>`
+    SELECT s.id, s."workspaceId", d."goalVersion", s."personDecision" AS "personDecision", m."senderRunId",
+      (s."personDecision" -> 'decision' ->> 'kind' = 'give_work'
+        AND NOT EXISTS (SELECT 1 FROM "PackageHandOff" h WHERE h."workspaceId" = d."workspaceId" AND h."sourceKey" = 'person:' || s.id || ':0')) AS "workUnrouted",
+      (jsonb_typeof(s."personDecision" -> 'askerHandOff') = 'object'
+        AND NOT EXISTS (SELECT 1 FROM "PackageHandOff" h WHERE h."workspaceId" = d."workspaceId" AND h."sourceKey" = 'person:' || s.id || ':asker:0')) AS "askerUnrouted"
     FROM "GoalDelivery" d
     JOIN "SupervisorDecision" s ON s."workspaceId" = d."workspaceId" AND s."personDecision" ->> 'goalVersion' = d."goalVersion"::text
     JOIN "SlaveMessage" m ON m.id = s."subjectId"
     WHERE d.id = ${deliveryId}
-      AND s."personDecision" -> 'decision' ->> 'kind' = 'give_work'
       AND s.status IN ('approved', 'rejected')
       AND m."senderRunId" IS NOT NULL
-      AND NOT EXISTS (SELECT 1 FROM "PackageHandOff" h WHERE h."workspaceId" = d."workspaceId" AND h."sourceKey" = 'person:' || s.id || ':0')
+      AND (
+        (s."personDecision" -> 'decision' ->> 'kind' = 'give_work'
+          AND NOT EXISTS (SELECT 1 FROM "PackageHandOff" h WHERE h."workspaceId" = d."workspaceId" AND h."sourceKey" = 'person:' || s.id || ':0'))
+        OR (jsonb_typeof(s."personDecision" -> 'askerHandOff') = 'object'
+          AND NOT EXISTS (SELECT 1 FROM "PackageHandOff" h WHERE h."workspaceId" = d."workspaceId" AND h."sourceKey" = 'person:' || s.id || ':asker:0'))
+      )
     ORDER BY s."resolvedAt", s.id`
   for (const row of unrouted) {
-    const decision = cardDecisionSchema.safeParse(row.decision)
-    if (!decision.success || decision.data.kind !== 'give_work') {
+    const stored = personDecisionSchema.safeParse(row.personDecision)
+    if (!stored.success) {
       console.error(`[hand-off] card ${row.id}: its person's decision cannot be read -- not routed`)
       continue
     }
-    const { target, request } = decision.data
-    const change = personText(request, HANDOFF_CHANGE_MAX_CHARS)
-    // One card that throws is said and skipped; the next pass retries it (no row at `person:<id>:0`).
-    try {
-      await routeHandOffs({
+    const route = (sourceKey: string, item: HandOffItem): Promise<unknown> =>
+      routeHandOffs({
         workspaceId: row.workspaceId,
         goalVersion: row.goalVersion,
         source: 'person',
-        sourceKey: personHandOffSourceKey(row.id),
+        sourceKey,
         fromRunId: row.senderRunId,
         // Nobody's own package (plan B D4): the asker's own package is a real target.
         fromPackageKey: null,
-        items: ['package' in target ? { package: target.package, change } : { path: target.path, change }],
+        items: [item],
       })
-    } catch (error) {
-      console.error(`[hand-off] card ${row.id}: its person's hand-off was not routed this pass:`, error)
+    const { decision, askerHandOff } = stored.data
+    // One card that throws is said and skipped; the next pass retries it (no row at its key).
+    if (row.workUnrouted && decision.kind === 'give_work') {
+      const change = personText(decision.request, HANDOFF_CHANGE_MAX_CHARS)
+      try {
+        await route(personHandOffSourceKey(row.id), 'package' in decision.target ? { package: decision.target.package, change } : { path: decision.target.path, change })
+      } catch (error) {
+        console.error(`[hand-off] card ${row.id}: its person's hand-off was not routed this pass:`, error)
+      }
+    }
+    if (row.askerUnrouted && askerHandOff !== undefined) {
+      try {
+        await route(personAskerHandOffSourceKey(row.id), { package: askerHandOff.package, change: personText(askerHandOff.change, HANDOFF_CHANGE_MAX_CHARS) })
+      } catch (error) {
+        console.error(`[hand-off] card ${row.id}: its decision's hand-off to the asking package was not routed this pass:`, error)
+      }
     }
   }
 }
