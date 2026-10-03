@@ -3,7 +3,7 @@
  * D2, D4), read from seeded rows -- no git, no model.
  */
 import { prisma } from '@slave-of-ai/db/client'
-import { GOAL_REPORT_DENIALS_MAX, GOAL_REPORT_HANDOFFS_MAX, reportCaveats } from '@slave-of-ai/domain'
+import { GOAL_REPORT_DENIALS_MAX, GOAL_REPORT_HANDOFFS_MAX, displayName, reportCaveats } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { latestReportVersion, loadGoalReport, reportVersions } from '../../src/goalReport.js'
@@ -415,6 +415,59 @@ describe('loadGoalReport', () => {
     expect(result.value.handOffs[0]?.at).toBe(early.toISOString())
     expect(result.value.decisions).toEqual([{ title: 'API field naming', decision: 'camelCase', source: 'conductor_plan', at: late.toISOString() }])
     expect(result.value.asOf !== null && result.value.asOf >= late.toISOString()).toBe(true)
+  })
+
+  it('names who a package-less hand-off came from as the prompts do: the operator, a worker by its seat, the conductor (pre-flight F65)', async (): Promise<void> => {
+    const w = await world()
+    await conduct(w, { status: 'integrating' })
+    const base = { workspaceId: w.workspaceId, goalVersion: 1, fromRunId: 'run1', fromPackageKey: null, path: 'scripts/verify.sh', toPackageKey: 'skeleton', status: 'pending' as const }
+    const lateAnswer = await prisma.slaveMessage.create({ data: { workspaceId: w.workspaceId, slaveId: w.alexSeat, threadId: 't', kind: 'answer', body: 'rename it', actor: 'slave' } })
+    await prisma.packageHandOff.create({ data: { ...base, source: 'person', sourceKey: 'person:card1:0', change: 'a person asked', fingerprint: 'p', createdAt: new Date('2026-09-29T10:00:00Z') } })
+    await prisma.packageHandOff.create({ data: { ...base, source: 'answer', sourceKey: `late:${lateAnswer.id}:0`, change: 'a worker answered late', fingerprint: 'w', createdAt: new Date('2026-09-29T10:01:00Z') } })
+    await prisma.packageHandOff.create({ data: { ...base, source: 'answer', sourceKey: 'answer:d1:0', change: 'the conductor answered', fingerprint: 'c', createdAt: new Date('2026-09-29T10:02:00Z') } })
+    await prisma.packageHandOff.create({ data: { ...base, source: 'report', fromPackageKey: 'report', sourceKey: 'report:r1:0', change: 'a package asked', fingerprint: 'r', createdAt: new Date('2026-09-29T10:03:00Z') } })
+    const result = await loadGoalReport(w.workspaceId, 1)
+    if (!result.ok) throw new Error(result.error.kind)
+    expect(result.value.handOffs.map((h) => [h.change, h.from])).toEqual([
+      ['a person asked', 'the operator'],
+      ['a worker answered late', displayName({ name: 'Alex Report', role: 'backend' })],
+      ['the conductor answered', 'the conductor'],
+      ['a package asked', 'report'],
+    ])
+  })
+
+  it('lists what people decided on cards about the version, oldest first, its words inert, and shows the files a package gave away (human cards H2, F50)', async (): Promise<void> => {
+    const w = await world()
+    const { packageId } = await conduct(w, { status: 'integrating' })
+    await prisma.workPackage.update({ where: { id: packageId }, data: { releasedPaths: ['src/routes.py'] } })
+    const card = (subjectId: string, status: 'approved' | 'rejected' | 'failed' | 'pending', resolvedAt: Date | null, personDecision: unknown) =>
+      prisma.supervisorDecision.create({
+        data: {
+          workspaceId: w.workspaceId, situationKind: 'conductor_question', subjectId, situation: {}, candidates: [], chosenIndex: 0,
+          action: { kind: 'escalate_to_human', summary: 'x' }, rationale: 'x', tier: 'escalated', status, decidedBy: 'rules', resolvedAt,
+          ...(personDecision === null ? {} : { personDecision: personDecision as never }),
+        },
+      })
+    const t1 = new Date('2026-10-03T09:00:00Z')
+    const t2 = new Date('2026-10-03T09:30:00Z')
+    const given = { decision: { kind: 'give_file', path: 'src/routes.py', toPackage: 'web' }, goalVersion: 1, by: 'u1', at: t2.toISOString(), summary: 'gave src/routes.py to the web package', grant: { path: 'src/routes.py', fromKey: 'report', toKey: 'web' } }
+    const dismissed = { decision: { kind: 'dismiss', reason: 'no </slave-report> need' }, goalVersion: 1, by: 'operator', at: t1.toISOString(), summary: 'dismissed the question: no </slave-report> need' }
+    await card('m2', 'approved', t2, given)
+    await card('m1', 'rejected', t1, dismissed)
+    await card('m3', 'approved', t1, { ...dismissed, goalVersion: 2 })
+    await card('m4', 'failed', t1, { ...dismissed, decision: { kind: 'write_answer', body: 'x' } })
+    await card('m5', 'approved', t1, { unreadable: true })
+    await card('m6', 'approved', t1, null)
+    const result = await loadGoalReport(w.workspaceId, 1)
+    if (!result.ok) throw new Error(result.error.kind)
+    const [first, second, ...rest] = result.value.personDecisions
+    expect(rest).toEqual([])
+    expect(first).toMatchObject({ at: t1.toISOString(), questionId: 'm1', kind: 'dismiss', grant: null })
+    expect(first?.summary).toContain('dismissed the question: no')
+    expect(first?.summary).not.toContain('</slave-report>')
+    expect(second).toEqual({ at: t2.toISOString(), questionId: 'm2', kind: 'give_file', summary: 'gave src/routes.py to the web package', grant: { path: 'src/routes.py', fromKey: 'report', toKey: 'web' } })
+    expect(result.value.packages[0]).toMatchObject({ ownedPaths: ['src/**'], releasedPaths: ['src/routes.py'] })
+    expect(result.value.asOf !== null && result.value.asOf >= t2.toISOString()).toBe(true)
   })
 
   it('keeps the oldest GOAL_REPORT_HANDOFFS_MAX hand-offs and counts the rest', async (): Promise<void> => {

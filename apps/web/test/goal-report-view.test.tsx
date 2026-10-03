@@ -29,7 +29,7 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
     rounds: [{ round: 1, runId: 'run-v1', verifier: 'Sam', commit: 'c'.repeat(40), at: '2026-09-29T10:04:00.000Z', pass: 1, fail: 0, unverifiable: 0 }],
     packages: [
       {
-        key: 'report', title: 'CSV mode', isIntegration: false, requirementKeys: ['R1'], ownedPaths: ['src/**'], dependsOn: [], persona: 'Backend Engineer',
+        key: 'report', title: 'CSV mode', isIntegration: false, requirementKeys: ['R1'], ownedPaths: ['src/**'], releasedPaths: [], dependsOn: [], persona: 'Backend Engineer',
         seat: 'Alex', taskId: 't1', taskStatus: 'done', integrated: true, mergedFiles: ['src/csv.py'], mergedFilesTruncated: false, reportedFiles: ['src/csv.py'],
         report: null, implementationRuns: 1,
       },
@@ -45,6 +45,7 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
     smoke: [],
     handOffs: [],
     handOffsOmitted: 0,
+    personDecisions: [],
     decisions: [],
     deniedToolCalls: [],
     deniedToolCallsOmitted: 0,
@@ -309,7 +310,7 @@ describe('GoalReportView', () => {
       render(
         <GoalReportView
           report={report({
-            handOffs: [{ id: 'h1', at, source: 'report', fromPackage: 'report', toPackage: 'skeleton', path: 'scripts/verify.sh', packageKey: null, change: 'run pytest', status: 'reopened', note: null }],
+            handOffs: [{ id: 'h1', at, source: 'report', fromPackage: 'report', from: 'report', toPackage: 'skeleton', path: 'scripts/verify.sh', packageKey: null, change: 'run pytest', status: 'reopened', note: null }],
             decisions: [{ title: 'API field naming', decision: 'camelCase', source: 'conductor_plan', at }],
           })}
         />,
@@ -318,8 +319,12 @@ describe('GoalReportView', () => {
       expect(screen.getByTestId('goal-report-handoff').textContent).toContain('reopened for it: run pytest')
       expect(screen.getByTestId('goal-report-decision').textContent).toContain('API field naming')
     })
+    it('names who a package-less hand-off came from (pre-flight F65)', () => {
+      render(<GoalReportView report={report({ handOffs: [{ id: 'h1', at, source: 'person', fromPackage: null, from: 'the operator', toPackage: 'skeleton', path: null, packageKey: 'skeleton', change: 'c', status: 'pending', note: null }] })} />)
+      expect(screen.getByTestId('goal-report-handoff').textContent).toContain('the operator → skeleton')
+    })
     it('counts the hand-offs it left out', () => {
-      render(<GoalReportView report={report({ handOffs: [{ id: 'h1', at, source: 'report', fromPackage: 'a', toPackage: 'b', path: null, packageKey: null, change: 'c', status: 'own', note: null }], handOffsOmitted: 7 })} />)
+      render(<GoalReportView report={report({ handOffs: [{ id: 'h1', at, source: 'report', fromPackage: 'a', from: 'a', toPackage: 'b', path: null, packageKey: null, change: 'c', status: 'own', note: null }], handOffsOmitted: 7 })} />)
       expect(screen.getByTestId('goal-report-handoffs-omitted').textContent).toContain('and 7 more')
       expect(screen.getByTestId('goal-report-handoff').textContent).toContain("nothing was sent")
     })
@@ -333,7 +338,7 @@ describe('GoalReportView', () => {
       const { container } = render(
         <GoalReportView
           report={report({
-            handOffs: [{ id: 'h1', at, source: 'report', fromPackage: 'a', toPackage: 'b', path: null, packageKey: null, change: hostile, status: 'expired', note: hostile }],
+            handOffs: [{ id: 'h1', at, source: 'report', fromPackage: 'a', from: 'a', toPackage: 'b', path: null, packageKey: null, change: hostile, status: 'expired', note: hostile }],
             decisions: [{ title: hostile, decision: hostile, source: 'person', at }],
           })}
         />,
@@ -341,6 +346,39 @@ describe('GoalReportView', () => {
       expect(container.querySelector('img')).toBe(null)
       expect(screen.getByTestId('goal-report-handoff').textContent).toContain(hostile)
       expect(screen.getByTestId('goal-report-decision').textContent).toContain(hostile)
+    })
+  })
+  describe('decided on cards (human cards H2)', () => {
+    it('lists each decision with its time, after the questions, its words as text', () => {
+      const hostile = 'dismissed the question: <img src=x onerror=alert(1)>'
+      const { container } = render(
+        <GoalReportView
+          report={report({
+            personDecisions: [
+              { at: '2026-10-03T09:00:00.000Z', questionId: 'm1', kind: 'give_file', summary: 'gave src/api/routes.ts to the web package', grant: { path: 'src/api/routes.ts', fromKey: 'api', toKey: 'web' } },
+              { at: '2026-10-03T09:05:00.000Z', questionId: 'm2', kind: 'dismiss', summary: hostile, grant: null },
+            ],
+          })}
+        />,
+      )
+      const rows = screen.getAllByTestId('goal-report-person-decision')
+      expect(rows.map((row) => row.textContent)).toEqual([
+        '2026-10-03 09:00 UTC gave src/api/routes.ts to the web package (taken from the api package)',
+        `2026-10-03 09:05 UTC ${hostile}`,
+      ])
+      expect(container.querySelector('img')).toBe(null)
+      const text = container.textContent ?? ''
+      expect(text.indexOf('Decided on cards')).toBeGreaterThan(text.indexOf('No questions were asked.'))
+    })
+    it('says so when nothing was decided on a card', () => {
+      render(<GoalReportView report={report()} />)
+      expect(screen.getByText('Nothing was decided on a card.')).toBeTruthy()
+    })
+    it('shows the files a person gave away from a package (ruling F50)', () => {
+      const base = report().packages[0]
+      if (base === undefined) throw new Error('fixture')
+      render(<GoalReportView report={report({ packages: [{ ...base, releasedPaths: ['src/routes.py'] }] })} />)
+      expect(screen.getByTestId('goal-report-package').textContent).toContain('Given by a person to another package: src/routes.py')
     })
   })
 })

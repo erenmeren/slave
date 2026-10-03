@@ -25,6 +25,7 @@ import {
   type GoalReportState,
   type GoalReportVerdictStatus,
 } from '@slave-of-ai/domain'
+import { formatUtcMinute } from '../../lib/format'
 import { Alert } from '../ui/Alert'
 import { Panel } from '../ui/Panel'
 import { ScrollArea } from '../ui/ScrollArea'
@@ -259,7 +260,7 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
           <ul className="flex flex-col gap-1 text-[13px] text-t2">
             {report.handOffs.map((h) => (
               <li key={h.id} data-testid="goal-report-handoff">
-                {h.fromPackage ?? 'the conductor'} → {h.toPackage ?? 'no package'}
+                {h.from} → {h.toPackage ?? 'no package'}
                 {(h.path ?? h.packageKey) !== null && (
                   <>
                     {' '}
@@ -337,6 +338,11 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
             <p>
               Owns: <span className="font-mono text-[12px]">{pkg.ownedPaths.join(', ')}</span>
             </p>
+            {pkg.releasedPaths.length > 0 && (
+              <p>
+                Given by a person to another package: <span className="font-mono text-[12px]">{pkg.releasedPaths.join(', ')}</span>
+              </p>
+            )}
             {pkg.dependsOn.length > 0 && <p>Depends on: {pkg.dependsOn.join(', ')}</p>}
             <p>
               Task: {pkg.taskStatus ?? 'none'}
@@ -493,6 +499,25 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
             )}
           </div>
         ))}
+      </Panel>
+
+      {/* Human cards H1/H2: every decision a person took on a card -- closing is a recorded decision.
+        * The summary is built from the person's words: a JSX child, like every other quote. */}
+      <Panel title="Decided on cards">
+        {report.personDecisions.length === 0 ? (
+          <p className="text-[13px] text-t2">Nothing was decided on a card.</p>
+        ) : (
+          <ul className="flex flex-col gap-1 text-[13px] text-t2">
+            {report.personDecisions.map((d, index) => (
+              <li key={`${d.questionId}-${String(index)}`}>
+                <p data-testid="goal-report-person-decision">
+                  <span className="font-mono text-[11.5px] text-t3">{formatUtcMinute(d.at)}</span> {d.summary}
+                  {d.grant?.fromKey != null && ` (taken from the ${d.grant.fromKey} package)`}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
       </Panel>
 
       <p className="text-[12px] text-t3">Built from Slave&apos;s records of this goal version. Quoted text is marked with who wrote it.</p>

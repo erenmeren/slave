@@ -59,7 +59,8 @@ export function questionTaskHref(workspaceId: string, taskId: string): string {
  * `report`, no clock read, no sorting of its own) and inert (every value another party wrote goes
  * through `mdInline`, `mdFence` or `mdQuote`). Sections, in order: state, what to know, why it
  * stopped, a refused merge, goal, requirements, rounds, smoke checks, shared decisions, hand-offs, evidence, packages, denied
- * tool calls, spend, decision trail, runs that continued without an answer (when any), questions.
+ * tool calls, spend, decision trail, runs that continued without an answer (when any), questions,
+ * what was decided on cards.
  */
 export function renderGoalReportMarkdown(report: GoalReport): string {
   const lines: string[] = []
@@ -151,7 +152,7 @@ export function renderGoalReportMarkdown(report: GoalReport): string {
       const what = h.path ?? h.packageKey
       const note = handOffNote(h)
       lines.push(
-        `- ${mdInline(h.fromPackage ?? 'the conductor')} → ${mdInline(h.toPackage ?? 'no package')}${what === null ? '' : ` (${mdInline(what)})`}, ` +
+        `- ${mdInline(h.from)} → ${mdInline(h.toPackage ?? 'no package')}${what === null ? '' : ` (${mdInline(what)})`}, ` +
           `${mdInline(HAND_OFF_STATUS_LABEL[h.status])}${note === null ? '' : ` (${mdInline(note)})`}: ${mdInline(h.change)}`,
       )
     }
@@ -185,6 +186,7 @@ export function renderGoalReportMarkdown(report: GoalReport): string {
     lines.push(`- Seat: ${pkg.seat === null ? 'none' : mdInline(pkg.seat)}${pkg.persona === null ? '' : ` (persona ${mdInline(pkg.persona)})`}`)
     lines.push(`- Requirements: ${pkg.requirementKeys.length === 0 ? 'none of its own' : pkg.requirementKeys.map(mdInline).join(', ')}`)
     lines.push(`- Owns: ${pkg.ownedPaths.map(mdInline).join(', ')}`)
+    if (pkg.releasedPaths.length > 0) lines.push(`- Given by a person to another package: ${pkg.releasedPaths.map(mdInline).join(', ')}`)
     if (pkg.dependsOn.length > 0) lines.push(`- Depends on: ${pkg.dependsOn.map(mdInline).join(', ')}`)
     lines.push(
       `- Task: ${pkg.taskStatus === null ? 'none' : mdInline(pkg.taskStatus)}${pkg.integrated ? integratedWhere(report) : ''}; ` +
@@ -262,6 +264,15 @@ export function renderGoalReportMarkdown(report: GoalReport): string {
       lines.push(`  Closed: ${questionClosedWords(q.closed)} (${GOAL_REPORT_CLOSED_BY[q.closed.by]}, ${mdInline(q.closed.at)}).`, '')
     }
   }
+
+  // Human cards H1/H2: every decision a person took on a card -- closing is a recorded decision.
+  lines.push('## Decided on cards', '')
+  if (report.personDecisions.length === 0) lines.push('Nothing was decided on a card.', '')
+  for (const d of report.personDecisions) {
+    const from = d.grant?.fromKey == null ? '' : ` (taken from the ${mdInline(d.grant.fromKey)} package)`
+    lines.push(`- ${mdInline(d.at)} · ${mdInline(d.summary)}${from}`)
+  }
+  if (report.personDecisions.length > 0) lines.push('')
 
   lines.push('---', '', "Built from Slave's records of this goal version. Quoted text is marked with who wrote it.")
   return `${lines.join('\n').trimEnd()}\n`

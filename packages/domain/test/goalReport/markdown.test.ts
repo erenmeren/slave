@@ -22,6 +22,7 @@ function pkg(over: Partial<GoalReportPackage> = {}): GoalReportPackage {
     isIntegration: false,
     requirementKeys: ['R1'],
     ownedPaths: ['src/report/**'],
+    releasedPaths: [],
     dependsOn: [],
     persona: 'Backend Engineer',
     seat: 'Alex',
@@ -101,6 +102,7 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
     smoke: [],
     handOffs: [],
     handOffsOmitted: 0,
+    personDecisions: [],
     decisions: [],
     deniedToolCalls: [],
     deniedToolCallsOmitted: 0,
@@ -308,6 +310,29 @@ describe('renderGoalReportMarkdown', () => {
     expect(lines.slice(notAskedIdx, notAskedIdx + 4)).toEqual(['- 2026-09-29T10:02:30.000Z · report asked:', '  > Quote all?', '', '  Not answered.'])
   })
 
+  it('lists what a person decided on cards (human cards H2)', () => {
+    const md = renderGoalReportMarkdown(
+      report({
+        personDecisions: [
+          { at: '2026-10-03T09:00:00.000Z', questionId: 'm1', kind: 'give_file', summary: 'gave src/api/routes.ts to the web package', grant: { path: 'src/api/routes.ts', fromKey: 'api', toKey: 'web' } },
+          { at: '2026-10-03T09:05:00.000Z', questionId: 'm2', kind: 'dismiss', summary: 'dismissed the question: <b>not</b> needed', grant: null },
+        ],
+      }),
+    )
+    expect(md).toContain('## Decided on cards')
+    expect(md).toContain('- 2026-10-03T09:00:00.000Z · gave src/api/routes.ts to the web package (taken from the api package)')
+    expect(md).toContain('- 2026-10-03T09:05:00.000Z · dismissed the question: &lt;b&gt;not&lt;/b&gt; needed')
+    expect(md.indexOf('## Decided on cards')).toBeGreaterThan(md.indexOf('## Questions'))
+    expect(md.indexOf('## Decided on cards')).toBeLessThan(md.lastIndexOf('\n---\n'))
+    expect(renderGoalReportMarkdown(report())).toContain('## Decided on cards\n\nNothing was decided on a card.')
+  })
+
+  it('says which files a person gave away from a package (ruling F50)', () => {
+    const md = renderGoalReportMarkdown(report({ packages: [pkg({ releasedPaths: ['src/report/routes.ts'] })] }))
+    expect(md).toContain('- Owns: src/report/\\*\\*\n- Given by a person to another package: src/report/routes.ts')
+    expect(renderGoalReportMarkdown(report())).not.toContain('Given by a person')
+  })
+
   it('writes the stop reason and the merge git refused where they exist', () => {
     const d = report().delivery!
     const md = renderGoalReportMarkdown(
@@ -420,7 +445,7 @@ describe('renderGoalReportMarkdown', () => {
   })
   describe('hand-offs and shared decisions (spec C2, C3)', () => {
     const handOff = {
-      id: 'h1', at: '2026-10-01T10:00:00.000Z', source: 'report' as const, fromPackage: 'report', toPackage: 'skeleton',
+      id: 'h1', at: '2026-10-01T10:00:00.000Z', source: 'report' as const, fromPackage: 'report', from: 'report', toPackage: 'skeleton',
       path: 'scripts/verify.sh', packageKey: null, change: 'run pytest <b>-k</b> report', status: 'reopened' as const, note: null,
     }
     it("lists each hand-off with where it went, escaping the worker's words", () => {
@@ -431,6 +456,20 @@ describe('renderGoalReportMarkdown', () => {
       expect(md).toContain('- report → skeleton (scripts/verify.sh), reopened for it: run pytest &lt;b&gt;-k&lt;/b&gt; report')
       expect(md).toContain('asked the conductor (no target found')
       expect(md).not.toContain('<b>')
+    })
+    it('names who a package-less hand-off came from: the operator, a worker by its seat, the conductor (pre-flight F65)', () => {
+      const md = renderGoalReportMarkdown(
+        report({
+          handOffs: [
+            { ...handOff, id: 'p', source: 'person', fromPackage: null, from: 'the operator', change: 'add a start script' },
+            { ...handOff, id: 'w', source: 'answer', fromPackage: null, from: 'Ivo (Implementer)', change: 'rename it' },
+            { ...handOff, id: 'c', source: 'answer', fromPackage: null, from: 'the conductor', change: 'pin node' },
+          ],
+        }),
+      )
+      expect(md).toContain('- the operator → skeleton (scripts/verify.sh), reopened for it: add a start script')
+      expect(md).toContain('- Ivo \\(Implementer\\) → skeleton')
+      expect(md).toContain('- the conductor → skeleton')
     })
     it('lists the shared decisions with who made them', () => {
       const md = renderGoalReportMarkdown(report({ decisions: [{ title: 'API field naming', decision: 'camelCase', source: 'conductor_plan', at: '2026-10-01T10:00:00.000Z' }] }))
