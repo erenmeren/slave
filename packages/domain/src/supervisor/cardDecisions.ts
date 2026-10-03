@@ -18,6 +18,12 @@ export type CardDecision =
   | { readonly kind: 'change_requirement'; readonly request: string }
   | { readonly kind: 'dismiss'; readonly reason: string | null }
 
+/** The bound on a path a card decision names (`give_work`'s file target, `give_file`'s file), shared
+ *  with the card's form in the browser so the limit a person is shown is the one the route enforces. */
+export const CARD_PATH_MAX_CHARS = 500
+/** The bound on a package key a card decision names -- the same sharing as {@link CARD_PATH_MAX_CHARS}. */
+export const CARD_PACKAGE_KEY_MAX_CHARS = 40
+
 const text = (max: number): z.ZodString => z.string().trim().min(1).max(max)
 
 /** Plan B D1: the one validator of a card decision -- the route's 400 and `decideCard`'s own check. */
@@ -28,11 +34,11 @@ export const cardDecisionSchema: z.ZodType<CardDecision, z.ZodTypeDef, unknown> 
     .object({
       kind: z.literal('give_work'),
       // Exactly one of a package or a path: a path is resolved to its owner by `resolveHandOff`.
-      target: z.union([z.object({ package: text(40) }).strict(), z.object({ path: text(500) }).strict()]),
+      target: z.union([z.object({ package: text(CARD_PACKAGE_KEY_MAX_CHARS) }).strict(), z.object({ path: text(CARD_PATH_MAX_CHARS) }).strict()]),
       request: text(HANDOFF_CHANGE_MAX_CHARS),
     })
     .strict(),
-  z.object({ kind: z.literal('give_file'), path: text(500), toPackage: text(40) }).strict(),
+  z.object({ kind: z.literal('give_file'), path: text(CARD_PATH_MAX_CHARS), toPackage: text(CARD_PACKAGE_KEY_MAX_CHARS) }).strict(),
   z.object({ kind: z.literal('record_decision'), title: text(SHARED_DECISION_TITLE_MAX_CHARS), text: text(SHARED_DECISION_TEXT_MAX_CHARS) }).strict(),
   z.object({ kind: z.literal('change_requirement'), request: text(PERSON_CARD_TEXT_MAX_CHARS) }).strict(),
   z.object({ kind: z.literal('dismiss'), reason: z.string().trim().max(PERSON_CARD_TEXT_MAX_CHARS).nullable() }).strict(),

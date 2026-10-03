@@ -208,6 +208,9 @@ export function SupervisorTimeline({
                     // empty one.
                     onApprove={(body) => void send(rowId, `${url}/approve`, body === undefined ? undefined : { body })}
                     onReject={(reason) => void send(rowId, `${url}/reject`, reason.trim() === '' ? {} : { reason })}
+                    // Human cards H2: a question card's decision, posted as the decide route's body.
+                    // Through the same `send`, so a card settled first is a notice and a refresh.
+                    onDecide={(body) => void send(rowId, `${url}/decide`, body)}
                   />
                   {error !== null && <li>{error}</li>}
                 </ul>

@@ -542,13 +542,15 @@ export function OrganizationNeeds({
                     busy={busyId === decision.id}
                     onApprove={(body) => void send(decision.id, 'approve', body === undefined ? undefined : { body })}
                     onReject={(reason) => void send(decision.id, 'reject', reason.trim() === '' ? undefined : { reason })}
+                    // Human cards H2: harmless here today (this list holds only capability
+                    // decisions, never a question card), and the same row decides one if it ever does.
+                    onDecide={(body) => void send(decision.id, 'decide', body)}
                   />
                   {errors[decision.id] !== undefined && (
                     <li role="alert" data-testid="organization-error" className="text-[11px] text-tone-blocked">
                       {errors[decision.id]}
                     </li>
                   )}
-
                 </ul>
               ))}
             </section>

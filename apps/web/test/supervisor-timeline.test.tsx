@@ -330,3 +330,105 @@ describe('SupervisorTimeline', () => {
     expect(screen.getByTestId('supervisor-timeline')).toBeTruthy()
   })
 })
+
+// Human cards plan B, Task 7: a question card in the DECISION REQUIRED lane is decided through the
+// decide route, by the same `send` -- so a card somebody settled first is a notice and a refresh.
+describe('SupervisorTimeline: a question card is decided in place (human cards H2)', () => {
+  const QUESTION_CARD_ENTRY: TimelineEntry = {
+    ...DECISION_ENTRY,
+    key: 'decision-d2',
+    decision: {
+      ...DECISION_ENTRY.decision!,
+      id: 'd2',
+      situationKind: 'conductor_question',
+      subjectId: 'm2',
+      situation: { kind: 'conductor_question', subjectId: 'm2', summary: 'a question to the conductor', facts: {} },
+      action: { kind: 'escalate_to_human', summary: 'a person decides' },
+      card: {
+        messageId: 'm2',
+        body: 'May I add a start script?',
+        goalVersion: 1,
+        askerPackageKey: 'integration',
+        askerRunId: 'r1',
+        askerWaiting: true,
+        closed: null,
+        timeoutRefusal: null,
+        lateAnswerNote: null,
+        lateAnswerFate: null,
+        packages: [{ key: 'skeleton', title: 'skeleton', isIntegration: false }],
+        offers: ['write_answer', 'give_work', 'give_file', 'record_decision', 'change_requirement', 'dismiss'],
+      },
+    },
+  }
+
+  const giveWork = (): void => {
+    fireEvent.click(screen.getByTestId('card-decision-give_work'))
+    type(screen.getByTestId('card-target-package'), 'skeleton')
+    type(screen.getByTestId('card-text'), 'Add a start script.')
+  }
+
+  it('posts the decision to the decide route as its JSON body, with no bare approve on the card', async () => {
+    stubFetch({ ok: true, outcome: { decision: 'give_work', summary: 'gave the skeleton package work: Add a start script.' } })
+    render(<SupervisorTimeline workspaceId="w1" entries={[QUESTION_CARD_ENTRY]} needsYou={[]} />)
+    expect(screen.queryByTestId('supervisor-approve')).toBeNull()
+
+    giveWork()
+    await click(screen.getByTestId('card-decide'))
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/supervisor/decisions/d2/decide', expect.objectContaining({ method: 'POST' }))
+    const init = fetchMock.mock.calls[0]?.[1] as { body?: string }
+    expect(JSON.parse(init.body ?? '')).toEqual({ kind: 'give_work', target: { package: 'skeleton' }, request: 'Add a start script.' })
+    expect(screen.queryByTestId('timeline-error')).toBeNull()
+  })
+
+  it('shows a card somebody else closed first as information and refreshes, not as an error (F41/F67)', async () => {
+    stubFetch({ error: 'question m2 was closed', notice: 'Already closed by alice at 2026-10-02 10:00 UTC.' }, 409)
+    const onRefresh = vi.fn()
+    render(<SupervisorTimeline workspaceId="w1" entries={[QUESTION_CARD_ENTRY]} needsYou={[]} onRefresh={onRefresh} />)
+
+    fireEvent.click(screen.getByTestId('card-decision-dismiss'))
+    await click(screen.getByTestId('card-decide'))
+    await click(screen.getByTestId('card-decide-confirm'))
+
+    expect(JSON.parse((fetchMock.mock.calls[0]?.[1] as { body?: string }).body ?? '')).toEqual({ kind: 'dismiss', reason: null })
+    expect(screen.queryByTestId('timeline-error')).toBeNull()
+    const notice = screen.getByTestId('timeline-notice')
+    expect(notice.textContent).toBe('Already closed by alice at 2026-10-02 10:00 UTC.')
+    expect(notice.getAttribute('role')).toBe('status')
+    expect(onRefresh).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows any other refusal beside the card, as an alert', async () => {
+    stubFetch({ error: 'the decision was refused, and nothing was changed: no package owns src/x.ts' }, 409)
+    render(<SupervisorTimeline workspaceId="w1" entries={[QUESTION_CARD_ENTRY]} needsYou={[]} />)
+
+    giveWork()
+    await click(screen.getByTestId('card-decide'))
+
+    const error = screen.getByTestId('timeline-error')
+    expect(error.textContent).toBe('the decision was refused, and nothing was changed: no package owns src/x.ts')
+    expect(error.getAttribute('role')).toBe('alert')
+  })
+
+  it('will not send a decision twice while the first is still in flight', async () => {
+    let release: (() => void) | null = null
+    fetchMock.mockImplementation(
+      async () =>
+        new Promise<Response>((resolve) => {
+          release = () => resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+        }),
+    )
+    render(<SupervisorTimeline workspaceId="w1" entries={[QUESTION_CARD_ENTRY]} needsYou={[]} />)
+
+    giveWork()
+    await click(screen.getByTestId('card-decide'))
+    expect((screen.getByTestId('card-decide') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByTestId('card-decision-dismiss') as HTMLButtonElement).disabled).toBe(true)
+    await click(screen.getByTestId('card-decide'))
+    await act(async () => {
+      release?.()
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})

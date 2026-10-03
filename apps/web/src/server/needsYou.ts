@@ -122,7 +122,9 @@ export async function buildNeedsYou(
       // The label, never the member -- `docs/ia.md` rule 3, and the same table `ProposalRow`
       // reads. The raw kind reaches the page on the decision itself.
       title: `${SITUATION_LABEL[decision.situationKind]}: ${decision.situation.summary}`,
-      href: `/w/${workspaceId}#decision-${decision.id}`,
+      // Ruling F17 (human cards plan B): the `#decision-<id>` anchor exists only on the activity
+      // page's timeline, which is where a question card's decisions render; `/w/<ws>` is the team.
+      href: `/w/${workspaceId}/activity#decision-${decision.id}`,
       since: decision.createdAt,
       taskId: null,
       decisionId: decision.id,
@@ -140,7 +142,8 @@ export async function buildNeedsYou(
         kind: 'question',
         id: question.messageId,
         title: `${question.askerName} asked: ${question.body}`,
-        href: `/w/${workspaceId}#question-${question.messageId}`,
+        // The same page, for the same reason: the answer box is the timeline's (ruling F17).
+        href: `/w/${workspaceId}/activity#question-${question.messageId}`,
         since: question.since,
         taskId: null,
         decisionId: null,

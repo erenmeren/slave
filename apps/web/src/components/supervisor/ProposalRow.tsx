@@ -8,6 +8,7 @@ import { GOAL_REPORT_CLOSE_WORDS, PROVIDER_LABEL, SITUATION_LABEL, type Action, 
 import type { SupervisorView } from '../../server/supervisor'
 import { formatUtcMinute } from '../../lib/format'
 import { Button } from '../ui/Button'
+import { CardDecisions, whereItGoes } from './CardDecisions'
 
 /**
  * One proposal, and the drafted answer under it (M57 R8 / spec erratum E18).
@@ -161,6 +162,7 @@ export function DraftEditor({
   question,
   body,
   onBody,
+  readOnly = false,
 }: {
   readonly draft: Draft
   /** The pending question this answers, when it is still in the world -- `undefined` once it has
@@ -169,6 +171,10 @@ export function DraftEditor({
   readonly question: Question | undefined
   readonly body: string
   readonly onBody: (text: string) => void
+  /** Human cards plan B (rulings F43/F61): on a question card the draft is READ, not edited --
+   *  `CardDecisions` is the one editor ("write my own answer"), so a second box cannot compete with
+   *  it. Shows the words "send this answer" would send (an earlier edit first), as text. */
+  readonly readOnly?: boolean
 }): React.JSX.Element {
   // Both signals, named separately and joined only when both fired: the lexicon's own words are
   // what a human checks against the question, and "the model asked for a human" is a different
@@ -189,14 +195,20 @@ export function DraftEditor({
           critical: {criticalParts.join(' · ')}
         </span>
       )}
-      <textarea
-        data-testid="supervisor-draft-body"
-        value={body}
-        onChange={(event) => onBody(event.target.value)}
-        placeholder="the answer this slave receives"
-        className="rounded border border-line bg-bg-0 p-2 text-xs text-text-1"
-        rows={4}
-      />
+      {readOnly ? (
+        <span data-testid="supervisor-draft-text" className="whitespace-pre-wrap rounded border border-line bg-bg-0 p-2 text-xs text-text-1">
+          {draft.editedBody ?? draft.body ?? 'no drafted answer'}
+        </span>
+      ) : (
+        <textarea
+          data-testid="supervisor-draft-body"
+          value={body}
+          onChange={(event) => onBody(event.target.value)}
+          placeholder="the answer this slave receives"
+          className="rounded border border-line bg-bg-0 p-2 text-xs text-text-1"
+          rows={4}
+        />
+      )}
       <span data-testid="supervisor-draft-confidence" className="font-mono text-[10px] text-text-3">
         {draft.confidence}
         {draft.confidence === 'sourced' ? '' : ' — nothing verified it; read it before you send it'}
@@ -228,10 +240,11 @@ export function DraftEditor({
       ))}
       {draft.editedBody !== undefined && (
         <span data-testid="supervisor-draft-edited" className="text-[11px] text-text-2">
-          edited by a human: {draft.editedBody}
+          {/* Read-only, the box above already shows the edit; repeating it would say it twice. */}
+          {readOnly ? 'edited by a human' : `edited by a human: ${draft.editedBody}`}
         </span>
       )}
-      {draft.conductor !== undefined && <ConductorDetails conductor={draft.conductor} />}
+      {draft.conductor !== undefined && <ConductorDetails conductor={draft.conductor} editable={!readOnly} />}
     </div>
   )
 }
@@ -242,7 +255,15 @@ export function DraftEditor({
  * what did not verify. A person approving the card must see all of it. Every value is the model's
  * or a worker's text, so each is a JSX child -- characters on the page, never markup.
  */
-function ConductorDetails({ conductor }: { readonly conductor: NonNullable<Draft['conductor']> }): React.JSX.Element {
+function ConductorDetails({
+  conductor,
+  editable,
+}: {
+  readonly conductor: NonNullable<Draft['conductor']>
+  /** Whether the answer can be edited right here; a read-only draft's card decisions say what an
+   *  answer of one's own applies instead (ruling F61). */
+  readonly editable: boolean
+}): React.JSX.Element {
   const { basis, newDecision, handOff } = conductor
   const cited = [
     ...(basis.requirements.length === 0 ? [] : [`requirements ${basis.requirements.join(', ')}`]),
@@ -266,18 +287,13 @@ function ConductorDetails({ conductor }: { readonly conductor: NonNullable<Draft
           not verified: {note}
         </span>
       ))}
-      <span data-testid="supervisor-draft-conductor-edit-note" className="text-text-3">
-        Editing the answer applies neither the decision nor the hand-off.
-      </span>
+      {editable && (
+        <span data-testid="supervisor-draft-conductor-edit-note" className="text-text-3">
+          Editing the answer applies neither the decision nor the hand-off.
+        </span>
+      )}
     </div>
   )
-}
-
-/** Spec H3: where an answer or a decision taken now on a question its run continued past goes. */
-function whereItGoes(card: NonNullable<Decision['card']>): string {
-  if (card.lateAnswerFate === 'next_run') return "; an answer now reaches the task's next run, if it has one."
-  if (card.lateAnswerFate === 'unread') return '; no run would read an answer.'
-  return card.askerPackageKey === null ? '; an answer stays in its thread.' : `; a decision now reaches the ${card.askerPackageKey} package as a hand-off.`
 }
 
 /**
@@ -323,6 +339,18 @@ function QuestionState({ card }: { readonly card: NonNullable<Decision['card']> 
 }
 
 /**
+ * Human cards plan B (ruling F55, Plan A final review I7): a question card whose proposed action is
+ * the machine's own move -- hire, seat, give a capability, re-address the question -- keeps an
+ * approve that names that move (spec H2: "cards whose action is the machine's keep approve and
+ * reject"; dismiss is the reject on a question card). An answer, an escalation or "do nothing" has
+ * no move of its own to approve: on those cards the decisions are the only buttons, "send this
+ * answer" being the approve.
+ */
+function machineMove(action: Action): boolean {
+  return action.kind !== 'answer_question' && action.kind !== 'escalate_to_human' && action.kind !== 'no_action'
+}
+
+/**
  * One proposal, with everything a person needs to answer it: the situation it was made on, what
  * would happen, and why the Supervisor picked that. Split out of the panel so the pending list and
  * its per-row reject box stay readable.
@@ -338,6 +366,7 @@ export function ProposalRow({
   busy,
   onApprove,
   onReject,
+  onDecide,
 }: {
   readonly decision: Decision
   /** Every pending question. The row picks its own out by the action's message id -- passed whole
@@ -353,6 +382,9 @@ export function ProposalRow({
    *  edit. */
   readonly onApprove: (body?: string) => void
   readonly onReject: (reason: string) => void
+  /** Human cards H2: present where the page can post to the decide route. A question card renders
+   *  its decisions with it; without it the card shows no decisions and never a bare approve. */
+  readonly onDecide?: (body: Record<string, unknown>) => void
 }): React.JSX.Element {
   const [reason, setReason] = useState('')
   const answering = decision.action.kind === 'answer_question' ? decision.action.messageId : null
@@ -411,30 +443,48 @@ export function ProposalRow({
         {decision.rationale}
       </span>
       {decision.card != null && <QuestionState card={decision.card} />}
-      {draft !== null && <DraftEditor draft={draft} question={question} body={body} onBody={setBody} />}
-      <div className="flex items-center gap-2">
-        <input
-          data-testid="supervisor-reject-reason"
-          value={reason}
-          placeholder="why not (optional)"
-          onChange={(event) => setReason(event.target.value)}
-          className="min-w-0 flex-1 rounded border border-line bg-bg-0 px-2 py-1 text-[11px] text-text-1"
-        />
-        <Button
-          variant="primary"
-          data-testid="supervisor-approve"
-          disabled={busy}
-          // An untouched box is not an edit. Sending it anyway would record every approval as a
-          // human rewrite of the model's answer -- including the ones where the operator only read
-          // it and said yes.
-          onClick={() => onApprove(body === seed ? undefined : body)}
-        >
-          approve
-        </Button>
-        <Button variant="ghost" data-testid="supervisor-reject" disabled={busy} onClick={() => onReject(reason)}>
-          reject
-        </Button>
-      </div>
+      {draft !== null && <DraftEditor draft={draft} question={question} body={body} onBody={setBody} readOnly={decision.card != null} />}
+      {decision.card != null ? (
+        // Human cards H2 / Plan A final review I7: a question card is decided, not approved -- no
+        // bare "approve" on it. Its draft above is read-only (F43); the decisions are the editor.
+        <>
+          {machineMove(decision.action) && (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="primary" size="sm" data-testid="supervisor-approve" disabled={busy} onClick={() => onApprove(undefined)}>
+                {`approve: ${actionText(decision.action, taskTitles)}`}
+              </Button>
+              <span data-testid="supervisor-approve-or-decide" className="text-[11px] text-text-3">
+                or decide the question below instead, which sets this proposal aside
+              </span>
+            </div>
+          )}
+          {onDecide !== undefined && <CardDecisions card={decision.card} draft={draft} busy={busy} onDecide={onDecide} />}
+        </>
+      ) : (
+        <div className="flex items-center gap-2">
+          <input
+            data-testid="supervisor-reject-reason"
+            value={reason}
+            placeholder="why not (optional)"
+            onChange={(event) => setReason(event.target.value)}
+            className="min-w-0 flex-1 rounded border border-line bg-bg-0 px-2 py-1 text-[11px] text-text-1"
+          />
+          <Button
+            variant="primary"
+            data-testid="supervisor-approve"
+            disabled={busy}
+            // An untouched box is not an edit. Sending it anyway would record every approval as a
+            // human rewrite of the model's answer -- including the ones where the operator only read
+            // it and said yes.
+            onClick={() => onApprove(body === seed ? undefined : body)}
+          >
+            approve
+          </Button>
+          <Button variant="ghost" data-testid="supervisor-reject" disabled={busy} onClick={() => onReject(reason)}>
+            reject
+          </Button>
+        </div>
+      )}
     </li>
   )
 }

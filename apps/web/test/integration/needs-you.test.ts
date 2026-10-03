@@ -49,6 +49,10 @@ describe('buildNeedsYou', () => {
     expect(byKind['decision']?.title).not.toContain('no_reviewer')
     expect(byKind['question']?.messageId).toBe(question.messageId)
     expect(byKind['question']?.title).toContain('Which gateway?')
+    // Ruling F17 (plan B Task 7): the `#decision-` / `#question-` anchors live only in the activity
+    // page's timeline, where a question card's decisions render -- so that is where the links go.
+    expect(byKind['decision']?.href).toBe(`/w/${workspaceId}/activity#decision-${decision.id}`)
+    expect(byKind['question']?.href).toBe(`/w/${workspaceId}/activity#question-${question.messageId}`)
     // E11: there is no web integration verb, so the item LINKS to the task on the board.
     expect(byKind['integrate']?.taskId).toBe(finished.id)
     expect(byKind['integrate']?.href).toBe(`/w/${workspaceId}/tasks?task=${finished.id}`)
