@@ -18,12 +18,17 @@ import { refusalStatus } from './refusalStatus'
  * `Result<unknown, ...>`, not `Result<void, ...>`, for the reason the sibling shells give: the
  * envelope is `{ ok: true }` whatever the verb returns -- unless `present` says what of the value a
  * page needs, which is spread beside `ok` (the decide route's `outcome`, plan B Task 6).
+ *
+ * `statusOf` overrides `refusalStatus` for a route whose verb can refuse the request's own body
+ * after the route's schema passed it -- the decide route's `invalid_card_decision` is a malformed
+ * body (400), never a card that declined (409) (plan B Task 6 carry).
  */
 export async function decisionControlResponse<T>(
   workspaceId: string,
   decisionId: string,
   operate: () => Promise<Result<T, ControlRefusal>>,
   present?: (value: T) => Readonly<Record<string, unknown>>,
+  statusOf: (kind: ControlRefusal['kind']) => number = refusalStatus,
 ): Promise<Response> {
   const decision = await prisma.supervisorDecision.findUnique({
     where: { id: decisionId },
@@ -35,7 +40,7 @@ export async function decisionControlResponse<T>(
   const result = await operate()
   if (result.ok) return Response.json(present === undefined ? { ok: true } : { ok: true, ...present(result.value) })
   const notice = await settledNotice(result.error, decisionId)
-  return Response.json({ error: refusalText(result.error), ...(notice === null ? {} : { notice }) }, { status: refusalStatus(result.error.kind) })
+  return Response.json({ error: refusalText(result.error), ...(notice === null ? {} : { notice }) }, { status: statusOf(result.error.kind) })
 }
 
 /**

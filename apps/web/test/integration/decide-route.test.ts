@@ -174,6 +174,18 @@ describe('POST /api/w/[workspaceId]/supervisor/decisions/[decisionId]/decide (hu
     await expectUntouched(f)
   })
 
+  it('400s an answer the verb finds empty once its unstorable characters are stripped, deciding nothing (Task 6 carry)', async (): Promise<void> => {
+    const f = await seedCard()
+
+    // Passes the schema (a NUL is one character, and trim keeps it), then is empty once storable:
+    // the verb's `invalid_card_decision` is the person's malformed body, not a card refusing it.
+    const response = await decide(f.workspaceId, f.cardId, { kind: 'write_answer', body: '\u0000\u0000' })
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toContain('empty once the characters that cannot be stored are removed')
+    await expectUntouched(f)
+  })
+
   it('409s a card somebody else took first, with a notice naming them by name and when -- never by id (spec §4)', async (): Promise<void> => {
     await prisma.user.create({ data: { id: 'u-alice', username: 'alice', passwordHash: 'x' } })
     const f = await seedCard()

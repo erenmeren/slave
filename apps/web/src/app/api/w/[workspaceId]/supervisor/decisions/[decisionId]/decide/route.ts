@@ -2,6 +2,7 @@ import { decideCard } from '@slave-of-ai/control'
 import { cardDecisionSchema } from '@slave-of-ai/domain'
 import { decisionControlResponse } from '../../../../../../../../server/supervisorControlRoute'
 import { requirePrincipal } from '../../../../../../../../server/principal'
+import { refusalStatus } from '../../../../../../../../server/refusalStatus'
 
 export const dynamic = 'force-dynamic'
 
@@ -53,5 +54,8 @@ export async function POST(
     decisionId,
     () => decideCard(decisionId, parsed.data, gate.principal ?? undefined),
     (outcome) => ({ outcome }),
+    // Plan B Task 6 carry: the verb's `invalid_card_decision` is a body that passed the schema but is
+    // empty once its unstorable characters are stripped -- the request's fault, so 400 like the schema's.
+    (kind) => (kind === 'invalid_card_decision' ? 400 : refusalStatus(kind)),
   )
 }
