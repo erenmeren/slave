@@ -231,7 +231,7 @@ export function renderReportProtocol(requirementKeys: readonly string[], workflo
     `  At most ${String(HANDOFFS_PER_REPORT_MAX)}; each "change" at most ${String(HANDOFF_CHANGE_MAX_CHARS)} characters, with exactly one of "path" or "package".`,
     '  An item that breaks these is not delivered: it goes to the conductor as a question.',
     '- "questions": a choice nobody has made (a design decision, an ambiguous requirement) for the conductor to decide; never a hand-off.',
-    `- "notes": what a person should know that needs no decision (a placeholder key, a limit you accepted, a manual step for release); at most ${String(NOTES_PER_REPORT_MAX)}, each at most ${String(NOTE_MAX_CHARS)} characters. A note goes to the activity feed and the goal report: never put one in "questions" or "handOffs".`,
+    `- "notes": what a person should know that needs no decision (a placeholder key, a limit you accepted, a manual step for release); at most ${String(NOTES_PER_REPORT_MAX)}, each at most ${String(NOTE_MAX_CHARS)} characters. A note goes to the activity feed and the goal report, and nobody answers or acts on a note: if something must be decided, ask it in "questions"; if another package must change something, hand it off in "handOffs". A note never carries either, and never put one in "questions" or "handOffs".`,
     'A missing or malformed report sends this task back to you.',
   ].join('\n')
 }

@@ -198,6 +198,14 @@ describe('renderReportProtocol', () => {
     expect(text).toContain('never put one in "questions" or "handOffs"')
     expect(text).toContain('at most 10, each at most 1000 characters')
   })
+
+  it('tells a worker nobody answers or acts on a note, so a decision is asked and a change is handed off (plan B Task 8 carry)', () => {
+    const text = renderReportProtocol(['R1'], 0)
+    const notes = text.split('\n').find((line) => line.startsWith('- "notes"')) ?? ''
+    expect(notes).toContain('nobody answers or acts on a note')
+    expect(notes).toContain('if something must be decided, ask it in "questions"')
+    expect(notes).toContain('if another package must change something, hand it off in "handOffs"')
+  })
 })
 
 describe('hand-offs in the contract (spec C1, plan A D11)', () => {
