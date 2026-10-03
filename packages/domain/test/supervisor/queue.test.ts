@@ -52,6 +52,15 @@ describe('the queue (human cards H4)', () => {
     expect(groups[0]?.since).toBe('2026-10-03T07:00:00.000Z')
   })
 
+  it('heads a group with its blocking decision before an older one that blocks nothing (fix round 1)', () => {
+    const groups = buildQueue([
+      { id: 'stale', groupKey: 'task:t1', goalVersion: 1, blocking: false, since: '2026-10-03T07:00:00.000Z', decision: true },
+      { id: 'needs-human', groupKey: 'task:t1', goalVersion: 1, blocking: true, since: '2026-10-03T09:00:00.000Z', decision: true },
+      { id: 'task', groupKey: 'task:t1', goalVersion: 1, blocking: true, since: '2026-10-03T06:00:00.000Z', decision: false },
+    ])
+    expect(groups.map((g) => [g.ids, g.blocking])).toEqual([[['needs-human', 'task', 'stale'], true]])
+  })
+
   it('keeps one subject apart across versions, and within a version orders blocking first, then the oldest', () => {
     const groups = buildQueue([
       { id: 'old', groupKey: 'item:x', goalVersion: 3, blocking: false, since: '2026-10-03T06:00:00.000Z', decision: true },

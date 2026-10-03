@@ -67,8 +67,9 @@ export interface QueueCard {
   readonly blocking: boolean
   /** ISO: when it started waiting. */
   readonly since: string
-  /** A pending decision (a card). Pre-flight F27: a group's head is its decision when it has one --
-   *  the card is what carries the action -- else its oldest item. */
+  /** A pending decision (a card). Pre-flight F27, refined in Task 9 fix round 1: a group's head is
+   *  its oldest BLOCKING decision, else its oldest decision -- the card is what carries the action --
+   *  else its oldest item. */
   readonly decision: boolean
 }
 
@@ -80,8 +81,8 @@ export interface QueueGroup {
   readonly blocking: boolean
   /** ISO: the oldest member's -- how long this subject has waited, whoever heads the row. */
   readonly since: string
-  /** The merged items: the head first (the oldest decision, else the oldest item), then the rest
-   *  oldest first. Never empty. */
+  /** The merged items: the head first (the oldest blocking decision, else the oldest decision, else
+   *  the oldest item), then the rest oldest first. Never empty. */
   readonly ids: readonly string[]
 }
 
@@ -101,7 +102,9 @@ export function buildQueue(cards: readonly QueueCard[]): readonly QueueGroup[] {
   for (const members of byKey.values()) {
     const oldest = members[0]
     if (oldest === undefined) continue
-    const head = members.find((member) => member.decision) ?? oldest
+    // Fix round 1 ruling: the head is the card that blocks, else any card, else the oldest item --
+    // a row marked blocking must offer the blocking card's decisions, not an older card's.
+    const head = members.find((member) => member.decision && member.blocking) ?? members.find((member) => member.decision) ?? oldest
     groups.push({
       key: oldest.groupKey,
       goalVersion: oldest.goalVersion,
