@@ -46,6 +46,8 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
     handOffs: [],
     handOffsOmitted: 0,
     personDecisions: [],
+    notes: [],
+    notesOmitted: 0,
     decisions: [],
     deniedToolCalls: [],
     deniedToolCallsOmitted: 0,
@@ -379,6 +381,35 @@ describe('GoalReportView', () => {
       if (base === undefined) throw new Error('fixture')
       render(<GoalReportView report={report({ packages: [{ ...base, releasedPaths: ['src/routes.py'] }] })} />)
       expect(screen.getByTestId('goal-report-package').textContent).toContain('Given by a person to another package: src/routes.py')
+    })
+  })
+  describe('notes from the packages (human cards plan B D9)', () => {
+    it('lists each note with its time and package, after "Decided on cards", its words as text', () => {
+      const hostile = 'the key is <img src=x onerror=alert(1)> a placeholder'
+      const { container } = render(
+        <GoalReportView
+          report={report({
+            notes: [
+              { at: '2026-10-03T09:10:00.000Z', packageKey: 'identity-access', text: 'VENDOR_LICENSE_PUBLIC_KEYS is a placeholder.' },
+              { at: '2026-10-03T09:12:00.000Z', packageKey: 'web', text: hostile },
+            ],
+            notesOmitted: 4,
+          })}
+        />,
+      )
+      const rows = screen.getAllByTestId('goal-report-note')
+      expect(rows.map((row) => row.textContent)).toEqual([
+        '2026-10-03 09:10 UTC identity-access noted: VENDOR_LICENSE_PUBLIC_KEYS is a placeholder.',
+        `2026-10-03 09:12 UTC web noted: ${hostile}`,
+      ])
+      expect(container.querySelector('img')).toBe(null)
+      expect(screen.getByText('… and 4 more, not listed.')).toBeTruthy()
+      const text = container.textContent ?? ''
+      expect(text.indexOf('Notes from the packages')).toBeGreaterThan(text.indexOf('Nothing was decided on a card.'))
+    })
+    it('says so when no package left a note', () => {
+      render(<GoalReportView report={report()} />)
+      expect(screen.getByText('No package left a note.')).toBeTruthy()
     })
   })
 })

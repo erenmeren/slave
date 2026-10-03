@@ -2,6 +2,8 @@ import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   GOAL_REPORT_DENIALS_MAX,
   GOAL_REPORT_HANDOFFS_MAX,
+  GOAL_REPORT_NOTES_MAX,
+  NOTE_MAX_CHARS,
   actionSchema,
   err,
   handOffFromName,
@@ -17,6 +19,7 @@ import {
   type GoalReportRequirement,
   type GoalReportRound,
   type GoalReportHandOff,
+  type GoalReportNote,
   type GoalReportSharedDecision,
   type GoalReportSmoke,
   type GoalReportState,
@@ -202,6 +205,28 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
     const grant = parsed.data.grant
     return [{ at: (row.resolvedAt ?? row.createdAt).toISOString(), questionId: row.subjectId, kind: parsed.data.decision.kind, summary, grant: grant === undefined ? null : { path: grant.path, fromKey: grant.fromKey, toKey: grant.toKey } }]
   })
+  // Human cards plan B D9: the notes the version's workers left, oldest first. A reworked run that
+  // reports the same note again repeats nothing a person needs: each package's identical note is
+  // listed once, at its first filing. The text was sanitised and fitted when filed; it is read back
+  // through `personText` all the same, so a row written any other way is inert here too.
+  const noteRows = await prisma.executionEvent.findMany({
+    where: { workspaceId, type: 'workspace_package_noted', payload: { path: ['version'], equals: goalVersion } },
+    orderBy: { seq: 'asc' },
+    select: { ts: true, payload: true },
+  })
+  const seenNotes = new Set<string>()
+  const allNotes = noteRows.flatMap((row): GoalReportNote[] => {
+    const p = (row.payload ?? {}) as Record<string, unknown>
+    const packageKey = p['packageKey']
+    const raw = p['note']
+    if (typeof packageKey !== 'string' || typeof raw !== 'string') return []
+    const text = personText(raw, NOTE_MAX_CHARS)
+    const key = JSON.stringify([packageKey, text])
+    if (text === '' || seenNotes.has(key)) return []
+    seenNotes.add(key)
+    return [{ at: row.ts.toISOString(), packageKey, text }]
+  })
+  const notes = allNotes.slice(0, GOAL_REPORT_NOTES_MAX)
   const decisions = decisionRows.map((row): GoalReportSharedDecision => ({ title: row.title, decision: row.decision, source: row.source, at: row.createdAt.toISOString() }))
   // Skeleton spec S9 (plan B D10): the denials of the version's runs -- its package tasks' and its verification runs'.
   const versionRuns = await prisma.slaveRun.findMany({
@@ -342,6 +367,7 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
     ...handOffs.map((h) => h.at),
     ...decisions.map((d) => d.at),
     ...personDecisions.map((d) => d.at),
+    ...notes.map((n) => n.at),
     ...questions.flatMap((q) => [q.at, ...(q.answer === null ? [] : [q.answer.at])]),
     ...[delivery?.acceptedAt, delivery?.mergedAt].flatMap((at) => (at == null ? [] : [at.toISOString()])),
   ].sort(byText)
@@ -382,6 +408,8 @@ export async function loadGoalReport(workspaceId: string, goalVersion: number): 
     verifier: scope.verifier,
     questions,
     personDecisions,
+    notes,
+    notesOmitted: allNotes.length - notes.length,
     smoke,
     handOffs,
     handOffsOmitted: Math.max(0, handOffRows.length - GOAL_REPORT_HANDOFFS_MAX),

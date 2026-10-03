@@ -254,6 +254,15 @@ export interface GoalReportPersonDecision {
   readonly grant: { readonly path: string; readonly fromKey: string | null; readonly toKey: string } | null
 }
 
+/** Human cards plan B D9: one note a package's worker left -- information that needed no decision. */
+export interface GoalReportNote {
+  /** When it was filed (its `workspace.package_noted` event). */
+  readonly at: string
+  readonly packageKey: string
+  /** The worker's words, sanitised and bounded when filed: renderers still escape them. */
+  readonly text: string
+}
+
 /** Skeleton spec S9 (plan B D10): one tool call the version's runs were refused. */
 export interface GoalReportDenial {
   readonly at: string
@@ -286,6 +295,11 @@ export interface GoalReport {
   /** What people decided on cards about the version's questions, oldest first (human cards H1/H2:
    *  "Closing is a recorded decision, shown on the goal report"). */
   readonly personDecisions: readonly GoalReportPersonDecision[]
+  /** The oldest `GOAL_REPORT_NOTES_MAX` notes the version's packages left, oldest first, each
+   *  package's identical note once (a reworked run reports it again) -- human cards plan B D9. */
+  readonly notes: readonly GoalReportNote[]
+  /** Notes past `GOAL_REPORT_NOTES_MAX`, left out. */
+  readonly notesOmitted: number
   /** Every smoke attempt of the version, oldest first. */
   readonly smoke: readonly GoalReportSmoke[]
   /** The oldest `GOAL_REPORT_HANDOFFS_MAX` hand-offs of the version, oldest first (expired ones too: they have no event). */

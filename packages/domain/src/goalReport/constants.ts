@@ -16,6 +16,10 @@ export const GOAL_REPORT_DENIALS_MAX = 200
  *  report keeps the oldest and says how many more there were. */
 export const GOAL_REPORT_HANDOFFS_MAX = 200
 
+/** Notes one report lists (human cards plan B D9): at most `NOTES_PER_REPORT_MAX` per run, but a
+ *  package reworked many times reports many runs; the report keeps the oldest and says how many more. */
+export const GOAL_REPORT_NOTES_MAX = 200
+
 /** One trail entry's quoted text. A verification rework reason carries the verifier's evidence
  *  (up to `VERIFICATION_REWORK_MAX_CHARS`), so this is the same order of size. */
 export const GOAL_REPORT_DETAIL_MAX_CHARS = 6000

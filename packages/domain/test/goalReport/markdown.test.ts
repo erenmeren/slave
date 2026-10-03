@@ -103,6 +103,8 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
     handOffs: [],
     handOffsOmitted: 0,
     personDecisions: [],
+    notes: [],
+    notesOmitted: 0,
     decisions: [],
     deniedToolCalls: [],
     deniedToolCallsOmitted: 0,
@@ -325,6 +327,27 @@ describe('renderGoalReportMarkdown', () => {
     expect(md.indexOf('## Decided on cards')).toBeGreaterThan(md.indexOf('## Questions'))
     expect(md.indexOf('## Decided on cards')).toBeLessThan(md.lastIndexOf('\n---\n'))
     expect(renderGoalReportMarkdown(report())).toContain('## Decided on cards\n\nNothing was decided on a card.')
+  })
+
+  it('lists the notes the packages left, quoted, after "Decided on cards" (human cards plan B D9, F15)', () => {
+    const md = renderGoalReportMarkdown(
+      report({
+        notes: [
+          { at: '2026-10-03T09:10:00.000Z', packageKey: 'identity-access', text: 'VENDOR_LICENSE_PUBLIC_KEYS is a placeholder.\nThe vendor runs the keygen offline.' },
+          { at: '2026-10-03T09:12:00.000Z', packageKey: 'web', text: '# not a heading <b>not bold</b>' },
+        ],
+        notesOmitted: 2,
+      }),
+    )
+    const lines = md.split('\n')
+    const first = lines.indexOf('- 2026-10-03T09:10:00.000Z · identity-access noted:')
+    expect(first).toBeGreaterThan(-1)
+    expect(lines.slice(first, first + 3)).toEqual(['- 2026-10-03T09:10:00.000Z · identity-access noted:', '  > VENDOR\\_LICENSE\\_PUBLIC\\_KEYS is a placeholder.', '  > The vendor runs the keygen offline.'])
+    expect(md).toContain('  > \\# not a heading &lt;b&gt;not bold&lt;/b&gt;')
+    expect(md).toContain('- … and 2 more, not listed.')
+    expect(md.indexOf('## Notes from the packages')).toBeGreaterThan(md.indexOf('## Decided on cards'))
+    expect(md.indexOf('## Notes from the packages')).toBeLessThan(md.lastIndexOf('\n---\n'))
+    expect(renderGoalReportMarkdown(report())).toContain('## Notes from the packages\n\nNo package left a note.')
   })
 
   it('says which files a person gave away from a package (ruling F50)', () => {

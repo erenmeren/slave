@@ -520,6 +520,30 @@ export function GoalReportView({ report }: { readonly report: GoalReport }): Rea
         )}
       </Panel>
 
+      {/* Human cards plan B D9 (pre-flight F15: after "Decided on cards"): what the workers said a
+        * person should know that needed no decision. A worker's words: a JSX child, never markup. */}
+      <Panel title="Notes from the packages">
+        {report.notes.length === 0 ? (
+          <p className="text-[13px] text-t2">No package left a note.</p>
+        ) : (
+          <ul className="flex flex-col gap-1 text-[13px] text-t2">
+            {report.notes.map((n, index) => (
+              <li key={`${n.packageKey}-${String(index)}`}>
+                <p data-testid="goal-report-note">
+                  <span className="font-mono text-[11.5px] text-t3">{formatUtcMinute(n.at)}</span> {n.packageKey} noted:{' '}
+                  <span className="whitespace-pre-wrap break-words">{n.text}</span>
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+        {report.notesOmitted > 0 && (
+          <p data-testid="goal-report-notes-omitted" className="text-[12.5px] text-t3">
+            … and {String(report.notesOmitted)} more, not listed.
+          </p>
+        )}
+      </Panel>
+
       <p className="text-[12px] text-t3">Built from Slave&apos;s records of this goal version. Quoted text is marked with who wrote it.</p>
     </ScrollArea>
   )

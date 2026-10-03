@@ -274,6 +274,15 @@ export function renderGoalReportMarkdown(report: GoalReport): string {
   }
   if (report.personDecisions.length > 0) lines.push('')
 
+  // Human cards plan B D9 (pre-flight F15: after "Decided on cards"): what the workers said a person
+  // should know that needed no decision. A worker's words, so quoted under who wrote them.
+  lines.push('## Notes from the packages', '')
+  if (report.notes.length === 0) lines.push('No package left a note.', '')
+  for (const n of report.notes) {
+    lines.push(`- ${mdInline(n.at)} · ${mdInline(n.packageKey)} noted:`, ...mdQuote(n.text).map((line) => `  ${line}`), '')
+  }
+  if (report.notesOmitted > 0) lines.push(`- … and ${String(report.notesOmitted)} more, not listed.`, '')
+
   lines.push('---', '', "Built from Slave's records of this goal version. Quoted text is marked with who wrote it.")
   return `${lines.join('\n').trimEnd()}\n`
 }

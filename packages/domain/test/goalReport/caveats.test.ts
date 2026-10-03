@@ -87,6 +87,8 @@ function report(over: Partial<GoalReport> = {}): GoalReport {
     handOffs: [],
     handOffsOmitted: 0,
     personDecisions: [],
+    notes: [],
+    notesOmitted: 0,
     decisions: [],
     deniedToolCalls: [],
     deniedToolCallsOmitted: 0,
