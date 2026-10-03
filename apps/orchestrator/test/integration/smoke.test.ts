@@ -8,9 +8,18 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { abandonGoal, isAlive } from '@slave-of-ai/control'
+import { abandonGoal, decideCard, isAlive, recordDecision, sendMessage } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import { INTAKE_BOOTSTRAP_SMOKE_SCRIPT, RUN_REQUIREMENT, SMOKE_OUTPUT_MAX_CHARS, integrationBranchName, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import {
+  CONDUCTOR_ROLE,
+  HANDOFF_TRUST_LINE,
+  INTAKE_BOOTSTRAP_SMOKE_SCRIPT,
+  OPERATOR_HANDOFF_HEADING,
+  RUN_REQUIREMENT,
+  SMOKE_OUTPUT_MAX_CHARS,
+  integrationBranchName,
+  workspaceId as brandWorkspaceId,
+} from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { ClaudeCodeAdapter } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -20,6 +29,8 @@ import { applySmokeOutcome, cleanUpSmokeProject, handOffSmokeRework, settleStran
 import { drainPumps, type TickDeps } from '../../src/tick.js'
 import { worktreeRootFor } from '../../src/worktree.js'
 import { fileRunReport } from '../../src/report.js'
+import { continueWaitingRuns } from '../../src/questionTimeout.js'
+import { buildRunContext } from '../../src/runContext.js'
 import { dispatchVerification } from '../../src/verification.js'
 
 const repos: string[] = []
@@ -827,4 +838,166 @@ describe('the smoke cleanup (final review minor 6)', () => {
     expect(calls.findIndex((c) => c.startsWith('rm -f'))).toBeLessThan(calls.findIndex((c) => c.startsWith('network rm')))
     rmSync(bin, { recursive: true, force: true })
   }, 60_000)
+})
+
+/**
+ * Human cards §5 "End to end", OBS-18: the integration package's run, parked on its question about
+ * a start script in a file the skeleton owns, is unblocked by a person's decision on the card -- the
+ * skeleton gets the work. Every link is read back from the database or from the rendered contract:
+ * the card, the claim and the close, the person's hand-off routed to the skeleton and reopening it,
+ * the skeleton's next contract carrying the request under the operator's heading, the asker
+ * continued with the decided message, and the version's smoke passing on the tip with the change.
+ * Not driven here: the skeleton's rework run itself and its merge (the fake CLI and the merge
+ * tests' own); the change is committed onto the integration branch as that merge would land it.
+ */
+describe('the observed integration question, decided on a card (human cards §5, OBS-18)', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SlaveMessage", "PackageHandOff", "GoalDecision", "GoalVersion", "SmokeAttempt", "RunReport", "ProviderConfiguration", "RunContext", "Checkpoint", "Artifact", "SlaveRun", "TaskDependency", "Task", "WorkPackage", "RequirementSet", "GoalDelivery", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+    )
+    // Ruling F30: a person's events name them by account (`ExecutionEvent.userId` is a foreign key).
+    await prisma.user.create({ data: { id: 'u1', username: 'u1', passwordHash: 'x' } })
+  })
+  afterEach(async (): Promise<void> => {
+    await drainPumps()
+  })
+
+  it('the person gives the skeleton the start-script work; the skeleton is reopened, the asker continues, and the version passes its smoke', async (): Promise<void> => {
+    // The smoke fails exactly as OBS-18's did until skeleton/package.json carries a start script.
+    const START = '#!/usr/bin/env bash\ngrep -q \'"start"\' skeleton/package.json 2>/dev/null || { echo \'npm error Missing script: "start"\' >&2; exit 1; }\necho started\n'
+    const f = await seedWithVerifier(START)
+    const REQUEST = 'add "start": "node server.js" to skeleton/package.json'
+
+    // Integration is parked on the question it asked (OBS-18). The task is waiting on that run.
+    const run = await prisma.slaveRun.create({ data: { slaveId: f.verifierId, taskId: f.taskOf.integration, status: 'paused', pauseReason: 'waiting_for_answer', pausedAt: new Date(), provider: 'claude_code' } })
+    await prisma.task.update({ where: { id: f.taskOf.integration }, data: { status: 'waiting', integratedAt: null, activeRunId: run.id } })
+    // Ruling F31: the four spawn-critical fields a checkpoint requires.
+    await prisma.checkpoint.create({
+      data: {
+        runId: run.id, sessionId: 's1', worktreePath: f.integrationPath, pauseFlagPath: '/tmp/p', deniedToolUseIds: [], headCommit: 'a'.repeat(40), dirtyFiles: [],
+        settingsPath: '/tmp/s', hookPath: '/tmp/h', gitAuthorName: 'Vera', gitAuthorEmail: 'vera@example.com',
+      },
+    })
+    const asked = await sendMessage(run.id, {
+      kind: 'question',
+      body: 'May the integration package add a "start" script to skeleton/package.json so the Docker image runs?',
+      recipientRole: CONDUCTOR_ROLE,
+      expectsReply: true,
+      taskId: f.taskOf.integration,
+    })
+    if (!asked.ok) throw new Error(JSON.stringify(asked.error))
+    // The Supervisor's escalation, recorded as its pass records one: a person decides.
+    const recorded = await recordDecision({
+      workspaceId: f.workspaceId,
+      situation: { kind: 'conductor_question', subjectId: asked.value.id, summary: 'A question to the conductor about goal v1 waits.', facts: {} },
+      candidates: [{ action: { kind: 'escalate_to_human', summary: 'a person decides' }, tier: 'escalated', why: 'the record does not answer this' }],
+      chosenIndex: 0,
+      rationale: 'the record does not answer this',
+      decidedBy: 'rules',
+      modelCostUsd: null,
+    })
+    if (!recorded.ok) throw new Error(JSON.stringify(recorded.error))
+    // Link 1 -- the card exists and is the person's to decide; the run still waits (well inside the
+    // two-hour question timeout, so nothing but a decision can continue it).
+    expect(await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: recorded.value.id } })).toMatchObject({ status: 'pending', situationKind: 'conductor_question', subjectId: asked.value.id })
+    expect(await continueWaitingRuns(f.workspaceId)).toEqual([])
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).queuedMessage).toBeNull()
+
+    // The person's decision: the skeleton owns skeleton/package.json (by `skeleton/**`), so it gets the work.
+    const decided = await decideCard(recorded.value.id, { kind: 'give_work', target: { path: 'skeleton/package.json' }, request: REQUEST }, { userId: 'u1' })
+    expect(decided.ok && decided.value).toEqual({ decision: 'give_work', summary: `gave the skeleton package work: ${REQUEST}` })
+
+    // Link 2 -- the card is claimed with the person's decision, and the question closes `decided`.
+    const card = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: recorded.value.id } })
+    expect(card).toMatchObject({ status: 'approved', resolvedByUserId: 'u1' })
+    expect(card.personDecision).toMatchObject({ decision: { kind: 'give_work', target: { path: 'skeleton/package.json' }, request: REQUEST }, goalVersion: 1, by: 'u1' })
+    const question = await prisma.slaveMessage.findUniqueOrThrow({ where: { id: asked.value.id } })
+    expect(question).toMatchObject({ closedReason: 'decided', closedBy: 'u1' })
+
+    // Link 3 -- one hand-off from the person, routed to the skeleton, which it reopened (done -> rework).
+    const handOffs = await prisma.packageHandOff.findMany({ where: { workspaceId: f.workspaceId } })
+    expect(handOffs).toMatchObject([
+      { source: 'person', sourceKey: `person:${card.id}:0`, fromPackageKey: null, fromRunId: run.id, toPackageKey: 'skeleton', path: 'skeleton/package.json', change: REQUEST, status: 'reopened' },
+    ])
+    const reopened = await prisma.task.findUniqueOrThrow({ where: { id: f.taskOf.skeleton } })
+    expect(reopened).toMatchObject({ status: 'rework', integratedAt: null, activeRunId: null })
+    expect((await prisma.workPackage.findFirstOrThrow({ where: { workspaceId: f.workspaceId, key: 'skeleton' } })).handOffReopens).toBe(1)
+
+    // The goal pass while the skeleton reworks: no second routing, no second reopen, and no smoke on
+    // a tip that lacks the change (the version waits for every package to be back).
+    await runGoalPass(depsFor(f.workspaceId, verifier()), { mayStartRuns: true })
+    await drainPumps()
+    expect(await prisma.packageHandOff.count({ where: { workspaceId: f.workspaceId } })).toBe(1)
+    expect((await prisma.workPackage.findFirstOrThrow({ where: { workspaceId: f.workspaceId, key: 'skeleton' } })).handOffReopens).toBe(1)
+    expect(await attemptsOf(f)).toEqual([])
+    expect(await deliveryOf(f)).toMatchObject({ status: 'integrating' })
+
+    // Link 4 -- the skeleton's next contract: its rework run is told the request under the operator's
+    // heading, not under the workers' "not from the operator" trust line.
+    const builderTeam = await prisma.team.create({ data: { workspaceId: f.workspaceId, name: 'Builders' } })
+    const builder = await prisma.slave.create({
+      data: { teamId: builderTeam.id, role: 'Implementer', runtimeRoles: ['implementer'], personId: (await prisma.person.create({ data: { name: 'Sami' } })).id },
+    })
+    const reworkRun = await prisma.slaveRun.create({ data: { taskId: f.taskOf.skeleton, slaveId: builder.id, kind: 'implementation', status: 'starting' } })
+    // The run context writes the worktree's git exclude file, so the directory must be a repository.
+    const reworkTree = mkdtempSync(join(tmpdir(), 'smoke-obs18-'))
+    git(['init', '-q'], reworkTree)
+    let prompt: string
+    try {
+      prompt = (
+        await buildRunContext({
+          runId: reworkRun.id as never,
+          kind: 'implementation',
+          slaveId: builder.id as never,
+          workspaceId: f.workspaceId as never,
+          taskId: f.taskOf.skeleton as never,
+          worktreePath: reworkTree,
+          provider: 'claude_code',
+        })
+      ).prompt
+    } finally {
+      rmSync(reworkTree, { recursive: true, force: true })
+    }
+    const heading = prompt.indexOf(OPERATOR_HANDOFF_HEADING)
+    const line = prompt.indexOf(`- from the operator (skeleton/package.json): ${REQUEST}`)
+    expect(heading).toBeGreaterThanOrEqual(0)
+    expect(line).toBeGreaterThan(heading)
+    // A person's request alone is not introduced as other workers' words.
+    expect(prompt).not.toContain(HANDOFF_TRUST_LINE)
+    // Shown whole in the rework reason, so the run that saw it is stamped (the next reopen pass settles it).
+    expect((await prisma.packageHandOff.findFirstOrThrow({ where: { source: 'person' } })).shownInRunId).toBe(reworkRun.id)
+
+    // Link 5 -- the asker continues, on the next tick's pass, with what was decided: the package that
+    // will do it is named, and it is told not to make that change itself.
+    const continued = await continueWaitingRuns(f.workspaceId)
+    expect(continued).toEqual([{ runId: run.id, questionId: asked.value.id, reason: 'decided' }])
+    const resumed = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(resumed.resumeRequestedAt).not.toBeNull()
+    expect(resumed.queuedMessage).toBe(question.closedNote)
+    expect(resumed.queuedMessage).toContain(`the skeleton package will do this: ${REQUEST}`)
+    expect(resumed.queuedMessage).toContain('Do not make that change yourself')
+    // Exactly once: the next pass finds no waiting run to continue again.
+    expect(await continueWaitingRuns(f.workspaceId)).toEqual([])
+
+    // The skeleton's rework lands the script on the integration branch; both packages are back. (The
+    // runs themselves are the fake CLI's and the merge tests'.)
+    mkdirSync(join(f.integrationPath, 'skeleton'), { recursive: true })
+    writeFileSync(join(f.integrationPath, 'skeleton/package.json'), '{ "scripts": { "start": "node server.js" } }\n')
+    git(['add', '-A'], f.integrationPath)
+    git(['commit', '-q', '-m', 'merge(T-skeleton): the start script'], f.integrationPath)
+    const tip = git(['rev-parse', f.branch], f.repoPath)
+    await prisma.slaveRun.update({ where: { id: reworkRun.id }, data: { status: 'succeeded', terminalAt: new Date() } })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { status: 'succeeded', terminalAt: new Date() } })
+    await prisma.task.updateMany({ where: { id: { in: [f.taskOf.skeleton, f.taskOf.integration] } }, data: { status: 'done', integratedAt: new Date(), activeRunId: null } })
+
+    // Link 6 -- the version's smoke passes, on the tip that carries the skeleton's change.
+    await runGoalPass(depsFor(f.workspaceId, verifier()), { mayStartRuns: true })
+    await drainPumps()
+    const attempts = await attemptsOf(f)
+    expect(attempts).toHaveLength(1)
+    expect(attempts[0]).toMatchObject({ status: 'passed', exitCode: 0, tip })
+    expect(attempts[0]?.output).toContain('started')
+    // The person's request is settled: the reopened skeleton's run saw it and finished.
+    expect(await prisma.packageHandOff.findFirstOrThrow({ where: { source: 'person' } })).toMatchObject({ toPackageKey: 'skeleton', status: 'delivered' })
+  }, 120_000)
 })
