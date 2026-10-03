@@ -643,13 +643,23 @@ async function changeRequirement(
   return ok({ decision: decision.kind, summary: claimed.value.close.personDecision.summary })
 }
 
+/** The run is paused waiting for an answer, and `questionId` is the question it waits on (its latest). */
+async function parkedOn(tx: Prisma.TransactionClient, runId: string, questionId: string): Promise<boolean> {
+  const run = await tx.slaveRun.findUnique({ where: { id: runId }, select: { status: true, pauseReason: true } })
+  if (run?.status !== 'paused' || run.pauseReason !== 'waiting_for_answer') return false
+  const latest = await tx.slaveMessage.findFirst({ where: { senderRunId: runId, kind: 'question' }, orderBy: { seq: 'desc' }, select: { id: true } })
+  return latest?.id === questionId
+}
+
 /**
  * Human cards H2.4 (plan B D5): the one ownership change in the system. Under the delivery's lock
  * ({@link withDeliveryLock}, the lock every verification, smoke and merge claim takes), and only while
  * the version is integrating with no smoke or verification claim and neither the giving nor the
  * receiving package's task holds a run: a run reads its ownership when it starts (the gate's
  * permissions file) and the diff audit reads it again when it ends, so a grant under a live run
- * would judge that run by a rule it did not start with. `planFileGrant` judges the move against the
+ * would judge that run by a rule it did not start with. One exception (final review I3): the
+ * receiving package's run may be the asker parked on this very question -- not running, and given
+ * the new rule when it resumes. `planFileGrant` judges the move against the
  * version's packages (disjointness, the manifest family, a shared registration directory).
  *
  * One transaction: the claim and the close ({@link claimAndClose}), then the `WorkPackage` writes,
@@ -716,7 +726,7 @@ async function giveFile(
         now,
         toAsker: { kind: 'message', text: decidedResumeMessage(decision, { packageKey: decision.toPackage, askerPackageKey: card.question.askerPackageKey }) },
       }
-      const close = await claimAndClose(tx, input)
+      const claimed = await claimAndClose(tx, input)
       // From here on the claim is written: every refusal THROWS.
       if (head.status !== 'integrating' || head.activeSmokeId !== null || head.activeRunId !== null) {
         throw refusedBy(`goal v${String(version)} is being verified or smoked (or is over): a file is given only while it is integrating`)
@@ -725,11 +735,21 @@ async function giveFile(
       const keys = [plan.value.fromKey, plan.value.toKey].filter((key): key is string => key !== null)
       const taskIds = keys.flatMap((key) => packages.find((p) => p.key === key)?.tasks.map((t) => t.id) ?? [])
       const tasks = taskIds.length === 0 ? [] : await tx.$queryRaw<{ id: string; activeRunId: string | null }[]>`SELECT id, "activeRunId" FROM "Task" WHERE id = ANY(${taskIds}::text[]) ORDER BY id FOR SHARE`
+      // Final review I3 (spec §4 "the target package has no running run"): the run parked on THIS
+      // question is not running. Its task keeps `activeRunId` while it waits, and resuming it
+      // rewrites its permissions file from the packages as they then stand (`executeResume` ->
+      // `permissionOwnership`), so a file given TO its package holds from its next turn. Taken FROM
+      // its package the grant stays refused: its own earlier edits of the file would fail its diff
+      // audit. Read under the question's lock, which every close, answer and timeout takes first.
+      const parkedHere = claimed.close !== null && card.question.askerRunId !== null && (await parkedOn(tx, card.question.askerRunId, card.subjectId))
       for (const key of keys) {
         const taskId = packages.find((p) => p.key === key)?.tasks[0]?.id
-        if (tasks.some((t) => t.id === taskId && t.activeRunId !== null)) {
-          throw refusedBy(`the ${key} package has a live run: give the file once it has finished, or give the ${key} package the work instead`)
-        }
+        const live = tasks.find((t) => t.id === taskId && t.activeRunId !== null)
+        if (live === undefined) continue
+        const asker = parkedHere && live.activeRunId === card.question.askerRunId
+        if (asker && key === plan.value.toKey) continue
+        if (asker) throw refusedBy(`the ${key} package is waiting on this question: answer or dismiss it first, or give it the work instead`)
+        throw refusedBy(`the ${key} package has a live run: give the file once it has finished, or give the ${key} package the work instead`)
       }
       for (const change of plan.value.changes) {
         const pkg = packages.find((p) => p.key === change.key)
@@ -740,11 +760,11 @@ async function giveFile(
         })
         if (moved.count === 0) throw refusedBy('the packages changed while this was decided: decide again')
       }
-      return { input, close }
+      return { input, claimed }
     }, { lockWaitMs: options.lockWaitMs ?? CARD_LOCK_WAIT_MS }),
     busy,
   )
   if (!done.ok) return done
-  await afterClaim(card, done.value.input, done.value.close)
-  return ok({ decision: decision.kind, summary: done.value.close.personDecision.summary })
+  await afterClaim(card, done.value.input, done.value.claimed)
+  return ok({ decision: decision.kind, summary: done.value.claimed.personDecision.summary })
 }

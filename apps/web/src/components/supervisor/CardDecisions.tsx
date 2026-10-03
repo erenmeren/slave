@@ -77,10 +77,20 @@ function extrasWords(extras: { readonly decision: boolean; readonly handOff: boo
   return null
 }
 
-/** What giving a file does, and when it is refused. */
+/**
+ * What giving a file does, and when it is refused. Review M2: the grant holds for the question's goal
+ * version only -- a new version's packages start with nothing released. Final review I3: the asking
+ * package's run parked on this question is not running, so a file may be given TO its package (it
+ * holds from the moment that run continues, whose permissions are rewritten then), but not taken
+ * FROM it while it waits.
+ */
 function giveFileNote(card: QuestionCard): string {
-  void card
-  return "Moves one file to another package -- the only way a file changes owner -- and the goal report records it. It takes effect at that package's next run; refused while either package is running or the version is being verified."
+  const version = card.goalVersion === null ? 'this goal version' : `goal v${String(card.goalVersion)}`
+  const asker =
+    card.askerWaiting && card.askerPackageKey !== null
+      ? ` The ${card.askerPackageKey} package, whose run waits on this question, may be given a file (it holds from when that run continues), but gives none away until the question is settled.`
+      : ''
+  return `Moves one file to another package for ${version} only -- the only way a file changes owner; a new goal version's packages start with nothing released -- and the goal report records it. It takes effect at that package's next run; refused while the version is being verified or either package has a run going.${asker}`
 }
 
 /**

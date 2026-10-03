@@ -275,6 +275,18 @@ describe('CardDecisions (human cards H2)', () => {
     }
   })
 
+  it('says which goal version a file is given for, and what the waiting asker can take (M2, final review I3)', () => {
+    renderCard()
+    choose('give_file')
+    expect(note()).toContain('for goal v1 only')
+    expect(note()).toContain("a new goal version's packages start with nothing released")
+    expect(note()).toContain('The integration package, whose run waits on this question, may be given a file (it holds from when that run continues), but gives none away until the question is settled.')
+    cleanup()
+    renderCard({ card: { askerWaiting: false } })
+    choose('give_file')
+    expect(note()).not.toContain('waits on this question')
+  })
+
   it('says a requirement change leaves a timed-out question closed as it timed out (M6)', () => {
     renderCard({ card: { askerWaiting: false, closed: timedOut, lateAnswerFate: 'hand_off' } })
     choose('change_requirement')
@@ -323,7 +335,7 @@ describe('CardDecisions (human cards H2)', () => {
     renderCard()
     choose('give_file')
     expect(note()).toContain('the only way a file changes owner')
-    expect(note()).toContain('refused while either package is running')
+    expect(note()).toContain('refused while the version is being verified or either package has a run going')
     choose('change_requirement')
     expect(note()).toContain('new goal version')
     expect(note()).toContain('superseded')

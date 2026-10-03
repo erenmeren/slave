@@ -146,7 +146,7 @@ function decidedResumeText(decision: CardDecision, target: { readonly packageKey
     case 'give_file':
       // As ruling F57 words give_work: a file given to the asker's own package is its to change.
       if (target.packageKey !== null && target.packageKey === target.askerPackageKey) {
-        return `A person gave your package ${personText(decision.path, 200)}: it is yours to change from your next run. Continue with your work, and say in your report what you changed in it.`
+        return `A person gave your package ${personText(decision.path, 200)}: it is yours to change from now on. Continue with your work, and say in your report what you changed in it.`
       }
       return `A person decided on your question: ${personText(decision.path, 200)} now belongs to ${pkgName(decision.toPackage)} package. Continue with the rest, and say in your report what you left to it.`
     case 'record_decision':

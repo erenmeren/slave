@@ -871,7 +871,7 @@ describe('decideCard: give a file (human cards H2.4)', () => {
 
   it('moves a file from its glob owner, takes effect for the next run, and records the move', async () => {
     const f = await seedCard()
-    // The asker is parked on the question, so the target must not be its package; give it to api's neighbour.
+    // Given to api's neighbour, which holds no run (a grant to the parked asker's own package is the I3 test below).
     await addWeb(f)
     const decided = await decideCard(f.cardId, { kind: 'give_file', path: 'src/api/routes.ts', toPackage: 'web' }, { userId: 'u1' })
     expect(decided.ok && decided.value).toEqual({ decision: 'give_file', summary: 'gave src/api/routes.ts to the web package' })
@@ -910,12 +910,10 @@ describe('decideCard: give a file (human cards H2.4)', () => {
     const smoking = await decideCard(f.cardId, { kind: 'give_file', path: 'src/api/routes.ts', toPackage: 'skeleton' })
     expect(!smoking.ok && refusalText(smoking.error)).toContain('smoked')
     await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { activeSmokeId: null } })
-    // Dockerfile is the integration package's (nobody else owns it), and integration's run is parked: the owner is live.
+    // Dockerfile is the integration package's (nobody else owns it), and integration's run is parked
+    // on this question: taking a file from the asker stays refused, in words a person can act on (I3).
     const owner = await decideCard(f.cardId, { kind: 'give_file', path: 'Dockerfile', toPackage: 'skeleton' })
-    expect(!owner.ok && refusalText(owner.error)).toContain('the integration package has a live run')
-    // scripts/verify.sh is the skeleton's by name; giving it to the parked integration package: the target is live.
-    const target = await decideCard(f.cardId, { kind: 'give_file', path: 'scripts/verify.sh', toPackage: 'integration' })
-    expect(!target.ok && refusalText(target.error)).toContain('the integration package has a live run')
+    expect(!owner.ok && refusalText(owner.error)).toContain('the integration package is waiting on this question: answer or dismiss it first, or give it the work instead')
     // A run the giving package holds is live too.
     const run = await prisma.slaveRun.create({ data: { slaveId: (await prisma.slave.findFirstOrThrow()).id, taskId: f.taskOf.api, status: 'working', provider: 'claude_code' } })
     await prisma.task.update({ where: { id: f.taskOf.api }, data: { activeRunId: run.id, status: 'running' } })
@@ -926,6 +924,36 @@ describe('decideCard: give a file (human cards H2.4)', () => {
     expect(await cardOf(f)).toMatchObject({ status: 'pending', personDecision: null })
     expect((await packagesOf(f)).filter((p) => p.key !== 'web')).toEqual(before)
     expect(await closeEvents(f)).toBe(0)
+  })
+
+  it('gives a file to the package whose run is parked on this question -- it is not running, and resumes under the new rule (final review I3)', async () => {
+    const f = await seedCard()
+    // scripts/verify.sh is the skeleton's by name; the integration package's run asked this question and waits on it.
+    const decided = await decideCard(f.cardId, { kind: 'give_file', path: 'scripts/verify.sh', toPackage: 'integration' }, { userId: 'u1' })
+    expect(decided.ok && decided.value.summary).toBe('gave scripts/verify.sh to the integration package')
+    expect((await packagesOf(f)).find((p) => p.key === 'skeleton')?.ownedPaths).not.toContain('scripts/verify.sh')
+    const q = await questionOf(f)
+    expect(q).toMatchObject({ closedReason: 'decided', closedBy: 'u1' })
+    expect(q.closedNote).toContain('A person gave your package scripts/verify.sh: it is yours to change from now on.')
+  })
+
+  it('refuses a file given to the asking package once its run waits on another question, or has gone on running (final review I3)', async () => {
+    const f = await seedCard()
+    const before = await packagesOf(f)
+    // The run continued and asked again: it is parked, but not on THIS question.
+    await prisma.slaveRun.update({ where: { id: f.runId }, data: { status: 'working', pauseReason: null } })
+    const again = await sendMessage(f.runId, { kind: 'question', body: 'And the lockfile?', recipientRole: CONDUCTOR_ROLE, expectsReply: true, taskId: f.taskOf.integration })
+    if (!again.ok) throw new Error(JSON.stringify(again.error))
+    await prisma.slaveRun.update({ where: { id: f.runId }, data: { status: 'paused', pauseReason: 'waiting_for_answer' } })
+    const other = await decideCard(f.cardId, { kind: 'give_file', path: 'scripts/verify.sh', toPackage: 'integration' })
+    expect(!other.ok && refusalText(other.error)).toContain('the integration package has a live run: give the file once it has finished')
+    // Running: refused as before.
+    await prisma.slaveRun.update({ where: { id: f.runId }, data: { status: 'working', pauseReason: null } })
+    const running = await decideCard(f.cardId, { kind: 'give_file', path: 'scripts/verify.sh', toPackage: 'integration' })
+    expect(!running.ok && refusalText(running.error)).toContain('the integration package has a live run')
+    expect(await packagesOf(f)).toEqual(before)
+    expect(await cardOf(f)).toMatchObject({ status: 'pending', personDecision: null })
+    expect((await questionOf(f)).closedAt).toBeNull()
   })
 
   it('throws when a package changed between the read and the write, rolling the claim and the close back', async () => {
