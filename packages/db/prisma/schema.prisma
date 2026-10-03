@@ -1470,6 +1470,9 @@ model WorkPackage {
   /// Supervisor-as-conductor spec C2 (plan A D5): how often other packages' hand-offs reopened this
   /// package's finished task in its goal version -- the loop guard stops at two.
   handOffReopens  Int      @default(0)
+  /// Human-cards spec H2 (plan B D5): literal paths a person gave from this package to another while it
+  /// owned them by a glob; `ownershipRuleFor` excludes them.
+  releasedPaths   String[] @default([])
   interface       String
   dependsOn       String[] @default([])
   isIntegration   Boolean  @default(false)
@@ -2114,6 +2117,9 @@ model SupervisorDecision {
   /// `failed` rows that were never pending -- `filterFresh` cools those from `createdAt` instead.
   resolvedAt       DateTime?
   resolvedByUserId String?
+  /// Human-cards spec H2 (plan B D3): what a person decided on this question card, validated at read
+  /// by `personDecisionSchema`; null for a card approved or rejected the old way, and every machine card.
+  personDecision   Json?
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 

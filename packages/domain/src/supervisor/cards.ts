@@ -110,10 +110,13 @@ export function timeoutResumeMessage(waitedMs: number, question: string): string
   )
 }
 
-/** Spec H2.7: what a run is told when a person dismissed its question. */
+/** Spec H2.7: what a run is told when a person dismissed its question, bounded to `closedNote` (ruling F69). */
 export function dismissResumeMessage(reason: string | null): string {
   const said = reason === null ? '' : personText(reason)
-  return `A person closed your question without an answer: ${said === '' ? 'no reason given' : said}. Continue on your safest assumption and say which in your report.`
+  return trimToFit(
+    `A person closed your question without an answer: ${said === '' ? 'no reason given' : said}. Continue on your safest assumption and say which in your report.`,
+    CLOSED_NOTE_MAX_CHARS,
+  )
 }
 
 /** Plan A D4: what a run is told when a person approved a card that sends it no answer. */
