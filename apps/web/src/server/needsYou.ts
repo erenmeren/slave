@@ -4,6 +4,7 @@ import {
   BLOCKING_SITUATION_KINDS,
   SITUATION_LABEL,
   buildQueue,
+  draftCarries,
   groupKeyFor,
   isQuestionSituation,
   isTaskSituation,
@@ -114,6 +115,12 @@ function draftPreviewOf(draft: DecisionView['draft']): { readonly text: string; 
   return chars.length <= DRAFT_PREVIEW_MAX_CHARS
     ? { text: body, cut: false }
     : { text: `${chars.slice(0, DRAFT_PREVIEW_MAX_CHARS - 1).join('')}…`, cut: true }
+}
+
+/** The draft carries more than its words (`draftCarries`). */
+function carriesMore(draft: DecisionView['draft']): boolean {
+  const carried = draftCarries(draft)
+  return carried.decision || carried.handOff
 }
 
 /** One item before the queue is built: everything but what the merge decides. */
@@ -256,8 +263,10 @@ export async function buildNeedsYou(
       // the card offers it -- never on a draftless answer card, which would approve into
       // `draft_missing`, and never on an escalation or a re-address card, whose decisions are the
       // card's own. A machine card keeps its approve.
-      // ... and (fix round 2) only where the row can show ALL of what it sends.
-      oneClick: card === null || (card.offers.includes('send_answer') && preview !== null && !preview.cut),
+      // ... and (fix round 2) only where the row can show ALL of what it sends -- and (final review
+      // I4, spec H2.1 "the card says what will apply") never where sending it as drafted would also
+      // apply a conductor draft's shared decision or hand-off, which the row does not show: "decide".
+      oneClick: card === null || (card.offers.includes('send_answer') && preview !== null && !preview.cut && !carriesMore(decision.draft)),
       questionCard: card !== null,
       draftPreview: preview?.text ?? null,
       draftPreviewCut: preview?.cut ?? false,

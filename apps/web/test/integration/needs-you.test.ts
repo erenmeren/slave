@@ -144,6 +144,8 @@ async function card(
     readonly action?: Record<string, unknown>
     readonly draftBody?: string | null
     readonly facts?: Record<string, unknown>
+    /** A conductor draft's shared decision and hand-off (Supervisor-as-conductor plan B D6). */
+    readonly conductor?: { readonly newDecision: { readonly title: string; readonly decision: string } | null; readonly handOff: Record<string, string> | null }
   },
 ): Promise<string> {
   const action = options.action ?? { kind: 'escalate_to_human', summary: 'a person decides' }
@@ -158,7 +160,18 @@ async function card(
       action: action as never,
       ...(options.draftBody === undefined
         ? {}
-        : { draft: { body: options.draftBody, sources: [], rejectedSources: [], critical: { lexicon: [], model: false }, confidence: 'interpretation' } }),
+        : {
+            draft: {
+              body: options.draftBody,
+              sources: [],
+              rejectedSources: [],
+              critical: { lexicon: [], model: false },
+              confidence: 'interpretation',
+              ...(options.conductor === undefined
+                ? {}
+                : { conductor: { basis: { requirements: [], packages: [], decisions: [] }, unverified: [], changes: 'none', ...options.conductor } }),
+            },
+          }),
       rationale: 'seeded',
       tier: 'proposed',
       status: 'pending',
@@ -300,5 +313,22 @@ describe('buildNeedsYou: one queue per goal version (human cards H4)', () => {
     expect(byId.get(draftedCard)?.draftPreviewCut).toBe(false)
     expect(items.every((item) => item.questionCard)).toBe(true)
     expect(items).toHaveLength(3)
+  })
+
+  it('offers no one click on a conductor draft that carries a shared decision or a hand-off: the row says "decide" (final review I4)', async (): Promise<void> => {
+    const fixture = await seedWorkspace({ autoMerge: false })
+    const { workspaceId } = fixture
+    const draftCard = async (body: string, minute: number, conductor: NonNullable<Parameters<typeof card>[1]['conductor']>): Promise<string> => {
+      const question = await seedUnanswerableQuestion(fixture, { body })
+      return card(workspaceId, { situationKind: 'conductor_question', subjectId: question.messageId, createdAt: at(minute), action: { kind: 'answer_question', messageId: question.messageId }, draftBody: 'Yes.', conductor })
+    }
+    const withDecision = await draftCard('one?', 1, { newDecision: { title: 'Port', decision: '3000' }, handOff: null })
+    const withHandOff = await draftCard('two?', 2, { newDecision: null, handOff: { package: 'skeleton', change: 'add a start script' } })
+    const plain = await draftCard('three?', 3, { newDecision: null, handOff: null })
+
+    const byId = new Map((await buildNeedsYou(workspaceId)).map((item) => [item.id, item]))
+
+    expect([byId.get(withDecision)?.oneClick, byId.get(withHandOff)?.oneClick, byId.get(plain)?.oneClick]).toEqual([false, false, true])
+    expect([byId.get(withDecision)?.questionCard, byId.get(withHandOff)?.questionCard]).toEqual([true, true])
   })
 })

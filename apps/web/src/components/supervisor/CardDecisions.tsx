@@ -9,6 +9,7 @@ import {
   PERSON_CARD_TEXT_MAX_CHARS,
   SHARED_DECISION_TEXT_MAX_CHARS,
   SHARED_DECISION_TITLE_MAX_CHARS,
+  draftCarries,
   type CardDecisionKind,
 } from '@slave-of-ai/domain'
 // Type-only, so nothing from `server/supervisor.ts` (and nothing it imports -- control, and the
@@ -63,12 +64,9 @@ function lateReach(kind: CardDecisionKind, card: QuestionCard): string {
 
 /** What a draft adds beyond its words when it is sent as it is: a conductor draft's shared decision
  *  and hand-off, each only when the draft really carries it and nobody edited the words (an edit
- *  applies neither -- `approveDecision`'s rule, Supervisor-as-conductor plan B D7). */
-function draftExtras(draft: Draft | null): { readonly decision: boolean; readonly handOff: boolean } {
-  const conductor = draft?.conductor
-  if (conductor === undefined) return { decision: false, handOff: false }
-  return { decision: conductor.newDecision !== null, handOff: conductor.handOff !== null }
-}
+ *  applies neither -- `approveDecision`'s rule, Supervisor-as-conductor plan B D7). The domain's one
+ *  reading (`draftCarries`), which the needs-you row's one click reads too (final review I4). */
+const draftExtras = (draft: Draft | null): { readonly decision: boolean; readonly handOff: boolean } => draftCarries(draft)
 
 function extrasWords(extras: { readonly decision: boolean; readonly handOff: boolean }): string | null {
   if (extras.decision && extras.handOff) return 'shared decision and hand-off'
