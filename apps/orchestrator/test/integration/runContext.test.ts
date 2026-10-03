@@ -1085,6 +1085,30 @@ describe('buildRunContext', () => {
       expect(prompt.split('read the page size from Config.pageSize')).toHaveLength(2)
     })
 
+    /** Final wave minor: a peer's late answer is named by its seat in the rework reason AND in the
+     *  contract's match against it, so the reopen run is shown it once, not twice. */
+    it("shows a reopen run a peer's late answer once, named by its seat", async () => {
+      await bindToPackage()
+      await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'done', integratedAt: new Date() } })
+      const delivery = await prisma.goalDelivery.create({ data: { workspaceId: fixture.workspaceId, goalVersion: 1, integrationBranch: 'slaveofai/goal-v1-x', baseCommit: 'a'.repeat(40) } })
+      const ada = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Ada' } })).id } })
+      const answer = await prisma.slaveMessage.create({ data: { workspaceId: fixture.workspaceId, slaveId: ada.id, threadId: 't-late', kind: 'answer', body: 'camelCase', actor: 'slave' } })
+      await prisma.packageHandOff.create({
+        data: {
+          workspaceId: fixture.workspaceId, goalVersion: 1, source: 'answer', sourceKey: `late:${answer.id}:0`, fromRunId: 'r0', fromPackageKey: null, toPackageKey: 'report',
+          packageKey: 'report', change: 'Q: Which shape? A: camelCase', fingerprint: 'f', status: 'pending',
+        },
+      })
+      await reopenForHandOffs(delivery.id)
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).lastRejectionReason).toContain('- from Ada (Reviewer): Q: Which shape? A: camelCase')
+
+      const { prompt } = await buildImplementation(fixture)
+
+      expect(prompt.split('Q: Which shape? A: camelCase')).toHaveLength(2)
+      expect(prompt).not.toContain('Asked of your package')
+      expect(prompt).not.toContain('from the conductor')
+    })
+
     it('stamps nothing when the prompt is refused, since nobody was shown it', async () => {
       await bindToPackage()
       const row = await prisma.packageHandOff.create({

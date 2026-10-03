@@ -5,11 +5,11 @@
  * conductor when nobody can take them (D7). Task states are seeded directly with Prisma.
  */
 import { prisma } from '@slave-of-ai/db/client'
-import { CONDUCTOR_ROLE } from '@slave-of-ai/domain'
+import { CONDUCTOR_ROLE, renderAskedOfYou } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { abandonGoal } from '../../src/goalDelivery.js'
-import { handOffView, lateAnswerSourceKey, listHandOffsFor, markHandOffsShown, reopenForHandOffs, routeHandOffs, routeStoredHandOffs } from '../../src/handOffs.js'
-import { answerQuestion } from '../../src/messaging.js'
+import { handOffView, handOffViews, lateAnswerSourceKey, listHandOffsFor, markHandOffsShown, reopenForHandOffs, routeHandOffs, routeStoredHandOffs } from '../../src/handOffs.js'
+import { answerQuestion, sendMessage } from '../../src/messaging.js'
 
 interface Fixture {
   readonly workspaceId: string
@@ -291,6 +291,103 @@ describe('reopenForHandOffs', () => {
     await route(f, [{ path: 'scripts/verify.sh', change: 'third' }], (await newRun(f)).id)
     expect((await rows(f)).map((r) => r.status)).toEqual(['delivered', 'delivered', 'to_conductor'])
     expect((await rows(f))[2]?.note).toContain('(from report)')
+  })
+})
+
+describe("a late answer's author (final wave minor: a worker's is named by its seat, not as the conductor)", () => {
+  beforeEach(async () => {
+    await prisma.$executeRawUnsafe(TRUNCATE)
+  })
+
+  const seatOf = async (f: Fixture) => (await task(f.taskOf.report)).assigneeId ?? ''
+  const timedOutQuestion = async (f: Fixture, id: string, senderRunId: string) =>
+    prisma.slaveMessage.create({
+      data: { id, threadId: id, workspaceId: f.workspaceId, taskId: f.taskOf.report, slaveId: await seatOf(f), senderRunId, recipientRole: CONDUCTOR_ROLE, kind: 'question', body: 'Which shape?', expectsReply: true, actor: 'slave', closedAt: new Date(), closedReason: 'timed_out', closedBy: 'system' },
+    })
+  /** A second seat on the same team, with a run of its own: the peer who answers. */
+  const peer = async (f: Fixture) => {
+    const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: f.workspaceId } })
+    const seat = await prisma.slave.create({ data: { teamId: team.id, role: 'Reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Ada' } })).id } })
+    const run = await prisma.slaveRun.create({ data: { taskId: f.taskOf.skeleton, slaveId: seat.id, status: 'working' } })
+    return { seatId: seat.id, runId: run.id }
+  }
+  const peerAnswer = async (f: Fixture, runId: string, questionId: string, body: string) => {
+    const sent = await sendMessage(runId, { kind: 'answer', body, recipientSlaveId: await seatOf(f), replyToId: questionId, idempotencyKey: `answer:${runId}:${questionId}` })
+    expect(sent.ok).toBe(true)
+    return sent.ok ? sent.value.id : ''
+  }
+  const askerRun = async (f: Fixture) => prisma.slaveRun.create({ data: { slaveId: await seatOf(f), taskId: f.taskOf.report, status: 'succeeded' } })
+  const lateRows = async (f: Fixture) => prisma.packageHandOff.findMany({ where: { workspaceId: f.workspaceId, sourceKey: { startsWith: 'late:' } }, orderBy: [{ createdAt: 'asc' }, { sourceKey: 'asc' }] })
+
+  it("names a peer worker's late answer by its seat, in the rework reason and the views", async () => {
+    const f = await seed({ skeleton: 'done', report: 'done', integration: 'ready' })
+    const run = await askerRun(f)
+    const question = await timedOutQuestion(f, 'q-peer', run.id)
+    const ada = await peer(f)
+    await peerAnswer(f, ada.runId, question.id, 'camelCase')
+    await routeStoredHandOffs(f.deliveryId)
+    const rows = await lateRows(f)
+    expect(rows).toEqual([expect.objectContaining({ source: 'answer', fromPackageKey: null, status: 'reopened' })])
+    const reason = (await task(f.taskOf.report)).lastRejectionReason ?? ''
+    expect(reason).toContain('- from Ada (Reviewer): ')
+    expect(reason).not.toContain('from the conductor')
+    expect(reason.startsWith('These are requests from other workers')).toBe(true)
+    expect((await handOffViews(rows)).map((view) => view.fromWorker)).toEqual(['Ada (Reviewer)'])
+  })
+
+  it("keeps the Supervisor's late answer the conductor's, and a person's the operator's", async () => {
+    const f = await seed({ skeleton: 'done', report: 'running', integration: 'ready' })
+    const resumed = await prisma.slaveRun.create({ data: { slaveId: await seatOf(f), taskId: f.taskOf.report, status: 'paused', pauseReason: 'waiting_for_answer', resumeRequestedAt: new Date() } })
+    const bySupervisor = await timedOutQuestion(f, 'q-sup', resumed.id)
+    const byPerson = await timedOutQuestion(f, 'q-person', resumed.id)
+    expect((await answerQuestion(bySupervisor.id, { body: 'snake_case', answeredBy: 'supervisor' }, 'system')).ok).toBe(true)
+    expect((await answerQuestion(byPerson.id, { body: 'kebab-case', answeredBy: 'web operator' })).ok).toBe(true)
+    await routeStoredHandOffs(f.deliveryId)
+    const rows = await lateRows(f)
+    expect(rows.map((row) => row.source).sort()).toEqual(['answer', 'person'])
+    const views = await handOffViews(rows)
+    expect(views.map((view) => view.fromWorker)).toEqual([undefined, undefined])
+    const text = renderAskedOfYou(views).text
+    expect(text).toContain('- from the conductor: ')
+    expect(text).toContain('- from the operator: ')
+  })
+
+  it('reads a worker whose answer row went with its seat as "another worker", and a gone Supervisor answer as the conductor\'s', async () => {
+    const f = await seed({ skeleton: 'done', report: 'running', integration: 'ready' })
+    const resumed = await prisma.slaveRun.create({ data: { slaveId: await seatOf(f), taskId: f.taskOf.report, status: 'paused', pauseReason: 'waiting_for_answer', resumeRequestedAt: new Date() } })
+    const ada = await peer(f)
+    await peerAnswer(f, ada.runId, (await timedOutQuestion(f, 'q-peer', resumed.id)).id, 'camelCase')
+    const supervisorAnswer = await answerQuestion((await timedOutQuestion(f, 'q-sup', resumed.id)).id, { body: 'snake_case', answeredBy: 'supervisor' }, 'system')
+    await routeStoredHandOffs(f.deliveryId)
+    expect(await lateRows(f)).toHaveLength(2)
+    // The answering seat is deleted (its answer cascades with it); the Supervisor's answer row is
+    // gone as when its ASKER's seat is deleted (`answerQuestion` writes the asker as `slaveId`).
+    await prisma.slave.delete({ where: { id: ada.seatId } })
+    await prisma.slaveMessage.delete({ where: { id: supervisorAnswer.ok ? supervisorAnswer.value.id : '' } })
+    const views = await handOffViews(await lateRows(f))
+    const bySource = new Map((await lateRows(f)).map((row, index) => [row.sourceKey, views[index]?.fromWorker] as const))
+    expect([...bySource.values()].sort()).toEqual(['another worker', undefined])
+    expect(renderAskedOfYou(views).text).toContain('- from another worker: ')
+    expect(renderAskedOfYou(views).text).toContain('- from the conductor: ')
+  })
+
+  it("names a peer's late answer in the conductor question and the loop guard's chain", async () => {
+    const f = await seed({ skeleton: 'done', report: 'done', integration: 'ready' })
+    const run = await askerRun(f)
+    const ada = await peer(f)
+    const earlier = await peerAnswer(f, ada.runId, (await timedOutQuestion(f, 'q-1', run.id)).id, 'first')
+    // The report package has been reopened twice already: once by Ada's earlier late answer, once by a person.
+    await prisma.workPackage.updateMany({ where: { workspaceId: f.workspaceId, key: 'report' }, data: { handOffReopens: 2 } })
+    const chainRow = { workspaceId: f.workspaceId, goalVersion: 1, fromRunId: run.id, fromPackageKey: null, toPackageKey: 'report', packageKey: 'report', change: 'x', status: 'delivered' as const, reopenedAt: new Date() }
+    await prisma.packageHandOff.create({ data: { ...chainRow, source: 'answer', sourceKey: `${lateAnswerSourceKey(earlier)}:0`, fingerprint: 'f1' } })
+    await prisma.packageHandOff.create({ data: { ...chainRow, source: 'person', sourceKey: 'person:d1:0', fingerprint: 'f2' } })
+    await peerAnswer(f, ada.runId, (await timedOutQuestion(f, 'q-2', run.id)).id, 'second')
+    await routeStoredHandOffs(f.deliveryId)
+    const asked = (await lateRows(f)).find((row) => row.status === 'to_conductor')
+    expect(asked?.note).toBe("the report package has already been reopened 2 times in goal v1 by other packages' hand-offs (from Ada (Reviewer), from the operator)")
+    const question = await prisma.slaveMessage.findUniqueOrThrow({ where: { id: asked?.questionMessageId ?? '' } })
+    expect(question.body).toMatch(/^A hand-off from Ada \(Reviewer\) was not delivered/u)
+    expect(question.body).not.toContain('the conductor')
   })
 })
 

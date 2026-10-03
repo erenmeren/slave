@@ -2,7 +2,9 @@ import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   CONDUCTOR_ROLE,
   HANDOFF_EVENT_CHANGE_MAX_CHARS,
+  displayName,
   HANDOFF_REOPENS_MAX,
+  handOffFromName,
   handOffFingerprint,
   handOffItemSchema,
   lateAnswerChange,
@@ -110,6 +112,70 @@ export function handOffView(row: {
   readonly change: string
 }): HandOffView {
   return { id: row.id, from: row.fromPackageKey, path: row.path, packageKey: row.packageKey, change: row.change, fromOperator: row.source === 'person' }
+}
+
+/** The answer id behind a late answer's stored key, `late:<answerId>:0` ({@link lateAnswerSourceKey}). */
+const LATE_ANSWER_KEY = /^late:(.+):\d+$/u
+
+/** What a worker's late answer reads as once its answer row is gone with its seat ({@link handOffViews}). */
+const GONE_WORKER = 'another worker'
+
+/**
+ * {@link handOffView} for each row, with a worker's late answer named (final wave minor): it comes
+ * from no package, and "from the conductor" would put the conductor's name on a worker's words. The
+ * answering seat's name, read off the answer row (`sendMessage` writes the sender as `slaveId`). A
+ * person's answer is the operator's (`source = person`) and the Supervisor's (`actor = system`) stays
+ * the conductor's.
+ *
+ * An answer row can be gone: it cascades with its `slaveId` -- the answering seat for a worker's
+ * answer, but the ASKING seat for the Supervisor's (`answerQuestion` writes the asker there) -- so a
+ * missing row alone does not say who wrote it. Its `slave.message_sent` event does (stored as `slave_message_sent`; `ExecutionEvent`
+ * has no foreign key to the seat and outlives it): `actor = slave` reads as "another worker", any
+ * other, or no event at all (a crash between the commit and the append), as the conductor -- the
+ * reading before this change. One read for the answers, a second only when one is gone, none when no
+ * row is a late answer. Every renderer of one set of rows must use this, so a line matched against an
+ * earlier render (the rework reason in `runContext`) matches; a seat renamed or deleted in between
+ * makes the request listed again, never dropped.
+ */
+export async function handOffViews(
+  rows: readonly (Parameters<typeof handOffView>[0] & { readonly sourceKey: string; readonly workspaceId: string })[],
+  client: Pick<Prisma.TransactionClient, 'slaveMessage' | 'executionEvent'> = prisma,
+): Promise<HandOffView[]> {
+  const answerIdOf = (row: { readonly source?: string; readonly fromPackageKey: string | null; readonly sourceKey: string }): string | null =>
+    row.source === 'answer' && row.fromPackageKey === null ? (LATE_ANSWER_KEY.exec(row.sourceKey)?.[1] ?? null) : null
+  const late = rows.flatMap((row) => {
+    const answerId = answerIdOf(row)
+    return answerId === null ? [] : [{ answerId, workspaceId: row.workspaceId }]
+  })
+  if (late.length === 0) return rows.map(handOffView)
+  const answers = await client.slaveMessage.findMany({
+    where: { id: { in: late.map((item) => item.answerId) } },
+    select: { id: true, actor: true, slave: { select: { role: true, person: { select: { name: true } } } } },
+  })
+  const authorOf = new Map<string, string | null>(
+    answers.map((answer) => [answer.id, answer.actor === 'slave' ? displayName({ name: answer.slave.person.name, role: answer.slave.role }) : null] as const),
+  )
+  const gone = late.filter((item) => !authorOf.has(item.answerId))
+  if (gone.length > 0) {
+    const said = await client.executionEvent.findMany({
+      where: {
+        type: 'slave_message_sent',
+        workspaceId: { in: [...new Set(gone.map((item) => item.workspaceId))] },
+        OR: gone.map((item) => ({ payload: { path: ['messageId'], equals: item.answerId } })),
+      },
+      select: { actor: true, payload: true },
+    })
+    for (const event of said) {
+      const messageId = (event.payload as { readonly messageId?: unknown }).messageId
+      if (typeof messageId === 'string' && event.actor === 'slave') authorOf.set(messageId, GONE_WORKER)
+    }
+  }
+  return rows.map((row) => {
+    const view = handOffView(row)
+    const answerId = answerIdOf(row)
+    const author = answerId === null ? null : (authorOf.get(answerId) ?? null)
+    return author === null ? view : { ...view, fromWorker: author }
+  })
 }
 
 /** Controller ruling F8: stored worker text never carries a NUL byte or a lone surrogate (spec §5). */
@@ -473,7 +539,8 @@ export async function sendHandOffQuestions(workspaceId: string): Promise<void> {
     const run = await prisma.slaveRun.findUnique({ where: { id: row.fromRunId }, select: { taskId: true } })
     const sent = await sendMessage(row.fromRunId, {
       kind: 'question',
-      body: renderHandOffQuestion({ view: handOffView(row), reason: row.note ?? 'no target found' }),
+      // Final wave minor: a worker's late answer is named in the question, as in every other rendering.
+      body: renderHandOffQuestion({ view: (await handOffViews([row]))[0] ?? handOffView(row), reason: row.note ?? 'no target found' }),
       recipientRole: CONDUCTOR_ROLE,
       expectsReply: true,
       taskId: run?.taskId ?? null,
@@ -559,9 +626,11 @@ async function reopenInLock(tx: Tx, deliveryId: string): Promise<void> {
         // `reopenedAt`, not the status: a reopen whose run has finished is `delivered` (final review I2).
         where: { workspaceId, goalVersion, toPackageKey: pkg.key, reopenedAt: { not: null } },
         orderBy: HAND_OFF_ORDER,
-        select: { fromPackageKey: true },
+        select: { id: true, workspaceId: true, source: true, sourceKey: true, fromPackageKey: true, path: true, packageKey: true, change: true },
       })
-      const from = [...new Set(chain.map((row) => row.fromPackageKey ?? 'the conductor'))].join(', from ')
+      // Final wave minor: named as the requests' own lines name them -- a person's as the operator's,
+      // a worker's late answer by its seat -- not every package-less one as the conductor's.
+      const from = [...new Set((await handOffViews(chain, tx)).map(handOffFromName))].join(', from ')
       await tx.packageHandOff.updateMany({
         where: { id: { in: unseen.map((row) => row.id) }, status: 'pending' },
         data: {
@@ -573,7 +642,7 @@ async function reopenInLock(tx: Tx, deliveryId: string): Promise<void> {
     }
     // Task 2 ruling: the reason adds requests WHOLE while they fit; only those are delivered by this
     // reopen, and a reason that shows none reopens nothing.
-    const reason = renderHandOffRework(unseen.map(handOffView))
+    const reason = renderHandOffRework(await handOffViews(unseen, tx))
     if (reason.shownIds.length === 0) continue
     const reopen = pkg.handOffReopens + 1
     if (!(await goalEventWith(tx, workspaceId, 'task_rework', { handOffReopen: reopen }, { taskId: task.id }))) {

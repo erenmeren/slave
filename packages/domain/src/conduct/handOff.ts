@@ -133,6 +133,10 @@ export interface HandOffView {
   readonly change: string
   /** Human cards plan A D10: a person's request (`source = person`), rendered under its own heading. */
   readonly fromOperator?: boolean
+  /** Final wave minor: who a request from no package came from when it was not the conductor -- a
+   *  worker's late answer, named by its seat ("another worker" when the answer row is gone with it).
+   *  Ignored when `from` names a package or `fromOperator` is set. */
+  readonly fromWorker?: string
 }
 
 /** Human cards plan A D10: the heading a person's requests sit under -- the operator's words, unlike
@@ -141,13 +145,15 @@ export interface HandOffView {
  *  stored text, and still to be done only in the package's own files. */
 export const OPERATOR_HANDOFF_HEADING = 'From the operator (a person answered or decided this; do it in your own files):'
 
-/** Who a hand-off is from, as its line and the "more requests" line name it. */
-function fromName(view: HandOffView): string {
-  return view.fromOperator === true ? 'the operator' : view.from === null ? 'the conductor' : sanitisePersonText(storableText(view.from))
+/** Who a hand-off is from, as its line, the "more requests" line and the loop guard's note name it. */
+export function handOffFromName(view: HandOffView): string {
+  if (view.fromOperator === true) return 'the operator'
+  if (view.from !== null) return sanitisePersonText(storableText(view.from))
+  return view.fromWorker === undefined ? 'the conductor' : sanitisePersonText(storableText(view.fromWorker))
 }
 
 function itemLine(view: HandOffView): string {
-  const from = fromName(view)
+  const from = handOffFromName(view)
   const where = view.path === null ? '' : ` (${sanitisePersonText(storableText(view.path))})`
   const change = trimToFit(sanitisePersonText(storableText(view.change).replace(/\s+/gu, ' ').trim()), HANDOFF_PROMPT_ITEM_MAX_CHARS)
   return `- from ${from}${where}: ${change}`
@@ -187,7 +193,7 @@ function fitItems(head: string, items: readonly HandOffView[], tail: readonly st
   }
   const rest = items.slice(shownIds.length)
   if (rest.length > 0) {
-    const keys = [...new Set(rest.map(fromName))].join(', ')
+    const keys = [...new Set(rest.map(handOffFromName))].join(', ')
     lines.push(`${String(rest.length)} more requests from ${keys} wait for your next run.`)
   }
   return { text: [head, ...lines, ...tail].join('\n'), shownIds }
@@ -248,7 +254,7 @@ export function renderHandOffRework(items: readonly HandOffView[]): HandOffBlock
  */
 export function renderHandOffQuestion(input: { readonly view: HandOffView; readonly reason: string }): string {
   const target = input.view.path !== null ? ` in ${sanitisePersonText(storableText(input.view.path))}` : input.view.packageKey !== null ? ` of the ${sanitisePersonText(storableText(input.view.packageKey))} package` : ''
-  const from = input.view.fromOperator === true ? 'the operator' : input.view.from === null ? 'the conductor' : `the ${sanitisePersonText(storableText(input.view.from))} package`
+  const from = input.view.from !== null && input.view.fromOperator !== true ? `the ${sanitisePersonText(storableText(input.view.from))} package` : handOffFromName(input.view)
   return [
     `A hand-off from ${from} was not delivered: ${sanitisePersonText(storableText(input.reason))}.`,
     `It asks for a change${target}: ${trimToFit(sanitisePersonText(storableText(input.view.change).replace(/\s+/gu, ' ').trim()), HANDOFF_CHANGE_MAX_CHARS)}`,
