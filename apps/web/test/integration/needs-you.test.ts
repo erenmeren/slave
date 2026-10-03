@@ -331,4 +331,14 @@ describe('buildNeedsYou: one queue per goal version (human cards H4)', () => {
     expect([byId.get(withDecision)?.oneClick, byId.get(withHandOff)?.oneClick, byId.get(plain)?.oneClick]).toEqual([false, false, true])
     expect([byId.get(withDecision)?.questionCard, byId.get(withHandOff)?.questionCard]).toEqual([true, true])
   })
+
+  it('offers no one click on a question card whose question is gone, and still lists it as a question card (Task 10 (d))', async (): Promise<void> => {
+    const { workspaceId } = await seedWorkspace({ autoMerge: false })
+    // A deleted seat cascades its SlaveMessage; the pending card survives with its subject gone.
+    const gone = await card(workspaceId, { situationKind: 'conductor_question', subjectId: 'gone-message', createdAt: at(1), action: { kind: 'answer_question', messageId: 'gone-message' }, draftBody: 'Yes.' })
+
+    const [row] = await buildNeedsYou(workspaceId)
+
+    expect(row).toMatchObject({ id: gone, kind: 'decision', questionCard: true, oneClick: false, draftPreview: null })
+  })
 })

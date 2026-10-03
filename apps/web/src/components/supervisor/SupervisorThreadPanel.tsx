@@ -46,6 +46,10 @@ export interface PendingDecision {
   readonly tier?: string
   readonly status?: string
   readonly decidedBy?: string
+  /** A question card's question as `listDecisions` read it: `null` when the question no longer
+   *  exists (Task 10 (d): a deleted seat cascades its message, and the card survives). Absent on a
+   *  row read without it, which is drawn as before. Read for that one fact only. */
+  readonly card?: unknown
 }
 
 /** One action a reply asked for (F R3), as the thread view carries it: the decision it became,
@@ -202,6 +206,9 @@ function DecisionCard({
   // sentence `ProposalRow` writes, from the whole action when it reads as one).
   // The cast is the question being asked of a stored string, as `situationLabel` asks it above.
   const question = decision !== null && isQuestionSituation(situationKind as SituationKind)
+  // Task 10 (d): nothing to approve on a card whose question is gone -- the activity page's card
+  // says so and offers to dismiss it.
+  const questionGone = question && decision.card === null
   const parsedAction = decision?.action === undefined ? null : actionSchema.safeParse(decision.action)
   const move = parsedAction?.success === true && machineMove(parsedAction.data) ? actionText(parsedAction.data) : null
   const decideHref = decision === null ? '' : `/w/${workspaceId}/activity#decision-${decision.id}`
@@ -252,7 +259,20 @@ function DecisionCard({
             {decision.situation.summary ?? 'The Supervisor has proposed something.'}
           </p>
           <div className="mt-[10px] flex gap-[6px]">
-            {question ? (
+            {questionGone ? (
+              <>
+                <span data-testid="supervisor-decision-question-gone" className="self-center text-[12px] text-t2">
+                  The question this card is about no longer exists.
+                </span>
+                <Link
+                  data-testid="supervisor-decision-decide"
+                  href={decideHref}
+                  className="rounded-card border border-line2 px-3 py-[6px] text-[12.5px] font-medium text-t1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                >
+                  Dismiss it on its card →
+                </Link>
+              </>
+            ) : question ? (
               <>
                 {move !== null && (
                   <button

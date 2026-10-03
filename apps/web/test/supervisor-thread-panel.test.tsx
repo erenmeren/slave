@@ -279,6 +279,19 @@ describe('the Supervisor panel', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/supervisor/decisions/d-8/approve', expect.objectContaining({ method: 'POST' })))
   })
 
+  it('offers no approve on a re-address card whose question no longer exists, only the way to its card (Task 10 (d))', async (): Promise<void> => {
+    const gone: readonly PendingDecision[] = [
+      { id: 'd-9', situationKind: 'unanswerable_question', situation: { summary: 'nobody holds product' }, status: 'pending', action: { kind: 'reassign_question', messageId: 'm-gone', toSlaveId: 'Bo' }, card: null },
+    ]
+    render(<SupervisorThreadPanel workspaceId="w1" pending={gone} />)
+    await waitFor(() => expect(screen.getByTestId('supervisor-decision-card')).toBeTruthy())
+
+    expect(screen.queryByTestId('supervisor-decision-approve')).toBeNull()
+    expect(screen.queryByTestId('supervisor-decision-decline')).toBeNull()
+    expect(screen.getByTestId('supervisor-decision-question-gone').textContent).toContain('no longer exists')
+    expect(screen.getByTestId('supervisor-decision-decide').getAttribute('href')).toBe('/w/w1/activity#decision-d-9')
+  })
+
   it('keeps Approve and Decline on a card that is not about a question', async (): Promise<void> => {
     render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
     await waitFor(() => expect(screen.getByTestId('supervisor-decision-approve')).toBeTruthy())

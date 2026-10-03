@@ -12,7 +12,7 @@ import { handOffView, routeStoredHandOffs } from '../../src/handOffs.js'
 import { sendMessage } from '../../src/messaging.js'
 import { loadQuestionCards } from '../../src/questions.js'
 import { refusalText } from '../../src/refusal.js'
-import { HEAL_APPROVED_CLOSE_AFTER_MS, listDecisions, recordDecision } from '../../src/supervisor.js'
+import { HEAL_APPROVED_CLOSE_AFTER_MS, listDecisions, recordDecision, rejectDecision } from '../../src/supervisor.js'
 
 const TRUNCATE =
   'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SlaveMessage", "PackageHandOff", "GoalDecision", "GoalVersion", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "WorkPackage", "GoalDelivery", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE'
@@ -782,6 +782,19 @@ describe('listDecisions: a question card offers its decisions (plan B D7)', () =
     const [decided] = await listDecisions(f.workspaceId)
     expect(decided?.personDecision).toMatchObject({ decision: { kind: 'dismiss', reason: null }, by: 'u1', goalVersion: 1, summary: 'dismissed the question' })
     expect(decided?.card?.offers).toEqual([])
+  })
+
+  it('gives a card whose question is gone no card, refuses deciding it, and lets it be dismissed (Task 10 (d))', async () => {
+    const f = await seedCard({ draft: 'Yes.' })
+    // A deleted seat cascades its SlaveMessage; the pending card survives.
+    await prisma.slaveMessage.delete({ where: { id: f.questionId } })
+    const [view] = await listDecisions(f.workspaceId, { pending: true })
+    expect(view).toMatchObject({ id: f.cardId, card: null })
+    const decided = await decideCard(f.cardId, { kind: 'dismiss', reason: null }, { userId: 'u1' })
+    expect(!decided.ok && decided.error.kind).toBe('message_not_found')
+    // The card's own reject is the dismissal the card offers: it claims the card and closes nothing.
+    expect((await rejectDecision(f.cardId, { userId: 'u1' }, 'the question no longer exists')).ok).toBe(true)
+    expect(await cardOf(f)).toMatchObject({ status: 'rejected', resolvedByUserId: 'u1' })
   })
 })
 

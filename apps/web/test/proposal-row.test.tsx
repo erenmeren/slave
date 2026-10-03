@@ -663,3 +663,34 @@ describe('a question card offers its decisions (human cards H2, Plan A final rev
     expect(text.querySelector('img')).toBeNull()
   })
 })
+
+// ---- Task 10 (d): a question card whose question is gone ------------------------------------------
+
+describe('a question card whose question no longer exists (Task 10 (d))', () => {
+  it('shows no approve, says the question is gone, and offers only to dismiss the card', () => {
+    // A deleted seat cascades its SlaveMessage; the pending card survives and `listDecisions` gives it `card: null`.
+    for (const row of [
+      answerDecision({ situationKind: 'conductor_question', card: null }),
+      decision({ situationKind: 'unanswerable_question', subjectId: 'm-gone', action: { kind: 'reassign_question', messageId: 'm-gone', toSlaveId: 's2' }, card: null }),
+    ]) {
+      renderRow(row, { decide: true })
+      expect(screen.queryByTestId('supervisor-approve')).toBeNull()
+      expect(screen.queryByTestId('supervisor-reject')).toBeNull()
+      expect(screen.queryByTestId('supervisor-draft-body')).toBeNull()
+      expect(screen.queryByTestId('card-decisions')).toBeNull()
+      expect(screen.getByTestId('card-question-gone').textContent).toContain('no longer exists')
+      fireEvent.click(screen.getByTestId('card-dismiss-gone'))
+      expect(onReject).toHaveBeenCalledWith('the question no longer exists')
+      expect(onApprove).not.toHaveBeenCalled()
+      cleanup()
+      onReject.mockReset()
+    }
+  })
+
+  it('keeps approve and reject on a machine card that is not about a question', () => {
+    renderRow(decision({ card: null }))
+    expect(screen.getByTestId('supervisor-approve')).toBeTruthy()
+    expect(screen.getByTestId('supervisor-reject')).toBeTruthy()
+    expect(screen.queryByTestId('card-question-gone')).toBeNull()
+  })
+})

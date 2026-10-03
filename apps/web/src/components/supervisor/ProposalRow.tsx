@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { GOAL_REPORT_CLOSE_WORDS, PROVIDER_LABEL, SITUATION_LABEL, type Action, type TeamSource } from '@slave-of-ai/domain'
+import { GOAL_REPORT_CLOSE_WORDS, PROVIDER_LABEL, SITUATION_LABEL, isQuestionSituation, type Action, type TeamSource } from '@slave-of-ai/domain'
 // Type-only, so nothing from `server/supervisor.ts` (and nothing it imports -- control, and the
 // Prisma client under it) reaches the client bundle. The same rule `useOverview.ts` states for
 // `OverviewSnapshot`.
@@ -399,6 +399,12 @@ export function ProposalRow({
   const seed = draft?.editedBody ?? draft?.body ?? ''
   const [body, setBody] = useState(seed)
   const source = sourceOf(decision.action)
+  // Task 10 (d): a card about a question whose message is gone (a deleted seat cascades it; the card
+  // survives, and `listDecisions` gives it `card: null`). There is nothing to answer, decide or
+  // approve: the card says so and offers the one true act, dismissing the card (its rejection claims
+  // it and closes nothing -- there is no question left to close). `null`, not absent: a row read by
+  // something other than `listDecisions` carries no card field at all and is drawn as before.
+  const questionGone = decision.card === null && isQuestionSituation(decision.situationKind)
   return (
     <li
       data-testid="supervisor-proposal"
@@ -443,8 +449,17 @@ export function ProposalRow({
         {decision.rationale}
       </span>
       {decision.card != null && <QuestionState card={decision.card} />}
-      {draft !== null && <DraftEditor draft={draft} question={question} body={body} onBody={setBody} readOnly={decision.card != null} />}
-      {decision.card != null ? (
+      {draft !== null && !questionGone && <DraftEditor draft={draft} question={question} body={body} onBody={setBody} readOnly={decision.card != null} />}
+      {questionGone ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span data-testid="card-question-gone" className="text-[11px] text-text-2">
+            The question this card is about no longer exists, so there is nothing to answer or approve.
+          </span>
+          <Button variant="ghost" size="sm" data-testid="card-dismiss-gone" disabled={busy} onClick={() => onReject('the question no longer exists')}>
+            dismiss this card
+          </Button>
+        </div>
+      ) : decision.card != null ? (
         // Human cards H2 / Plan A final review I7: a question card is decided, not approved -- no
         // bare "approve" on it. Its draft above is read-only (F43); the decisions are the editor.
         <>

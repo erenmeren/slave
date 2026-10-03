@@ -242,6 +242,10 @@ export async function buildNeedsYou(
   for (const decision of decisions) {
     const taskId = taskOfDecision(decision)
     const card = decision.card ?? null
+    // Task 10 (d): a card about a question whose message is gone (a deleted seat cascades it) has no
+    // `card` to decide on, but it is still a question card -- never a bare Approve/Reject. Its row
+    // links to the card, which says the question is gone and offers only to dismiss it.
+    const onQuestion = isQuestionSituation(decision.situationKind)
     const preview = card !== null && card.offers.includes('send_answer') ? draftPreviewOf(decision.draft) : null
     items.push({
       kind: 'decision',
@@ -266,8 +270,8 @@ export async function buildNeedsYou(
       // ... and (fix round 2) only where the row can show ALL of what it sends -- and (final review
       // I4, spec H2.1 "the card says what will apply") never where sending it as drafted would also
       // apply a conductor draft's shared decision or hand-off, which the row does not show: "decide".
-      oneClick: card === null || (card.offers.includes('send_answer') && preview !== null && !preview.cut && !carriesMore(decision.draft)),
-      questionCard: card !== null,
+      oneClick: onQuestion ? card !== null && card.offers.includes('send_answer') && preview !== null && !preview.cut && !carriesMore(decision.draft) : true,
+      questionCard: onQuestion,
       draftPreview: preview?.text ?? null,
       draftPreviewCut: preview?.cut ?? false,
     })
