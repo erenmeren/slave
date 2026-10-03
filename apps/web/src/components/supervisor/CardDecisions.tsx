@@ -178,8 +178,11 @@ export function CardDecisions({
   readonly busy: boolean
   readonly onDecide: (body: Record<string, unknown>) => void
 }): React.JSX.Element {
-  const [kind, setKind] = useState<CardDecisionKind | null>(null)
+  const [picked, setKind] = useState<CardDecisionKind | null>(null)
   const [fields, setFields] = useState<Partial<Readonly<Record<CardDecisionKind, Fields>>>>({})
+  // A refresh can withdraw what was picked (the question timed out, its draft went): a decision the
+  // card no longer offers is neither shown nor sent (ruling F37).
+  const kind = picked !== null && card.offers.includes(picked) ? picked : null
   const id = useId()
   const noteId = `${id}-note`
 

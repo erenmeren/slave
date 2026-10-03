@@ -96,6 +96,16 @@ describe('CardDecisions (human cards H2)', () => {
     ])
   })
 
+  it('drops a chosen decision the refreshed card no longer offers, rather than sending it', () => {
+    const onDecide = vi.fn()
+    const { rerender } = render(<CardDecisions card={card} draft={null} busy={false} onDecide={onDecide} />)
+    choose('write_answer')
+    expect(screen.getByTestId('card-decision-note')).toBeTruthy()
+    rerender(<CardDecisions card={{ ...card, offers: ['dismiss'] }} draft={null} busy={false} onDecide={onDecide} />)
+    expect(screen.queryByTestId('card-decision-note')).toBeNull()
+    expect(screen.queryByTestId('card-decide')).toBeNull()
+  })
+
   it('renders nothing to choose on a card that offers nothing', () => {
     renderCard({ card: { offers: [] } })
     expect(screen.queryAllByTestId(/^card-decision-/u)).toHaveLength(0)
