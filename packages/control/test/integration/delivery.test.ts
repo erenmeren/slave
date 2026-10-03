@@ -154,6 +154,13 @@ describe('conductorView', () => {
     expect(pkg?.taskStatus).toBe('ready')
   })
 
+  it('shows the files a person gave away beside the globs, so the view says what the package really owns (human cards H2.4)', async () => {
+    const w = await seedConductedVersion()
+    await prisma.workPackage.updateMany({ where: { workspaceId: w }, data: { ownedPaths: ['src/**'], releasedPaths: ['src/routes.ts'] } })
+    const view = await conductorView(w)
+    expect(view.ok && view.value.packages[0]).toMatchObject({ ownedPaths: ['src/**'], releasedPaths: ['src/routes.ts'] })
+  })
+
   it('says a package is reported once its RunReport exists', async () => {
     const w = await seedConductedVersion()
     const task = await prisma.task.findFirstOrThrow({ where: { workspaceId: w } })

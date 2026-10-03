@@ -10,6 +10,7 @@ import { GoalDecisionRefused, lockGoalDecisions, writeGoalDecisionIn } from '../
 import { routeStoredHandOffs } from '../../src/handOffs.js'
 import { sendMessage } from '../../src/messaging.js'
 import { loadQuestionCards } from '../../src/questions.js'
+import { refusalText } from '../../src/refusal.js'
 import { HEAL_APPROVED_CLOSE_AFTER_MS, listDecisions, recordDecision } from '../../src/supervisor.js'
 
 const TRUNCATE =
@@ -655,5 +656,159 @@ describe('healApprovedClose and a person\'s written answer (ruling F51)', () => 
       now: new Date(Date.now() + HEAL_APPROVED_CLOSE_AFTER_MS * 10),
     })
     expect((await questionOf(f)).closedAt).toBeNull()
+  })
+})
+
+/** Every package of the fixture's version as stored: what a refused grant must leave untouched. */
+const packagesOf = async (f: CardFixture) =>
+  (await prisma.workPackage.findMany({ where: { workspaceId: f.workspaceId }, orderBy: { key: 'asc' }, select: { key: true, ownedPaths: true, releasedPaths: true } }))
+
+/**
+ * Runs `decideCard` with the card's transaction client reading the version's packages and then, on
+ * another connection, `meanwhile` writing one of them -- a write landing between the grant's read and
+ * its guarded update. The shared client's `$transaction` is replaced by an assigned wrapper, restored
+ * in `finally` (not `vi.spyOn`).
+ */
+async function decideWhilePackagesMove(f: CardFixture, decision: unknown, meanwhile: () => Promise<unknown>): Promise<Awaited<ReturnType<typeof decideCard>>> {
+  const client = prisma as unknown as { $transaction: (work: (tx: unknown) => Promise<unknown>, options?: unknown) => Promise<unknown> }
+  const original = client.$transaction
+  let moved = false
+  client.$transaction = (work, options) =>
+    original.call(
+      prisma,
+      (tx: unknown) => {
+        const delegate = (tx as { workPackage: { findMany: (...args: unknown[]) => Promise<unknown> } }).workPackage
+        const wrapped = new Proxy(tx as object, {
+          get(target, key, receiver) {
+            if (key !== 'workPackage') return Reflect.get(target, key, receiver) as unknown
+            return new Proxy(delegate, {
+              get(inner, name, innerReceiver) {
+                if (name !== 'findMany') return Reflect.get(inner, name, innerReceiver) as unknown
+                return async (...args: unknown[]) => {
+                  const rows = await delegate.findMany(...args)
+                  if (!moved) {
+                    moved = true
+                    await meanwhile()
+                  }
+                  return rows
+                }
+              },
+            })
+          },
+        })
+        return work(wrapped)
+      },
+      options,
+    )
+  try {
+    return await decideCard(f.cardId, decision, { userId: 'u1' })
+  } finally {
+    client.$transaction = original
+  }
+}
+
+describe('decideCard: give a file (human cards H2.4)', () => {
+  beforeEach(async () => {
+    await prisma.$executeRawUnsafe(TRUNCATE)
+  })
+
+  /** The api package's neighbour: owns src/web/**, with no task (so no live run). */
+  const addWeb = (f: CardFixture) =>
+    prisma.workPackage.create({ data: { workspaceId: f.workspaceId, goalVersion: 1, key: 'web', title: 'web', requirementKeys: [], ownedPaths: ['src/web/**'], interface: '', templateId: 'tpl' } })
+
+  it('moves a file from its glob owner, takes effect for the next run, and records the move', async () => {
+    const f = await seedCard()
+    // The asker is parked on the question, so the target must not be its package; give it to api's neighbour.
+    await addWeb(f)
+    const decided = await decideCard(f.cardId, { kind: 'give_file', path: 'src/api/routes.ts', toPackage: 'web' }, { userId: 'u1' })
+    expect(decided.ok && decided.value).toEqual({ decision: 'give_file', summary: 'gave src/api/routes.ts to the web package' })
+    const byKey = new Map((await prisma.workPackage.findMany({ where: { workspaceId: f.workspaceId } })).map((p) => [p.key, p]))
+    expect(byKey.get('api')).toMatchObject({ ownedPaths: ['src/api/**'], releasedPaths: ['src/api/routes.ts'] })
+    expect(byKey.get('web')).toMatchObject({ ownedPaths: ['src/web/**', 'src/api/routes.ts'], releasedPaths: [] })
+    const card = await cardOf(f)
+    expect(card).toMatchObject({ status: 'approved', resolvedByUserId: 'u1' })
+    expect(card.personDecision).toMatchObject({ decision: { kind: 'give_file' }, grant: { path: 'src/api/routes.ts', fromKey: 'api', toKey: 'web' }, summary: 'gave src/api/routes.ts to the web package', goalVersion: 1 })
+    const q = await questionOf(f)
+    expect(q).toMatchObject({ closedReason: 'decided', closedBy: 'u1' })
+    expect(q.closedNote).toContain('src/api/routes.ts now belongs to the web package')
+    expect(await closeEvents(f)).toBe(1)
+  })
+
+  it('refuses a split manifest family: nothing moves, the question stays open and the card pending', async () => {
+    const f = await seedCard()
+    await prisma.workPackage.create({ data: { workspaceId: f.workspaceId, goalVersion: 1, key: 'core-domain', title: 'core', requirementKeys: [], ownedPaths: ['src/core/**'], interface: '', templateId: 'tpl' } })
+    const before = await packagesOf(f)
+    const family = await decideCard(f.cardId, { kind: 'give_file', path: 'backend/package.json', toPackage: 'core-domain' }, { userId: 'u1' })
+    expect(!family.ok && family.error).toMatchObject({ kind: 'card_decision_refused', decisionId: f.cardId })
+    expect(!family.ok && refusalText(family.error)).toContain('belong to the skeleton package')
+    expect(await packagesOf(f)).toEqual(before)
+    expect(await cardOf(f)).toMatchObject({ status: 'pending', personDecision: null, resolvedAt: null })
+    expect((await questionOf(f)).closedAt).toBeNull()
+    expect(await closeEvents(f)).toBe(0)
+  })
+
+  it('refuses a version being verified or smoked, and a package with a live run -- closing nothing', async () => {
+    const f = await seedCard()
+    const before = await packagesOf(f)
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'verifying' } })
+    const verifying = await decideCard(f.cardId, { kind: 'give_file', path: 'src/api/routes.ts', toPackage: 'skeleton' })
+    expect(!verifying.ok && refusalText(verifying.error)).toContain('verified')
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'integrating', activeSmokeId: 'smoke-1' } })
+    const smoking = await decideCard(f.cardId, { kind: 'give_file', path: 'src/api/routes.ts', toPackage: 'skeleton' })
+    expect(!smoking.ok && refusalText(smoking.error)).toContain('smoked')
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { activeSmokeId: null } })
+    // Dockerfile is the integration package's (nobody else owns it), and integration's run is parked: the owner is live.
+    const owner = await decideCard(f.cardId, { kind: 'give_file', path: 'Dockerfile', toPackage: 'skeleton' })
+    expect(!owner.ok && refusalText(owner.error)).toContain('the integration package has a live run')
+    // scripts/verify.sh is the skeleton's by name; giving it to the parked integration package: the target is live.
+    const target = await decideCard(f.cardId, { kind: 'give_file', path: 'scripts/verify.sh', toPackage: 'integration' })
+    expect(!target.ok && refusalText(target.error)).toContain('the integration package has a live run')
+    // A run the giving package holds is live too.
+    const run = await prisma.slaveRun.create({ data: { slaveId: (await prisma.slave.findFirstOrThrow()).id, taskId: f.taskOf.api, status: 'working', provider: 'claude_code' } })
+    await prisma.task.update({ where: { id: f.taskOf.api }, data: { activeRunId: run.id, status: 'running' } })
+    await addWeb(f)
+    const giver = await decideCard(f.cardId, { kind: 'give_file', path: 'src/api/routes.ts', toPackage: 'web' })
+    expect(!giver.ok && refusalText(giver.error)).toContain('the api package has a live run')
+    expect((await questionOf(f)).closedAt).toBeNull()
+    expect(await cardOf(f)).toMatchObject({ status: 'pending', personDecision: null })
+    expect((await packagesOf(f)).filter((p) => p.key !== 'web')).toEqual(before)
+    expect(await closeEvents(f)).toBe(0)
+  })
+
+  it('throws when a package changed between the read and the write, rolling the claim and the close back', async () => {
+    const f = await seedCard()
+    await addWeb(f)
+    const lost = await decideWhilePackagesMove(f, { kind: 'give_file', path: 'src/api/routes.ts', toPackage: 'web' }, () =>
+      prisma.workPackage.updateMany({ where: { workspaceId: f.workspaceId, key: 'api' }, data: { ownedPaths: ['src/api/**', 'src/api/extra.ts'] } }),
+    )
+    expect(!lost.ok && lost.error).toMatchObject({ kind: 'card_decision_refused', reason: 'the packages changed while this was decided: decide again' })
+    const byKey = new Map((await packagesOf(f)).map((p) => [p.key, p]))
+    // Only the other connection's write stands: no release from api, nothing gained by web.
+    expect(byKey.get('api')).toEqual({ key: 'api', ownedPaths: ['src/api/**', 'src/api/extra.ts'], releasedPaths: [] })
+    expect(byKey.get('web')).toEqual({ key: 'web', ownedPaths: ['src/web/**'], releasedPaths: [] })
+    expect(await cardOf(f)).toMatchObject({ status: 'pending', personDecision: null })
+    expect((await questionOf(f)).closedAt).toBeNull()
+    expect(await closeEvents(f)).toBe(0)
+  })
+
+  it('writes no package change for a card another person took first', async () => {
+    const f = await seedCard()
+    await addWeb(f)
+    const before = await packagesOf(f)
+    const lost = await decideAfterLosingTheClaim(f, { kind: 'give_file', path: 'src/api/routes.ts', toPackage: 'web' })
+    const card = await cardOf(f)
+    expect(!lost.ok && lost.error).toEqual({ kind: 'decision_not_pending', decisionId: f.cardId, status: 'rejected', resolvedAt: card.resolvedAt?.toISOString(), resolvedByUserId: 'u2' })
+    expect(card.personDecision).toBeNull()
+    expect(await packagesOf(f)).toEqual(before)
+    expect((await questionOf(f)).closedAt).toBeNull()
+  })
+
+  it('refuses a version with no delivery before anything is written', async () => {
+    const f = await seedCard()
+    await addWeb(f)
+    await prisma.goalDelivery.delete({ where: { id: f.deliveryId } })
+    const refused = await decideCard(f.cardId, { kind: 'give_file', path: 'src/api/routes.ts', toPackage: 'web' })
+    expect(!refused.ok && refusalText(refused.error)).toContain('goal v1 has no delivery')
+    expect(await cardOf(f)).toMatchObject({ status: 'pending', personDecision: null })
   })
 })

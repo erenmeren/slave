@@ -10,6 +10,8 @@ import {
   isQuestionSituation,
   personDecisionSummary,
   personText,
+  planFileGrant,
+  registrationsSchema,
   resolveHandOff,
   storableJsonReviver,
   type Action,
@@ -24,6 +26,7 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import { GoalDecisionRefused, lockGoalDecisions, writeGoalDecisionIn } from './conductorAnswer.js'
 import { announceGoalVersion, requestChangeIn } from './goal.js'
+import { withDeliveryLock } from './goalDelivery.js'
 import { personHandOffSourceKey, routeHandOffs } from './handOffs.js'
 import { answerQuestion } from './messaging.js'
 import type { Principal } from './principal.js'
@@ -541,14 +544,98 @@ async function changeRequirement(
   return ok({ decision: decision.kind, summary: input.personDecision.summary })
 }
 
-/** Task 5 replaces this; until then a file grant is refused and nothing is written. */
-function giveFile(
+/**
+ * Human cards H2.4 (plan B D5): the one ownership change in the system. Under the delivery's lock
+ * ({@link withDeliveryLock}, the lock every verification, smoke and merge claim takes), and only while
+ * the version is integrating with no smoke or verification claim and neither the giving nor the
+ * receiving package's task holds a run: a run reads its ownership when it starts (the gate's
+ * permissions file) and the diff audit reads it again when it ends, so a grant under a live run
+ * would judge that run by a rule it did not start with. `planFileGrant` judges the move against the
+ * version's packages (disjointness, the manifest family, a shared registration directory).
+ *
+ * One transaction: the claim and the close ({@link claimAndClose}), then the `WorkPackage` writes,
+ * each guarded on the arrays it read -- a write that lost THROWS, so a refused or lost grant changes
+ * no package and closes nothing, and the card stays pending (spec §4). Every refusal known only
+ * under the lock is thrown after the claim, so a person who lost the card is told who took it.
+ *
+ * Lock order (the one order every path keeps): the delivery's advisory lock, then the Workspace row,
+ * then the question row (`lockCardQuestion`), then the two packages' task rows (`FOR SHARE`, so a
+ * dispatch claiming either task waits for the grant and its run then reads the new rule), then the
+ * `WorkPackage` rows the writes touch. Nothing takes the delivery lock while holding any of these:
+ * `withDeliveryLock` always opens its own transaction, and no caller runs inside another.
+ */
+async function giveFile(
   card: PendingCard,
-  _decision: Extract<CardDecision, { kind: 'give_file' }>,
-  _record: (extra?: Partial<PersonDecision>) => PersonDecision,
-  _status: 'approved' | 'rejected',
-  _principal: Principal | undefined,
-  _now: Date,
+  decision: Extract<CardDecision, { kind: 'give_file' }>,
+  record: (extra?: Partial<PersonDecision>) => PersonDecision,
+  status: 'approved' | 'rejected',
+  principal: Principal | undefined,
+  now: Date,
 ): Promise<Result<DecideOutcome, ControlRefusal>> {
-  return Promise.resolve(refusedCard(card, 'not yet'))
+  const version = card.question.goalVersion
+  // Before any write.
+  if (version === null) return refusedCard(card, 'the question belongs to no goal version')
+  const delivery = await prisma.goalDelivery.findUnique({ where: { workspaceId_goalVersion: { workspaceId: card.workspaceId, goalVersion: version } }, select: { id: true } })
+  if (delivery === null) return refusedCard(card, `goal v${String(version)} has no delivery: a file is given only while its packages are integrating`)
+  const refusedBy = (reason: string): CardRefused => new CardRefused({ kind: 'card_decision_refused', decisionId: card.id, reason })
+  const done = await inCardTransaction(() =>
+    withDeliveryLock(delivery.id, async (tx) => {
+      const head = await tx.goalDelivery.findUniqueOrThrow({ where: { id: delivery.id }, select: { status: true, activeSmokeId: true, activeRunId: true } })
+      const packages = await tx.workPackage.findMany({
+        where: { workspaceId: card.workspaceId, goalVersion: version },
+        orderBy: { key: 'asc' },
+        select: {
+          id: true,
+          key: true,
+          ownedPaths: true,
+          releasedPaths: true,
+          isIntegration: true,
+          registrations: true,
+          // Plan A D2: a package's one task is its oldest.
+          tasks: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: 1, select: { id: true } },
+        },
+      })
+      const plan = planFileGrant({
+        path: decision.path,
+        toKey: decision.toPackage,
+        packages: packages.map((p) => ({ key: p.key, ownedPaths: p.ownedPaths, releasedPaths: p.releasedPaths, isIntegration: p.isIntegration, registrations: registrationsSchema.parse(p.registrations) })),
+      })
+      const input: ClaimInput = {
+        card,
+        status,
+        principal,
+        personDecision: record(plan.ok ? { grant: { path: plan.value.path, fromKey: plan.value.fromKey, toKey: plan.value.toKey } } : {}),
+        close: { reason: 'decided', note: decidedResumeMessage(decision, { packageKey: decision.toPackage, askerPackageKey: card.question.askerPackageKey }) },
+        now,
+      }
+      const close = await claimAndClose(tx, input)
+      // From here on the claim is written: every refusal THROWS.
+      if (head.status !== 'integrating' || head.activeSmokeId !== null || head.activeRunId !== null) {
+        throw refusedBy(`goal v${String(version)} is being verified or smoked (or is over): a file is given only while it is integrating`)
+      }
+      if (!plan.ok) throw refusedBy(plan.error)
+      const keys = [plan.value.fromKey, plan.value.toKey].filter((key): key is string => key !== null)
+      const taskIds = keys.flatMap((key) => packages.find((p) => p.key === key)?.tasks.map((t) => t.id) ?? [])
+      const tasks = taskIds.length === 0 ? [] : await tx.$queryRaw<{ id: string; activeRunId: string | null }[]>`SELECT id, "activeRunId" FROM "Task" WHERE id = ANY(${taskIds}::text[]) ORDER BY id FOR SHARE`
+      for (const key of keys) {
+        const taskId = packages.find((p) => p.key === key)?.tasks[0]?.id
+        if (tasks.some((t) => t.id === taskId && t.activeRunId !== null)) {
+          throw refusedBy(`the ${key} package has a live run: give the file once it has finished, or give the ${key} package the work instead`)
+        }
+      }
+      for (const change of plan.value.changes) {
+        const pkg = packages.find((p) => p.key === change.key)
+        if (pkg === undefined) throw refusedBy(`the ${change.key} package is gone`)
+        const moved = await tx.workPackage.updateMany({
+          where: { id: pkg.id, ownedPaths: { equals: pkg.ownedPaths }, releasedPaths: { equals: pkg.releasedPaths } },
+          data: { ownedPaths: [...change.ownedPaths], releasedPaths: [...change.releasedPaths] },
+        })
+        if (moved.count === 0) throw refusedBy('the packages changed while this was decided: decide again')
+      }
+      return { input, close }
+    }),
+  )
+  if (!done.ok) return done
+  await afterClaim(card, done.value.input, done.value.close)
+  return ok({ decision: decision.kind, summary: done.value.input.personDecision.summary })
 }
