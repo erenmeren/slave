@@ -395,12 +395,16 @@ describe("a late answer's author (final wave minor: a worker's is named by its s
     const chainRow = { workspaceId: f.workspaceId, goalVersion: 1, fromRunId: run.id, fromPackageKey: null, toPackageKey: 'report', packageKey: 'report', change: 'x', status: 'delivered' as const, reopenedAt: new Date() }
     await prisma.packageHandOff.create({ data: { ...chainRow, source: 'answer', sourceKey: `${lateAnswerSourceKey(earlier)}:0`, fingerprint: 'f1' } })
     await prisma.packageHandOff.create({ data: { ...chainRow, source: 'person', sourceKey: 'person:d1:0', fingerprint: 'f2' } })
+    // Final-wave residual: a late answer to a finished package at its cap is not routed at all (its
+    // card says no run reads it), so the chain is met by another package's hand-off instead.
     await peerAnswer(f, ada.runId, (await timedOutQuestion(f, 'q-2', run.id)).id, 'second')
     await routeStoredHandOffs(f.deliveryId)
-    const asked = (await lateRows(f)).find((row) => row.status === 'to_conductor')
+    expect((await lateRows(f)).map((row) => row.sourceKey)).toEqual([`${lateAnswerSourceKey(earlier)}:0`])
+    await routeHandOffs({ workspaceId: f.workspaceId, goalVersion: 1, source: 'report', sourceKey: 'report:r-skeleton', fromRunId: run.id, fromPackageKey: 'skeleton', items: [{ package: 'report', change: 'y' }] })
+    const asked = (await rows(f)).find((row) => row.status === 'to_conductor')
     expect(asked?.note).toBe("the report package has already been reopened 2 times in goal v1 by other packages' hand-offs (from Ada (Reviewer), from the operator)")
     const question = await prisma.slaveMessage.findUniqueOrThrow({ where: { id: asked?.questionMessageId ?? '' } })
-    expect(question.body).toMatch(/^A hand-off from Ada \(Reviewer\) was not delivered/u)
+    expect(question.body).toMatch(/^A hand-off from the skeleton package /u)
     expect(question.body).not.toContain('the conductor')
   })
 })
