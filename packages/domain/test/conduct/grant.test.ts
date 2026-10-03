@@ -44,6 +44,18 @@ describe('planFileGrant (human cards H2.4, plan B D5)', () => {
     expect(web !== undefined && isOwned(ownershipRuleFor(web, after) ?? { owned: null, excluded: [] }, 'src/api/routes.ts')).toBe(true)
   })
 
+  it('takes a file the integration package lists by name off its list, so its contract no longer says it owns it (Task 2 carry)', () => {
+    const named = VERSION.map((p) => (p.key === 'integration' ? { ...p, ownedPaths: ['Dockerfile', 'README.md'] } : p))
+    const granted = planFileGrant({ path: 'Dockerfile', toKey: 'web', packages: named })
+    if (!granted.ok) throw new Error(granted.error)
+    expect(granted.value).toMatchObject({ fromKey: 'integration', toKey: 'web' })
+    expect(granted.value.changes).toEqual([
+      { key: 'integration', ownedPaths: ['README.md'], releasedPaths: [] },
+      { key: 'web', ownedPaths: ['src/web/**', 'Dockerfile'], releasedPaths: [] },
+    ])
+    expect(ownersOf(applied(named, granted.value.changes), 'Dockerfile')).toEqual(['web'])
+  })
+
   it('moves a file owned by name by taking the name away', () => {
     const granted = planFileGrant({ path: 'src/api/index.ts', toKey: 'web', packages: VERSION })
     expect(granted.ok && granted.value.changes.find((c) => c.key === 'api')).toEqual({ key: 'api', ownedPaths: ['src/api/**'], releasedPaths: ['src/api/index.ts'] })

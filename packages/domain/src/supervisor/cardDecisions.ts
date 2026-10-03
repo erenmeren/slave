@@ -109,9 +109,10 @@ export function personDecisionSummary(decision: CardDecision, target: { readonly
 
 /**
  * Plan B D3: what a parked asker continues with once a person decided its question without an
- * answer. `packageKey` is the package the decision names (`give_work`'s resolved target);
- * `askerPackageKey` is the asking task's own package -- work given to it is the asker's to do
- * (ruling F57), so it is never told to leave that work alone. Bounded to `closedNote` (ruling F69).
+ * answer. `packageKey` is the package the decision names (`give_work`'s resolved target, the
+ * package `give_file` gives to); `askerPackageKey` is the asking task's own package -- work or a
+ * file given to it is the asker's (ruling F57), so it is never told to leave it alone. Bounded to
+ * `closedNote` (ruling F69).
  */
 export function decidedResumeMessage(decision: CardDecision, target: { readonly packageKey: string | null; readonly askerPackageKey: string | null }): string {
   return trimToFit(decidedResumeText(decision, target), CLOSED_NOTE_MAX_CHARS)
@@ -125,6 +126,10 @@ function decidedResumeText(decision: CardDecision, target: { readonly packageKey
       }
       return `A person decided on your question: ${pkgName(target.packageKey)} package will do this: ${personText(decision.request)}. Do not make that change yourself; continue with the rest, and say in your report what you left to it.`
     case 'give_file':
+      // As ruling F57 words give_work: a file given to the asker's own package is its to change.
+      if (target.packageKey !== null && target.packageKey === target.askerPackageKey) {
+        return `A person gave your package ${personText(decision.path, 200)}: it is yours to change from your next run. Continue with your work, and say in your report what you changed in it.`
+      }
       return `A person decided on your question: ${personText(decision.path, 200)} now belongs to ${pkgName(decision.toPackage)} package. Continue with the rest, and say in your report what you left to it.`
     case 'record_decision':
       return `A person recorded a shared decision for your goal version: "${personText(decision.title, 80)}" -- ${personText(decision.text, 600)}. Continue with it.`

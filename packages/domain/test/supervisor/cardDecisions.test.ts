@@ -51,6 +51,15 @@ describe('card decisions (human cards H2)', () => {
     expect(own).not.toContain('will do this')
   })
 
+  it('tells the asker a file given to its own package is now its to change (Task 1 carry, as F57)', () => {
+    const own = decidedResumeMessage({ kind: 'give_file', path: 'src/api/routes.ts', toPackage: 'web' }, { packageKey: 'web', askerPackageKey: 'web' })
+    expect(own).toContain('A person gave your package src/api/routes.ts')
+    expect(own).not.toContain('left to it')
+    const other = decidedResumeMessage({ kind: 'give_file', path: 'src/api/routes.ts', toPackage: 'web' }, { packageKey: 'web', askerPackageKey: 'api' })
+    expect(other).toContain('now belongs to the web package')
+    expect(other).toContain('what you left to it')
+  })
+
   it('bounds every resume message to a closed note (ruling F69)', () => {
     const long = 'x'.repeat(PERSON_CARD_TEXT_MAX_CHARS * 3)
     const target = { packageKey: 'k'.repeat(200), askerPackageKey: null }

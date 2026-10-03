@@ -54,6 +54,12 @@ export function planFileGrant(input: { readonly path: string; readonly toKey: st
     return seen
   }
   let released = false
+  if (from !== null && from.isIntegration && from.ownedPaths.includes(path)) {
+    // The integration package owns by exclusion, so its rule already loses the file once the target
+    // names it; but its contract lists `ownedPaths` as "Files you own", so a name it held goes too.
+    const owned = edit(from)
+    owned.ownedPaths = owned.ownedPaths.filter((glob) => glob !== path)
+  }
   if (from !== null && !from.isIntegration) {
     // A name is taken away; a glob that still matches is narrowed by releasing the path from it.
     const owned = edit(from)
