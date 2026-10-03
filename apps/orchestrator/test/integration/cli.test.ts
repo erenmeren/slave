@@ -3851,10 +3851,15 @@ describe('the orchestrator CLI', () => {
       expect([workspace.runTimeoutMs, workspace.maxConcurrentRuns, workspace.maxAttempts]).toEqual([1_800_000, 3, 3])
     })
 
-    it('set-limits moves the question timeout, in minutes, and refuses one out of range (human cards H3)', async (): Promise<void> => {
+    it('set-limits moves the question timeout, given in minutes and said in hours, and refuses one out of range (human cards H3)', async (): Promise<void> => {
       const result = await runCli(['set-limits', '--workspace', fixture.workspaceId, '--question-timeout-min', '240'])
       expect(result.code).toBe(0)
-      expect(result.stdout).toContain('question timeout 120 min to 240 min')
+      // Final wave: said in hours, the way the settings-changed card says it -- "4320 min" reads badly.
+      expect(result.stdout).toContain('question timeout 2 hours to 4 hours')
+      const odd = await runCli(['set-limits', '--workspace', fixture.workspaceId, '--question-timeout-min', '90', '--run-timeout-min', '45'])
+      expect(odd.stdout).toContain('question timeout 4 hours to 1 hour 30 minutes')
+      expect(odd.stdout).toContain('run timeout 30 min to 45 min')
+      expect((await runCli(['set-limits', '--workspace', fixture.workspaceId, '--question-timeout-min', '240', '--run-timeout-min', '30'])).code).toBe(0)
       // The usage says what the flag is: its range, its default and what happens past it.
       const help = await runCli(['help'])
       const usage = help.stdout.replace(/\s+/gu, ' ')
@@ -3862,7 +3867,7 @@ describe('the orchestrator CLI', () => {
       expect(usage).toContain('past it the run continues on its safest assumption')
       expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).questionTimeoutMs).toBe(240 * 60_000)
       const events = await prisma.executionEvent.findMany({ where: { workspaceId: fixture.workspaceId, type: 'workspace_settings_changed' } })
-      expect(events.map((event) => event.payload)).toEqual([{ field: 'questionTimeoutMs', from: 7_200_000, to: 14_400_000 }])
+      expect(events.map((event) => event.payload)).toContainEqual({ field: 'questionTimeoutMs', from: 7_200_000, to: 14_400_000 })
 
       for (const bad of ['14', '4321', 'soon']) {
         const refused = await runCli(['set-limits', '--workspace', fixture.workspaceId, '--question-timeout-min', bad])

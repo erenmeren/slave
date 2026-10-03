@@ -193,6 +193,7 @@ import {
   displayName,
   domainLabel,
   filterFresh,
+  formatWait,
   grantsFor,
   manifestFor,
   observe,
@@ -3905,8 +3906,10 @@ export async function main(argv: readonly string[]): Promise<number> {
         return 0
       }
       const said = { runTimeoutMs: 'run timeout', maxConcurrentRuns: 'runs at once', maxAttempts: 'attempts per task', questionTimeoutMs: 'question timeout' }
+      // Final wave: the question timeout in hours, as the settings-changed card says it ("4320 min"
+      // reads badly); the run timeout keeps its minutes.
       const figure = (field: keyof typeof said, value: number): string =>
-        field === 'runTimeoutMs' || field === 'questionTimeoutMs' ? `${String(value / 60_000)} min` : String(value)
+        field === 'questionTimeoutMs' ? formatWait(value) : field === 'runTimeoutMs' ? `${String(value / 60_000)} min` : String(value)
       process.stdout.write(
         `limits updated on ${workspaceId}: ` +
           moved.map((move) => `${said[move.field]} ${figure(move.field, move.from)} to ${figure(move.field, move.to)}`).join(', ') +
