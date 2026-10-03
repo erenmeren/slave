@@ -4,6 +4,7 @@ import { trimToFit } from '../conduct/verification.js'
 import { CLOSED_NOTE_MAX_CHARS, PERSON_CARD_TEXT_MAX_CHARS, type QuestionCloseReason } from '../messaging/close.js'
 import type { Action } from './actions.js'
 import { dismissResumeMessage, personText, type LateAnswerFate } from './cards.js'
+import { ANSWER_MAX_CHARS } from './constants.js'
 
 /** Human-cards spec H2: the decisions a question card can carry, in the order a card offers them. */
 export const CARD_DECISION_KINDS = ['send_answer', 'write_answer', 'give_work', 'give_file', 'record_decision', 'change_requirement', 'dismiss'] as const
@@ -29,7 +30,9 @@ const text = (max: number): z.ZodString => z.string().trim().min(1).max(max)
 /** Plan B D1: the one validator of a card decision -- the route's 400 and `decideCard`'s own check. */
 export const cardDecisionSchema: z.ZodType<CardDecision, z.ZodTypeDef, unknown> = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('send_answer') }).strict(),
-  z.object({ kind: z.literal('write_answer'), body: text(PERSON_CARD_TEXT_MAX_CHARS) }).strict(),
+  // Task 7 fix round 1 (ruling I1): an answer is bounded as every answer is -- the draft it may start
+  // from, the answer box and the approve-with-edit path all take ANSWER_MAX_CHARS.
+  z.object({ kind: z.literal('write_answer'), body: text(ANSWER_MAX_CHARS) }).strict(),
   z
     .object({
       kind: z.literal('give_work'),

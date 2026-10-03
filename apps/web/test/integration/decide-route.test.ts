@@ -174,6 +174,19 @@ describe('POST /api/w/[workspaceId]/supervisor/decisions/[decisionId]/decide (hu
     await expectUntouched(f)
   })
 
+  it('takes a long drafted answer edited by one word, whole (Task 7 fix round 1, ruling I1)', async (): Promise<void> => {
+    const draft = `Yes: ${'add it to backend/package.json. '.repeat(95)}`.trim()
+    expect(draft.length).toBeGreaterThan(3_000)
+    const f = await seedCard({ draft })
+    const edited = draft.replace('Yes:', 'No:')
+
+    const response = await decide(f.workspaceId, f.cardId, { kind: 'write_answer', body: edited })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: true, outcome: { decision: 'write_answer', summary: 'answered in their own words' } })
+    expect((await prisma.slaveMessage.findFirstOrThrow({ where: { replyToId: f.questionId, kind: 'answer' } })).body).toBe(edited)
+  })
+
   it('400s an answer the verb finds empty once its unstorable characters are stripped, deciding nothing (Task 6 carry)', async (): Promise<void> => {
     const f = await seedCard()
 

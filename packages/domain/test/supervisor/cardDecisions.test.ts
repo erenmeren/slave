@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { CLOSED_NOTE_MAX_CHARS, PERSON_CARD_TEXT_MAX_CHARS } from '../../src/messaging/close.js'
 import { dismissResumeMessage } from '../../src/supervisor/cards.js'
+import { ANSWER_MAX_CHARS } from '../../src/supervisor/constants.js'
 import { cardDecisionSchema, cardOffers, decidedResumeMessage, personDecisionSchema, personDecisionSummary, type CardDecision } from '../../src/supervisor/cardDecisions.js'
 
 describe('card decisions (human cards H2)', () => {
@@ -14,6 +15,17 @@ describe('card decisions (human cards H2)', () => {
     expect(cardDecisionSchema.safeParse({ kind: 'write_answer', body: '   ' }).success).toBe(false)
     expect(cardDecisionSchema.safeParse({ kind: 'dismiss', reason: null }).success).toBe(true)
     expect(cardDecisionSchema.safeParse({ kind: 'approve' }).success).toBe(false)
+  })
+
+  // Task 7 fix round 1 (ruling I1): a person's own answer fits wherever the draft it starts from fits
+  // -- the same bound as the answer box and the approve-with-edit path, not the card's 2000.
+  it("bounds a written answer by ANSWER_MAX_CHARS, the draft's own bound", () => {
+    expect(cardDecisionSchema.safeParse({ kind: 'write_answer', body: 'x'.repeat(ANSWER_MAX_CHARS) }).success).toBe(true)
+    expect(cardDecisionSchema.safeParse({ kind: 'write_answer', body: 'x'.repeat(ANSWER_MAX_CHARS + 1) }).success).toBe(false)
+    expect(ANSWER_MAX_CHARS).toBeGreaterThan(PERSON_CARD_TEXT_MAX_CHARS)
+    // The stored copy reads back with the same bound.
+    const decision = { kind: 'write_answer', body: 'x'.repeat(ANSWER_MAX_CHARS) }
+    expect(personDecisionSchema.safeParse({ decision, goalVersion: 1, by: 'operator', at: '2026-10-03T00:00:00.000Z', summary: 'answered in their own words' }).success).toBe(true)
   })
 
   it('offers what fits the card (plan B D7)', () => {

@@ -1,5 +1,6 @@
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
+  ANSWER_MAX_CHARS,
   CLOSED_BY_SYSTEM,
   HANDOFF_CHANGE_MAX_CHARS,
   actionSchema,
@@ -319,9 +320,15 @@ async function decideAnswer(
 ): Promise<Result<DecideOutcome, ControlRefusal>> {
   // The person's words made inert and storable (no NUL, no protocol marker, no routing literal):
   // they reach the asker's resume turn as they are stored.
-  const body = decision.kind === 'write_answer' ? personText(decision.body) : null
+  // Task 7 fix round 1 (ruling I1): bounded as every answer is (ANSWER_MAX_CHARS, the schema's bound
+  // for it), and never cut: made safe with no cap of its own, then refused whole if that grew it past
+  // the bound -- the same refusal the approve-with-edit path gives, here before anything is written.
+  const body = decision.kind === 'write_answer' ? personText(decision.body, Number.MAX_SAFE_INTEGER) : null
   // Before any write: a body of NULs alone is empty once storable.
   if (body === '') return err({ kind: 'invalid_card_decision', reason: 'the answer is empty' })
+  if (body !== null && body.length > ANSWER_MAX_CHARS) {
+    return err({ kind: 'invalid_card_decision', reason: `the answer is longer than ${String(ANSWER_MAX_CHARS)} characters once made safe to send` })
+  }
   if (card.actionKind === 'answer_question') {
     // The person's decision is written by the approval's own conditional claim (review M4), so a
     // card is never approved without it; the resolved event carries its summary.

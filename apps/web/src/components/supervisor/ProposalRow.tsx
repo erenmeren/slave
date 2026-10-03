@@ -344,9 +344,9 @@ function QuestionState({ card }: { readonly card: NonNullable<Decision['card']> 
  * approve that names that move (spec H2: "cards whose action is the machine's keep approve and
  * reject"; dismiss is the reject on a question card). An answer, an escalation or "do nothing" has
  * no move of its own to approve: on those cards the decisions are the only buttons, "send this
- * answer" being the approve.
+ * answer" being the approve. Exported for the Supervisor panel's card, which answers by the same rule.
  */
-function machineMove(action: Action): boolean {
+export function machineMove(action: Action): boolean {
   return action.kind !== 'answer_question' && action.kind !== 'escalate_to_human' && action.kind !== 'no_action'
 }
 

@@ -24,6 +24,7 @@ export function DangerConfirm({
   confirmName,
   onConfirm,
   className = '',
+  describedBy,
 }: {
   readonly label: string
   readonly testId: string
@@ -40,6 +41,9 @@ export function DangerConfirm({
   readonly confirmName?: string
   readonly onConfirm: () => Promise<string | null>
   readonly className?: string
+  /** The id of the sentence that says what the action does, for both the trigger and the confirm
+   *  (`aria-describedby`) -- human cards Task 7 fix round 1, M2. */
+  readonly describedBy?: string
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [pending, setPending] = useState(false)
@@ -94,6 +98,7 @@ export function DangerConfirm({
         data-testid={testId}
         disabled={disabled}
         {...(title === undefined ? {} : { title })}
+        {...(describedBy === undefined ? {} : { 'aria-describedby': describedBy })}
         onClick={() => setOpen(true)}
         className={className}
       >
@@ -103,7 +108,15 @@ export function DangerConfirm({
   }
   return (
     <span role="alertdialog" aria-label={confirmName ?? `confirm ${label}`} className={`flex flex-wrap items-center gap-2 ${className}`.trim()}>
-      <Button ref={confirmRef} variant="danger" size="sm" data-testid={`${testId}-confirm`} disabled={pending} onClick={() => void confirm()}>
+      <Button
+        ref={confirmRef}
+        variant="danger"
+        size="sm"
+        data-testid={`${testId}-confirm`}
+        disabled={pending}
+        {...(describedBy === undefined ? {} : { 'aria-describedby': describedBy })}
+        onClick={() => void confirm()}
+      >
         {pending ? 'working…' : confirmText}
       </Button>
       <button type="button" data-testid={`${testId}-cancel`} disabled={pending} onClick={() => { setOpen(false); setErrorText(null) }} className="text-xs text-text-3">

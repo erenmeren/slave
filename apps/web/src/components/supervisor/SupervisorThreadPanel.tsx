@@ -7,6 +7,9 @@ import {
   SITUATION_LABEL,
   SUPERVISOR_DEFAULT_PROVIDER,
   TIER_LABEL,
+  actionSchema,
+  isQuestionSituation,
+  type SituationKind,
   type ChatAttachment,
   type Tier,
 } from '@slave-of-ai/domain'
@@ -19,6 +22,7 @@ import type { SupervisorThread } from '../../server/supervisorThreads'
 import { ModelSelect } from '../ModelSelect'
 import { ProviderSelect } from '../ProviderSelect'
 import { Kbd } from '../ui/Kbd'
+import { actionText, machineMove } from './ProposalRow'
 
 /** Exactly what this panel reads off `GET /api/w/:id/supervisor` — the pending proposals, and
  *  nothing else. The full `SupervisorView` carries a report, recent decisions, questions and two
@@ -35,7 +39,7 @@ export interface PendingDecision {
    *  this card has no room to show one -- so it sends them to the surface that does instead of
    *  offering a one-click Approve over words nobody has seen. Optional, and a proposal that
    *  somehow arrives without it keeps the buttons, which is every other kind's behaviour. */
-  readonly action?: { readonly kind?: string }
+  readonly action?: { readonly kind?: string } & Readonly<Record<string, unknown>>
   /** The whole record, for `supervisor-decision-meta`'s `title` (spec erratum E18) — the four
    *  fields `SupervisorPanel.tsx:557` put there before this panel replaced it. Optional because a
    *  row written by an older build carries none. */
@@ -192,6 +196,15 @@ function DecisionCard({
   // so this card sends a person there rather than growing a second, smaller copy of it.
   const needsReading = decision?.action?.kind === 'answer_question'
   const situationKind = decision?.situationKind ?? OPERATOR_REQUEST
+  // Human cards Task 7 fix round 1 (Plan A final review I7): a card about a QUESTION is decided on the
+  // activity page, where its decisions render -- never with a bare Approve/Decline here. Only the
+  // machine's own re-addressing move keeps an approve, labelled with that move (ruling F55; the
+  // sentence `ProposalRow` writes, from the whole action when it reads as one).
+  // The cast is the question being asked of a stored string, as `situationLabel` asks it above.
+  const question = decision !== null && isQuestionSituation(situationKind as SituationKind)
+  const parsedAction = decision?.action === undefined ? null : actionSchema.safeParse(decision.action)
+  const move = parsedAction?.success === true && machineMove(parsedAction.data) ? actionText(parsedAction.data) : null
+  const decideHref = decision === null ? '' : `/w/${workspaceId}/activity#decision-${decision.id}`
   return (
     <div
       data-testid="supervisor-decision-card"
@@ -239,10 +252,32 @@ function DecisionCard({
             {decision.situation.summary ?? 'The Supervisor has proposed something.'}
           </p>
           <div className="mt-[10px] flex gap-[6px]">
-            {needsReading ? (
+            {question ? (
+              <>
+                {move !== null && (
+                  <button
+                    type="button"
+                    data-testid="supervisor-decision-approve"
+                    disabled={busy}
+                    onClick={() => onAnswer(decision.id, 'approve')}
+                    className="rounded-card border-0 bg-accent px-3 py-[6px] text-[12.5px] font-semibold text-accent-ink disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                  >
+                    {`Approve: ${move}`}
+                  </button>
+                )}
+                <Link
+                  data-testid="supervisor-decision-decide"
+                  href={decideHref}
+                  className="rounded-card border border-line2 px-3 py-[6px] text-[12.5px] font-medium text-t1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                >
+                  Decide the question →
+                </Link>
+              </>
+            ) : needsReading ? (
               <Link
                 data-testid="supervisor-decision-review"
-                href={`/w/${workspaceId}`}
+                // Ruling F17: the `#decision-` anchor exists only on the activity page.
+                href={decideHref}
                 className="rounded-card border border-line2 px-3 py-[6px] text-[12.5px] font-medium text-t1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               >
                 Review the draft →

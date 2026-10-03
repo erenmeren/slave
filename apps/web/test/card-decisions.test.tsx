@@ -2,6 +2,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  ANSWER_MAX_CHARS,
   CARD_PATH_MAX_CHARS,
   HANDOFF_CHANGE_MAX_CHARS,
   PERSON_CARD_TEXT_MAX_CHARS,
@@ -315,8 +316,9 @@ describe('CardDecisions (human cards H2)', () => {
     expect(screen.getByLabelText(`the decision (at most ${String(SHARED_DECISION_TEXT_MAX_CHARS)} characters)`)).toBe(text)
     expect(text.maxLength).toBe(SHARED_DECISION_TEXT_MAX_CHARS)
     choose('write_answer')
-    expect((screen.getByTestId('card-text') as HTMLTextAreaElement).maxLength).toBe(PERSON_CARD_TEXT_MAX_CHARS)
-    expect(screen.getByLabelText(`your answer (at most ${String(PERSON_CARD_TEXT_MAX_CHARS)} characters)`)).toBeTruthy()
+    // Task 7 fix round 1 (ruling I1): a written answer is bounded as the draft it starts from is.
+    expect((screen.getByTestId('card-text') as HTMLTextAreaElement).maxLength).toBe(ANSWER_MAX_CHARS)
+    expect(screen.getByLabelText(`your answer (at most ${String(ANSWER_MAX_CHARS)} characters)`)).toBeTruthy()
     choose('give_work')
     expect((screen.getByTestId('card-text') as HTMLTextAreaElement).maxLength).toBe(HANDOFF_CHANGE_MAX_CHARS)
     choose('change_requirement')
@@ -359,5 +361,85 @@ describe('CardDecisions (human cards H2)', () => {
     expect(box.value).toBe('<script>boom()</script>')
     expect(box.querySelector('script')).toBeNull()
     expect(document.querySelector('script')).toBeNull()
+  })
+
+  // ---- Task 7 fix round 1 ----------------------------------------------------------------------
+
+  it('posts a long drafted answer edited by one word (ruling I1)', () => {
+    const long = `Yes: ${'add it to backend/package.json. '.repeat(95)}`.trim()
+    expect(long.length).toBeGreaterThan(3_000)
+    const onDecide = renderCard({ card: { offers: ['send_answer', 'write_answer', 'dismiss'] }, draft: { ...plainDraft, body: long } })
+    choose('write_answer')
+    const edited = long.replace('Yes:', 'No:')
+    type('card-text', edited)
+    expect(screen.getByTestId('card-count-text').textContent).toBe(`${String(edited.length)} / ${String(ANSWER_MAX_CHARS)} characters`)
+    expect(decideButton().disabled).toBe(false)
+    fireEvent.click(decideButton())
+    expect(onDecide).toHaveBeenCalledWith({ kind: 'write_answer', body: edited })
+  })
+
+  it('shows every text field\'s count against its cap, and keeps decide down and says why while one is over', () => {
+    renderCard()
+    choose('record_decision')
+    type('card-title', 'Scripts')
+    type('card-text', 'x'.repeat(SHARED_DECISION_TEXT_MAX_CHARS + 2))
+    expect(screen.getByTestId('card-count-title').textContent).toBe(`7 / ${String(SHARED_DECISION_TITLE_MAX_CHARS)} characters`)
+    expect(screen.getByTestId('card-count-text').textContent).toContain(`${String(SHARED_DECISION_TEXT_MAX_CHARS + 2)} / ${String(SHARED_DECISION_TEXT_MAX_CHARS)} characters`)
+    expect(decideButton().disabled).toBe(true)
+    expect(screen.getByTestId('card-over-cap').textContent).toBe(`the decision is 2 characters over its limit of ${String(SHARED_DECISION_TEXT_MAX_CHARS)}; shorten it to decide`)
+    // The count is of the trimmed text, as the route measures it.
+    type('card-text', `  ${'x'.repeat(SHARED_DECISION_TEXT_MAX_CHARS)}  `)
+    expect(decideButton().disabled).toBe(false)
+    expect(screen.queryByTestId('card-over-cap')).toBeNull()
+
+    choose('give_file')
+    type('card-target-package', 'skeleton')
+    type('card-path', 'p'.repeat(CARD_PATH_MAX_CHARS + 1))
+    expect(screen.getByTestId('card-count-path').textContent).toBe(`${String(CARD_PATH_MAX_CHARS + 1)} / ${String(CARD_PATH_MAX_CHARS)} characters`)
+    expect(decideButton().disabled).toBe(true)
+    expect(screen.getByTestId('card-over-cap').textContent).toContain('the file is 1 character over its limit')
+
+    choose('dismiss')
+    type('card-text', 'x'.repeat(PERSON_CARD_TEXT_MAX_CHARS + 1))
+    expect(decideButton().disabled).toBe(true)
+    expect(screen.getByTestId('card-text').getAttribute('aria-describedby')).toBe(screen.getByTestId('card-count-text').id)
+  })
+
+  it('closes an open confirm when another decision is chosen (M1)', () => {
+    renderCard()
+    choose('dismiss')
+    fireEvent.click(decideButton())
+    expect(screen.getByTestId('card-decide-confirm')).toBeTruthy()
+    choose('change_requirement')
+    expect(screen.queryByTestId('card-decide-confirm')).toBeNull()
+    expect(decideButton().textContent).toBe('decide')
+  })
+
+  it('leaves nothing open or clickable while a decision is in flight (M1)', () => {
+    const onDecide = vi.fn()
+    const { rerender } = render(<CardDecisions card={card} draft={null} busy={false} onDecide={onDecide} />)
+    choose('dismiss')
+    fireEvent.click(decideButton())
+    expect(screen.getByTestId('card-decide-confirm')).toBeTruthy()
+    rerender(<CardDecisions card={card} draft={null} busy onDecide={onDecide} />)
+    expect(screen.queryByTestId('card-decide-confirm')).toBeNull()
+    expect(decideButton().disabled).toBe(true)
+    fireEvent.click(decideButton())
+    expect(screen.queryByTestId('card-decide-confirm')).toBeNull()
+    expect(onDecide).not.toHaveBeenCalled()
+  })
+
+  it('points the confirm-step decide and its confirm at the note, as the plain decide does (M2)', () => {
+    renderCard()
+    choose('give_work')
+    const noteId = screen.getByTestId('card-decision-note').id
+    expect(noteId).not.toBe('')
+    expect(decideButton().getAttribute('aria-describedby')).toBe(noteId)
+    for (const kind of ['give_file', 'change_requirement', 'dismiss']) {
+      choose(kind)
+      expect(decideButton().getAttribute('aria-describedby')).toBe(screen.getByTestId('card-decision-note').id)
+    }
+    fireEvent.click(decideButton())
+    expect(screen.getByTestId('card-decide-confirm').getAttribute('aria-describedby')).toBe(screen.getByTestId('card-decision-note').id)
   })
 })

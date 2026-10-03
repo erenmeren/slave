@@ -2,6 +2,7 @@
 
 import { useId, useState } from 'react'
 import {
+  ANSWER_MAX_CHARS,
   CARD_PATH_MAX_CHARS,
   HANDOFF_CHANGE_MAX_CHARS,
   PERSON_CARD_TEXT_MAX_CHARS,
@@ -142,13 +143,37 @@ function confirmFor(kind: CardDecisionKind, fields: Fields): string | null {
   }
 }
 
-/** The text box's label and the server's bound for it, per decision that has one. */
-const TEXT_BOX: Partial<Readonly<Record<CardDecisionKind, { readonly label: string; readonly max: number }>>> = {
-  write_answer: { label: 'your answer', max: PERSON_CARD_TEXT_MAX_CHARS },
-  give_work: { label: 'the change you want made', max: HANDOFF_CHANGE_MAX_CHARS },
-  record_decision: { label: 'the decision', max: SHARED_DECISION_TEXT_MAX_CHARS },
-  change_requirement: { label: 'the change to the requirements', max: PERSON_CARD_TEXT_MAX_CHARS },
-  dismiss: { label: 'why (optional)', max: PERSON_CARD_TEXT_MAX_CHARS },
+/** The text box's label, what the over-limit sentence calls it, and the server's bound for it, per
+ *  decision that has one. Ruling I1 (fix round 1): a written answer takes ANSWER_MAX_CHARS, the bound
+ *  of the draft it starts from. */
+const TEXT_BOX: Partial<Readonly<Record<CardDecisionKind, { readonly label: string; readonly name: string; readonly max: number }>>> = {
+  write_answer: { label: 'your answer', name: 'your answer', max: ANSWER_MAX_CHARS },
+  give_work: { label: 'the change you want made', name: 'the change', max: HANDOFF_CHANGE_MAX_CHARS },
+  record_decision: { label: 'the decision', name: 'the decision', max: SHARED_DECISION_TEXT_MAX_CHARS },
+  change_requirement: { label: 'the change to the requirements', name: 'the change', max: PERSON_CARD_TEXT_MAX_CHARS },
+  dismiss: { label: 'why (optional)', name: 'your reason', max: PERSON_CARD_TEXT_MAX_CHARS },
+}
+
+type FieldKey = 'text' | 'title' | 'path'
+
+/** Every text field of a decision with its bound, in the order the form shows them -- what the counts
+ *  and the over-limit check read. The route trims before it measures, and so does this. */
+function boundsFor(kind: CardDecisionKind): readonly { readonly field: FieldKey; readonly name: string; readonly max: number }[] {
+  const text = TEXT_BOX[kind]
+  return [
+    ...(kind === 'give_work' || kind === 'give_file' ? [{ field: 'path' as const, name: 'the file', max: CARD_PATH_MAX_CHARS }] : []),
+    ...(kind === 'record_decision' ? [{ field: 'title' as const, name: 'the title', max: SHARED_DECISION_TITLE_MAX_CHARS }] : []),
+    ...(text === undefined ? [] : [{ field: 'text' as const, name: text.name, max: text.max }]),
+  ]
+}
+
+/** The first field over its bound, as the sentence that says so; null when every field fits. */
+function overCap(kind: CardDecisionKind, fields: Fields): string | null {
+  for (const bound of boundsFor(kind)) {
+    const over = fields[bound.field].trim().length - bound.max
+    if (over > 0) return `${bound.name} is ${String(over)} character${over === 1 ? '' : 's'} over its limit of ${String(bound.max)}; shorten it to decide`
+  }
+  return null
 }
 
 const FIELD = 'rounded border border-line bg-bg-0 px-2 py-1 text-[11px] text-text-1'
@@ -200,10 +225,18 @@ export function CardDecisions({
     }
   }
 
-  const body = kind === null ? null : bodyFor(kind, current)
+  const tooLong = kind === null ? null : overCap(kind, current)
+  // Blank or over a bound: not a body the route would take, so decide stays down (ruling I1).
+  const body = kind === null || tooLong !== null ? null : bodyFor(kind, current)
   const confirm = kind === null ? null : confirmFor(kind, current)
   const textBox = kind === null ? undefined : TEXT_BOX[kind]
   const picksPackage = kind === 'give_work' || kind === 'give_file'
+  /** A field's count against its bound, beside the field and named as its description. */
+  const count = (field: FieldKey, max: number): React.JSX.Element => (
+    <span id={`${id}-count-${field}`} data-testid={`card-count-${field}`} className="font-mono text-[10px] text-text-3">
+      {`${String(current[field].trim().length)} / ${String(max)} characters`}
+    </span>
+  )
   const answerWithheld = card.closed?.reason === 'timed_out' && card.lateAnswerFate === 'unread'
 
   return (
@@ -251,15 +284,17 @@ export function CardDecisions({
           {picksPackage && (
             <label className={LABELLED}>
               {kind === 'give_work' ? `the file whose owner gets the work, instead (at most ${String(CARD_PATH_MAX_CHARS)} characters)` : `the file, e.g. backend/package.json (at most ${String(CARD_PATH_MAX_CHARS)} characters)`}
-              <input data-testid="card-path" value={current.path} maxLength={CARD_PATH_MAX_CHARS} onChange={(event) => set({ path: event.target.value })} className={FIELD} />
+              <input data-testid="card-path" value={current.path} maxLength={CARD_PATH_MAX_CHARS} aria-describedby={`${id}-count-path`} onChange={(event) => set({ path: event.target.value })} className={FIELD} />
             </label>
           )}
+          {picksPackage && count('path', CARD_PATH_MAX_CHARS)}
           {kind === 'record_decision' && (
             <label className={LABELLED}>
               {`title (at most ${String(SHARED_DECISION_TITLE_MAX_CHARS)} characters)`}
-              <input data-testid="card-title" value={current.title} maxLength={SHARED_DECISION_TITLE_MAX_CHARS} onChange={(event) => set({ title: event.target.value })} className={FIELD} />
+              <input data-testid="card-title" value={current.title} maxLength={SHARED_DECISION_TITLE_MAX_CHARS} aria-describedby={`${id}-count-title`} onChange={(event) => set({ title: event.target.value })} className={FIELD} />
             </label>
           )}
+          {kind === 'record_decision' && count('title', SHARED_DECISION_TITLE_MAX_CHARS)}
           {textBox !== undefined && (
             <label className={LABELLED}>
               {`${textBox.label} (at most ${String(textBox.max)} characters)`}
@@ -268,10 +303,17 @@ export function CardDecisions({
                 value={current.text}
                 rows={3}
                 maxLength={textBox.max}
+                aria-describedby={`${id}-count-text`}
                 onChange={(event) => set({ text: event.target.value })}
                 className="rounded border border-line bg-bg-0 p-2 text-xs text-text-1"
               />
             </label>
+          )}
+          {textBox !== undefined && count('text', textBox.max)}
+          {tooLong !== null && (
+            <span role="alert" data-testid="card-over-cap" className="text-[11px] text-tone-blocked">
+              {tooLong}
+            </span>
           )}
           <div className="flex items-center gap-2">
             {confirm === null ? (
@@ -291,10 +333,14 @@ export function CardDecisions({
               // Irreversible, or not simply undone (a file's owner, a new goal version, a closed
               // question): the app's one two-step control asks with the sentence first.
               <DangerConfirm
+                // Keyed by the decision and by the request in flight (fix round 1, M1): a confirm
+                // opened for one decision never stays open on another, and none is open while busy.
+                key={`${kind}:${busy ? 'busy' : 'idle'}`}
                 label="decide"
                 testId="card-decide"
                 confirmText={confirm}
                 confirmName={`confirm: ${confirm}`}
+                describedBy={noteId}
                 disabled={busy || body === null}
                 onConfirm={async () => {
                   if (body !== null) onDecide(body)

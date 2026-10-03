@@ -3,7 +3,7 @@
  * the question in one transaction; a refusal writes nothing.
  */
 import { prisma } from '@slave-of-ai/db/client'
-import { CONDUCTOR_ROLE } from '@slave-of-ai/domain'
+import { ANSWER_MAX_CHARS, CONDUCTOR_ROLE } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { CARD_BUSY_REASON, CardRefused, claimAndClose, decideCard, inCardTransaction, type PendingCard } from '../../src/cards.js'
 import { GoalDecisionRefused, lockGoalDecisions, writeGoalDecisionIn } from '../../src/conductorAnswer.js'
@@ -120,6 +120,25 @@ describe('decideCard: answers and dismissal (human cards H2.1, H2.2, H2.7)', () 
     expect(await closeEvents(f)).toBe(1)
     const resolved = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'supervisor_resolved' } })
     expect(resolved.map((e) => e.payload)).toEqual([{ decisionId: f.cardId, outcome: 'approved', reason: 'A person decided: answered in their own words' }])
+  })
+
+  // Task 7 fix round 1 (ruling I1): a person's answer is bounded as the draft is (ANSWER_MAX_CHARS),
+  // and nothing on the way truncates it -- not the stored edit, not the answer row.
+  it('sends a person\'s answer past the card text bound whole, on an answer card and on an escalation', async () => {
+    const draft = `Yes: ${'the skeleton adds it. '.repeat(140)}`.trim()
+    expect(draft.length).toBeGreaterThan(2_900)
+    const edited = `${draft} Also a stop script.`
+    const f = await seedCard({ draft })
+    expect((await decideCard(f.cardId, { kind: 'write_answer', body: edited }, { userId: 'u1' })).ok).toBe(true)
+    expect((await prisma.slaveMessage.findFirstOrThrow({ where: { replyToId: f.questionId, kind: 'answer' } })).body).toBe(edited)
+    expect((await cardOf(f)).draft).toMatchObject({ editedBody: edited })
+    expect((await cardOf(f)).personDecision).toMatchObject({ decision: { kind: 'write_answer', body: edited } })
+
+    await prisma.$executeRawUnsafe(TRUNCATE)
+    const g = await seedCard()
+    const long = 'y'.repeat(ANSWER_MAX_CHARS)
+    expect((await decideCard(g.cardId, { kind: 'write_answer', body: long }, { userId: 'u1' })).ok).toBe(true)
+    expect((await prisma.slaveMessage.findFirstOrThrow({ where: { replyToId: g.questionId, kind: 'answer' } })).body).toBe(long)
   })
 
   it('refuses an answer that is empty once made storable, before anything is written', async () => {
