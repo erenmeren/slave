@@ -1,13 +1,16 @@
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   CLOSED_BY_SYSTEM,
+  HANDOFF_CHANGE_MAX_CHARS,
   actionSchema,
   cardDecisionSchema,
   decidedResumeMessage,
   draftSchema,
+  handOffRoute,
   isQuestionSituation,
   personDecisionSummary,
   personText,
+  resolveHandOff,
   storableJsonReviver,
   type Action,
   type CardDecision,
@@ -19,6 +22,9 @@ import {
   ok,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { GoalDecisionRefused, lockGoalDecisions, writeGoalDecisionIn } from './conductorAnswer.js'
+import { announceGoalVersion, requestChangeIn } from './goal.js'
+import { personHandOffSourceKey, routeHandOffs } from './handOffs.js'
 import { answerQuestion } from './messaging.js'
 import type { Principal } from './principal.js'
 import {
@@ -32,6 +38,7 @@ import {
   type CloseQuestionInput,
   type QuestionCard,
 } from './questions.js'
+import { isUniqueConstraintViolation } from './prisma-errors.js'
 import { refusalText, type ControlRefusal } from './refusal.js'
 import { approveDecision, withOffers } from './supervisor.js'
 
@@ -325,14 +332,223 @@ async function decideAnswer(
   return ok({ decision: decision.kind, summary: personDecision.summary })
 }
 
-/** Tasks 4 and 5 fill this in; until then the decision is refused and nothing is written. */
-function decideOther(
+/** Ruling F38: what a held hand-off's summary adds -- the version is not integrating, so no run reads it yet. */
+const HELD_NOTE = ' (it waits until the version is integrating again)'
+
+/**
+ * H2.3, H2.5, H2.6 (and Task 5's H2.4): the decisions that act on the version. Each claims the card
+ * and closes its question in one transaction ({@link claimAndClose}); a refusal known before the
+ * claim is returned before anything is written, and one met after it THROWS so the claim rolls back.
+ */
+async function decideOther(
   card: PendingCard,
   decision: Extract<CardDecision, { kind: 'give_work' | 'record_decision' | 'change_requirement' | 'give_file' }>,
+  record: (extra?: Partial<PersonDecision>) => PersonDecision,
+  status: 'approved' | 'rejected',
+  principal: Principal | undefined,
+  now: Date,
+): Promise<Result<DecideOutcome, ControlRefusal>> {
+  switch (decision.kind) {
+    case 'give_work':
+      return giveWork(card, decision, record, status, principal, now)
+    case 'record_decision':
+      return recordSharedDecision(card, decision, record, status, principal, now)
+    case 'change_requirement':
+      return changeRequirement(card, decision, record, status, principal, now)
+    case 'give_file':
+      return giveFile(card, decision, record, status, principal, now)
+  }
+}
+
+const refusedCard = (card: PendingCard, reason: string): Result<never, ControlRefusal> => err({ kind: 'card_decision_refused', decisionId: card.id, reason })
+
+/**
+ * H2.3 (plan B D4): a package is given work. The target is resolved by the ownership rule
+ * (`resolveHandOff`, from nobody's package, so the asker's own package is a real target) and, ruling
+ * F38, refused BEFORE the claim unless `handOffRoute` -- the rule `routeHandOffs` stores by -- says
+ * the request would be delivered or held: a failed or cancelled target task would turn a person's
+ * request into a conductor question, and an ended version would store it expired. Every refusal here
+ * is returned before the first write. The routing runs after the commit, with no lock held; a
+ * failure there is said and swallowed, and the goal pass routes it (`routeStoredPersonHandOffs`).
+ * Residual race: a target task or the delivery moving between this read and the routing is stored
+ * as `routeHandOffs` rules at that moment.
+ */
+async function giveWork(
+  card: PendingCard,
+  decision: Extract<CardDecision, { kind: 'give_work' }>,
+  record: (extra?: Partial<PersonDecision>) => PersonDecision,
+  status: 'approved' | 'rejected',
+  principal: Principal | undefined,
+  now: Date,
+): Promise<Result<DecideOutcome, ControlRefusal>> {
+  const version = card.question.goalVersion
+  const askerRunId = card.question.askerRunId
+  if (version === null || askerRunId === null) return refusedCard(card, 'the question belongs to no goal version with packages, or no run asked it')
+  const [delivery, packages] = await Promise.all([
+    prisma.goalDelivery.findUnique({ where: { workspaceId_goalVersion: { workspaceId: card.workspaceId, goalVersion: version } }, select: { status: true } }),
+    prisma.workPackage.findMany({
+      where: { workspaceId: card.workspaceId, goalVersion: version },
+      orderBy: { key: 'asc' },
+      select: {
+        key: true,
+        ownedPaths: true,
+        releasedPaths: true,
+        isIntegration: true,
+        // Plan A D2: a package's one task is its oldest, as `routeHandOffs` reads it.
+        tasks: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: 1, select: { status: true } },
+      },
+    }),
+  ])
+  const request = personText(decision.request, HANDOFF_CHANGE_MAX_CHARS)
+  if (request === '') return err({ kind: 'invalid_card_decision', reason: 'the request is empty' })
+  const item = 'package' in decision.target ? { package: decision.target.package, change: request } : { path: decision.target.path, change: request }
+  const resolved = resolveHandOff(item, null, packages)
+  if (resolved.kind !== 'package') return refusedCard(card, resolved.kind === 'none' ? resolved.reason : 'no package can take it')
+  const taskStatus = packages.find((pkg) => pkg.key === resolved.key)?.tasks[0]?.status
+  const route = handOffRoute(delivery?.status ?? null, taskStatus)
+  if (route === 'to_conductor') return refusedCard(card, `the ${resolved.key} package cannot take work: its task is ${taskStatus ?? 'gone'}`)
+  if (route === 'expired') return refusedCard(card, `goal v${String(version)} was ${delivery?.status ?? 'ended'}: none of its packages takes work any more`)
+  const target = { packageKey: resolved.key, askerPackageKey: card.question.askerPackageKey }
+  const summary = `${personDecisionSummary(decision, target)}${route === 'held' ? HELD_NOTE : ''}`
+  const input: ClaimInput = {
+    card,
+    status,
+    principal,
+    personDecision: record({ summary }),
+    // Ruling F57: work given to the asker's own package is worded as its work to do.
+    close: { reason: 'decided', note: decidedResumeMessage(decision, target) },
+    now,
+  }
+  const claimed = await inCardTransaction(() => prisma.$transaction((tx) => claimAndClose(tx, input)))
+  if (!claimed.ok) return claimed
+  await afterClaim(card, input, claimed.value)
+  try {
+    await routeHandOffs({
+      workspaceId: card.workspaceId,
+      goalVersion: version,
+      source: 'person',
+      sourceKey: personHandOffSourceKey(card.id),
+      fromRunId: askerRunId,
+      fromPackageKey: null,
+      items: [item],
+    })
+  } catch (error) {
+    // Said and swallowed: the decision is committed; the goal pass routes it (`routeStoredPersonHandOffs`).
+    console.error(`[cards] card ${card.id}: its hand-off waits for the next goal pass:`, error)
+  }
+  return ok({ decision: decision.kind, summary })
+}
+
+/**
+ * H2.5 (plan B D6): a person's shared decision for the question's goal version, written in the card's
+ * transaction ({@link writeGoalDecisionIn}); a taken title (however cased or spaced), the version's
+ * cap or a text empty once defused THROWS, so the claim and the close roll back.
+ *
+ * Lock order: the version's goal-decisions advisory lock, then the Workspace row, then the question
+ * row. The conductor's writer takes the advisory lock and then (the insert's foreign key) a share
+ * lock on the Workspace row, and nothing takes the advisory lock while holding the Workspace row,
+ * so the advisory lock must come first here too. The claim precedes the write, so a person who lost
+ * the card is told who took it, not that the title was taken by the winner.
+ */
+async function recordSharedDecision(
+  card: PendingCard,
+  decision: Extract<CardDecision, { kind: 'record_decision' }>,
+  record: (extra?: Partial<PersonDecision>) => PersonDecision,
+  status: 'approved' | 'rejected',
+  principal: Principal | undefined,
+  now: Date,
+): Promise<Result<DecideOutcome, ControlRefusal>> {
+  const version = card.question.goalVersion
+  // Before any write.
+  if (version === null) return refusedCard(card, 'the question belongs to no goal version')
+  const input: ClaimInput = {
+    card,
+    status,
+    principal,
+    personDecision: record(),
+    close: { reason: 'decided', note: decidedResumeMessage(decision, { packageKey: null, askerPackageKey: card.question.askerPackageKey }) },
+    now,
+  }
+  let claimed: Result<CloseQuestionInput | null, ControlRefusal>
+  try {
+    claimed = await inCardTransaction(() =>
+      prisma.$transaction(async (tx) => {
+        await lockGoalDecisions(tx, card.workspaceId, version)
+        const close = await claimAndClose(tx, input)
+        try {
+          await writeGoalDecisionIn(tx, { workspaceId: card.workspaceId, goalVersion: version, title: decision.title, decision: decision.text, source: 'person', questionId: card.subjectId, decisionId: card.id })
+        } catch (error) {
+          if (error instanceof GoalDecisionRefused) throw new CardRefused({ kind: 'card_decision_refused', decisionId: card.id, reason: error.message })
+          throw error
+        }
+        return close
+      }),
+    )
+  } catch (error) {
+    // Only a writer outside the advisory lock (the plan's own decisions) can reach the unique key;
+    // the transaction rolled back, so the card is still pending.
+    if (isUniqueConstraintViolation(error)) return refusedCard(card, `goal v${String(version)} already has a shared decision with that title`)
+    throw error
+  }
+  if (!claimed.ok) return claimed
+  await afterClaim(card, input, claimed.value)
+  return ok({ decision: decision.kind, summary: input.personDecision.summary })
+}
+
+/**
+ * H2.6: a requirement changed through a new goal version (`requestChange`'s write), superseding the
+ * question. Ruling F53: the version is written on the card's transaction ({@link requestChangeIn})
+ * after the claim and the close, and a refusal (a duplicate request, a missing workspace) THROWS, so
+ * a change the goal refuses closes nothing and leaves the card pending. Lock order: the Workspace
+ * row, then the question row (`claimAndClose`), then the Workspace row again -- a no-op in the same
+ * transaction. The version's `workspace.goal_set` event and memory follow the commit, said and
+ * swallowed.
+ */
+async function changeRequirement(
+  card: PendingCard,
+  decision: Extract<CardDecision, { kind: 'change_requirement' }>,
+  record: (extra?: Partial<PersonDecision>) => PersonDecision,
+  status: 'approved' | 'rejected',
+  principal: Principal | undefined,
+  now: Date,
+): Promise<Result<DecideOutcome, ControlRefusal>> {
+  const request = personText(decision.request)
+  // Before any write.
+  if (request === '') return err({ kind: 'invalid_card_decision', reason: 'the request is empty' })
+  const input: ClaimInput = {
+    card,
+    status,
+    principal,
+    personDecision: record(),
+    close: { reason: 'superseded', note: decidedResumeMessage(decision, { packageKey: null, askerPackageKey: card.question.askerPackageKey }) },
+    now,
+  }
+  const claimed = await inCardTransaction(() =>
+    prisma.$transaction(async (tx) => {
+      const close = await claimAndClose(tx, input)
+      const changed = await requestChangeIn(tx, card.workspaceId, request, principal, now)
+      if (!changed.ok) throw new CardRefused(changed.error)
+      return { close, changed: changed.value }
+    }),
+  )
+  if (!claimed.ok) return claimed
+  await afterClaim(card, input, claimed.value.close)
+  try {
+    await announceGoalVersion(card.workspaceId, claimed.value.changed, principal, request, null)
+  } catch (error) {
+    console.error(`[cards] card ${card.id}: goal v${String(claimed.value.changed.version)}'s event was not written:`, error)
+  }
+  return ok({ decision: decision.kind, summary: input.personDecision.summary })
+}
+
+/** Task 5 replaces this; until then a file grant is refused and nothing is written. */
+function giveFile(
+  card: PendingCard,
+  _decision: Extract<CardDecision, { kind: 'give_file' }>,
   _record: (extra?: Partial<PersonDecision>) => PersonDecision,
   _status: 'approved' | 'rejected',
   _principal: Principal | undefined,
   _now: Date,
 ): Promise<Result<DecideOutcome, ControlRefusal>> {
-  return Promise.resolve(err({ kind: 'card_decision_not_offered', decisionId: card.id, decision: decision.kind }))
+  return Promise.resolve(refusedCard(card, 'not yet'))
 }

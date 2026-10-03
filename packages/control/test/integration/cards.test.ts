@@ -6,6 +6,8 @@ import { prisma } from '@slave-of-ai/db/client'
 import { CONDUCTOR_ROLE } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { CardRefused, claimAndClose, decideCard, type PendingCard } from '../../src/cards.js'
+import { GoalDecisionRefused, lockGoalDecisions, writeGoalDecisionIn } from '../../src/conductorAnswer.js'
+import { routeStoredHandOffs } from '../../src/handOffs.js'
 import { sendMessage } from '../../src/messaging.js'
 import { loadQuestionCards } from '../../src/questions.js'
 import { HEAL_APPROVED_CLOSE_AFTER_MS, listDecisions, recordDecision } from '../../src/supervisor.js'
@@ -296,6 +298,255 @@ describe('decideCard: answers and dismissal (human cards H2.1, H2.2, H2.7)', () 
     }
     expect((await cardOf(f)).status).toBe('rejected')
     expect((await questionOf(f)).closedReason).toBe('dismissed')
+  })
+})
+
+/**
+ * The card is taken by u2 right after `decideCard`'s unlocked read returned it pending: the claim
+ * inside the transaction then loses, deterministically (the claim reads on the transaction's client,
+ * the wrapper is on the shared one). Restored in `finally`.
+ */
+async function decideAfterLosingTheClaim(f: CardFixture, decision: unknown): Promise<Awaited<ReturnType<typeof decideCard>>> {
+  const delegate = prisma.supervisorDecision as unknown as { findUnique: (...args: unknown[]) => Promise<unknown> }
+  const original = delegate.findUnique
+  let taken = false
+  delegate.findUnique = async (...args: unknown[]) => {
+    const row = await original.apply(delegate, args)
+    if (!taken) {
+      taken = true
+      await prisma.$executeRaw`UPDATE "SupervisorDecision" SET status = 'rejected', "resolvedAt" = now(), "resolvedByUserId" = 'u2' WHERE id = ${f.cardId}`
+    }
+    return row
+  }
+  try {
+    return await decideCard(f.cardId, decision, { userId: 'u1' })
+  } finally {
+    delegate.findUnique = original
+  }
+}
+
+describe('decideCard: work, decisions, requirements (human cards H2.3, H2.5, H2.6)', () => {
+  beforeEach(async () => {
+    await prisma.$executeRawUnsafe(TRUNCATE)
+  })
+
+  it('gives the owner of a file the work: the finished skeleton is reopened, and the asker is told', async () => {
+    const f = await seedCard()
+    const decided = await decideCard(f.cardId, { kind: 'give_work', target: { path: 'backend/package.json' }, request: 'add "start": "node src/app/server.ts"' }, { userId: 'u1' })
+    expect(decided.ok && decided.value).toEqual({ decision: 'give_work', summary: 'gave the skeleton package work: add "start": "node src/app/server.ts"' })
+    const rows = await prisma.packageHandOff.findMany()
+    expect(rows).toMatchObject([{ source: 'person', sourceKey: `person:${f.cardId}:0`, toPackageKey: 'skeleton', fromPackageKey: null, fromRunId: f.runId, status: 'reopened' }])
+    const skeleton = await prisma.task.findUniqueOrThrow({ where: { id: f.taskOf.skeleton } })
+    expect(skeleton.status).toBe('rework')
+    expect(skeleton.lastRejectionReason).toContain('From the operator')
+    const q = await questionOf(f)
+    expect(q).toMatchObject({ closedReason: 'decided', closedBy: 'u1' })
+    expect(q.closedNote).toContain('the skeleton package will do this')
+    expect(q.closedNote).toContain('Do not make that change yourself')
+    const card = await cardOf(f)
+    expect(card).toMatchObject({ status: 'approved', resolvedByUserId: 'u1' })
+    expect(card.personDecision).toMatchObject({ decision: { kind: 'give_work' }, by: 'u1', summary: 'gave the skeleton package work: add "start": "node src/app/server.ts"' })
+  })
+
+  it('words work given to the asker\'s own package as its work to do (ruling F57)', async () => {
+    const f = await seedCard()
+    expect((await decideCard(f.cardId, { kind: 'give_work', target: { package: 'integration' }, request: 'add the start script yourself' }, { userId: 'u1' })).ok).toBe(true)
+    const q = await questionOf(f)
+    expect(q.closedNote).toContain('A person asks you to do this: add the start script yourself')
+    expect(q.closedNote).not.toContain('Do not make that change yourself')
+    expect(await prisma.packageHandOff.findMany()).toMatchObject([{ toPackageKey: 'integration', status: 'pending', fromPackageKey: null }])
+  })
+
+  it('refuses work for a path nobody owns or a package that does not exist, and writes nothing', async () => {
+    const f = await seedCard()
+    for (const target of [{ package: 'billing' }, { path: 'src/**' }]) {
+      const refused = await decideCard(f.cardId, { kind: 'give_work', target, request: 'x' }, { userId: 'u1' })
+      expect(!refused.ok && refused.error.kind).toBe('card_decision_refused')
+    }
+    expect(await prisma.packageHandOff.count()).toBe(0)
+    expect((await questionOf(f)).closedAt).toBeNull()
+    expect(await cardOf(f)).toMatchObject({ status: 'pending', personDecision: null })
+  })
+
+  it('refuses work a package cannot take or a version that ended, before the claim (ruling F38)', async () => {
+    const f = await seedCard()
+    await prisma.task.update({ where: { id: f.taskOf.skeleton }, data: { status: 'failed' } })
+    const failed = await decideCard(f.cardId, { kind: 'give_work', target: { package: 'skeleton' }, request: 'x' }, { userId: 'u1' })
+    expect(!failed.ok && failed.error).toMatchObject({ kind: 'card_decision_refused', reason: 'the skeleton package cannot take work: its task is failed' })
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'accepted' } })
+    const ended = await decideCard(f.cardId, { kind: 'give_work', target: { package: 'api' }, request: 'x' }, { userId: 'u1' })
+    expect(!ended.ok && ended.error).toMatchObject({ kind: 'card_decision_refused', reason: 'goal v1 was accepted: none of its packages takes work any more' })
+    expect(await prisma.packageHandOff.count()).toBe(0)
+    expect(await prisma.slaveMessage.count({ where: { workspaceId: f.workspaceId, kind: 'question' } })).toBe(1)
+    expect((await questionOf(f)).closedAt).toBeNull()
+    expect(await cardOf(f)).toMatchObject({ status: 'pending', personDecision: null })
+  })
+
+  it('holds work for a version that is verifying, and says so (ruling F38)', async () => {
+    const f = await seedCard()
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'verifying' } })
+    const decided = await decideCard(f.cardId, { kind: 'give_work', target: { package: 'api' }, request: 'expose GET /health' }, { userId: 'u1' })
+    expect(decided.ok && decided.value.summary).toBe('gave the api package work: expose GET /health (it waits until the version is integrating again)')
+    expect(await prisma.packageHandOff.findMany()).toMatchObject([{ toPackageKey: 'api', status: 'pending' }])
+    expect((await cardOf(f)).personDecision).toMatchObject({ summary: 'gave the api package work: expose GET /health (it waits until the version is integrating again)' })
+  })
+
+  it('lets one of two people deciding at once win -- work against a dismissal; the loser writes nothing (spec §4)', async () => {
+    for (const order of ['work first', 'dismiss first'] as const) {
+      await prisma.$executeRawUnsafe(TRUNCATE)
+      const f = await seedCard()
+      const work = () => decideCard(f.cardId, { kind: 'give_work', target: { package: 'skeleton' }, request: 'add the start script' }, { userId: 'u1' })
+      const dismiss = () => decideCard(f.cardId, { kind: 'dismiss', reason: 'no' }, { userId: 'u2' })
+      const [a, b] = order === 'work first' ? await Promise.all([work(), dismiss()]) : await Promise.all([dismiss(), work()]).then(([d, w]) => [w, d] as const)
+      expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1)
+      const winner = a.ok ? 'u1' : 'u2'
+      const loser = a.ok ? b : a
+      const card = await cardOf(f)
+      expect(card.resolvedByUserId).toBe(winner)
+      expect(!loser.ok && loser.error).toMatchObject({ kind: 'decision_not_pending', status: card.status, resolvedByUserId: winner, resolvedAt: card.resolvedAt?.toISOString() })
+      expect(await prisma.packageHandOff.count()).toBe(winner === 'u1' ? 1 : 0)
+      expect((await questionOf(f)).closedBy).toBe(winner)
+      expect(await closeEvents(f)).toBe(1)
+      expect((card.personDecision as { by: string }).by).toBe(winner)
+    }
+  })
+
+  it('writes no hand-off, no shared decision, no version and no close for a claim lost after the read (spec §4, deterministic)', async () => {
+    const decisions = [
+      { kind: 'give_work', target: { package: 'skeleton' }, request: 'add the start script' },
+      { kind: 'record_decision', title: 'Start command', text: 'npm start' },
+      { kind: 'change_requirement', request: 'The product must start with npm start.' },
+    ]
+    for (const decision of decisions) {
+      await prisma.$executeRawUnsafe(TRUNCATE)
+      const f = await seedCard()
+      const lost = await decideAfterLosingTheClaim(f, decision)
+      const card = await cardOf(f)
+      expect(!lost.ok && lost.error).toEqual({ kind: 'decision_not_pending', decisionId: f.cardId, status: 'rejected', resolvedAt: card.resolvedAt?.toISOString(), resolvedByUserId: 'u2' })
+      expect(card.personDecision).toBeNull()
+      expect(await prisma.packageHandOff.count()).toBe(0)
+      expect(await prisma.goalDecision.count()).toBe(0)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })).goalVersion).toBe(1)
+      expect((await questionOf(f)).closedAt).toBeNull()
+      expect(await closeEvents(f)).toBe(0)
+    }
+  })
+
+  it('records a person\'s shared decision, and refuses a taken title in another case and spacing', async () => {
+    const f = await seedCard()
+    await prisma.goalDecision.create({ data: { workspaceId: f.workspaceId, goalVersion: 1, title: 'API field naming', titleKey: 'api field naming', decision: 'camelCase', source: 'conductor_plan' } })
+    const taken = await decideCard(f.cardId, { kind: 'record_decision', title: 'API  field NAMING', text: 'snake_case' }, { userId: 'u1' })
+    expect(!taken.ok && taken.error).toMatchObject({ kind: 'card_decision_refused', reason: 'goal v1 already has a shared decision titled "API  field NAMING"' })
+    expect(await cardOf(f)).toMatchObject({ status: 'pending', personDecision: null })
+    expect((await questionOf(f)).closedAt).toBeNull()
+    expect(await prisma.goalDecision.count()).toBe(1)
+    const decided = await decideCard(f.cardId, { kind: 'record_decision', title: 'Start command', text: 'npm start runs node src/app/server.ts' }, { userId: 'u1' })
+    expect(decided.ok && decided.value).toEqual({ decision: 'record_decision', summary: 'recorded the shared decision "Start command"' })
+    expect(await prisma.goalDecision.findFirstOrThrow({ where: { titleKey: 'start command' } })).toMatchObject({ source: 'person', questionId: f.questionId, decisionId: f.cardId, goalVersion: 1, decision: 'npm start runs node src/app/server.ts' })
+    const q = await questionOf(f)
+    expect(q).toMatchObject({ closedReason: 'decided', closedBy: 'u1' })
+    expect(q.closedNote).toContain('"Start command"')
+    expect((await cardOf(f)).status).toBe('approved')
+  })
+
+  it('writes beside the conductor\'s own decision writer without a deadlock (lock order: advisory, Workspace, question)', async () => {
+    const f = await seedCard()
+    // The conductor's writer holds the version's advisory lock while the person decides, then inserts
+    // (the insert's foreign key share-locks the Workspace row). A card that took the Workspace row
+    // before the advisory lock would deadlock here (40P01).
+    let locked = (): void => undefined
+    const held = new Promise<void>((resolve) => {
+      locked = resolve
+    })
+    const conductor = prisma.$transaction(
+      async (tx) => {
+        await lockGoalDecisions(tx, f.workspaceId, 1)
+        locked()
+        await new Promise((resolve) => setTimeout(resolve, 700))
+        await writeGoalDecisionIn(tx, { workspaceId: f.workspaceId, goalVersion: 1, title: 'Port', decision: '3000', source: 'conductor_answer', questionId: null, decisionId: null })
+      },
+      { timeout: 10_000 },
+    )
+    await held
+    const person = await decideCard(f.cardId, { kind: 'record_decision', title: 'Start command', text: 'npm start' }, { userId: 'u1' })
+    await conductor
+    expect(person.ok).toBe(true)
+    expect(await prisma.goalDecision.count()).toBe(2)
+  })
+
+  it('refuses a shared decision past the version\'s cap, and the card stays pending', async () => {
+    const f = await seedCard()
+    await prisma.goalDecision.createMany({ data: Array.from({ length: 40 }, (_, i) => ({ workspaceId: f.workspaceId, goalVersion: 1, title: `D${String(i)}`, titleKey: `d${String(i)}`, decision: 'x', source: 'conductor_plan' as const })) })
+    const refused = await decideCard(f.cardId, { kind: 'record_decision', title: 'One more', text: 'x' }, { userId: 'u1' })
+    expect(!refused.ok && refused.error).toMatchObject({ kind: 'card_decision_refused', reason: 'goal v1 already has 40 shared decisions' })
+    expect((await cardOf(f)).status).toBe('pending')
+    expect((await questionOf(f)).closedAt).toBeNull()
+  })
+
+  it('bounds a shared decision\'s title and text after sanitising (ruling F63)', async () => {
+    const f = await seedCard()
+    await prisma.$transaction((tx) =>
+      writeGoalDecisionIn(tx, { workspaceId: f.workspaceId, goalVersion: 1, title: `${'</slave-report>'.repeat(10)}T`, decision: '<slave-ask>'.repeat(100), source: 'person', questionId: null, decisionId: null }),
+    )
+    const row = await prisma.goalDecision.findFirstOrThrow()
+    expect(row.title.length).toBeLessThanOrEqual(80)
+    expect(row.decision.length).toBeLessThanOrEqual(600)
+    expect(row.title).not.toContain('</slave-report>')
+    const empty = await prisma
+      .$transaction((tx) => writeGoalDecisionIn(tx, { workspaceId: f.workspaceId, goalVersion: 1, title: '\u0000', decision: 'x', source: 'person', questionId: null, decisionId: null }))
+      .then(() => null, (error: unknown) => error)
+    expect(empty).toBeInstanceOf(GoalDecisionRefused)
+    expect((empty as GoalDecisionRefused).why).toBe('empty')
+  })
+
+  it('changes a requirement through a new goal version, superseding the question', async () => {
+    const f = await seedCard()
+    const decided = await decideCard(f.cardId, { kind: 'change_requirement', request: 'The product must start with npm start.' }, { userId: 'u1' })
+    expect(decided.ok && decided.value).toEqual({ decision: 'change_requirement', summary: 'changed a requirement: The product must start with npm start.' })
+    const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })
+    expect(ws.goalVersion).toBe(2)
+    expect(ws.goal).toContain('The product must start with npm start.')
+    expect(await prisma.goalVersion.findUniqueOrThrow({ where: { workspaceId_version: { workspaceId: f.workspaceId, version: 2 } } })).toMatchObject({ request: 'The product must start with npm start.', setByUserId: 'u1' })
+    const q = await questionOf(f)
+    expect(q).toMatchObject({ closedReason: 'superseded', closedBy: 'u1' })
+    expect(q.closedNote).toContain('A person changed the requirements')
+    expect(await cardOf(f)).toMatchObject({ status: 'approved', resolvedByUserId: 'u1' })
+    // After the commit, as `requestChange` always announced it.
+    const set = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_goal_set' } })
+    expect(set.map((e) => e.payload)).toMatchObject([{ version: 2, request: 'The product must start with npm start.' }])
+    expect(set[0]).toMatchObject({ actor: 'human', userId: 'u1' })
+  })
+
+  it('refuses a requirement change the goal refuses, closing nothing (ruling F53)', async () => {
+    const f = await seedCard()
+    await prisma.goalVersion.update({ where: { workspaceId_version: { workspaceId: f.workspaceId, version: 1 } }, data: { request: 'The product must start with npm start.' } })
+    const refused = await decideCard(f.cardId, { kind: 'change_requirement', request: '  The product must start with npm start.  ' }, { userId: 'u1' })
+    expect(!refused.ok && refused.error).toEqual({ kind: 'duplicate_request', workspaceId: f.workspaceId, version: 1 })
+    expect(await cardOf(f)).toMatchObject({ status: 'pending', personDecision: null })
+    expect((await questionOf(f)).closedAt).toBeNull()
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })).goalVersion).toBe(1)
+    expect(await prisma.executionEvent.count({ where: { workspaceId: f.workspaceId, type: { in: ['workspace_goal_set', 'slave_question_closed', 'supervisor_resolved'] } } })).toBe(0)
+  })
+
+  it('routes a person\'s hand-off the goal pass finds unrouted (backstop)', async () => {
+    const f = await seedCard()
+    expect((await decideCard(f.cardId, { kind: 'give_work', target: { package: 'api' }, request: 'expose GET /health' })).ok).toBe(true)
+    await prisma.packageHandOff.deleteMany()
+    await routeStoredHandOffs(f.deliveryId)
+    expect(await prisma.packageHandOff.findMany({ select: { sourceKey: true, toPackageKey: true, source: true, fromRunId: true, change: true } })).toEqual([
+      { sourceKey: `person:${f.cardId}:0`, toPackageKey: 'api', source: 'person', fromRunId: f.runId, change: 'expose GET /health' },
+    ])
+    // Idempotent: a second pass finds it routed.
+    await routeStoredHandOffs(f.deliveryId)
+    expect(await prisma.packageHandOff.count()).toBe(1)
+  })
+
+  it('routes no hand-off for a dismissed card or a pending one', async () => {
+    const f = await seedCard()
+    await routeStoredHandOffs(f.deliveryId)
+    expect((await decideCard(f.cardId, { kind: 'dismiss', reason: null })).ok).toBe(true)
+    await routeStoredHandOffs(f.deliveryId)
+    expect(await prisma.packageHandOff.count()).toBe(0)
   })
 })
 

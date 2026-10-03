@@ -1,7 +1,9 @@
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   CONDUCTOR_ROLE,
+  HANDOFF_CHANGE_MAX_CHARS,
   HANDOFF_EVENT_CHANGE_MAX_CHARS,
+  cardDecisionSchema,
   displayName,
   HANDOFF_DELIVERING_STATUS,
   HANDOFF_REOPENS_MAX,
@@ -11,6 +13,7 @@ import {
   handOffRoute,
   isHandOffVersionEnded,
   lateAnswerChange,
+  personText,
   renderHandOffQuestion,
   renderHandOffRework,
   resolveHandOff,
@@ -364,6 +367,7 @@ export async function routeStoredHandOffs(deliveryId: string): Promise<void> {
   }
   await routeStoredAnswerHandOffs(deliveryId)
   await routeLateAnswers(deliveryId)
+  await routeStoredPersonHandOffs(deliveryId)
 }
 
 /** Plan B D7: the key prefix an answer's hand-off is stored under; its one item is `answer:<decisionId>:0`. */
@@ -499,6 +503,57 @@ export async function routeLateAnswers(deliveryId: string): Promise<void> {
       })
     } catch (error) {
       console.error(`[hand-off] answer ${row.answerId}: its late answer was not routed this pass:`, error)
+    }
+  }
+}
+
+/** Human cards plan B D4: the key a person's `give_work` is stored under; its one item is `person:<decisionId>:0`. */
+export function personHandOffSourceKey(decisionId: string): string {
+  return `person:${decisionId}`
+}
+
+/**
+ * Human cards plan B D4: the goal pass's backstop for a person's `give_work` whose routing never
+ * landed (a busy delivery lock, or a crash, after the card committed) -- spec C2 "never dropped".
+ * One query: the version's question cards a person decided with `give_work` (claimed `approved` or
+ * `rejected`), asked by a run, with no row at `person:<decisionId>:0`. Idempotent by
+ * {@link personHandOffSourceKey}; must run with no lock held ({@link routeHandOffs}). The stored
+ * decision is read again by the one schema, and its request made inert as `decideCard` makes it.
+ */
+export async function routeStoredPersonHandOffs(deliveryId: string): Promise<void> {
+  const unrouted = await prisma.$queryRaw<{ id: string; workspaceId: string; goalVersion: number; decision: unknown; senderRunId: string }[]>`
+    SELECT s.id, s."workspaceId", d."goalVersion", s."personDecision" -> 'decision' AS decision, m."senderRunId"
+    FROM "GoalDelivery" d
+    JOIN "SupervisorDecision" s ON s."workspaceId" = d."workspaceId" AND s."personDecision" ->> 'goalVersion' = d."goalVersion"::text
+    JOIN "SlaveMessage" m ON m.id = s."subjectId"
+    WHERE d.id = ${deliveryId}
+      AND s."personDecision" -> 'decision' ->> 'kind' = 'give_work'
+      AND s.status IN ('approved', 'rejected')
+      AND m."senderRunId" IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM "PackageHandOff" h WHERE h."workspaceId" = d."workspaceId" AND h."sourceKey" = 'person:' || s.id || ':0')
+    ORDER BY s."resolvedAt", s.id`
+  for (const row of unrouted) {
+    const decision = cardDecisionSchema.safeParse(row.decision)
+    if (!decision.success || decision.data.kind !== 'give_work') {
+      console.error(`[hand-off] card ${row.id}: its person's decision cannot be read -- not routed`)
+      continue
+    }
+    const { target, request } = decision.data
+    const change = personText(request, HANDOFF_CHANGE_MAX_CHARS)
+    // One card that throws is said and skipped; the next pass retries it (no row at `person:<id>:0`).
+    try {
+      await routeHandOffs({
+        workspaceId: row.workspaceId,
+        goalVersion: row.goalVersion,
+        source: 'person',
+        sourceKey: personHandOffSourceKey(row.id),
+        fromRunId: row.senderRunId,
+        // Nobody's own package (plan B D4): the asker's own package is a real target.
+        fromPackageKey: null,
+        items: ['package' in target ? { package: target.package, change } : { path: target.path, change }],
+      })
+    } catch (error) {
+      console.error(`[hand-off] card ${row.id}: its person's hand-off was not routed this pass:`, error)
     }
   }
 }
