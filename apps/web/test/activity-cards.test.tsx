@@ -970,6 +970,31 @@ describe('targeted card bodies', () => {
 })
 
 /** M40 §6: the three requirement-versioning events, as an operator reads them in the timeline. */
+// Plan B Task 8 carry: the hand-off card names its sender the way the timeline does -- a package by
+// its key, a package-less one by the server's name, and with no name by the event's own source.
+describe('the workspace.package_handed_off card', () => {
+  const Card = ACTIVITY_CARDS['workspace.package_handed_off']
+  const lateAnswer = { version: 1, handOffId: 'h-late', source: 'answer', fromPackage: null, toPackage: 'skeleton', path: 'scripts/verify.sh', package: null, delivery: 'prompt', change: 'x' }
+
+  it("names a worker's late answer by the seat the server named, as the timeline does", () => {
+    render(<Card event={{ ...baseEvent('workspace.package_handed_off', lateAnswer), handOffFrom: 'Alex (dev)' }} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('goal v1: Alex (dev) handed work to skeleton (scripts/verify.sh), waits in its next prompt')
+  })
+
+  it('falls back to the event alone: a person as the operator, anything else as the conductor', () => {
+    const { unmount } = render(<Card event={baseEvent('workspace.package_handed_off', lateAnswer)} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toContain('goal v1: the conductor handed work')
+    unmount()
+    render(<Card event={baseEvent('workspace.package_handed_off', { ...lateAnswer, source: 'person' })} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toContain('goal v1: the operator handed work')
+  })
+
+  it('names a package by its key, whatever name rides on the row', () => {
+    render(<Card event={{ ...fixtureFor('workspace.package_handed_off'), handOffFrom: 'ignored' }} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toContain('goal v1: report handed work to integration')
+  })
+})
+
 describe('the requirement-versioning cards', () => {
   it('workspace.replan_started names the goal version being re-planned for', () => {
     const Card = ACTIVITY_CARDS['workspace.replan_started']

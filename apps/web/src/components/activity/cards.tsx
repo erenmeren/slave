@@ -25,6 +25,7 @@ import {
 import { formatQuestionTimeout, formatTimeout, formatUtcMinute } from '../../lib/format'
 import { formatUsd } from '../../lib/realMoney'
 import { plural } from '../../lib/plural'
+import { handOffSender } from '../../lib/handOffSender'
 import { ActivityCard, type ActivityCardProps } from './ActivityCard'
 
 // Every payload field name below is copied verbatim from `packages/domain/src/events/schema.ts`
@@ -934,7 +935,9 @@ function WorkspacePackageHandedOffCard(props: ActivityCardProps): ReactElement {
     change: string
     source: string
   }
-  const from = payload.source === 'person' ? 'a person' : (payload.fromPackage ?? 'the conductor')
+  // Plan B Task 8 carry: the timeline's own rule and the server's own name, so a worker's late
+  // answer reads as its seat here too, not "the conductor".
+  const from = handOffSender(props.event.payload, props.event.handOffFrom)
   const to = payload.toPackage ?? 'no package'
   const what = payload.path ?? payload.package
   return (

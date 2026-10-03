@@ -1,6 +1,7 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, EVENT_TYPE_BY_DOMAIN_TYPE, type DomainEventType } from '@slave-of-ai/db'
 import { feedSummary } from '../lib/feedSummary'
+import { packageLessHandOffNames } from './handOffNames'
 import { buildShellFacts, type ShellFacts } from './shell'
 import { EMPTY_ACTIVITY_FILTERS, type ActivityFilters } from '../lib/activityFilters'
 
@@ -17,6 +18,10 @@ export interface ActivityEventRow {
   readonly userId: string | null
   readonly payload: Record<string, unknown>
   readonly summary: string
+  /** Plan B Task 8 carry: who a package-less `workspace.package_handed_off` came from, named by the
+   *  server the way the timeline names it (`packageLessHandOffNames`) -- absent on every other row,
+   *  and on a row that arrived on the live stream, where the card falls back to the event's source. */
+  readonly handOffFrom?: string
 }
 
 export interface ActivityHistoryPage {
@@ -185,9 +190,12 @@ export async function buildActivityHistory(
     toolCallSparkline(workspaceId, now),
   ])
 
+  const handOffFrom = await packageLessHandOffNames(workspaceId, rows)
   const events: ActivityEventRow[] = rows.map((row) => {
     const domainType = DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? (row.type as DomainEventType)
     const payload = row.payload as Record<string, unknown>
+    const handOffId = domainType === 'workspace.package_handed_off' ? payload['handOffId'] : undefined
+    const named = typeof handOffId === 'string' ? handOffFrom.get(handOffId) : undefined
     return {
       seq: Number(row.seq),
       ts: row.ts.toISOString(),
@@ -199,6 +207,7 @@ export async function buildActivityHistory(
       userId: row.userId,
       payload,
       summary: feedSummary(domainType, payload),
+      ...(named === undefined ? {} : { handOffFrom: named }),
     }
   })
 

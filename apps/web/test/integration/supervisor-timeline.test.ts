@@ -8,6 +8,9 @@ import {
   memoryStatusOf,
   retryCauseOf,
 } from '../../src/server/timeline.js'
+import { buildActivityHistory } from '../../src/server/activity.js'
+import { EMPTY_ACTIVITY_FILTERS } from '../../src/lib/activityFilters.js'
+import { handOffSender } from '../../src/lib/handOffSender.js'
 import {
   seedPendingDecision,
   seedTask,
@@ -356,6 +359,21 @@ describe('buildSupervisorTimeline', () => {
       'goal v1: the operator handed work to skeleton',
       'goal v1: the conductor handed work to skeleton',
     ])
+
+    // Plan B Task 8 carry: the activity page's rows carry the same server-side name, so the card
+    // and the timeline name each sender alike -- a late answer by its seat, never "the conductor".
+    const page = await buildActivityHistory(workspaceId, EMPTY_ACTIVITY_FILTERS, {})
+    const handOffs = [...(page?.events ?? [])].reverse().filter((event) => event.type === 'workspace.package_handed_off')
+    expect(handOffs.map((event) => handOffSender(event.payload, event.handOffFrom))).toEqual([
+      'the operator',
+      'Alex (dev)',
+      'the conductor',
+      'report',
+      'the operator',
+      'the conductor',
+    ])
+    // Named by the server only where the event alone cannot say it: the three package-less rows that exist.
+    expect(handOffs.map((event) => event.handOffFrom ?? null)).toEqual(['the operator', 'Alex (dev)', 'the conductor', null, null, null])
   })
 })
 

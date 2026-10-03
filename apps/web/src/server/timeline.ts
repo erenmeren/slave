@@ -1,6 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, EVENT_TYPE_BY_DOMAIN_TYPE, type DomainEventType } from '@slave-of-ai/db'
-import { handOffViews, listDecisions, type DecisionView } from '@slave-of-ai/control'
+import { listDecisions, type DecisionView } from '@slave-of-ai/control'
 import {
   BREAKER_TRIP_LABEL,
   BROKER_OP_LABEL,
@@ -10,7 +10,6 @@ import {
   MEMORY_STATUSES,
   MEMORY_STATUS_LABEL,
   MEMORY_TYPE_LABEL,
-  handOffFromName,
   isResolvedDecision,
   laneFor,
   originLabel,
@@ -25,6 +24,8 @@ import {
   type TimelineSubject,
 } from '@slave-of-ai/domain'
 import { readableEventType } from '../lib/eventLabels'
+import { handOffSender } from '../lib/handOffSender'
+import { packageLessHandOffNames } from './handOffNames'
 import { buildNeedsYou, type NeedsYouItem } from './needsYou'
 
 /** How many organisational events one timeline page reads. */
@@ -216,34 +217,6 @@ export async function buildSupervisorTimeline(
 }
 
 /**
- * Pre-flight F65 (human cards plan A carry, plan B Task 8): who each package-less hand-off on this
- * page came from, by its id -- named the way the goal report and the workers' prompts name it
- * (`handOffViews` + `handOffFromName`): a person's request or late answer as the operator's, a
- * worker's late answer by its seat, the Supervisor's as the conductor's. A hand-off from a package
- * is named by its package off the event alone, so only the package-less ones are read: one query
- * for their rows, and `handOffViews`' own reads only when one is a late answer. None when the page
- * holds no such event.
- */
-async function packageLessHandOffNames(
-  workspaceId: string,
-  rows: readonly { readonly type: string; readonly payload: unknown }[],
-): Promise<ReadonlyMap<string, string>> {
-  const ids = rows.flatMap((row) => {
-    if (row.type !== EVENT_TYPE_BY_DOMAIN_TYPE['workspace.package_handed_off']) return []
-    const payload = (row.payload ?? {}) as Record<string, unknown>
-    const id = payload['handOffId']
-    return payload['fromPackage'] == null && typeof id === 'string' ? [id] : []
-  })
-  if (ids.length === 0) return new Map()
-  const handOffs = await prisma.packageHandOff.findMany({
-    where: { workspaceId, id: { in: [...new Set(ids)] } },
-    select: { id: true, workspaceId: true, source: true, sourceKey: true, fromPackageKey: true, path: true, packageKey: true, change: true },
-  })
-  const views = await handOffViews(handOffs)
-  return new Map(views.map((view) => [view.id, handOffFromName(view)] as const))
-}
-
-/**
  * Final wave M5: `workspace.goal_retried`'s `cause`, or `null` for every other row and for a retry
  * that carries none (a person's). Narrowed to the one type and the one value, like
  * {@link memoryStatusOf} below. Exported because it is PURE.
@@ -405,11 +378,9 @@ function titleFor(
     // event's own source -- a person's as the operator's, any other as the conductor's.
     case 'workspace.package_handed_off': {
       const version = payload['version']
-      const from = payload['fromPackage']
       const to = payload['toPackage']
       const handOffId = payload['handOffId']
-      const named = typeof handOffId === 'string' ? handOffFrom.get(handOffId) : undefined
-      const who = typeof from === 'string' ? from : (named ?? (payload['source'] === 'person' ? 'the operator' : 'the conductor'))
+      const who = handOffSender(payload, typeof handOffId === 'string' ? handOffFrom.get(handOffId) : undefined)
       return `goal v${typeof version === 'number' ? String(version) : '?'}: ${who} handed work to ${typeof to === 'string' ? to : 'no package'}`
     }
     // Human cards H1: a question stopped waiting. Every underscore (pre-flight F68): `timed_out`
