@@ -18,10 +18,12 @@ import {
   READDRESSING_ACTION_KINDS,
   actionSchema,
   candidateSchema,
+  cardOffers,
   dismissResumeMessage,
   draftSchema,
   isQuestionSituation,
   neutraliseMarkers,
+  personDecisionSchema,
   promotionFor,
   questionCloseOnVerdict,
   readsAsPlatform,
@@ -35,6 +37,7 @@ import {
   type DecisionStatus,
   type Draft,
   type PermissionKind,
+  type PersonDecision,
   type QuestionCloseReason,
   type Result,
   type Situation,
@@ -1591,6 +1594,9 @@ export interface DecisionView {
   /** Human cards plan A D13: the question a question card is about; null for every other card (and
    *  for a question that is gone). Optional, so a view built elsewhere keeps compiling. */
   readonly card?: QuestionCard | null
+  /** Human cards plan B D3: what a person decided on the card (`decideCard`); null when nobody did.
+   *  Optional, so a view built elsewhere keeps compiling. */
+  readonly personDecision?: PersonDecision | null
 }
 
 /** The project's decisions, newest first -- the web panel's and the CLI's read side. `pending`
@@ -1606,28 +1612,52 @@ export async function listDecisions(
   })
   // One read for every question card on the page, not one per card.
   const cards = await loadQuestionCards(workspaceId, rows.filter((row) => isQuestionSituation(row.situationKind)).map((row) => row.subjectId))
-  return rows.map((row) => ({
-    id: row.id,
-    workspaceId: row.workspaceId,
-    situationKind: row.situationKind,
-    subjectId: row.subjectId,
-    situation: parsedOrThrow(situationSchema.safeParse(row.situation), `SupervisorDecision ${row.id}.situation`),
-    candidates: storedCandidates(row.candidates, `SupervisorDecision ${row.id}.candidates`),
-    chosenIndex: row.chosenIndex,
-    action: parsedOrThrow(actionSchema.safeParse(row.action), `SupervisorDecision ${row.id}.action`),
-    draft: storedDraft(row.draft, `SupervisorDecision ${row.id}.draft`),
-    rationale: row.rationale,
-    tier: row.tier,
-    status: row.status,
-    decidedBy: row.decidedBy,
-    modelCostUsd: row.modelCostUsd,
-    modelCalled: row.modelCalled,
-    failureReason: row.failureReason,
-    createdAt: row.createdAt.toISOString(),
-    expiresAt: row.expiresAt?.toISOString() ?? null,
-    resolvedAt: row.resolvedAt?.toISOString() ?? null,
-    card: isQuestionSituation(row.situationKind) ? (cards.get(row.subjectId) ?? null) : null,
-  }))
+  return rows.map((row) => {
+    const action = parsedOrThrow(actionSchema.safeParse(row.action), `SupervisorDecision ${row.id}.action`)
+    const draft = storedDraft(row.draft, `SupervisorDecision ${row.id}.draft`)
+    return {
+      id: row.id,
+      workspaceId: row.workspaceId,
+      situationKind: row.situationKind,
+      subjectId: row.subjectId,
+      situation: parsedOrThrow(situationSchema.safeParse(row.situation), `SupervisorDecision ${row.id}.situation`),
+      candidates: storedCandidates(row.candidates, `SupervisorDecision ${row.id}.candidates`),
+      chosenIndex: row.chosenIndex,
+      action,
+      draft,
+      rationale: row.rationale,
+      tier: row.tier,
+      status: row.status,
+      decidedBy: row.decidedBy,
+      modelCostUsd: row.modelCostUsd,
+      modelCalled: row.modelCalled,
+      failureReason: row.failureReason,
+      createdAt: row.createdAt.toISOString(),
+      expiresAt: row.expiresAt?.toISOString() ?? null,
+      resolvedAt: row.resolvedAt?.toISOString() ?? null,
+      card: isQuestionSituation(row.situationKind) ? withOffers(cards.get(row.subjectId) ?? null, action, draft) : null,
+      personDecision: row.personDecision === null ? null : parsedOrThrow(personDecisionSchema.safeParse(row.personDecision), `SupervisorDecision ${row.id}.personDecision`),
+    }
+  })
+}
+
+/**
+ * Plan B D7: a card's question with the decisions it offers, from the card's own action and draft
+ * -- and, for a question its run continued past, where a late answer would go (ruling F37: an answer
+ * no run would read is not offered).
+ */
+export function withOffers(card: QuestionCard | null, action: Action, draft: Draft | null): QuestionCard | null {
+  if (card === null) return null
+  return {
+    ...card,
+    offers: cardOffers({
+      actionKind: action.kind,
+      hasDraftBody: sendableBody(draft) !== null,
+      closedReason: card.closed?.reason ?? null,
+      hasPackages: card.packages.length > 0,
+      lateAnswerFate: card.lateAnswerFate,
+    }),
+  }
 }
 
 /** A `draft` column read back into its domain shape, or null when the row carries none -- which is

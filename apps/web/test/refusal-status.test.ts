@@ -173,6 +173,12 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   invalid_runtime_roles: true,
   decision_not_found: true,
   decision_not_pending: true,
+  // Human cards plan B Task 3: a card decision's four. All 409 by the suffix rule: the card is there,
+  // and the decision does not make sense against it.
+  invalid_card_decision: true,
+  card_not_a_question: true,
+  card_decision_not_offered: true,
+  card_decision_refused: true,
   supervisor_cooldown: true,
   supervisor_disabled: true,
   task_not_failable: true,

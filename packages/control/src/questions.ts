@@ -12,6 +12,7 @@ import {
   runContinuedPast,
   storableText,
   trimToFit,
+  type CardDecisionKind,
   type LateAnswerFate,
   type QuestionCloseReason,
   type TaskStatus,
@@ -368,6 +369,11 @@ export interface QuestionCard {
   /** Where an answer given now goes, for a question its run continued past (`timed_out`); null for
    *  any other. Spec H3: "the card says where it will go". */
   readonly lateAnswerFate: LateAnswerFate | null
+  /** Plan B D7: the question's goal version's packages, for the target pickers; [] with no version. */
+  readonly packages: readonly { readonly key: string; readonly title: string; readonly isIntegration: boolean }[]
+  /** Plan B D7: the decisions this card offers; [] until `listDecisions` (or `decideCard`) fills them
+   *  from the card's own action and draft (`withOffers`). */
+  readonly offers: readonly CardDecisionKind[]
 }
 
 /** A `closedBy` in the words a person reads ({@link closerWords}); `names` holds the accounts
@@ -387,7 +393,7 @@ export async function closerNames(ids: readonly (string | null)[]): Promise<Read
 /**
  * Every card's question in one read (plan A D13); a message that is gone is simply absent. A fixed
  * number of queries whatever the page holds: the questions, the parked runs, each run's latest
- * question, the routed goal versions and the closers' names.
+ * question, the routed goal versions, the closers' names and (plan B D7) the versions' packages.
  */
 export async function loadQuestionCards(workspaceId: string, messageIds: readonly string[]): Promise<ReadonlyMap<string, QuestionCard>> {
   if (messageIds.length === 0) return new Map()
@@ -430,6 +436,16 @@ export async function loadQuestionCards(workspaceId: string, messageIds: readonl
     versions.length === 0
       ? new Map<number, string>()
       : new Map((await prisma.goalDelivery.findMany({ where: { workspaceId, goalVersion: { in: versions } }, select: { goalVersion: true, status: true } })).map((d) => [d.goalVersion, d.status] as const))
+  // Plan B D7: every card's goal version's packages, in one read (ruling F32: not `versions`, which
+  // holds only the asking packages' versions; ruling F70: still a fixed number of queries).
+  const versionOf = (row: (typeof rows)[number]): number | null => row.task?.workPackage?.goalVersion ?? row.task?.goalVersion ?? null
+  const cardVersions = [...new Set(rows.flatMap((row) => { const version = versionOf(row); return version === null ? [] : [version] }))]
+  const packageRows =
+    cardVersions.length === 0
+      ? []
+      : await prisma.workPackage.findMany({ where: { workspaceId, goalVersion: { in: cardVersions } }, orderBy: { key: 'asc' }, select: { goalVersion: true, key: true, title: true, isIntegration: true } })
+  const packagesOf = (version: number | null): QuestionCard['packages'] =>
+    packageRows.filter((p) => p.goalVersion === version).map(({ key, title, isIntegration }) => ({ key, title, isIntegration }))
   return new Map(
     rows.map((row) => {
       const packageVersion = row.task?.workPackage?.goalVersion
@@ -437,7 +453,7 @@ export async function loadQuestionCards(workspaceId: string, messageIds: readonl
       const card: QuestionCard = {
         messageId: row.id,
         body: row.body,
-        goalVersion: row.task?.workPackage?.goalVersion ?? row.task?.goalVersion ?? null,
+        goalVersion: versionOf(row),
         askerPackageKey: row.task?.workPackage?.key ?? null,
         askerRunId: row.senderRunId,
         askerWaiting: row.senderRunId !== null && parked.has(row.senderRunId) && latest.get(row.senderRunId) === row.seq,
@@ -454,6 +470,8 @@ export async function loadQuestionCards(workspaceId: string, messageIds: readonl
         timeoutRefusal: row.timeoutRefusal,
         lateAnswerNote: fate === 'unread' && row.replies.length > 0 ? LATE_ANSWER_NOTE.unread : null,
         lateAnswerFate: fate,
+        packages: packagesOf(versionOf(row)),
+        offers: [],
       }
       return [row.id, card] as const
     }),

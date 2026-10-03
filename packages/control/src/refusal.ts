@@ -550,6 +550,18 @@ export type ControlRefusal =
       readonly resolvedAt?: string | null
       readonly resolvedByUserId?: string | null
     }
+  /** Human cards plan B D1: `decideCard` was given a body `cardDecisionSchema` does not read (or an
+   *  answer that is empty once made storable). `reason` is the schema's own words. */
+  | { readonly kind: 'invalid_card_decision'; readonly reason: string }
+  /** Plan B: `decideCard` on a card that is not about a question -- a machine card keeps approve and
+   *  reject (spec H2). */
+  | { readonly kind: 'card_not_a_question'; readonly decisionId: string }
+  /** Plan B D7: the decision is not one this card offers (`cardOffers`) -- a drafted answer with no
+   *  draft, an answer no run would read, a decision on a closed question. */
+  | { readonly kind: 'card_decision_not_offered'; readonly decisionId: string; readonly decision: string }
+  /** Plan B: the decision fits the card but cannot be carried out; `reason` is a whole sentence.
+   *  Nothing was written. */
+  | { readonly kind: 'card_decision_refused'; readonly decisionId: string; readonly reason: string }
   /**
    * M38 t2: the Supervisor is already on this situation key (spec §1, "idempotent and quiet").
    * Either an open `pending` proposal is waiting on a human, or the last decision for the key
@@ -987,6 +999,14 @@ export function refusalText(refusal: ControlRefusal): string {
       return `no supervisor decision with id ${refusal.decisionId}`
     case 'decision_not_pending':
       return `supervisor decision ${refusal.decisionId} is ${refusal.status}, not pending${refusal.resolvedAt == null ? '' : ` (resolved by ${resolverWords(refusal.status, refusal.resolvedByUserId ?? null)} at ${refusal.resolvedAt})`}: there is nothing left to approve or reject`
+    case 'invalid_card_decision':
+      return `that is not a decision a card can carry: ${refusal.reason}`
+    case 'card_not_a_question':
+      return `supervisor decision ${refusal.decisionId} is not about a question: approve or reject it`
+    case 'card_decision_not_offered':
+      return `supervisor decision ${refusal.decisionId} does not offer "${refusal.decision.replace('_', ' ')}"`
+    case 'card_decision_refused':
+      return `the decision was refused, and nothing was changed: ${refusal.reason}`
     case 'supervisor_cooldown':
       return `the supervisor has already decided ${refusal.situationKind} for ${refusal.subjectId}; the next decision on it can be made after ${refusal.untilTs}`
     case 'supervisor_disabled':

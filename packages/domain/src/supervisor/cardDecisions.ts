@@ -65,14 +65,15 @@ export const personDecisionSchema: z.ZodType<PersonDecision, z.ZodTypeDef, unkno
  * Plan B D7: the decisions that fit a card, in {@link CARD_DECISION_KINDS} order. A question closed
  * any way but a timeout takes none; one that timed out still takes all but an answer no run would
  * read (ruling F37: with `lateAnswerFate` `unread` an answer would retire the card while nobody reads
- * it). `lateAnswerFate` is read only for a `timed_out` question; absent, no answer is held back.
+ * it). `lateAnswerFate` is read only for a `timed_out` question; it is required (Task 3 carry) so no
+ * caller can leave it out -- `QuestionCard.lateAnswerFate` is the value to pass.
  */
 export function cardOffers(input: {
   readonly actionKind: Action['kind']
   readonly hasDraftBody: boolean
   readonly closedReason: QuestionCloseReason | null
   readonly hasPackages: boolean
-  readonly lateAnswerFate?: LateAnswerFate | null | undefined
+  readonly lateAnswerFate: LateAnswerFate | null
 }): readonly CardDecisionKind[] {
   if (input.closedReason !== null && input.closedReason !== 'timed_out') return []
   const answerUnread = input.closedReason === 'timed_out' && input.lateAnswerFate === 'unread'

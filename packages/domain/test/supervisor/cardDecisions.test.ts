@@ -17,7 +17,7 @@ describe('card decisions (human cards H2)', () => {
   })
 
   it('offers what fits the card (plan B D7)', () => {
-    const base = { actionKind: 'escalate_to_human' as const, hasDraftBody: false, closedReason: null, hasPackages: true }
+    const base = { actionKind: 'escalate_to_human' as const, hasDraftBody: false, closedReason: null, hasPackages: true, lateAnswerFate: null }
     expect(cardOffers(base)).toEqual(['write_answer', 'give_work', 'give_file', 'record_decision', 'change_requirement', 'dismiss'])
     expect(cardOffers({ ...base, actionKind: 'answer_question', hasDraftBody: true })[0]).toBe('send_answer')
     expect(cardOffers({ ...base, actionKind: 'answer_question', hasDraftBody: false })).not.toContain('send_answer')
