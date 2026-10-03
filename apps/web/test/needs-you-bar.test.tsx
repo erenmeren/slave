@@ -188,6 +188,48 @@ describe('NeedsYouBar', () => {
     expect(screen.queryByTestId('needs-you')).toBeNull()
   })
 
+  // Plan B Task 10 (Task 9 carry): a poll that still lists the refused row -- on its own or merged
+  // into another -- keeps the refusal; only one without that row clears it, even a non-empty one.
+  it('keeps a refusal through a poll that still lists its row, and clears it once the row is gone', async (): Promise<void> => {
+    let listed: readonly NeedsYouItem[] = [DECISION, BLOCKED]
+    let polls = 0
+    fetchMock.mockImplementation(async (input: unknown) => {
+      if (String(input).endsWith('/approve')) return new Response(JSON.stringify({ error: 'the decision was already answered' }), { status: 409 })
+      polls += 1
+      return new Response(JSON.stringify(listed), { status: 200 })
+    })
+    // The poll is throttled to once per 5 s by the clock: each wake-up below is a minute later.
+    let clock = Date.parse('2026-10-03T10:00:00.000Z')
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    try {
+      const view = render(<NeedsYouBar workspaceId="w1" initial={[DECISION, BLOCKED]} />)
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('needs-you-approve'))
+      })
+      expect(screen.getByTestId('needs-you-error').textContent).toBe('the decision was already answered')
+      const wake = async (tick: number): Promise<void> => {
+        clock += 60_000
+        shellFacts = { tick }
+        await act(async () => {
+          view.rerender(<NeedsYouBar workspaceId="w1" initial={[DECISION, BLOCKED]} />)
+        })
+        await waitFor(() => expect(polls).toBe(tick))
+      }
+
+      await wake(1)
+      expect(screen.getByTestId('needs-you-error').textContent).toBe('the decision was already answered')
+      listed = [{ ...BLOCKED, mergedIds: ['d-1'], merged: [DECISION] }]
+      await wake(2)
+      expect(screen.getByTestId('needs-you-error').textContent).toBe('the decision was already answered')
+      listed = [BLOCKED]
+      await wake(3)
+      await waitFor(() => expect(screen.queryByTestId('needs-you-error')).toBeNull())
+      expect(screen.getAllByTestId('needs-you-row')).toHaveLength(1)
+    } finally {
+      now.mockRestore()
+    }
+  })
+
   it('is absent for an empty queue', () => {
     render(<NeedsYouBar workspaceId="w1" initial={[]} />)
     expect(screen.queryByTestId('needs-you')).toBeNull()

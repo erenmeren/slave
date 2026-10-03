@@ -283,6 +283,39 @@ describe('HomeClient', () => {
     expect(screen.queryByTestId('home-needs-you')).toBeNull()
   })
 
+  // Plan B Task 10 (Task 9 carry): a fresh snapshot that still lists the refused row -- on its own or
+  // merged into another -- keeps the refusal; only one without that row clears it.
+  it('keeps a refusal through a snapshot that still lists its row, and clears it once the row is gone', async (): Promise<void> => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'the decision was already answered' }), { status: 409 })))
+    const machine = needsYouItem({ kind: 'decision', id: 'd5', decisionId: 'd5', taskId: null, title: 'No reviewer: nobody holds reviewer', oneClick: true, blocking: false })
+    const other = needsYouItem({ id: 't7', taskId: 't7', title: 'Wire the webhook — blocked' })
+    const view = renderHome(snapshot({ needsYou: [machine] }))
+    const tree = (initial: HomeSnapshot): React.JSX.Element => (
+      <ModeProvider>
+        <ModeProbe />
+        <HeaderActionProvider>
+          <HeaderActionSlot />
+          <HomeClient initial={initial} companies={companies} />
+        </HeaderActionProvider>
+      </ModeProvider>
+    )
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('needs-you-approve'))
+    })
+    expect(screen.getByTestId('needs-you-error').textContent).toBe('the decision was already answered')
+
+    // The poll comes back with the refused row still there, and something new beside it.
+    view.rerender(tree(snapshot({ needsYou: [machine, other] })))
+    expect(screen.getByTestId('needs-you-error').textContent).toBe('the decision was already answered')
+    // Merged into another row's subject: still listed, still true.
+    view.rerender(tree(snapshot({ needsYou: [{ ...other, mergedIds: ['d5'], merged: [machine] }] })))
+    expect(screen.getByTestId('needs-you-error').textContent).toBe('the decision was already answered')
+    // Gone, though the list is not empty: the refusal goes with it.
+    view.rerender(tree(snapshot({ needsYou: [other] })))
+    expect(screen.queryByTestId('needs-you-error')).toBeNull()
+    expect(screen.getAllByTestId('needs-you-row')).toHaveLength(1)
+  })
+
   it('wraps the needs-you queue in a ScrollArea capped at 30dvh, so 30 items scroll inside Home instead of growing it (I2)', () => {
     const many = Array.from({ length: 30 }, (_, i) => needsYouItem({ id: `t${String(i)}`, title: `Task ${String(i)} — blocked` }))
     renderHome(snapshot({ needsYou: many }))

@@ -38,6 +38,25 @@ export async function answerNeedsYou(
   return result.notice !== null ? { notice: aboutCard(item.title, result.notice), error: null } : { notice: null, error: result.error }
 }
 
+/** A refusal, and the row it refused: the card the person clicked. */
+export interface NeedsYouRefusal {
+  readonly text: string
+  readonly rowId: string
+  readonly decisionId: string | null
+}
+
+/**
+ * Whether a fresh list still holds the row a refusal was about -- as a row of its own, or merged
+ * into another row. Plan B Task 10 (Task 9 carry): a refresh clears a refusal only when its row is
+ * gone (or the list is empty); while the row is still there the refusal is still true, and it stays
+ * until it is dismissed or the person acts again -- a poll seconds later must not take it away
+ * before it is read. Shared by the strip and Home.
+ */
+export function refusalStillListed(items: readonly NeedsYouItem[], refusal: NeedsYouRefusal): boolean {
+  const same = (item: NeedsYouItem): boolean => item.id === refusal.rowId || (refusal.decisionId !== null && item.decisionId === refusal.decisionId)
+  return items.some((item) => same(item) || item.merged.some(same))
+}
+
 /**
  * One `needs-you-row` (M61 R7/Task 6, spec erratum E8), pulled out of this bar so Home's own
  * cross-project queue (Task 8) can draw the SAME row rather than a second copy of it: the
@@ -237,7 +256,8 @@ export function NeedsYouBar({
 }): React.JSX.Element | null {
   const [items, setItems] = useState<readonly NeedsYouItem[]>(initial)
   const [busy, setBusy] = useState<string | null>(null)
-  const [errorText, setErrorText] = useState<string | null>(null)
+  const [refusal, setRefusal] = useState<NeedsYouRefusal | null>(null)
+  const errorText = refusal?.text ?? null
   /** A card somebody else settled first (human cards spec §4): information, never the red band. */
   const [noticeText, setNoticeText] = useState<string | null>(null)
   const shellFacts = useShellFacts(workspaceId)
@@ -256,7 +276,7 @@ export function NeedsYouBar({
   // bar is a different conversation, so a workspace switch does.
   useEffect((): void => {
     setNoticeText(null)
-    setErrorText(null)
+    setRefusal(null)
   }, [workspaceId])
 
   const load = async (): Promise<void> => {
@@ -265,9 +285,10 @@ export function NeedsYouBar({
       if (!response.ok) return
       const next = (await response.json()) as readonly NeedsYouItem[]
       setItems(next)
-      // Fix round 2: a later refresh that succeeds clears an old refusal -- the list it refused on
-      // is gone, and a red line with nothing left to act on is noise.
-      setErrorText(null)
+      // Fix round 2, narrowed in Task 10: a refresh clears a refusal only once the row it refused is
+      // gone -- a red line with nothing left to act on is noise, but one still about a listed row
+      // stays until it is dismissed or the person acts again.
+      setRefusal((current) => (current === null || refusalStillListed(next, current) ? current : null))
     } catch {
       // Keep the list we have -- a bar that empties itself because one poll failed is worse
       // than one that is a few seconds stale (`ProjectSwitcher.tsx`'s own rule).
@@ -297,12 +318,12 @@ export function NeedsYouBar({
   const answer = async (item: NeedsYouItem, verdict: NeedsYouVerdict): Promise<void> => {
     if (item.decisionId === null) return
     setBusy(item.decisionId)
-    setErrorText(null)
+    setRefusal(null)
     setNoticeText(null)
     const result = await answerNeedsYou(workspaceId, item, verdict)
     setBusy(null)
     if (result.error !== null) {
-      setErrorText(result.error)
+      setRefusal({ text: result.error, rowId: item.id, decisionId: item.decisionId })
       return
     }
     // Human cards spec §4: somebody else settled it first -- who and when -- or what the decision
@@ -327,7 +348,7 @@ export function NeedsYouBar({
             type="button"
             data-testid="needs-you-error-dismiss"
             aria-label="dismiss this error"
-            onClick={() => setErrorText(null)}
+            onClick={() => setRefusal(null)}
             className="shrink-0 text-t3 hover:text-t1"
           >
             ×

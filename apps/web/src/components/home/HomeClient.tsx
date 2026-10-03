@@ -9,7 +9,7 @@ import type { HomeNeedsYouItem, HomeSnapshot } from '../../server/home'
 import { KpiStrip } from '../analytics/KpiStrip'
 import type { CompanyRow } from '../CompanyManager'
 import { useMode } from '../mode/ModeProvider'
-import { NeedsYouRow, answerNeedsYou, type NeedsYouVerdict } from '../project/NeedsYouBar'
+import { NeedsYouRow, answerNeedsYou, refusalStillListed, type NeedsYouRefusal, type NeedsYouVerdict } from '../project/NeedsYouBar'
 import { NewProjectDrawer } from '../projects/NewProjectDrawer'
 import { useHeaderAction } from '../shell/HeaderActionProvider'
 import { Button } from '../ui/Button'
@@ -66,13 +66,15 @@ export function HomeClient({
 
   const [newOpen, setNewOpen] = useState(searchParams.get('new') === '1')
   const [busyDecisionId, setBusyDecisionId] = useState<string | null>(null)
-  const [needsYouError, setNeedsYouError] = useState<string | null>(null)
+  const [needsYouRefusal, setNeedsYouRefusal] = useState<NeedsYouRefusal | null>(null)
+  const needsYouError = needsYouRefusal?.text ?? null
   /** A card somebody else settled first (human cards spec §4): information, never the red band. */
   const [needsYouNotice, setNeedsYouNotice] = useState<string | null>(null)
-  // Fix round 2: a fresh snapshot (the poll, a refresh) clears an old refusal -- the list it refused
-  // on has been read again, and a red line with nothing left to act on is noise. The notice stays.
+  // Fix round 2, narrowed in Task 10: a fresh snapshot (the poll, a refresh) clears a refusal only
+  // once the row it refused is gone from the queue -- while that row is still listed the refusal is
+  // still true, and it stays until it is dismissed or the person acts again. The notice stays.
   useEffect((): void => {
-    setNeedsYouError(null)
+    setNeedsYouRefusal((current) => (current === null || refusalStillListed(snapshot.needsYou, current) ? current : null))
   }, [snapshot])
 
   // The header's primary action (M57 R7's idiom): a `Button`, not a bare `<button>`, PUSHED
@@ -127,12 +129,12 @@ export function HomeClient({
   const onNeedsYou = async (item: HomeNeedsYouItem, verdict: NeedsYouVerdict): Promise<void> => {
     if (item.decisionId === null) return
     setBusyDecisionId(item.decisionId)
-    setNeedsYouError(null)
+    setNeedsYouRefusal(null)
     setNeedsYouNotice(null)
     const result = await answerNeedsYou(item.workspaceId, item, verdict)
     setBusyDecisionId(null)
     if (result.error !== null) {
-      setNeedsYouError(result.error)
+      setNeedsYouRefusal({ text: result.error, rowId: item.id, decisionId: item.decisionId })
       return
     }
     setNeedsYouNotice(result.notice)
@@ -164,7 +166,7 @@ export function HomeClient({
                 type="button"
                 data-testid="needs-you-error-dismiss"
                 aria-label="dismiss this error"
-                onClick={() => setNeedsYouError(null)}
+                onClick={() => setNeedsYouRefusal(null)}
                 className="shrink-0 text-t3 hover:text-t1"
               >
                 ×
