@@ -1,5 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  BLOCKING_SITUATION_KINDS,
   needsYou,
   userWorkspaceStatus,
   type TaskStatus,
@@ -25,6 +26,10 @@ export interface SidebarProject {
   /** The WORD, for `title` and for a screen reader (`docs/ia.md` rule 3). */
   readonly statusLabel: string
   readonly needsYouCount: number
+  /** Human cards H4: runs parked on an open question plus pending goal_needs_human and
+   *  task_blocked_human cards -- counted on their own, beside `needsYouCount`: what stops a goal
+   *  version, not merely what waits on a person. */
+  readonly blockingCount: number
   readonly tasksActive: number
 }
 
@@ -35,7 +40,7 @@ const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'mer
 /**
  * Every project a person can reach, with the one word and the one number the tree draws.
  *
- * FOUR QUERIES, and deliberately not `listProjects()` (plan erratum E3): that function is the
+ * SIX QUERIES, and deliberately not `listProjects()` (plan erratum E3): that function is the
  * PROJECTS PAGE's read model — six grouped reads plus a `findMany` with a nested include of every
  * team's every slave, returning spend, avatars and per-status task counts — and this one runs in
  * the ROOT layout, which means on every page in the product. What the tree draws is a name, a dot
@@ -48,7 +53,7 @@ const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'mer
  * this reader nor `listProjects` makes, and `buildNeedsYou` is the fuller answer on the Overview.
  */
 export async function buildSidebarTree(): Promise<readonly SidebarProject[]> {
-  const [workspaces, taskGroups, unintegratedDoneGroups, pendingDecisionGroups] = await Promise.all([
+  const [workspaces, taskGroups, unintegratedDoneGroups, pendingDecisionGroups, parkedRunGroups, blockingCardGroups] = await Promise.all([
     prisma.workspace.findMany({
       where: { archivedAt: null },
       select: { id: true, name: true, haltedReason: true, autoMerge: true, archivedAt: true },
@@ -70,12 +75,27 @@ export async function buildSidebarTree(): Promise<readonly SidebarProject[]> {
       where: { status: 'pending' },
       _count: { _all: true },
     }),
+    // Human cards H4 (plan B D8): what blocks a goal version -- a run parked on its question, and
+    // the two cards that stop a version on their own. Two grouped reads, ONE each for every project.
+    prisma.$queryRaw<{ workspaceId: string; n: bigint }[]>`
+      SELECT t."workspaceId", COUNT(*)::bigint AS n
+      FROM "SlaveRun" r JOIN "Slave" s ON s.id = r."slaveId" JOIN "Team" t ON t.id = s."teamId"
+      WHERE r.status = 'paused' AND r."pauseReason" = 'waiting_for_answer'
+      GROUP BY t."workspaceId"`,
+    prisma.supervisorDecision.groupBy({
+      by: ['workspaceId'],
+      where: { status: 'pending', situationKind: { in: [...BLOCKING_SITUATION_KINDS] } },
+      _count: { _all: true },
+    }),
   ])
 
   const unintegratedDoneOf = (workspaceId: string): number =>
     unintegratedDoneGroups.find((group) => group.workspaceId === workspaceId)?._count._all ?? 0
   const pendingDecisionsOf = (workspaceId: string): number =>
     pendingDecisionGroups.find((group) => group.workspaceId === workspaceId)?._count._all ?? 0
+  const blockingOf = (workspaceId: string): number =>
+    Number(parkedRunGroups.find((group) => group.workspaceId === workspaceId)?.n ?? 0n) +
+    (blockingCardGroups.find((group) => group.workspaceId === workspaceId)?._count._all ?? 0)
 
   return workspaces.map((workspace) => {
     let needsYouCount = 0
@@ -110,6 +130,7 @@ export async function buildSidebarTree(): Promise<readonly SidebarProject[]> {
       status: status.state,
       statusLabel: status.label,
       needsYouCount,
+      blockingCount: blockingOf(workspace.id),
       tasksActive,
     }
   })

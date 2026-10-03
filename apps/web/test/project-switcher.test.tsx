@@ -10,8 +10,8 @@ vi.mock('next/navigation', () => ({
 }))
 
 const PROJECTS: readonly SidebarProject[] = [
-  { id: 'a', name: 'Alpha', archived: false, status: 'needs_you', statusLabel: 'NEEDS YOU', needsYouCount: 2, tasksActive: 1 },
-  { id: 'b', name: 'Beta', archived: false, status: 'idle', statusLabel: 'IDLE', needsYouCount: 0, tasksActive: 0 },
+  { id: 'a', name: 'Alpha', archived: false, status: 'needs_you', statusLabel: 'NEEDS YOU', needsYouCount: 2, blockingCount: 1, tasksActive: 1 },
+  { id: 'b', name: 'Beta', archived: false, status: 'idle', statusLabel: 'IDLE', needsYouCount: 0, blockingCount: 0, tasksActive: 0 },
 ]
 
 let fetchMock: ReturnType<typeof vi.fn>
@@ -38,6 +38,19 @@ describe('the project switcher (M61 R5)', () => {
     expect(items).toHaveLength(2)
     expect(items[0]?.getAttribute('data-needs-you')).toBe('2')
     expect(screen.getByTestId('new-project')).toBeTruthy()
+  })
+
+  // Human cards H4: what blocks a goal version, counted on its own beside the needs-you count.
+  it('shows the blocking count on its own, labelled, and nothing for a project nothing blocks', () => {
+    render(<ProjectSwitcher projects={PROJECTS} currentId="a" currentName="Alpha" />)
+    fireEvent.click(screen.getByTestId('project-switcher'))
+    const [alpha, beta] = screen.getAllByTestId('project-switcher-item')
+    const blocking = alpha?.querySelector('[data-testid="sidebar-blocking"]')
+    expect(blocking?.getAttribute('data-blocking')).toBe('1')
+    expect(blocking?.textContent).toBe('1!')
+    expect(blocking?.getAttribute('title')).toBe('blocking a goal version')
+    expect(blocking?.getAttribute('aria-label')).toBe('1 blocking a goal version')
+    expect(beta?.querySelector('[data-testid="sidebar-blocking"]')).toBeNull()
   })
 
   it('closes on Escape and returns focus to the trigger', () => {

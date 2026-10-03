@@ -113,6 +113,18 @@ export function ProjectSwitcher({
               {project.needsYouCount > 0 && (
                 <span className="font-mono text-[11px] font-medium text-s-waiting">{project.needsYouCount}</span>
               )}
+              {/* Human cards H4: what blocks a goal version, counted on its own beside the queue's count. */}
+              {project.blockingCount > 0 && (
+                <span
+                  data-testid="sidebar-blocking"
+                  data-blocking={project.blockingCount}
+                  title="blocking a goal version"
+                  aria-label={`${String(project.blockingCount)} blocking a goal version`}
+                  className="font-mono text-[11px] font-medium text-s-blocked"
+                >
+                  {project.blockingCount}!
+                </span>
+              )}
             </Link>
           ))}
           <button

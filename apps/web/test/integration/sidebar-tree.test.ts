@@ -128,6 +128,30 @@ describe('buildSidebarTree', () => {
     expect(row?.tasksActive).toBe(2)
   })
 
+  // Human cards H4 (plan B D8): runs parked on an open question plus pending goal_needs_human and
+  // task_blocked_human cards -- counted on their own, per project; any other card does not count.
+  it('counts what blocks a goal version on its own, per project', async (): Promise<void> => {
+    const blocked = await seedProject('Blocked')
+    const other = await seedProject('Other')
+    const team = await prisma.team.create({ data: { workspaceId: blocked, name: 'Engineering' } })
+    const person = await prisma.person.create({ data: { name: 'Alex' } })
+    const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'dev', runtimeRoles: ['dev'], personId: person.id } })
+    await prisma.slaveRun.create({ data: { slaveId: slave.id, kind: 'planning', status: 'paused', pauseReason: 'waiting_for_answer' } })
+    // A run paused for another reason, and one that is running, block nothing.
+    await prisma.slaveRun.create({ data: { slaveId: slave.id, kind: 'planning', status: 'paused', pauseReason: 'human' } })
+    await prisma.slaveRun.create({ data: { slaveId: slave.id, kind: 'planning', status: 'working' } })
+    await seedPendingDecision(blocked, { subjectId: `${blocked}:v1:merge`, situationKind: 'goal_needs_human' })
+    await seedPendingDecision(blocked, { subjectId: 'task-1', situationKind: 'task_blocked_human' })
+    await seedPendingDecision(blocked, { subjectId: 'reviewer' })
+    await seedPendingDecision(other, { subjectId: 'reviewer' })
+
+    const byName = new Map((await buildSidebarTree()).map((row) => [row.name, row]))
+
+    expect(byName.get('Blocked')?.blockingCount).toBe(3)
+    expect(byName.get('Blocked')?.needsYouCount).toBe(3)
+    expect(byName.get('Other')?.blockingCount).toBe(0)
+  })
+
   it('answers an empty list on an empty installation rather than throwing', async (): Promise<void> => {
     expect(await buildSidebarTree()).toEqual([])
   })
