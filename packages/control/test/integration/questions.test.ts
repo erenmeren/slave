@@ -3,11 +3,11 @@
  * closes its question, and the cards of a closed question are retired.
  */
 import { prisma } from '@slave-of-ai/db/client'
-import { CONDUCTOR_ROLE, LATE_ANSWER_NOTE, QUESTION_SITUATION_KINDS } from '@slave-of-ai/domain'
+import { CONDUCTOR_ROLE, HANDOFF_REOPENS_MAX, LATE_ANSWER_NOTE, QUESTION_SITUATION_KINDS } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { answerQuestion, listPendingQuestions, reportQuestionKey, sendMessage } from '../../src/messaging.js'
 import { expirePendingDecisions } from '../../src/supervisor.js'
-import { closeQuestion, lateAnswerFate, loadQuestionCards, retireClosedQuestionCards, retireQuestionCards } from '../../src/questions.js'
+import { closeQuestion, lateAnswerFate, lateAnswerFateOf, loadQuestionCards, retireClosedQuestionCards, retireQuestionCards } from '../../src/questions.js'
 import { loadSupervisorWorld } from '../../src/supervisorWorld.js'
 
 const TRUNCATE =
@@ -335,5 +335,17 @@ describe('closing a question (human cards H1)', () => {
     const sent = await answerQuestion(q, { body: 'camel\u0000Case', answeredBy: 'web operator' })
     expect(sent.ok && sent.value.body).toBe('camelCase')
     expect((await answerQuestion(q, { body: '\u0000 ', answeredBy: 'web operator' })).ok).toBe(false)
+  })
+})
+
+describe('lateAnswerFateOf: the reopen cap (final-wave residual)', () => {
+  const pkgTask = (status: 'done' | 'waiting') => ({ workPackageId: 'p1', status })
+  it('reads nowhere for a finished asking package already reopened to its cap, and as a hand-off one below it', () => {
+    expect(lateAnswerFateOf(pkgTask('done'), 'integrating', HANDOFF_REOPENS_MAX)).toBe('unread')
+    expect(lateAnswerFateOf(pkgTask('done'), 'integrating', HANDOFF_REOPENS_MAX - 1)).toBe('hand_off')
+    // An unfinished package is not reopened, so the cap does not apply.
+    expect(lateAnswerFateOf(pkgTask('waiting'), 'integrating', HANDOFF_REOPENS_MAX)).toBe('hand_off')
+    expect(lateAnswerFateOf({ workPackageId: null, status: 'waiting' }, null, 0)).toBe('next_run')
+    expect(lateAnswerFateOf(null, null, 0)).toBe('unread')
   })
 })

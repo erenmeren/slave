@@ -8,6 +8,7 @@ import {
   QUESTION_SITUATION_KINDS,
   TERMINAL,
   closerWords,
+  handOffReopensSpent,
   handOffRoute,
   runContinuedPast,
   storableText,
@@ -207,12 +208,13 @@ const RETIRED_BECAUSE: Readonly<Record<QuestionCloseReason, string>> = {
  * routing cannot disagree). A task outside any package that has not finished: its next run's inbox.
  * Anything else nobody reads: a finished task, no task at all (a task-less planning run has no next
  * run on anything), or a package whose version is accepted (merged or not), abandoned, verifying or
- * waiting on a person, has no delivery, or whose task cannot take it (a conductor question).
+ * waiting on a person, has no delivery, whose task cannot take it (a conductor question), or that is
+ * finished and already reopened to its cap (`handOffReopensSpent`: also a conductor question).
  */
 export async function lateAnswerFate(client: Prisma.TransactionClient, questionId: string): Promise<LateAnswerFate> {
   const question = await client.slaveMessage.findUnique({
     where: { id: questionId },
-    select: { workspaceId: true, task: { select: { workPackageId: true, status: true, workPackage: { select: { goalVersion: true } } } } },
+    select: { workspaceId: true, task: { select: { workPackageId: true, status: true, workPackage: { select: { goalVersion: true, handOffReopens: true } } } } },
   })
   const task = question?.task ?? null
   const version = task?.workPackage?.goalVersion
@@ -220,16 +222,26 @@ export async function lateAnswerFate(client: Prisma.TransactionClient, questionI
     question === null || version === undefined
       ? null
       : await client.goalDelivery.findUnique({ where: { workspaceId_goalVersion: { workspaceId: question.workspaceId, goalVersion: version } }, select: { status: true } })
-  return lateAnswerFateOf(task, delivery?.status ?? null)
+  return lateAnswerFateOf(task, delivery?.status ?? null, task?.workPackage?.handOffReopens ?? 0)
 }
 
 /** {@link lateAnswerFate}'s rule on an asking task already read, so a page of cards reads it in its
  *  own query rather than one per card. `deliveryStatus`: the status of the task's package's goal
  *  version's delivery, or null when it has none -- then the goal pass, which is what routes a late
  *  answer (`routeLateAnswers`), never runs for it. */
-export function lateAnswerFateOf(task: { readonly workPackageId: string | null; readonly status: TaskStatus } | null, deliveryStatus: string | null): LateAnswerFate {
+export function lateAnswerFateOf(
+  task: { readonly workPackageId: string | null; readonly status: TaskStatus } | null,
+  deliveryStatus: string | null,
+  /** The asking package's `handOffReopens` (0 for a task outside any package). */
+  handOffReopens: number,
+): LateAnswerFate {
   if (task === null) return 'unread'
-  if (task.workPackageId !== null) return deliveryStatus !== null && handOffRoute(deliveryStatus, task.status) === 'delivered' ? 'hand_off' : 'unread'
+  if (task.workPackageId !== null) {
+    // Final-wave residual (as I1): a finished package already reopened to its cap gets a new request
+    // as a conductor question (`reopenInLock`), so nobody in it would read the answer or decision.
+    if (handOffReopensSpent(task.status, handOffReopens)) return 'unread'
+    return deliveryStatus !== null && handOffRoute(deliveryStatus, task.status) === 'delivered' ? 'hand_off' : 'unread'
+  }
   return TERMINAL.includes(task.status) ? 'unread' : 'next_run'
 }
 
@@ -410,7 +422,7 @@ export async function loadQuestionCards(workspaceId: string, messageIds: readonl
       closedNote: true,
       timeoutRefusal: true,
       replies: { where: { kind: 'answer' }, take: 1, select: { id: true } },
-      task: { select: { goalVersion: true, status: true, workPackageId: true, workPackage: { select: { key: true, goalVersion: true } } } },
+      task: { select: { goalVersion: true, status: true, workPackageId: true, workPackage: { select: { key: true, goalVersion: true, handOffReopens: true } } } },
     },
   })
   const runIds = [...new Set(rows.flatMap((row) => (row.senderRunId === null ? [] : [row.senderRunId])))]
@@ -449,7 +461,7 @@ export async function loadQuestionCards(workspaceId: string, messageIds: readonl
   return new Map(
     rows.map((row) => {
       const packageVersion = row.task?.workPackage?.goalVersion
-      const fate = row.closedReason === 'timed_out' ? lateAnswerFateOf(row.task, packageVersion === undefined ? null : (deliveryStatusOf.get(packageVersion) ?? null)) : null
+      const fate = row.closedReason === 'timed_out' ? lateAnswerFateOf(row.task, packageVersion === undefined ? null : (deliveryStatusOf.get(packageVersion) ?? null), row.task?.workPackage?.handOffReopens ?? 0) : null
       const card: QuestionCard = {
         messageId: row.id,
         body: row.body,

@@ -9,7 +9,7 @@ import { CARD_BUSY_REASON, CardRefused, claimAndClose, decideCard, inCardTransac
 import { GoalDecisionRefused, lockGoalDecisions, writeGoalDecisionIn } from '../../src/conductorAnswer.js'
 import { withDeliveryLock } from '../../src/goalDelivery.js'
 import { handOffView, routeStoredHandOffs } from '../../src/handOffs.js'
-import { sendMessage } from '../../src/messaging.js'
+import { answerQuestion, sendMessage } from '../../src/messaging.js'
 import { loadQuestionCards } from '../../src/questions.js'
 import { refusalText } from '../../src/refusal.js'
 import { HEAL_APPROVED_CLOSE_AFTER_MS, listDecisions, recordDecision, rejectDecision } from '../../src/supervisor.js'
@@ -700,6 +700,59 @@ describe('decideCard on a question its run continued past (ruling F37)', () => {
     await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'integrating' } })
     await routeStoredHandOffs(f.deliveryId)
     expect(await prisma.packageHandOff.count()).toBe(0)
+  })
+
+  /** The asking (integration) package finished and was reopened `reopens` times by hand-offs. */
+  const askerFinished = async (f: CardFixture, reopens: number): Promise<void> => {
+    await prisma.task.update({ where: { id: f.taskOf.integration }, data: { status: 'done', integratedAt: new Date(), activeRunId: null } })
+    await prisma.slaveRun.update({ where: { id: f.runId }, data: { status: 'succeeded', pauseReason: null, terminalAt: new Date() } })
+    await prisma.workPackage.updateMany({ where: { workspaceId: f.workspaceId, key: 'integration' }, data: { handOffReopens: reopens } })
+  }
+
+  it('routes no late decision to a finished asking package at its reopen cap, and says so (final-wave residual)', async () => {
+    const f = await seedCard()
+    await timeOut(f)
+    await askerFinished(f, HANDOFF_REOPENS_MAX)
+    const [view] = await listDecisions(f.workspaceId, { pending: true })
+    expect(view?.card?.lateAnswerFate).toBe('unread')
+    expect(view?.card?.offers).not.toContain('write_answer')
+    const decided = await decideCard(f.cardId, { kind: 'record_decision', title: 'Start command', text: 'npm start' }, { userId: 'u1' })
+    expect(decided.ok && decided.value.summary).toBe('recorded the shared decision "Start command"; the run had already continued and was not told')
+    expect((await cardOf(f)).personDecision).not.toHaveProperty('askerHandOff')
+    await routeStoredHandOffs(f.deliveryId)
+    expect(await prisma.packageHandOff.count()).toBe(0)
+  })
+
+  it('routes no late answer to a finished asking package at its reopen cap; its card stays open saying no run reads it (final-wave residual)', async () => {
+    const f = await seedCard()
+    await timeOut(f)
+    await askerFinished(f, HANDOFF_REOPENS_MAX)
+    expect((await answerQuestion(f.questionId, { body: 'Yes, the skeleton adds it.', answeredBy: 'a person' }, 'human')).ok).toBe(true)
+    await routeStoredHandOffs(f.deliveryId)
+    expect(await prisma.packageHandOff.count()).toBe(0)
+    expect((await cardOf(f)).status).toBe('pending')
+    const [view] = await listDecisions(f.workspaceId, { pending: true })
+    expect(view?.card).toMatchObject({ lateAnswerFate: 'unread', lateAnswerNote: 'The answer came after its run continued; no run will read it.' })
+  })
+
+  it('still routes a late decision and a late answer to a finished asking package one below its cap (final-wave residual)', async () => {
+    const f = await seedCard()
+    await timeOut(f)
+    await askerFinished(f, HANDOFF_REOPENS_MAX - 1)
+    const [view] = await listDecisions(f.workspaceId, { pending: true })
+    expect(view?.card?.lateAnswerFate).toBe('hand_off')
+    const decided = await decideCard(f.cardId, { kind: 'record_decision', title: 'Start command', text: 'npm start' }, { userId: 'u1' })
+    expect(decided.ok && decided.value.summary).toBe('recorded the shared decision "Start command"; the run had already continued, so the integration package gets it as a hand-off')
+    expect(await prisma.packageHandOff.findMany({ select: { sourceKey: true, toPackageKey: true } })).toEqual([{ sourceKey: `person:${f.cardId}:asker:0`, toPackageKey: 'integration' }])
+
+    await prisma.$executeRawUnsafe(TRUNCATE)
+    const g = await seedCard()
+    await timeOut(g)
+    await askerFinished(g, HANDOFF_REOPENS_MAX - 1)
+    const answered = await answerQuestion(g.questionId, { body: 'Yes, the skeleton adds it.', answeredBy: 'a person' }, 'human')
+    if (!answered.ok) throw new Error(JSON.stringify(answered.error))
+    await routeStoredHandOffs(g.deliveryId)
+    expect(await prisma.packageHandOff.findMany({ select: { sourceKey: true, toPackageKey: true } })).toEqual([{ sourceKey: `late:${answered.value.id}:0`, toPackageKey: 'integration' }])
   })
 
   it('says the run had already continued when the timeout wins while the person decides (final review I2, the same-tick race)', async () => {

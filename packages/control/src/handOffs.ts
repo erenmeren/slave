@@ -487,9 +487,10 @@ export function lateAnswerSourceKey(answerId: string): string {
  */
 export async function routeLateAnswers(deliveryId: string): Promise<void> {
   const late = await prisma.$queryRaw<
-    { answerId: string; workspaceId: string; goalVersion: number; senderRunId: string; packageKey: string; question: string; answer: string; actor: string }[]
+    { answerId: string; workspaceId: string; goalVersion: number; senderRunId: string; packageKey: string; question: string; answer: string; actor: string; taskStatus: string; handOffReopens: number }[]
   >`
-    SELECT a.id AS "answerId", d."workspaceId", d."goalVersion", q."senderRunId", p.key AS "packageKey", q.body AS question, a.body AS answer, a.actor::text AS actor
+    SELECT a.id AS "answerId", d."workspaceId", d."goalVersion", q."senderRunId", p.key AS "packageKey", q.body AS question, a.body AS answer, a.actor::text AS actor,
+      t.status::text AS "taskStatus", p."handOffReopens" AS "handOffReopens"
     FROM "GoalDelivery" d
     JOIN "WorkPackage" p ON p."workspaceId" = d."workspaceId" AND p."goalVersion" = d."goalVersion"
     JOIN "Task" t ON t."workPackageId" = p.id
@@ -504,6 +505,10 @@ export async function routeLateAnswers(deliveryId: string): Promise<void> {
       AND NOT EXISTS (SELECT 1 FROM "PackageHandOff" h WHERE h."workspaceId" = d."workspaceId" AND h."sourceKey" = 'late:' || a.id || ':0')
     ORDER BY a."createdAt", a.id`
   for (const row of late) {
+    // Final-wave residual: a finished asking package at its reopen cap reads no late answer -- its card
+    // says so (`lateAnswerFateOf` gives `unread`) and stays open; routing it would only make a
+    // conductor question (`reopenInLock`). Not routed, by the same rule.
+    if (handOffReopensSpent(row.taskStatus, row.handOffReopens)) continue
     // One answer that throws is said and skipped; the next pass retries it (no row at `late:<id>:0`).
     try {
       await routeHandOffs({
