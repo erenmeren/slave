@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isUniqueConstraintViolation, uniqueConstraintTarget } from '../src/prisma-errors.js'
+import { isLockTimeout, isTransactionTimeout, isUniqueConstraintViolation, uniqueConstraintTarget } from '../src/prisma-errors.js'
 
 /**
  * Catalog Person Pool (Task 2): `syncPersonPool` is the first caller with TWO unique constraints
@@ -137,5 +137,26 @@ describe('isUniqueConstraintViolation alongside uniqueConstraintTarget', () => {
   it('a non-P2002 error is never mistaken for a constraint this pass could classify', () => {
     const error = { code: 'P2003', meta: { target: ['poolSlot'] } }
     expect(isUniqueConstraintViolation(error)).toBe(false)
+  })
+})
+
+describe('isLockTimeout and isTransactionTimeout (human cards plan B, Task 5 carry)', () => {
+  /** The error a raw query gets from this client when Postgres's `lock_timeout` cancels its wait (captured from a real run). */
+  const lockTimeout = {
+    code: 'P2010',
+    meta: { driverAdapterError: { name: 'DriverAdapterError', cause: { originalCode: '55P03', originalMessage: 'canceling statement due to lock timeout', kind: 'postgres', code: '55P03' } } },
+  }
+
+  it('reads a lock wait Postgres cancelled, and nothing else', () => {
+    expect(isLockTimeout(lockTimeout)).toBe(true)
+    expect(isLockTimeout({ code: 'P2010', meta: { driverAdapterError: { cause: { code: '40P01' } } } })).toBe(false)
+    expect(isLockTimeout({ code: 'P2028' })).toBe(false)
+    expect(isLockTimeout(new Error('55P03'))).toBe(false)
+    expect(isLockTimeout(null)).toBe(false)
+  })
+
+  it('keeps the transaction timeout apart from a lock timeout', () => {
+    expect(isTransactionTimeout({ code: 'P2028' })).toBe(true)
+    expect(isTransactionTimeout(lockTimeout)).toBe(false)
   })
 })

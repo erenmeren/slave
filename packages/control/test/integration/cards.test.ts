@@ -5,8 +5,9 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { CONDUCTOR_ROLE } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { CardRefused, claimAndClose, decideCard, type PendingCard } from '../../src/cards.js'
+import { CARD_BUSY_REASON, CardRefused, claimAndClose, decideCard, inCardTransaction, type PendingCard } from '../../src/cards.js'
 import { GoalDecisionRefused, lockGoalDecisions, writeGoalDecisionIn } from '../../src/conductorAnswer.js'
+import { withDeliveryLock } from '../../src/goalDelivery.js'
 import { routeStoredHandOffs } from '../../src/handOffs.js'
 import { sendMessage } from '../../src/messaging.js'
 import { loadQuestionCards } from '../../src/questions.js'
@@ -810,5 +811,60 @@ describe('decideCard: give a file (human cards H2.4)', () => {
     const refused = await decideCard(f.cardId, { kind: 'give_file', path: 'src/api/routes.ts', toPackage: 'web' })
     expect(!refused.ok && refusalText(refused.error)).toContain('goal v1 has no delivery')
     expect(await cardOf(f)).toMatchObject({ status: 'pending', personDecision: null })
+  })
+})
+
+describe('decideCard while the version is busy (Task 5 carry)', () => {
+  beforeEach(async () => {
+    await prisma.$executeRawUnsafe(TRUNCATE)
+  })
+
+  it('refuses a file given while a merge holds the delivery lock, promptly and writing nothing; once free it goes through', async () => {
+    const f = await seedCard()
+    await prisma.workPackage.create({ data: { workspaceId: f.workspaceId, goalVersion: 1, key: 'web', title: 'web', requirementKeys: [], ownedPaths: ['src/web/**'], interface: '', templateId: 'tpl' } })
+    const before = await packagesOf(f)
+    const give = { kind: 'give_file', path: 'src/api/routes.ts', toPackage: 'web' }
+    // The holder: the delivery's own lock, held (as a final merge holds it) until the test lets go.
+    let release = (): void => undefined
+    const released = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let locked = (): void => undefined
+    const holding = new Promise<void>((resolve) => {
+      locked = resolve
+    })
+    const holder = withDeliveryLock(f.deliveryId, async () => {
+      locked()
+      await released
+    })
+    await holding
+    let busy: Awaited<ReturnType<typeof decideCard>>
+    let waited: number
+    try {
+      const started = Date.now()
+      busy = await decideCard(f.cardId, give, { userId: 'u1' }, { lockWaitMs: 200 })
+      waited = Date.now() - started
+    } finally {
+      release()
+      await holder
+    }
+    // It gave up on its own wait, not on the holder letting go.
+    expect(waited).toBeLessThan(3_000)
+    expect(!busy.ok && busy.error).toMatchObject({ kind: 'card_decision_refused', decisionId: f.cardId })
+    expect(!busy.ok && refusalText(busy.error)).toBe('the decision was refused, and nothing was changed: goal v1 is busy -- a merge, a check or another decision holds it: decide again in a moment')
+    expect(await packagesOf(f)).toEqual(before)
+    expect(await cardOf(f)).toMatchObject({ status: 'pending', personDecision: null, resolvedAt: null })
+    expect((await questionOf(f)).closedAt).toBeNull()
+    expect(await closeEvents(f)).toBe(0)
+
+    const again = await decideCard(f.cardId, give, { userId: 'u1' }, { lockWaitMs: 200 })
+    expect(again.ok && again.value.summary).toBe('gave src/api/routes.ts to the web package')
+  })
+
+  it('turns a transaction that ran out of time into the same refusal, and keeps any other error an error', async () => {
+    const expired = Object.assign(new Error('Transaction API error: A query cannot be executed on an expired transaction.'), { code: 'P2028' })
+    expect(await inCardTransaction('card-1', () => Promise.reject(expired))).toEqual({ ok: false, error: { kind: 'card_decision_refused', decisionId: 'card-1', reason: CARD_BUSY_REASON } })
+    expect(await inCardTransaction('card-1', () => Promise.reject(expired), 'goal v2 is busy')).toEqual({ ok: false, error: { kind: 'card_decision_refused', decisionId: 'card-1', reason: 'goal v2 is busy' } })
+    await expect(inCardTransaction('card-1', () => Promise.reject(new Error('the disk is gone')))).rejects.toThrow('the disk is gone')
   })
 })

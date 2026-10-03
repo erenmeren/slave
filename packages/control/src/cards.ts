@@ -41,7 +41,7 @@ import {
   type CloseQuestionInput,
   type QuestionCard,
 } from './questions.js'
-import { isUniqueConstraintViolation } from './prisma-errors.js'
+import { isLockTimeout, isTransactionTimeout, isUniqueConstraintViolation } from './prisma-errors.js'
 import { refusalText, type ControlRefusal } from './refusal.js'
 import { approveDecision, withOffers } from './supervisor.js'
 
@@ -185,12 +185,31 @@ export async function afterClaim(card: PendingCard, input: ClaimInput, close: Cl
   }
 }
 
-/** Runs a card's transaction, turning a thrown {@link CardRefused} back into a refusal. */
-export async function inCardTransaction<T>(work: () => Promise<T>): Promise<Result<T, ControlRefusal>> {
+/** What a card whose transaction ran out of time tells the person (Task 5 carry): nothing was written, and deciding again is the remedy. */
+export const CARD_BUSY_REASON = 'another change to this question or its project held it for too long: decide again in a moment'
+
+/** Plan B Task 6: how long a person's give_file waits for the delivery lock before it is refused as busy -- an HTTP request, not the goal pass. */
+export const CARD_LOCK_WAIT_MS = 5_000
+
+/** How `decideCard` waits. Tests shorten the lock wait; the route and the CLI take the default. */
+export interface DecideOptions {
+  /** {@link CARD_LOCK_WAIT_MS} unless given. */
+  readonly lockWaitMs?: number
+}
+
+/**
+ * Runs a card's transaction, turning a thrown {@link CardRefused} back into a refusal. A lock wait
+ * Postgres cancelled (`lock_timeout`) or a transaction Prisma expired (P2028) is a refusal too
+ * (Task 5 carry): either way the transaction rolled back and nothing was written, so the person is
+ * told the card is busy and to decide again (`busyReason`), not handed a server error. Any other
+ * error stays an error.
+ */
+export async function inCardTransaction<T>(decisionId: string, work: () => Promise<T>, busyReason: string = CARD_BUSY_REASON): Promise<Result<T, ControlRefusal>> {
   try {
     return ok(await work())
   } catch (error) {
     if (error instanceof CardRefused) return err(error.refusal)
+    if (isLockTimeout(error) || isTransactionTimeout(error)) return err({ kind: 'card_decision_refused', decisionId, reason: busyReason })
     throw error
   }
 }
@@ -214,7 +233,7 @@ function statusFor(actionKind: string, decision: CardDecision): 'approved' | 're
  * returned before anything is written; the rest is refused inside the card's transaction by a throw,
  * so a refused decision closes nothing. Machine cards keep approve and reject.
  */
-export async function decideCard(decisionId: string, raw: unknown, principal?: Principal): Promise<Result<DecideOutcome, ControlRefusal>> {
+export async function decideCard(decisionId: string, raw: unknown, principal?: Principal, options: DecideOptions = {}): Promise<Result<DecideOutcome, ControlRefusal>> {
   const parsed = cardDecisionSchema.safeParse(raw)
   if (!parsed.success) return err({ kind: 'invalid_card_decision', reason: parsed.error.issues.slice(0, 3).map((i) => i.message).join('; ') })
   const decision = storableDecision(parsed.data)
@@ -266,7 +285,7 @@ export async function decideCard(decisionId: string, raw: unknown, principal?: P
         close: { reason: 'dismissed', note: decidedResumeMessage(decision, { packageKey: null, askerPackageKey: question.askerPackageKey }) },
         now,
       }
-      const claimed = await inCardTransaction(() => prisma.$transaction((tx) => claimAndClose(tx, input)))
+      const claimed = await inCardTransaction(card.id, () => prisma.$transaction((tx) => claimAndClose(tx, input)))
       if (!claimed.ok) return claimed
       await afterClaim(card, input, claimed.value)
       return ok({ decision: decision.kind, summary: input.personDecision.summary })
@@ -276,7 +295,7 @@ export async function decideCard(decisionId: string, raw: unknown, principal?: P
     case 'change_requirement':
     case 'give_file':
       // Tasks 4 and 5.
-      return decideOther(card, decision, record, status, principal, now)
+      return decideOther(card, decision, record, status, principal, now, options)
   }
 }
 
@@ -312,7 +331,7 @@ async function decideAnswer(
   }
   if (body === null) return err({ kind: 'card_decision_not_offered', decisionId: card.id, decision: decision.kind })
   const input: ClaimInput = { card, status, principal, personDecision, close: null, now }
-  const claimed = await inCardTransaction(() => prisma.$transaction((tx) => claimAndClose(tx, input)))
+  const claimed = await inCardTransaction(card.id, () => prisma.$transaction((tx) => claimAndClose(tx, input)))
   if (!claimed.ok) return claimed
   const answered = await answerQuestion(card.subjectId, { body, answeredBy: 'a person, on a card', ...(principal === undefined ? {} : { principal }) }, 'human')
   if (!answered.ok) {
@@ -350,6 +369,7 @@ async function decideOther(
   status: 'approved' | 'rejected',
   principal: Principal | undefined,
   now: Date,
+  options: DecideOptions,
 ): Promise<Result<DecideOutcome, ControlRefusal>> {
   switch (decision.kind) {
     case 'give_work':
@@ -359,7 +379,7 @@ async function decideOther(
     case 'change_requirement':
       return changeRequirement(card, decision, record, status, principal, now)
     case 'give_file':
-      return giveFile(card, decision, record, status, principal, now)
+      return giveFile(card, decision, record, status, principal, now, options)
   }
 }
 
@@ -422,7 +442,7 @@ async function giveWork(
     close: { reason: 'decided', note: decidedResumeMessage(decision, target) },
     now,
   }
-  const claimed = await inCardTransaction(() => prisma.$transaction((tx) => claimAndClose(tx, input)))
+  const claimed = await inCardTransaction(card.id, () => prisma.$transaction((tx) => claimAndClose(tx, input)))
   if (!claimed.ok) return claimed
   await afterClaim(card, input, claimed.value)
   try {
@@ -474,7 +494,7 @@ async function recordSharedDecision(
   }
   let claimed: Result<CloseQuestionInput | null, ControlRefusal>
   try {
-    claimed = await inCardTransaction(() =>
+    claimed = await inCardTransaction(card.id, () =>
       prisma.$transaction(async (tx) => {
         await lockGoalDecisions(tx, card.workspaceId, version)
         const close = await claimAndClose(tx, input)
@@ -526,7 +546,7 @@ async function changeRequirement(
     close: { reason: 'superseded', note: decidedResumeMessage(decision, { packageKey: null, askerPackageKey: card.question.askerPackageKey }) },
     now,
   }
-  const claimed = await inCardTransaction(() =>
+  const claimed = await inCardTransaction(card.id, () =>
     prisma.$transaction(async (tx) => {
       const close = await claimAndClose(tx, input)
       const changed = await requestChangeIn(tx, card.workspaceId, request, principal, now)
@@ -563,6 +583,10 @@ async function changeRequirement(
  * dispatch claiming either task waits for the grant and its run then reads the new rule), then the
  * `WorkPackage` rows the writes touch. Nothing takes the delivery lock while holding any of these:
  * `withDeliveryLock` always opens its own transaction, and no caller runs inside another.
+ *
+ * Task 5 carry: every lock wait here is bounded ({@link DecideOptions.lockWaitMs}); a wait that runs
+ * out rolls the transaction back and is refused as the version being busy, so a person deciding
+ * during a final merge is told to decide again instead of waiting through it for a server error.
  */
 async function giveFile(
   card: PendingCard,
@@ -571,6 +595,7 @@ async function giveFile(
   status: 'approved' | 'rejected',
   principal: Principal | undefined,
   now: Date,
+  options: DecideOptions,
 ): Promise<Result<DecideOutcome, ControlRefusal>> {
   const version = card.question.goalVersion
   // Before any write.
@@ -578,7 +603,10 @@ async function giveFile(
   const delivery = await prisma.goalDelivery.findUnique({ where: { workspaceId_goalVersion: { workspaceId: card.workspaceId, goalVersion: version } }, select: { id: true } })
   if (delivery === null) return refusedCard(card, `goal v${String(version)} has no delivery: a file is given only while its packages are integrating`)
   const refusedBy = (reason: string): CardRefused => new CardRefused({ kind: 'card_decision_refused', decisionId: card.id, reason })
-  const done = await inCardTransaction(() =>
+  // Task 5 carry: a final merge holds the delivery lock through git; the person waits a bounded
+  // time for it (every lock wait in the transaction does) and is then told the version is busy.
+  const busy = `goal v${String(version)} is busy -- a merge, a check or another decision holds it: decide again in a moment`
+  const done = await inCardTransaction(card.id, () =>
     withDeliveryLock(delivery.id, async (tx) => {
       const head = await tx.goalDelivery.findUniqueOrThrow({ where: { id: delivery.id }, select: { status: true, activeSmokeId: true, activeRunId: true } })
       const packages = await tx.workPackage.findMany({
@@ -633,7 +661,8 @@ async function giveFile(
         if (moved.count === 0) throw refusedBy('the packages changed while this was decided: decide again')
       }
       return { input, close }
-    }),
+    }, { lockWaitMs: options.lockWaitMs ?? CARD_LOCK_WAIT_MS }),
+    busy,
   )
   if (!done.ok) return done
   await afterClaim(card, done.value.input, done.value.close)
