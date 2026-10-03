@@ -354,17 +354,29 @@ async function healApprovedClose(tx: Prisma.TransactionClient, workspaceId: stri
   const latest = await tx.supervisorDecision.findFirst({
     where: { workspaceId, subjectId: messageId, situationKind: { in: [...QUESTION_SITUATION_KINDS] } },
     orderBy: { createdAt: 'desc' },
-    select: { id: true, status: true, situationKind: true, action: true, resolvedAt: true, resolvedByUserId: true },
+    select: { id: true, status: true, situationKind: true, action: true, resolvedAt: true, resolvedByUserId: true, personDecision: true },
   })
   if (latest?.status !== 'approved' || latest.resolvedAt === null) return null
   if (latest.resolvedAt.getTime() > now.getTime() - HEAL_APPROVED_CLOSE_AFTER_MS) return null
   const action = parsedOrThrow(actionSchema.safeParse(latest.action), `SupervisorDecision ${latest.id}.action`)
   if (READDRESSING_ACTION_KINDS.includes(action.kind)) return null
+  // Plan B ruling F51: a person who answered in their own words on a card (`decideCard`) had the card
+  // claimed before `answerQuestion` ran; a crash between the two must not close the question
+  // `decided` over their text, which the card keeps in `personDecision`. Left open, the question
+  // takes a new card or its timeout instead.
+  if (writtenAnswerOf(latest.personDecision)) return null
   const question = await lockCardQuestion(tx, workspaceId, messageId)
   if (question === null || question.closedAt !== null) return null
   const principal = latest.resolvedByUserId === null ? undefined : { userId: latest.resolvedByUserId }
   const close = await closeForVerdict(tx, question, { id: latest.id, situationKind: latest.situationKind, actionKind: action.kind }, 'approved', null, principal, now)
   return close?.closed === true ? close : null
+}
+
+/** A stored `personDecision` that is a person's own answer (ruling F51). Read loosely: an unreadable
+ *  row is not one, and the heal goes on as it would without a person's decision. */
+const writtenAnswerOf = (stored: unknown): boolean => {
+  const parsed = stored === null ? null : personDecisionSchema.safeParse(stored)
+  return parsed?.success === true && parsed.data.decision.kind === 'write_answer'
 }
 
 const questionClosedOf = (close: CardClose): ControlRefusal => ({
