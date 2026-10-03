@@ -271,6 +271,35 @@ describe('closing a question (human cards H1)', () => {
     expect((await prisma.slaveMessage.findUniqueOrThrow({ where: { id: q } })).closedReason).toBe('answered')
   })
 
+  it('never throws out of a committed answer when the close event cannot be written, and still retires the card (final wave round 2)', async () => {
+    const f = await seed()
+    const byWorker = await reportQuestion(f, 'by a worker')
+    const byPerson = await reportQuestion(f, 'by a person')
+    const workerCard = await card(f, byWorker, 'conductor_question')
+    const personCard = await card(f, byPerson, 'conductor_question')
+    // The close event's append fails after the answer committed: a trigger refuses that one event type.
+    await prisma.$executeRawUnsafe(`CREATE OR REPLACE FUNCTION test_refuse_question_closed() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'test: no question_closed events'; END $$ LANGUAGE plpgsql`)
+    await prisma.$executeRawUnsafe(`CREATE TRIGGER test_refuse_question_closed BEFORE INSERT ON "ExecutionEvent" FOR EACH ROW WHEN (NEW.type = 'slave.question_closed') EXECUTE FUNCTION test_refuse_question_closed()`)
+    const errors: unknown[] = []
+    const realError = console.error
+    console.error = (...args: unknown[]) => {
+      errors.push(args)
+    }
+    try {
+      const sent = await peerAnswers(f, byWorker)
+      expect(sent.ok).toBe(true)
+      const answered = await answerQuestion(byPerson, { body: 'kebab-case', answeredBy: 'web operator', principal: { userId: 'u1' } })
+      expect(answered.ok).toBe(true)
+    } finally {
+      console.error = realError
+      await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS test_refuse_question_closed ON "ExecutionEvent"')
+      await prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS test_refuse_question_closed()')
+    }
+    for (const q of [byWorker, byPerson]) expect((await prisma.slaveMessage.findUniqueOrThrow({ where: { id: q } })).closedReason).toBe('answered')
+    for (const c of [workerCard, personCard]) expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: c.id } })).status).toBe('expired')
+    expect(errors).toHaveLength(2)
+  })
+
   it('refuses a worker\'s answer to a dismissed question, writing nothing (final wave, finding 1)', async () => {
     const f = await seed()
     const q = await reportQuestion(f)

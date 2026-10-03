@@ -289,11 +289,17 @@ export async function closeAnsweredIn(tx: Prisma.TransactionClient, gate: { read
 
 /**
  * After the answer's commit: the close's one event, then every open card about the question retired
- * (plan A D5) -- or kept open, when no run will read a late answer. The retirement is said and
- * swallowed: the answer is out, and the tick's backstop retires what this missed.
+ * (plan A D5) -- or kept open, when no run will read a late answer. Both are said and swallowed: the
+ * answer and its close are committed, so a throw here would report a written answer as failed (and a
+ * replay under the same key finds it written and does nothing). The tick's backstop retires what
+ * this missed; a lost close event is only logged (final wave round 2).
  */
 export async function afterAnswered(answered: AnsweredClose, actor: 'human' | 'system', userId: string | null, now: Date = new Date()): Promise<void> {
-  if (answered.close !== null) await announceQuestionClosed(answered.question, answered.close, actor, userId)
+  try {
+    if (answered.close !== null) await announceQuestionClosed(answered.question, answered.close, actor, userId)
+  } catch (error) {
+    console.error(`[messaging] question ${answered.question.id}: its close event was not written:`, error)
+  }
   try {
     if (answered.retireReason !== null) await retireQuestionCards(answered.question.workspaceId, answered.question.id, answered.retireReason, now)
   } catch (error) {
