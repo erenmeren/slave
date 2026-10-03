@@ -3,10 +3,13 @@ import {
   CONDUCTOR_ROLE,
   HANDOFF_EVENT_CHANGE_MAX_CHARS,
   displayName,
+  HANDOFF_DELIVERING_STATUS,
   HANDOFF_REOPENS_MAX,
   handOffFromName,
   handOffFingerprint,
   handOffItemSchema,
+  handOffRoute,
+  isHandOffVersionEnded,
   lateAnswerChange,
   renderHandOffQuestion,
   renderHandOffRework,
@@ -61,8 +64,6 @@ const HAND_OFF_ORDER = [{ createdAt: 'asc' as const }, { sourceKey: 'asc' as con
 /** The statuses a request is "on record" in, for the per-version dedup (plan A D6). */
 const ON_RECORD = ['pending', 'reopened', 'delivered'] as const
 
-/** A target task in one of these can take no more work: the request becomes a conductor question. */
-const CANNOT_TAKE: ReadonlySet<string> = new Set(['failed', 'cancelled'])
 
 /** Thrown inside the lock when a guarded move lost its race: rolls every move of the pass back. */
 class HandOffMoved extends Error {}
@@ -226,7 +227,7 @@ export async function routeHandOffs(input: RouteHandOffsInput): Promise<readonly
     // nothing into it: what would be delivered or asked is stored `expired`, as `expirePendingHandOffs`
     // leaves a pending one, and is neither announced, asked nor reopened for.
     const ended = delivery === null ? null : (await tx.goalDelivery.findUnique({ where: { id: delivery.id }, select: { status: true } }))?.status
-    const endedAs = ended === 'accepted' || ended === 'abandoned' ? ended : null
+    const endedAs = typeof ended === 'string' && isHandOffVersionEnded(ended) ? ended : null
     const out: { readonly row: HandOffRow; readonly delivery: Delivery | null }[] = []
     for (const [index, raw] of input.items.entries()) {
       const sourceKey = `${input.sourceKey}:${String(index)}`
@@ -252,7 +253,8 @@ export async function routeHandOffs(input: RouteHandOffsInput): Promise<readonly
         status = 'own'
         note = 'the reporting package owns it'
         routedAs = 'own'
-      } else if (task === undefined || CANNOT_TAKE.has(task.status)) {
+      } else if (handOffRoute(ended ?? null, task?.status) === 'to_conductor') {
+        // Final wave round 2: `handOffRoute`, the rule a late answer's card reads its fate from.
         status = 'to_conductor'
         note = `the ${target.key} package cannot take it: its task is ${task?.status ?? 'gone'}`
         routedAs = 'question'
@@ -586,12 +588,12 @@ export async function reopenForHandOffs(deliveryId: string): Promise<void> {
 async function reopenInLock(tx: Tx, deliveryId: string): Promise<void> {
   const delivery = await tx.goalDelivery.findUniqueOrThrow({ where: { id: deliveryId } })
   const { workspaceId, goalVersion } = delivery
-  if (delivery.status === 'accepted' || delivery.status === 'abandoned') {
+  if (isHandOffVersionEnded(delivery.status)) {
     await expirePendingHandOffs(tx, workspaceId, goalVersion, delivery.status)
     return
   }
   const pending = await tx.packageHandOff.findMany({ where: { workspaceId, goalVersion, status: 'pending' }, orderBy: HAND_OFF_ORDER })
-  const mayReopen = delivery.status === 'integrating' && delivery.activeSmokeId === null && delivery.activeRunId === null
+  const mayReopen = delivery.status === HANDOFF_DELIVERING_STATUS && delivery.activeSmokeId === null && delivery.activeRunId === null
   for (const pkg of await packagesOf(tx, workspaceId, goalVersion)) {
     const mine = pending.filter((row) => row.toPackageKey === pkg.key)
     const task = pkg.tasks[0]
@@ -607,7 +609,8 @@ async function reopenInLock(tx: Tx, deliveryId: string): Promise<void> {
       })
     }
     if (mine.length === 0) continue
-    if (task === undefined || CANNOT_TAKE.has(task.status)) {
+    // `task === undefined` repeats the rule's first clause for the type narrowing below.
+    if (task === undefined || handOffRoute(delivery.status, task.status) === 'to_conductor') {
       await tx.packageHandOff.updateMany({
         where: { id: { in: mine.map((row) => row.id) }, status: 'pending' },
         data: { status: 'to_conductor', note: `the ${pkg.key} package cannot take it: its task is ${task?.status ?? 'gone'}` },

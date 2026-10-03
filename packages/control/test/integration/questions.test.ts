@@ -147,17 +147,32 @@ describe('closing a question (human cards H1)', () => {
     expect(LATE_ANSWER_NOTE.unread).toBe('The answer came after its run continued; no run will read it.')
   })
 
-  it('says a late answer goes to the package as a hand-off only while its goal version is still routed (final wave, finding 6)', async () => {
-    const f = await seed()
-    await inPackage(f, 'verifying')
-    const q = await reportQuestion(f)
-    await closeQuestion({ messageId: q, reason: 'timed_out', by: 'system', decisionId: null, note: () => null }, 'system', null)
-    expect(await lateAnswerFate(prisma, q)).toBe('hand_off')
-    expect((await loadQuestionCards(f.workspaceId, [q])).get(q)?.lateAnswerFate).toBe('hand_off')
-  })
+  // Final wave round 2 (I5): `hand_off` only where routing really delivers the item to a run of the
+  // package (`handOffRoute` = delivered): an integrating version, a task that can take it.
+  for (const [taskStatus, fate] of [
+    ['done', 'hand_off'],
+    ['running', 'hand_off'],
+    ['failed', 'unread'],
+  ] as const) {
+    it(`says a late answer to an integrating version's ${taskStatus} package task is ${fate} (final wave round 2)`, async () => {
+      const f = await seed()
+      await inPackage(f, 'integrating')
+      await prisma.task.update({ where: { id: f.taskId }, data: { status: taskStatus } })
+      const q = await reportQuestion(f)
+      await closeQuestion({ messageId: q, reason: 'timed_out', by: 'system', decisionId: null, note: () => null }, 'system', null)
+      expect(await lateAnswerFate(prisma, q)).toBe(fate)
+      expect((await loadQuestionCards(f.workspaceId, [q])).get(q)?.lateAnswerFate).toBe(fate)
+    })
+  }
 
   for (const [label, status, merged] of [
     ['merged', 'accepted', true],
+    // Final wave round 2 (I5): accepted and not merged (auto-merge off) still has its delivery open
+    // to the goal pass, but routing stores every item for an accepted version `expired`.
+    ['accepted and not merged', 'accepted', false],
+    // An item stored while verifying stays pending and no run is shown it; an accepted round then
+    // expires it unread. It reaches a run only if the round fails back to integrating.
+    ['verifying', 'verifying', false],
     ['abandoned', 'abandoned', false],
     ['waiting on a person', 'needs_human', false],
     ['never delivered', null, false],

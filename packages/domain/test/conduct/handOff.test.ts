@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   handOffFingerprint,
   handOffItemSchema,
+  handOffRoute,
   handOffShownIn,
   HANDOFF_TRUST_LINE,
   OPERATOR_HANDOFF_HEADING,
@@ -257,5 +258,26 @@ describe("a worker's late answer (final wave minor: named by its seat, not as th
     const reason = renderHandOffRework([peer]).text
     expect(handOffShownIn(reason, peer)).toBe(true)
     expect(handOffShownIn(reason, { ...conductor, id: peer.id, change: peer.change })).toBe(false)
+  })
+})
+
+describe('handOffRoute (final wave round 2: one rule for routing and a late answer\'s fate)', () => {
+  it('asks the conductor when the target task cannot take it, whatever the version', () => {
+    for (const version of ['integrating', 'verifying', 'accepted', 'needs_human', 'abandoned', null]) {
+      expect(handOffRoute(version, 'failed')).toBe('to_conductor')
+      expect(handOffRoute(version, 'cancelled')).toBe('to_conductor')
+      expect(handOffRoute(version, undefined)).toBe('to_conductor')
+    }
+  })
+  it('expires it in a version that is accepted (merged or not) or abandoned', () => {
+    expect(handOffRoute('accepted', 'done')).toBe('expired')
+    expect(handOffRoute('abandoned', 'running')).toBe('expired')
+  })
+  it('delivers it in an integrating version (or one conducted before deliveries), and holds it otherwise', () => {
+    expect(handOffRoute('integrating', 'done')).toBe('delivered')
+    expect(handOffRoute('integrating', 'running')).toBe('delivered')
+    expect(handOffRoute(null, 'ready')).toBe('delivered')
+    expect(handOffRoute('verifying', 'done')).toBe('held')
+    expect(handOffRoute('needs_human', 'done')).toBe('held')
   })
 })

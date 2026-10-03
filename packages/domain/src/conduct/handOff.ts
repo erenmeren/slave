@@ -113,6 +113,41 @@ export function resolveHandOff(item: HandOffItem, fromPackageKey: string | null,
   return key === fromPackageKey ? { kind: 'own' } : { kind: 'package', key }
 }
 
+/** A target task in one of these can take no more work: a hand-off to it becomes a conductor question. */
+export const HANDOFF_CANNOT_TAKE: ReadonlySet<string> = new Set(['failed', 'cancelled'])
+
+/** The delivery statuses a version has ended in: a hand-off stored now is `expired` (plan A D4),
+ *  and a pending one is expired on the move (`expirePendingHandOffs`). Accepted counts whether or
+ *  not the branch is merged yet -- with auto-merge off that can last indefinitely. */
+export const HANDOFF_VERSION_ENDED: ReadonlySet<string> = new Set(['accepted', 'abandoned'])
+
+/** {@link HANDOFF_VERSION_ENDED} as a type guard, for the callers that name the end. */
+export function isHandOffVersionEnded(status: string): status is 'accepted' | 'abandoned' {
+  return HANDOFF_VERSION_ENDED.has(status)
+}
+
+/** The one delivery status in which a package is reopened for a hand-off (`reopenInLock`'s
+ *  `mayReopen`) or shown it in its next prompt. */
+export const HANDOFF_DELIVERING_STATUS = 'integrating'
+
+/** What becomes of a hand-off to a package ({@link handOffRoute}). `held`: stored pending, shown to
+ *  no run while the version is verifying or waiting on a person -- read only if the version returns
+ *  to integrating, and expired unread if it is accepted first. */
+export type HandOffRoute = 'to_conductor' | 'expired' | 'delivered' | 'held'
+
+/**
+ * Final wave round 2 (finding I5): the one rule for where a hand-off to a package goes, from its
+ * version's delivery status (null: a version conducted before Plan 4a wrote deliveries) and the
+ * target task's status (undefined: no task). `routeHandOffs` and `reopenInLock` store and move rows
+ * by it, and a late answer's card says "goes to the package as a hand-off" only when it is
+ * `delivered`, so the card and the routing cannot drift apart.
+ */
+export function handOffRoute(versionStatus: string | null, taskStatus: string | undefined): HandOffRoute {
+  if (taskStatus === undefined || HANDOFF_CANNOT_TAKE.has(taskStatus)) return 'to_conductor'
+  if (versionStatus !== null && isHandOffVersionEnded(versionStatus)) return 'expired'
+  return versionStatus === null || versionStatus === HANDOFF_DELIVERING_STATUS ? 'delivered' : 'held'
+}
+
 /**
  * Plan A D6: the same request from the same source to the same target, however it is spaced or
  * cased. `goalSha256`, the domain's own hash: `packages/domain` must not import `node:crypto`.

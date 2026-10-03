@@ -8,6 +8,7 @@ import {
   QUESTION_SITUATION_KINDS,
   TERMINAL,
   closerWords,
+  handOffRoute,
   runContinuedPast,
   storableText,
   trimToFit,
@@ -18,7 +19,6 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
-import { ROUTED_DELIVERY_WHERE } from './deliveryOpen.js'
 
 /**
  * Human-cards spec H1: a question closes once, and a closed question is pending nowhere. Every close
@@ -200,11 +200,13 @@ const RETIRED_BECAUSE: Readonly<Record<QuestionCloseReason, string>> = {
 
 /**
  * Task 7 fix round 1: where a late answer to this question goes ({@link LateAnswerFate}), read from
- * the asking task -- on `tx` when the caller holds the question's lock. A package task whose goal
- * version the goal pass still routes ({@link ROUTED_DELIVERY_WHERE}): a hand-off. A task outside any
- * package that has not finished: its next run's inbox. Anything else -- a finished task, no task at
- * all (a task-less planning run has no next run on anything), or a package whose version is merged,
- * abandoned or waiting on a person (final wave, finding 6) -- nobody reads it.
+ * the asking task -- on `tx` when the caller holds the question's lock. A package task: a hand-off
+ * only where routing really delivers it to a run of the package -- `handOffRoute` says `delivered`
+ * (final wave round 2, finding I5: the rule `routeHandOffs` stores the row by, so the card and the
+ * routing cannot disagree). A task outside any package that has not finished: its next run's inbox.
+ * Anything else nobody reads: a finished task, no task at all (a task-less planning run has no next
+ * run on anything), or a package whose version is accepted (merged or not), abandoned, verifying or
+ * waiting on a person, has no delivery, or whose task cannot take it (a conductor question).
  */
 export async function lateAnswerFate(client: Prisma.TransactionClient, questionId: string): Promise<LateAnswerFate> {
   const question = await client.slaveMessage.findUnique({
@@ -213,19 +215,20 @@ export async function lateAnswerFate(client: Prisma.TransactionClient, questionI
   })
   const task = question?.task ?? null
   const version = task?.workPackage?.goalVersion
-  const routed =
+  const delivery =
     question === null || version === undefined
-      ? false
-      : (await client.goalDelivery.count({ where: { workspaceId: question.workspaceId, goalVersion: version, ...ROUTED_DELIVERY_WHERE } })) > 0
-  return lateAnswerFateOf(task, routed)
+      ? null
+      : await client.goalDelivery.findUnique({ where: { workspaceId_goalVersion: { workspaceId: question.workspaceId, goalVersion: version } }, select: { status: true } })
+  return lateAnswerFateOf(task, delivery?.status ?? null)
 }
 
-/** {@link lateAnswerFate}'s rule on an asking task already read, so a page of cards reads it in
- *  its own query rather than one per card. `routed`: the task's package belongs to a goal version
- *  the goal pass still routes hand-offs for. */
-export function lateAnswerFateOf(task: { readonly workPackageId: string | null; readonly status: TaskStatus } | null, routed: boolean): LateAnswerFate {
+/** {@link lateAnswerFate}'s rule on an asking task already read, so a page of cards reads it in its
+ *  own query rather than one per card. `deliveryStatus`: the status of the task's package's goal
+ *  version's delivery, or null when it has none -- then the goal pass, which is what routes a late
+ *  answer (`routeLateAnswers`), never runs for it. */
+export function lateAnswerFateOf(task: { readonly workPackageId: string | null; readonly status: TaskStatus } | null, deliveryStatus: string | null): LateAnswerFate {
   if (task === null) return 'unread'
-  if (task.workPackageId !== null) return routed ? 'hand_off' : 'unread'
+  if (task.workPackageId !== null) return deliveryStatus !== null && handOffRoute(deliveryStatus, task.status) === 'delivered' ? 'hand_off' : 'unread'
   return TERMINAL.includes(task.status) ? 'unread' : 'next_run'
 }
 
@@ -415,16 +418,16 @@ export async function loadQuestionCards(workspaceId: string, messageIds: readonl
           ).map((group) => [group.senderRunId, group._max.seq] as const),
         )
   const names = await closerNames(rows.map((row) => row.closedBy))
-  // The goal versions the goal pass still routes, among the asking packages' (final wave, finding 6).
+  // The asking packages' goal versions' delivery statuses, for `lateAnswerFateOf` (final wave round 2).
   const versions = [...new Set(rows.flatMap((row) => (row.task?.workPackage === null || row.task?.workPackage === undefined ? [] : [row.task.workPackage.goalVersion])))]
-  const routed =
+  const deliveryStatusOf =
     versions.length === 0
-      ? new Set<number>()
-      : new Set((await prisma.goalDelivery.findMany({ where: { workspaceId, goalVersion: { in: versions }, ...ROUTED_DELIVERY_WHERE }, select: { goalVersion: true } })).map((d) => d.goalVersion))
+      ? new Map<number, string>()
+      : new Map((await prisma.goalDelivery.findMany({ where: { workspaceId, goalVersion: { in: versions } }, select: { goalVersion: true, status: true } })).map((d) => [d.goalVersion, d.status] as const))
   return new Map(
     rows.map((row) => {
       const packageVersion = row.task?.workPackage?.goalVersion
-      const fate = row.closedReason === 'timed_out' ? lateAnswerFateOf(row.task, packageVersion !== undefined && routed.has(packageVersion)) : null
+      const fate = row.closedReason === 'timed_out' ? lateAnswerFateOf(row.task, packageVersion === undefined ? null : (deliveryStatusOf.get(packageVersion) ?? null)) : null
       const card: QuestionCard = {
         messageId: row.id,
         body: row.body,

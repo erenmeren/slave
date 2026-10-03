@@ -10,6 +10,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { abandonGoal } from '../../src/goalDelivery.js'
 import { handOffView, handOffViews, lateAnswerSourceKey, listHandOffsFor, markHandOffsShown, reopenForHandOffs, routeHandOffs, routeStoredHandOffs } from '../../src/handOffs.js'
 import { answerQuestion, sendMessage } from '../../src/messaging.js'
+import { lateAnswerFate } from '../../src/questions.js'
 
 interface Fixture {
   readonly workspaceId: string
@@ -443,6 +444,18 @@ describe('a late answer (human cards plan A D9)', () => {
     expect(rows[0] === undefined ? null : handOffView(rows[0]).fromOperator).toBe(true)
     // The answer stays undelivered: nothing woke a run with it, and the thread keeps it as it was.
     expect((await prisma.slaveMessage.findUniqueOrThrow({ where: { id: answered.ok ? answered.value.id : '' } })).deliveredAt).toBeNull()
+  })
+
+  it('expires, unread, a late answer to an accepted version not yet merged -- the fate the card names (final wave round 2)', async () => {
+    const f = await seed({ skeleton: 'done', report: 'done', integration: 'done' })
+    await prisma.goalDelivery.update({ where: { id: f.deliveryId }, data: { status: 'accepted' } })
+    const run = await prisma.slaveRun.create({ data: { slaveId: await seatOf(f), taskId: f.taskOf.report, status: 'succeeded' } })
+    const question = await timedOutQuestion(f, 'q-accepted', run.id)
+    expect(await lateAnswerFate(prisma, question.id)).toBe('unread')
+    expect((await answerQuestion(question.id, { body: 'camelCase', answeredBy: 'web operator', principal: { userId: 'u1' } })).ok).toBe(true)
+    await routeStoredHandOffs(f.deliveryId)
+    expect(await lateRows()).toEqual([expect.objectContaining({ status: 'expired' })])
+    expect((await task(f.taskOf.report)).status).toBe('done')
   })
 
   it('routes nothing while the asking run still waits on it, or once the answer was delivered', async () => {
