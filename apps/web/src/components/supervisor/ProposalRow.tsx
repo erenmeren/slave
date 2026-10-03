@@ -6,6 +6,7 @@ import { GOAL_REPORT_CLOSE_WORDS, PROVIDER_LABEL, SITUATION_LABEL, type Action, 
 // Prisma client under it) reaches the client bundle. The same rule `useOverview.ts` states for
 // `OverviewSnapshot`.
 import type { SupervisorView } from '../../server/supervisor'
+import { formatUtcMinute } from '../../lib/format'
 import { Button } from '../ui/Button'
 
 /**
@@ -300,7 +301,7 @@ function QuestionState({ card }: { readonly card: NonNullable<Decision['card']> 
     // Final wave, finding 7: an expired card timed its question out with nobody parked on it.
     return (
       <span data-testid="card-question-state" className="text-[11px] text-text-2">
-        The card expired with no decision at {closed.at}
+        The card expired with no decision at {formatUtcMinute(closed.at)}
         {card.lateAnswerNote !== null ? `. ${card.lateAnswerNote}` : whereItGoes(card)}
       </span>
     )
@@ -308,7 +309,7 @@ function QuestionState({ card }: { readonly card: NonNullable<Decision['card']> 
   if (closed.reason === 'timed_out') {
     return (
       <span data-testid="card-question-state" className="text-[11px] text-tone-waiting">
-        The run continued without an answer at {closed.at}
+        The run continued without an answer at {formatUtcMinute(closed.at)}
         {card.lateAnswerNote !== null ? `. ${card.lateAnswerNote}` : whereItGoes(card)}
       </span>
     )
@@ -316,7 +317,7 @@ function QuestionState({ card }: { readonly card: NonNullable<Decision['card']> 
   const words = GOAL_REPORT_CLOSE_WORDS[closed.reason]
   return (
     <span data-testid="card-question-state" className="text-[11px] text-text-2">
-      {`${words.charAt(0).toUpperCase()}${words.slice(1)} by ${closed.byName} at ${closed.at}.`}
+      {`${words.charAt(0).toUpperCase()}${words.slice(1)} by ${closed.byName} at ${formatUtcMinute(closed.at)}.`}
     </span>
   )
 }

@@ -1,6 +1,7 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { closerName, closerNames, refusalText, type ControlRefusal } from '@slave-of-ai/control'
 import { isQuestionSituation, resolverWords, type Result } from '@slave-of-ai/domain'
+import { formatUtcMinute } from '../lib/format'
 import { refusalStatus } from './refusalStatus'
 
 /**
@@ -70,11 +71,6 @@ async function closedBy(by: string | null, at: string): Promise<string> {
 }
 
 function sentence(name: string, at: string | null): string {
-  return `Already closed by ${name}${at === null ? '' : ` at ${noticeTime(at)}`}.`
+  return `Already closed by ${name}${at === null ? '' : ` at ${formatUtcMinute(at)}`}.`
 }
 
-/** `2026-10-02T10:00:00.000Z` → `2026-10-02 10:00 UTC`: the server renders the sentence, so it
- *  names its zone rather than guessing the reader's. */
-function noticeTime(iso: string): string {
-  return `${iso.slice(0, 16).replace('T', ' ')} UTC`
-}

@@ -38,6 +38,14 @@ export function formatQuestionTimeout(ms: number): string {
   return ms > 0 && ms % 3_600_000 === 0 ? `${String(ms / 3_600_000)}h` : formatTimeout(ms)
 }
 
+/** `2026-10-02T10:00:00.000Z` → `2026-10-02 10:00 UTC` (human cards plan A): when a question closed,
+ *  as both the settled notice (rendered on the server) and a question card (rendered in the browser)
+ *  say it -- one formatter, so the two never disagree. It names its zone rather than guessing the
+ *  reader's. */
+export function formatUtcMinute(iso: string): string {
+  return `${iso.slice(0, 16).replace('T', ' ')} UTC`
+}
+
 /**
  * `2026-09-19T10:58:00.000Z` (with `now` five minutes later) → `5m ago`; under a minute →
  * `just now` (M61 R7).

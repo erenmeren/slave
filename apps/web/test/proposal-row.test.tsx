@@ -2,6 +2,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ProposalRow, actionText } from '../src/components/supervisor/ProposalRow.js'
+import { formatUtcMinute } from '../src/lib/format.js'
 import type { SupervisorView } from '../src/server/supervisor.js'
 
 /**
@@ -487,11 +488,14 @@ describe('a question card says how its question stands (human cards H1/H3)', () 
     renderRow(answerDecision({ card: { ...base, askerWaiting: false, closed: timedOut, timeoutRefusal: null, lateAnswerFate: 'hand_off' } }))
     expect(screen.getByTestId('card-question-state').textContent).toContain('continued without an answer')
     expect(screen.getByTestId('card-question-state').textContent).toContain('integration package as a hand-off')
+    // Final wave: the settled notice's "YYYY-MM-DD HH:MM UTC", one formatter for both.
+    expect(screen.getByTestId('card-question-state').textContent).toContain('continued without an answer at 2026-10-02 10:00 UTC')
+    expect(formatUtcMinute(timedOut.at)).toBe('2026-10-02 10:00 UTC')
   })
 
   it('says a card expired with no decision, never that its run continued (final wave, finding 7)', () => {
     renderRow(answerDecision({ card: { ...base, askerWaiting: false, closed: { ...timedOut, runContinued: false }, timeoutRefusal: null, lateAnswerFate: 'hand_off' } }))
-    expect(screen.getByTestId('card-question-state').textContent).toContain('The card expired with no decision')
+    expect(screen.getByTestId('card-question-state').textContent).toContain('The card expired with no decision at 2026-10-02 10:00 UTC')
     expect(screen.getByTestId('card-question-state').textContent).not.toContain('continued')
   })
 
@@ -503,7 +507,7 @@ describe('a question card says how its question stands (human cards H1/H3)', () 
 
   it('names how, by whom and when a closed question closed', () => {
     renderRow(answerDecision({ card: { ...base, askerWaiting: false, closed: { reason: 'dismissed', at: '2026-10-02T09:00:00.000Z', by: 'u1', byName: 'alice', runContinued: false }, timeoutRefusal: null } }))
-    expect(screen.getByTestId('card-question-state').textContent).toBe('Closed without an answer by alice at 2026-10-02T09:00:00.000Z.')
+    expect(screen.getByTestId('card-question-state').textContent).toBe('Closed without an answer by alice at 2026-10-02 09:00 UTC.')
   })
 
   it('says a late answer no run will read, on the card that stays open for it', () => {
