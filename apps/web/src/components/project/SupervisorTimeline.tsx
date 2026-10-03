@@ -124,6 +124,19 @@ export function SupervisorTimeline({
     if (entry.taskId !== null && entry.taskTitle !== null) taskTitles[entry.taskId] = entry.taskTitle
   }
 
+  /** The rows on the page now, by the ids `send`/`decide` key their notices by. */
+  const liveRows = new Set<string>([
+    ...decisionEntries.flatMap((entry) => (entry.decision === null ? [] : [`decision-${entry.decision.id}`])),
+    ...questions.map((item) => `question-${item.messageId ?? ''}`),
+    ...blocked.map((item) => `blocked-${item.taskId ?? ''}`),
+  ])
+
+  /** Task 9 fix round 1: a new action clears the acting row's old notice, and every notice whose
+   *  row has left the page -- a decided card's outcome is read once, not stacked for ever. */
+  const clearNotices = (rowId: string): void => {
+    setNotices((was) => Object.fromEntries(Object.entries(was).filter(([id]) => id !== rowId && liveRows.has(id))))
+  }
+
   /** One row's write. Returns whether it landed, so a row with a box of its own can clear it on
    *  success and keep it on a refusal (fix round 1, minor 5). */
   const send = async (rowId: string, url: string, body?: Record<string, unknown>, about?: string): Promise<boolean> => {
@@ -132,10 +145,7 @@ export function SupervisorTimeline({
       const { [rowId]: _gone, ...rest } = was
       return rest
     })
-    setNotices((was) => {
-      const { [rowId]: _gone, ...rest } = was
-      return rest
-    })
+    clearNotices(rowId)
     const result = await postControl(url, body)
     if (!result.ok && result.notice !== null) {
       // Human cards spec §4: who settled it and when, then a fresh queue -- not a red band. Named
@@ -157,10 +167,7 @@ export function SupervisorTimeline({
       const { [rowId]: _gone, ...rest } = was
       return rest
     })
-    setNotices((was) => {
-      const { [rowId]: _gone, ...rest } = was
-      return rest
-    })
+    clearNotices(rowId)
     const result = await postDecision(url, body)
     if (result.ok || result.notice !== null) {
       const text = result.ok ? result.summary : result.notice

@@ -52,7 +52,7 @@ const DECISION_ENTRY: TimelineEntry = {
 }
 
 /** Human cards H4's fields, as a lone item with nothing merged into it carries them. */
-const QUEUE_FIELDS = { goalVersion: null, blocking: false, groupKey: 'x', mergedIds: [], merged: [], oneClick: false, questionCard: false } as const
+const QUEUE_FIELDS = { goalVersion: null, blocking: false, groupKey: 'x', mergedIds: [], merged: [], oneClick: false, questionCard: false, draftPreview: null } as const
 
 const QUESTION: NeedsYouItem = { kind: 'question', id: 'm1', title: 'Ada asked: Which gateway?', href: '/w/w1#question-m1', since: '2026-09-09T10:00:00.000Z', taskId: null, decisionId: null, messageId: 'm1', ...QUEUE_FIELDS }
 const BLOCKED: NeedsYouItem = { kind: 'blocked_task', id: 't1', title: 'Wire the webhook — no credentials', href: '/w/w1/tasks?task=t1', since: '2026-09-09T10:00:00.000Z', taskId: 't1', decisionId: null, messageId: null, ...QUEUE_FIELDS }
@@ -428,6 +428,29 @@ describe('SupervisorTimeline: a question card is decided in place (human cards H
     expect(notice.getAttribute('role')).toBe('status')
     expect(onRefresh).toHaveBeenCalledTimes(1)
     expect(screen.queryByTestId('timeline-error')).toBeNull()
+  })
+
+  // Task 9 fix round 1: a decided card's outcome is read once -- the next action clears every notice
+  // whose row has left the page, so they never pile up.
+  it("clears a notice whose card has gone on the next action", async () => {
+    stubFetch({ ok: true, outcome: { decision: { kind: 'give_work' }, summary: 'gave the skeleton package work: Add a start script.' } })
+    const second: TimelineEntry = { ...QUESTION_CARD_ENTRY, key: 'decision-d3', title: 'the second card', decision: { ...QUESTION_CARD_ENTRY.decision!, id: 'd3' } }
+    const view = render(<SupervisorTimeline workspaceId="w1" entries={[QUESTION_CARD_ENTRY, second]} needsYou={[]} />)
+
+    const firstRow = document.getElementById('decision-d2') as HTMLElement
+    fireEvent.click(within(firstRow).getByTestId('card-decision-give_work'))
+    type(within(firstRow).getByTestId('card-target-package'), 'skeleton')
+    type(within(firstRow).getByTestId('card-text'), 'Add a start script.')
+    await click(within(firstRow).getByTestId('card-decide'))
+    expect(screen.getAllByTestId('timeline-notice')).toHaveLength(1)
+
+    // The refresh took the first card away; the person decides the second.
+    view.rerender(<SupervisorTimeline workspaceId="w1" entries={[second]} needsYou={[]} />)
+    giveWork()
+    await click(screen.getByTestId('card-decide'))
+
+    const notices = screen.getAllByTestId('timeline-notice')
+    expect(notices.map((notice) => notice.textContent)).toEqual(['the second card — gave the skeleton package work: Add a start script.'])
   })
 
   it('shows any other refusal beside the card, as an alert', async () => {
