@@ -5,7 +5,7 @@
  * reason; the critical lexicon, a missing model and a missing plan all hand the question to a person
  * by the rules.
  */
-import { handOffQuestionKey, loadSupervisorWorld, rejectDecision, reportQuestionKey, sendMessage, type ModelDecider, type ModelOutcome } from '@slave-of-ai/control'
+import { decideCard, handOffQuestionKey, loadSupervisorWorld, rejectDecision, reportQuestionKey, sendMessage, type ModelDecider, type ModelOutcome } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { CONDUCTOR_ROLE, COOLDOWN_MS, HANDOFF_REOPENS_MAX, WAITING_STALE_MS } from '@slave-of-ai/domain'
 import { execFileSync } from 'node:child_process'
@@ -220,6 +220,26 @@ describe('answerConductorQuestions (spec C4)', () => {
     expect(await prisma.supervisorDecision.count({ where: { subjectId: f.qReport } })).toBe(1)
     // qPaused's escalation is still open (a person has not looked), so nothing is asked at all.
     expect(model.prompts).toHaveLength(1)
+  })
+
+  it('raises no new card for a question a person decided on its card, within or after the cooldown (human cards plan B, OBS-9; Task 10 (c))', async () => {
+    const f = await seed()
+    // No model wired: the rules give both questions to a person.
+    await supervise({ workspaceId: f.workspaceId, now: () => f.now })
+    const cardOf = (subjectId: string) => prisma.supervisorDecision.findFirstOrThrow({ where: { subjectId, status: 'pending' } })
+    const paused = await cardOf(f.qPaused)
+    const finished = await cardOf(f.qReport)
+    expect((await decideCard(paused.id, { kind: 'record_decision', title: 'API port', text: '8080 unless PORT is set' })).ok).toBe(true)
+    expect((await decideCard(finished.id, { kind: 'dismiss', reason: 'moot' })).ok).toBe(true)
+    // The Supervisor's scan once more, with a model wired: inside the cooldown and after it.
+    const model = scripted((prompt) => answerJson(idsIn(prompt).map((id) => ok(id))))
+    for (const at of [new Date(f.now.getTime() + 60_000), new Date(f.now.getTime() + COOLDOWN_MS + 60_000)]) {
+      await supervise({ workspaceId: f.workspaceId, decider: model.decider, model: 'm', now: () => at })
+      expect(await prisma.supervisorDecision.count({ where: { subjectId: f.qPaused } })).toBe(1)
+      expect(await prisma.supervisorDecision.count({ where: { subjectId: f.qReport } })).toBe(1)
+    }
+    expect(model.prompts).toHaveLength(0)
+    expect(await prisma.supervisorDecision.count({ where: { workspaceId: f.workspaceId, status: 'pending' } })).toBe(0)
   })
 
   it('writes no decision for a failed batch, and gives the question to a person with the reason after three (spec C4)', async () => {
