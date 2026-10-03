@@ -26,3 +26,21 @@ describe('slave.question_closed (human cards H1)', () => {
     expect(LANE_BY_TYPE['slave.question_closed']).toBe('work')
   })
 })
+
+describe('workspace.package_noted (human cards plan B D9)', () => {
+  const noted = (payload: object) => executionEventSchema.safeParse({ ...BASE, actor: 'slave', type: 'workspace.package_noted', payload }).success
+  const note = { version: 1, packageKey: 'identity-access', runId: 'r1', note: 'VENDOR_LICENSE_PUBLIC_KEYS is a placeholder.' }
+
+  it('reads a note, and refuses one over 1000 characters, an empty one, a long package key and a version 0', () => {
+    expect(noted(note)).toBe(true)
+    expect(noted({ ...note, note: 'x'.repeat(1000) })).toBe(true)
+    expect(noted({ ...note, note: 'x'.repeat(1001) })).toBe(false)
+    expect(noted({ ...note, note: '' })).toBe(false)
+    expect(noted({ ...note, packageKey: 'k'.repeat(41) })).toBe(false)
+    expect(noted({ ...note, version: 0 })).toBe(false)
+  })
+
+  it('files a note on the work lane, beside the hand-offs', () => {
+    expect(LANE_BY_TYPE['workspace.package_noted']).toBe('work')
+  })
+})

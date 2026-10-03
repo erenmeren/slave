@@ -1,6 +1,6 @@
 import { sanitisePersonText } from '../handoff/contract.js'
 import type { RequirementItem } from './requirements.js'
-import { HANDOFF_CHANGE_MAX_CHARS, HANDOFFS_PER_REPORT_MAX, SKELETON_PACKAGE_KEY } from './constants.js'
+import { HANDOFF_CHANGE_MAX_CHARS, HANDOFFS_PER_REPORT_MAX, NOTE_MAX_CHARS, NOTES_PER_REPORT_MAX, SKELETON_PACKAGE_KEY } from './constants.js'
 import { globToRegExp } from './glob.js'
 import {
   gateRunsVerifyScript,
@@ -217,6 +217,7 @@ export function renderReportProtocol(requirementKeys: readonly string[], workflo
     workflow: workflowSteps > 0 ? [{ step: 1, done: true, note: '' }] : [],
     questions: [],
     handOffs: [],
+    notes: [],
   }
   return [
     'When you finish, end your final message with this report, exactly once:',
@@ -230,6 +231,7 @@ export function renderReportProtocol(requirementKeys: readonly string[], workflo
     `  At most ${String(HANDOFFS_PER_REPORT_MAX)}; each "change" at most ${String(HANDOFF_CHANGE_MAX_CHARS)} characters, with exactly one of "path" or "package".`,
     '  An item that breaks these is not delivered: it goes to the conductor as a question.',
     '- "questions": a choice nobody has made (a design decision, an ambiguous requirement) for the conductor to decide; never a hand-off.',
+    `- "notes": what a person should know that needs no decision (a placeholder key, a limit you accepted, a manual step for release); at most ${String(NOTES_PER_REPORT_MAX)}, each at most ${String(NOTE_MAX_CHARS)} characters. A note goes to the activity feed and the goal report: never put one in "questions" or "handOffs".`,
     'A missing or malformed report sends this task back to you.',
   ].join('\n')
 }

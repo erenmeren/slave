@@ -1,6 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, EVENT_TYPE_BY_DOMAIN_TYPE, type DomainEventType } from '@slave-of-ai/db'
-import { listDecisions, type DecisionView } from '@slave-of-ai/control'
+import { handOffViews, listDecisions, type DecisionView } from '@slave-of-ai/control'
 import {
   BREAKER_TRIP_LABEL,
   BROKER_OP_LABEL,
@@ -10,6 +10,7 @@ import {
   MEMORY_STATUSES,
   MEMORY_STATUS_LABEL,
   MEMORY_TYPE_LABEL,
+  handOffFromName,
   isResolvedDecision,
   laneFor,
   originLabel,
@@ -126,6 +127,7 @@ export async function buildSupervisorTimeline(
   ])
 
   const titles: Record<string, string> = Object.fromEntries(tasks.map((task) => [task.id, task.title]))
+  const handOffFrom = await packageLessHandOffNames(workspaceId, rows)
   const decisionById = new Map(decisions.map((decision) => [decision.id, decision]))
 
   const entries: TimelineEntry[] = []
@@ -174,7 +176,7 @@ export async function buildSupervisorTimeline(
       lane,
       laneLabel: LANE_LABEL[lane],
       at: row.ts.toISOString(),
-      title: titleFor(type, payload, titles),
+      title: titleFor(type, payload, titles, handOffFrom),
       detail: detailFor(type, payload),
       taskId: row.taskId,
       taskTitle: row.taskId === null ? null : (titles[row.taskId] ?? null),
@@ -214,6 +216,34 @@ export async function buildSupervisorTimeline(
 }
 
 /**
+ * Pre-flight F65 (human cards plan A carry, plan B Task 8): who each package-less hand-off on this
+ * page came from, by its id -- named the way the goal report and the workers' prompts name it
+ * (`handOffViews` + `handOffFromName`): a person's request or late answer as the operator's, a
+ * worker's late answer by its seat, the Supervisor's as the conductor's. A hand-off from a package
+ * is named by its package off the event alone, so only the package-less ones are read: one query
+ * for their rows, and `handOffViews`' own reads only when one is a late answer. None when the page
+ * holds no such event.
+ */
+async function packageLessHandOffNames(
+  workspaceId: string,
+  rows: readonly { readonly type: string; readonly payload: unknown }[],
+): Promise<ReadonlyMap<string, string>> {
+  const ids = rows.flatMap((row) => {
+    if (row.type !== EVENT_TYPE_BY_DOMAIN_TYPE['workspace.package_handed_off']) return []
+    const payload = (row.payload ?? {}) as Record<string, unknown>
+    const id = payload['handOffId']
+    return payload['fromPackage'] == null && typeof id === 'string' ? [id] : []
+  })
+  if (ids.length === 0) return new Map()
+  const handOffs = await prisma.packageHandOff.findMany({
+    where: { workspaceId, id: { in: [...new Set(ids)] } },
+    select: { id: true, workspaceId: true, source: true, sourceKey: true, fromPackageKey: true, path: true, packageKey: true, change: true },
+  })
+  const views = await handOffViews(handOffs)
+  return new Map(views.map((view) => [view.id, handOffFromName(view)] as const))
+}
+
+/**
  * Final wave M5: `workspace.goal_retried`'s `cause`, or `null` for every other row and for a retry
  * that carries none (a person's). Narrowed to the one type and the one value, like
  * {@link memoryStatusOf} below. Exported because it is PURE.
@@ -250,6 +280,7 @@ function titleFor(
   type: DomainEventType,
   payload: Record<string, unknown>,
   titles: Readonly<Record<string, string>>,
+  handOffFrom: ReadonlyMap<string, string>,
 ): string {
   switch (type) {
     case 'workspace.goal_set': {
@@ -369,17 +400,29 @@ function titleFor(
       const to = payload['toPackage']
       return `goal v${typeof version === 'number' ? String(version) : '?'}: smoke fix handed to ${typeof to === 'string' ? to : '?'}`
     }
-    // Supervisor-as-conductor spec C2: one package handed work to another.
+    // Supervisor-as-conductor spec C2: one package handed work to another. A package-less one is
+    // named by `packageLessHandOffNames` (pre-flight F65); a row that is gone falls back to the
+    // event's own source -- a person's as the operator's, any other as the conductor's.
     case 'workspace.package_handed_off': {
       const version = payload['version']
       const from = payload['fromPackage']
       const to = payload['toPackage']
-      return `goal v${typeof version === 'number' ? String(version) : '?'}: ${typeof from === 'string' ? from : 'the conductor'} handed work to ${typeof to === 'string' ? to : 'no package'}`
+      const handOffId = payload['handOffId']
+      const named = typeof handOffId === 'string' ? handOffFrom.get(handOffId) : undefined
+      const who = typeof from === 'string' ? from : (named ?? (payload['source'] === 'person' ? 'the operator' : 'the conductor'))
+      return `goal v${typeof version === 'number' ? String(version) : '?'}: ${who} handed work to ${typeof to === 'string' ? to : 'no package'}`
     }
-    // Human cards H1: a question stopped waiting.
+    // Human cards H1: a question stopped waiting. Every underscore (pre-flight F68): `timed_out`
+    // reads "timed out", and a later reason with two underscores would not keep its second.
     case 'slave.question_closed': {
       const reason = payload['reason']
-      return `question ${typeof reason === 'string' ? reason.replace('_', ' ') : 'closed'}`
+      return `question ${typeof reason === 'string' ? reason.replaceAll('_', ' ') : 'closed'}`
+    }
+    // Human cards plan B D9: a worker's note -- information, never a card. Its words are the detail.
+    case 'workspace.package_noted': {
+      const version = payload['version']
+      const packageKey = payload['packageKey']
+      return `goal v${typeof version === 'number' ? String(version) : '?'}: ${typeof packageKey === 'string' ? packageKey : 'a package'} left a note`
     }
     // M48 R5/R7: a runbook adopted, or stopped. The payload's `title` is not a field this event
     // carries, so without a case of its own it would read as its own type name on the PLAN CHANGE
@@ -514,6 +557,8 @@ function detailFor(type: DomainEventType, payload: Record<string, unknown>): str
     const version = payload['version']
     return typeof version === 'number' ? `v${String(version)}` : null
   }
+  // Human cards plan B D9: a note's own words, as a JSX child like every other quoted detail.
+  if (type === 'workspace.package_noted' && typeof payload['note'] === 'string' && payload['note'] !== '') return payload['note']
   for (const field of ['goal', 'body', 'reason', 'branch', 'summary'] as const) {
     const value = payload[field]
     if (typeof value === 'string' && value !== '') return value

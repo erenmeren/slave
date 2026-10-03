@@ -304,6 +304,59 @@ describe('buildSupervisorTimeline', () => {
   it('answers an empty list for a project that does not exist', async (): Promise<void> => {
     expect(await buildSupervisorTimeline('00000000-0000-0000-0000-000000000000')).toEqual([])
   })
+
+  // Human cards plan B D9: a worker's note is information on the WORK lane, its words the second line.
+  it('shows a package note on WORK IN PROGRESS, its words as the detail and nothing waiting on a person', async (): Promise<void> => {
+    const { workspaceId } = await seedWorkspace({})
+    const note = 'VENDOR_LICENSE_PUBLIC_KEYS is a placeholder; the vendor runs the keygen offline.'
+    await appendEvent({ type: 'workspace.package_noted', workspaceId, runId: 'r1', actor: 'slave', payload: { version: 2, packageKey: 'identity-access', runId: 'r1', note } })
+
+    const entries = await buildSupervisorTimeline(workspaceId)
+
+    expect(entries.map((entry) => [entry.lane, entry.title, entry.detail, entry.eventType])).toEqual([
+      ['work', 'goal v2: identity-access left a note', note, 'workspace.package_noted'],
+    ])
+  })
+
+  // Pre-flight F65 / section (e) carry: a package-less hand-off is named as the goal report and the
+  // workers' prompts name it (`handOffViews` + `handOffFromName`) -- never "the conductor" for all.
+  it('names who a package-less hand-off came from: the operator, a worker by its seat, the conductor', async (): Promise<void> => {
+    const { workspaceId, slaveId } = await seedWorkspace({})
+    const lateAnswer = await prisma.slaveMessage.create({ data: { workspaceId, slaveId, threadId: 't', kind: 'answer', body: 'rename it', actor: 'slave' } })
+    const rows: readonly (readonly [string, 'person' | 'answer' | 'report', string, string | null])[] = [
+      ['h-person', 'person', 'person:card1:0', null],
+      ['h-late', 'answer', `late:${lateAnswer.id}:0`, null],
+      ['h-conductor', 'answer', 'answer:d1:0', null],
+      ['h-report', 'report', 'report:r1:0', 'report'],
+    ]
+    for (const [id, source, sourceKey, fromPackageKey] of rows) {
+      await prisma.packageHandOff.create({
+        data: { id, workspaceId, goalVersion: 1, source, sourceKey, fromRunId: 'r1', fromPackageKey, toPackageKey: 'skeleton', path: 'scripts/verify.sh', change: 'x', fingerprint: id, status: 'pending' },
+      })
+    }
+    const handedOff = (handOffId: string, source: string, fromPackage: string | null) =>
+      appendEvent({
+        type: 'workspace.package_handed_off',
+        workspaceId,
+        actor: source === 'person' ? 'human' : 'system',
+        payload: { version: 1, handOffId, source, fromPackage, toPackage: 'skeleton', path: 'scripts/verify.sh', package: null, delivery: 'prompt', change: 'x' },
+      })
+    for (const [id, source, , fromPackageKey] of rows) await handedOff(id, source, fromPackageKey)
+    // A row that is gone (its workspace's rows cleaned up by hand): the event's own source still names a person.
+    await handedOff('h-gone-person', 'person', null)
+    await handedOff('h-gone-answer', 'answer', null)
+
+    const entries = await buildSupervisorTimeline(workspaceId)
+
+    expect(entries.map((entry) => entry.title).reverse()).toEqual([
+      'goal v1: the operator handed work to skeleton',
+      'goal v1: Alex (dev) handed work to skeleton',
+      'goal v1: the conductor handed work to skeleton',
+      'goal v1: report handed work to skeleton',
+      'goal v1: the operator handed work to skeleton',
+      'goal v1: the conductor handed work to skeleton',
+    ])
+  })
 })
 
 /**

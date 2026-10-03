@@ -22,7 +22,7 @@ import {
   type MemoryStatus,
   type MemoryType,
 } from '@slave-of-ai/domain'
-import { formatQuestionTimeout, formatTimeout } from '../../lib/format'
+import { formatQuestionTimeout, formatTimeout, formatUtcMinute } from '../../lib/format'
 import { formatUsd } from '../../lib/realMoney'
 import { plural } from '../../lib/plural'
 import { ActivityCard, type ActivityCardProps } from './ActivityCard'
@@ -949,6 +949,21 @@ function WorkspacePackageHandedOffCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+/**
+ * Human cards plan B D9: a worker's note -- information for a person, not a question, and never a
+ * card. `note` is the worker's words (sanitised when filed), rendered as a JSX child: text, never markup.
+ */
+function WorkspacePackageNotedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; packageKey: string; note: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="working" label={`goal v${String(payload.version)}: ${payload.packageKey} left a note`}>
+        <span data-testid="package-note">{payload.note}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 const QUESTION_CLOSED_WORDS: Readonly<Record<string, string>> = {
   answered: 'answered',
   decided: 'decided on a card',
@@ -1439,7 +1454,7 @@ function SupervisorProposedCard(props: ActivityCardProps): ReactElement {
           * minutes -- `expirePendingDecisions` runs per tick, so seconds are a precision the
           * deadline does not have. */}
         <span data-testid="supervisor-expires" className="font-mono">
-          {payload.expiresAt.slice(0, 16).replace('T', ' ')}
+          {formatUtcMinute(payload.expiresAt)}
         </span>
         {' \u00b7 '}
         <DecisionRef id={payload.decisionId} />
@@ -1848,6 +1863,7 @@ export const ACTIVITY_CARDS = {
   'workspace.smoke_handed_off': WorkspaceSmokeHandedOffCard,
   'workspace.package_handed_off': WorkspacePackageHandedOffCard,
   'slave.question_closed': SlaveQuestionClosedCard,
+  'workspace.package_noted': WorkspacePackageNotedCard,
   'workspace.plan_created': WorkspacePlanCreatedCard,
   'workspace.replan_started': WorkspaceReplanStartedCard,
   'workspace.replanned': WorkspaceReplannedCard,

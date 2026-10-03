@@ -2608,7 +2608,12 @@ enum EventType {
   workspace_smoke_handed_off     @map("workspace.smoke_handed_off")
   /// Supervisor-as-conductor spec C2: a package's hand-off routed to the package that owns it.
   workspace_package_handed_off   @map("workspace.package_handed_off")
+  /// Human cards H1 (plan A D11): a question stopped waiting -- answered, decided on a card,
+  /// dismissed, past its timeout, or superseded by a new goal version.
   slave_question_closed          @map("slave.question_closed")
+  /// Human cards plan B D9: one note from a package worker's report -- information a person
+  /// should know that needs no decision. The feed and the goal report, never a card.
+  workspace_package_noted        @map("workspace.package_noted")
   workspace_plan_created      @map("workspace.plan_created")
   /// M40 §2: the goal moved on a board that already had tasks, so the tick started a DELTA re-plan
   /// run (`workspace.replan_started`, whose `version` is the dedup key for "one re-plan per goal

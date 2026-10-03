@@ -53,6 +53,7 @@ export const EVENT_TYPE_BY_DOMAIN_TYPE = {
   'workspace.smoke_handed_off': 'workspace_smoke_handed_off',
   'workspace.package_handed_off': 'workspace_package_handed_off',
   'slave.question_closed': 'slave_question_closed',
+  'workspace.package_noted': 'workspace_package_noted',
   'workspace.plan_created': 'workspace_plan_created',
   'workspace.replan_started': 'workspace_replan_started',
   'workspace.replanned': 'workspace_replanned',

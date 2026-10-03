@@ -190,6 +190,14 @@ describe('renderReportProtocol', () => {
     expect(text).toContain('one entry per workflow step (3)')
     expect(text).toContain('done|partial|not_done')
   })
+
+  it('tells a worker that information for a person is a note, never a question (plan B D9)', () => {
+    const text = renderReportProtocol(['R1'], 0)
+    expect(text).toContain('"notes":[]')
+    expect(text).toContain('- "notes": what a person should know that needs no decision')
+    expect(text).toContain('never put one in "questions" or "handOffs"')
+    expect(text).toContain('at most 10, each at most 1000 characters')
+  })
 })
 
 describe('hand-offs in the contract (spec C1, plan A D11)', () => {

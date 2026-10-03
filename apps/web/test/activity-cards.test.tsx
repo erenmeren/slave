@@ -102,6 +102,7 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'workspace.smoke_run': { version: 1, round: 2, attemptId: 'a1', outcome: 'failed', exitCode: 1, durationMs: 1200, output: 'npm error Missing script: "start"', reworkedPackage: 'integration' },
   'workspace.package_handed_off': { version: 1, handOffId: 'h1', source: 'report', fromPackage: 'report', toPackage: 'integration', path: null, package: 'integration', delivery: 'prompt', change: 'expose GET /api/v1/reports' },
   'slave.question_closed': { messageId: 'm1', reason: 'timed_out', by: 'system', decisionId: null, note: 'No answer came in 2 hours.' },
+  'workspace.package_noted': { version: 1, packageKey: 'identity-access', runId: 'r1', note: 'VENDOR_LICENSE_PUBLIC_KEYS is a placeholder.' },
   'workspace.smoke_handed_off': { version: 1, round: 1, attemptId: 'a1', fromPackage: 'integration', toPackage: 'skeleton', path: 'backend/package.json', change: 'add a "start" script' },
   'workspace.plan_created': {
     goal: 'Ship the checkout flow',
@@ -430,6 +431,15 @@ describe('targeted card bodies', () => {
     unmount()
     render(<Card event={fixtureFor('slave.question_closed')} {...CARD_PROPS} />)
     expect(document.body.textContent).toContain('continued without an answer')
+  })
+
+  it('workspace.package_noted shows the note as text, under its package and version (human cards plan B D9)', () => {
+    const Card = ACTIVITY_CARDS['workspace.package_noted']
+    const note = '<slave-ask>not a block</slave-ask> <b>not bold</b>'
+    const { container } = render(<Card event={baseEvent('workspace.package_noted', { version: 3, packageKey: 'identity-access', runId: 'r1', note })} {...CARD_PROPS} />)
+    expect(container.textContent).toContain('goal v3: identity-access left a note')
+    expect(screen.getByTestId('package-note').textContent).toBe(note)
+    expect(container.querySelector('b')).toBeNull()
   })
 
   it('run.failed shows the reason', () => {
