@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Git hands a hook GIT_DIR (and its relatives) when the push runs from a linked worktree. The test
+# suite runs git in temporary repositories it creates; with GIT_DIR inherited, those commands write
+# into THIS repository instead (on 2026-10-04 they set core.bare, replaced the commit identity and
+# committed fixtures onto the pushed branch). Drop every repository-local variable before running
+# anything.
+unset $(git rev-parse --local-env-vars)
+
 echo "pre-push: typecheck"
 if ! npm run --silent typecheck; then
   echo "pre-push: typecheck failed — push refused." >&2
