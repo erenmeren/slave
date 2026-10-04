@@ -15,9 +15,11 @@ import {
   brokerChannelPathFor,
   buildChildEnv,
   permissionsFilePathFor,
+  readSpawnExtras,
   terminateChild,
   toolResultsPathFor,
   verifyDirIfPresent,
+  type SpawnExtras,
 } from '../runtime/process.js'
 import { isRecord } from '../runtime/summary.js'
 import { TOOL_ERROR_CLASSES, type ToolErrorClass } from '../tool-result.js'
@@ -142,6 +144,14 @@ const DEFAULT_RESUME_PROMPT = 'Continue the paused run.'
 
 const DEFAULT_KILL_GRACE_MS = 5_000
 
+/** The argv a run's spawn extras add; nothing for a run without the file. */
+function extrasArgs(extras: SpawnExtras): readonly string[] {
+  return [
+    ...(extras.sessionDefinitions === undefined ? [] : ['--agents', extras.sessionDefinitions]),
+    ...(extras.maxBudgetUsd === undefined ? [] : ['--max-budget-usd', String(extras.maxBudgetUsd)]),
+  ]
+}
+
 export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
   readonly kind = 'claude_code' as const
 
@@ -261,11 +271,16 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
   }
 
   private spawnRun(input: StartRunInput, settingsPath: string, tapPath: string | undefined): Promise<RunHandle> {
+    const extras = readSpawnExtras(input.runDir)
     const args = [
       ...this.extraArgs,
       ...claudeFlags({ settingsPath }),
       '-p',
       input.prompt,
+      // Lead-flow plan A L4: a lead turn continues the previous turn's session. Never
+      // `--fork-session` (ADR 0001 §3): the id must stay the same across turns.
+      ...(input.resumeSessionId !== undefined ? ['--resume', input.resumeSessionId] : []),
+      ...extrasArgs(extras),
       // Omitted entirely, not passed with a sentinel, when unset -- a legacy run with no override
       // anywhere in the chain must spawn with exactly the args it always has.
       ...(input.model !== undefined ? ['--model', input.model] : []),
@@ -292,6 +307,8 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         ...(tapPath === undefined ? {} : { toolResultsPath: toolResultsPathFor(input.runDir) }),
         // Conductor Plan 4b (D2): a verification run's scratch directory, declared by its presence.
         ...verifyDirIfPresent(input.runDir),
+        // Lead-flow spec B6: a lead turn waits for its background subordinates before ending.
+        ...(extras.keepAliveForSubordinates === true ? { keepAliveForSubordinates: true } : {}),
       }),
       startInput: input,
       // `settings` and `hook` are this provider's declared channels
@@ -616,6 +633,9 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
       // exactly as no override ever did.
       ...(checkpoint.model !== undefined ? { model: checkpoint.model } : {}),
     }
+    // Lead-flow plan A: the extras file lives in the ORIGINAL run directory, so a resumed paused
+    // turn spawns with the roster, the cap and the keep-alive its start had.
+    const extras = readSpawnExtras(resumedInput.runDir)
 
     const args = [
       ...this.extraArgs,
@@ -627,6 +647,7 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
       // one `checkpoint.sessionId` already carries.
       '--resume',
       checkpoint.sessionId,
+      ...extrasArgs(extras),
       ...(resumedInput.model !== undefined ? ['--model', resumedInput.model] : []),
     ]
 
@@ -648,6 +669,7 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         // Conductor Plan 4b (D2): the SAME scratch directory the start exported -- it lives under
         // the original run directory, so its presence there is the whole of the resume's evidence.
         ...verifyDirIfPresent(resumedInput.runDir),
+        ...(extras.keepAliveForSubordinates === true ? { keepAliveForSubordinates: true } : {}),
         // The resumed run's scratch directory is the ORIGINAL one (`resumedInput.runDir`, recovered
         // from `checkpoint.settingsPath`), so a resumed run appends to the same file its first half
         // wrote. What makes that safe is `startTapTailer`'s own rule -- it starts at the file's

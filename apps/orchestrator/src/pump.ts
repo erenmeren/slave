@@ -826,6 +826,8 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
           summary: event.summary,
           toolUseId: event.toolUseId,
           argsHash: event.argsHash,
+          ...(event.subagent === undefined ? {} : { subagent: event.subagent }),
+          ...(event.parentToolUseId === undefined ? {} : { parentToolUseId: event.parentToolUseId }),
         })
         break
       }

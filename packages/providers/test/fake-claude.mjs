@@ -73,6 +73,20 @@
 //                  `$SLAVEOFAI_VERIFY_DIR` set it writes `check-<key>.sh`
 //                  there, one per key -- a verifier's evidence, outside the
 //                  repository.
+//                  Lead-flow plan A: eight knobs on the WORK body, each a
+//                  no-op unless its flag is on ARGV. `--no-work` writes and
+//                  commits nothing; `--no-commit` writes its files and leaves
+//                  them uncommitted; `--extra-file-base64 <path>:<base64>`
+//                  writes one more file before the commit; `--fail-resume`
+//                  (with `--resume` on argv) prints nothing to stdout and
+//                  exits 1, a transcript that is gone; `--subordinate <name>`
+//                  puts one `Agent` call naming that session definition, one
+//                  call its session made (`parent_tool_use_id` set) and both
+//                  results after the init line, `--subordinate-unfinished`
+//                  the two calls with no results; `--final-text-base64
+//                  <base64>` is appended to the final message and the result
+//                  text; `--result-patch-base64 <base64 JSON>` is merged over
+//                  the terminal `result` line.
 //   M52 R8 hangs three optional side effects off the `--work-fixture` arm,
 //   so they reach every mode that has one and change nothing in any mode
 //   that is not asked for them. `--env-out <path>` appends this child's own
@@ -1300,6 +1314,65 @@ async function slowWorkBody(prompt) {
   process.exit(0)
 }
 
+/**
+ * Lead-flow plan A: `--extra-file-base64 <relative path>:<base64 content>` -- one more file a work
+ * run writes before its commit (the lead's docs/DECISIONS.md).
+ */
+function extraFile() {
+  const spec = flagValue('--extra-file-base64')
+  if (spec === undefined) return undefined
+  const at = spec.indexOf(':')
+  return at === -1 ? undefined : { file: spec.slice(0, at), content: Buffer.from(spec.slice(at + 1), 'base64').toString('utf8') }
+}
+
+/**
+ * Lead-flow plan A: patches the `complete` capture's lines in place, each knob a no-op unless its
+ * flag is on ARGV. Returns whether any applied.
+ *   --subordinate <name>          one `Agent` tool call naming that session definition, one
+ *                                 `Bash` call the subordinate made under it (C1: its line carries
+ *                                 `parent_tool_use_id`), and both results, right after the init
+ *                                 line (`--subordinate-unfinished`: the two calls, no results)
+ *   --final-text-base64 <b64>     appended to the final message and the result text
+ *   --result-patch-base64 <b64>   a JSON object merged over the terminal `result` line (a budget
+ *                                 cap's ending, a cost)
+ */
+function applyRunKnobs(lines) {
+  let applied = false
+  const subordinate = flagValue('--subordinate')
+  if (subordinate !== undefined) {
+    const session = JSON.parse(lines[0]).session_id
+    const id = 'toolu_fake_subordinate'
+    const innerId = 'toolu_fake_subordinate_inner'
+    const call = { type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Agent', input: { subagent_type: subordinate, description: 'fake subordinate work', prompt: 'do it' } }] }, parent_tool_use_id: null, session_id: session }
+    // C1: what the subordinate itself does arrives on this stream under its parent call's id.
+    const inner = { type: 'assistant', message: { content: [{ type: 'tool_use', id: innerId, name: 'Bash', input: { command: 'true', description: 'subordinate check' } }] }, parent_tool_use_id: id, session_id: session }
+    const innerResult = { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: innerId, content: '' }] }, parent_tool_use_id: id, session_id: session }
+    const result = { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'done' }] }, parent_tool_use_id: null, session_id: session }
+    // `--subordinate-unfinished`: no results -- the subordinate was still working when the turn ended.
+    if (args.includes('--subordinate-unfinished')) lines.splice(1, 0, JSON.stringify(call), JSON.stringify(inner))
+    else lines.splice(1, 0, JSON.stringify(call), JSON.stringify(inner), JSON.stringify(innerResult), JSON.stringify(result))
+    applied = true
+  }
+  const finalText = flagValue('--final-text-base64')
+  if (finalText !== undefined) {
+    const suffix = `\n${Buffer.from(finalText, 'base64').toString('utf8')}`
+    appendToLastAssistantText(lines, suffix)
+    appendToResultText(lines, suffix)
+    applied = true
+  }
+  const patch = flagValue('--result-patch-base64')
+  if (patch !== undefined) {
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const parsed = JSON.parse(lines[i])
+      if (parsed.type !== 'result') continue
+      lines[i] = JSON.stringify({ ...parsed, ...JSON.parse(Buffer.from(patch, 'base64').toString('utf8')) })
+      break
+    }
+    applied = true
+  }
+  return applied
+}
+
 async function main() {
   if (fixtureName === 'hang') {
     // Write nothing and never exit on its own. Without something keeping
@@ -1424,29 +1497,48 @@ async function main() {
     // A work run: the m8a-flow work body verbatim -- leave a real commit in the worktree
     // (cwd), then replay success.
     if (await workFixtureArm()) return
-    const workFile = path.join(process.cwd(), flagValue('--work-file') ?? 'm8a-work.txt')
-    mkdirSync(path.dirname(workFile), { recursive: true })
-    writeFileSync(workFile, `${prompt.slice(0, 80)}\n`)
-    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
-    // `--allow-empty`: a REWORK run adopts its previous attempt's worktree, where this same file
-    // with the same first line is already committed -- without it the commit finds nothing, git
-    // exits non-zero, and the run dies with no terminal result instead of doing its rework.
-    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '--allow-empty', '-m', 'fake work'], { cwd: process.cwd() })
+    // Lead-flow plan A: a resumed turn whose transcript is gone -- nothing on stdout, a non-zero exit.
+    if (args.includes('--fail-resume') && args.includes('--resume')) {
+      process.stderr.write('No conversation found with session ID\n')
+      process.exit(1)
+    }
+    // Lead-flow plan A: `--no-work` writes and commits nothing (a lead that built nothing);
+    // `--no-commit` writes its files and leaves them uncommitted (work the orchestrator commits).
+    if (!args.includes('--no-work')) {
+      const workFile = path.join(process.cwd(), flagValue('--work-file') ?? 'm8a-work.txt')
+      mkdirSync(path.dirname(workFile), { recursive: true })
+      writeFileSync(workFile, `${prompt.slice(0, 80)}\n`)
+      const extra = extraFile()
+      if (extra !== undefined) {
+        mkdirSync(path.dirname(path.join(process.cwd(), extra.file)), { recursive: true })
+        writeFileSync(path.join(process.cwd(), extra.file), extra.content)
+      }
+      if (!args.includes('--no-commit')) {
+        execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
+        // `--allow-empty`: a REWORK run adopts its previous attempt's worktree, where this same file
+        // with the same first line is already committed -- without it the commit finds nothing, git
+        // exits non-zero, and the run dies with no terminal result instead of doing its rework.
+        execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '--allow-empty', '-m', 'fake work'], { cwd: process.cwd() })
+      }
+    }
     // Conductor Plan 2: a package worker ends with a `<slave-report>` block. Scripted on argv, and
     // patched into the same `complete` capture the ask legs patch, so the report reaches the pump
     // through the stream shape a real run produces.
     const report = reportEnvelope()
-    if (report === undefined) {
+    const lines = readFixtureLines('complete')
+    const knobbed = applyRunKnobs(lines)
+    if (report === undefined && !knobbed) {
       await replayFixture('complete')
       return
     }
-    const lines = readFixtureLines('complete')
-    const suffix = `\n<slave-report>${report}</slave-report>`
-    if (!appendToLastAssistantText(lines, suffix)) {
-      process.stderr.write('fake-claude: m8-flow could not find an assistant text block in the complete fixture\n')
-      process.exit(2)
+    if (report !== undefined) {
+      const suffix = `\n<slave-report>${report}</slave-report>`
+      if (!appendToLastAssistantText(lines, suffix)) {
+        process.stderr.write('fake-claude: m8-flow could not find an assistant text block in the complete fixture\n')
+        process.exit(2)
+      }
+      appendToResultText(lines, suffix)
     }
-    appendToResultText(lines, suffix)
     await writeLines(lines)
     process.exit(0)
   }

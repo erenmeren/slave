@@ -87,3 +87,6 @@ export const SMOKE_FAILING_KEY = 'SMOKE'
 /** Plan A L13: the only situations the Supervisor raises in a lead-flow workspace. Spelled as
  *  strings so this module stays a leaf; `SITUATION_KINDS` holds both. */
 export const LEAD_SITUATION_KINDS: readonly string[] = ['goal_needs_human', 'workspace_halted']
+
+/** Plan A L16: the tool names that start a subordinate session -- the current one and the older. */
+export const SUBORDINATE_TOOLS: readonly string[] = ['Agent', 'Task']

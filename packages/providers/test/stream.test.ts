@@ -890,3 +890,27 @@ describe('parseStreamResults (M51 R1, fix round 1 -- review Important 4)', () =>
     expect(parseStreamLine(parallel)).toEqual(first)
   })
 })
+
+describe('a subordinate call names its session definition (lead flow L16, C1)', () => {
+  const line = (name: string, input: unknown, parent: string | null = null): string =>
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu_1', name, input }] }, parent_tool_use_id: parent })
+
+  it('carries subagent_type as `subagent` for the subordinate tool under either name', () => {
+    expect(parseStreamLine(line('Agent', { subagent_type: 'backend-developer', description: 'build the API', prompt: 'x' }))).toMatchObject({ kind: 'tool_call', toolName: 'Agent', subagent: 'backend-developer' })
+    expect(parseStreamLine(line('Task', { subagent_type: 'general-purpose', prompt: 'x' }))).toMatchObject({ kind: 'tool_call', subagent: 'general-purpose' })
+  })
+
+  it('carries no such field for any other tool, or when the input names none', () => {
+    expect(parseStreamLine(line('Bash', { subagent_type: 'x', command: 'ls' }))).not.toHaveProperty('subagent')
+    expect(parseStreamLine(line('Agent', { prompt: 'x' }))).not.toHaveProperty('subagent')
+    expect(parseStreamLine(line('Agent', { subagent_type: '   ' }))).not.toHaveProperty('subagent')
+  })
+
+  it('carries the parent call on a line a subordinate session wrote, and names no subordinate there (C1)', () => {
+    const inner = parseStreamLine(line('Agent', { subagent_type: 'qa', prompt: 'x' }, 'tu_parent'))
+    expect(inner).toMatchObject({ kind: 'tool_call', toolName: 'Agent', parentToolUseId: 'tu_parent' })
+    expect(inner).not.toHaveProperty('subagent')
+    expect(parseStreamLine(line('Bash', { command: 'ls' }, 'tu_parent'))).toMatchObject({ parentToolUseId: 'tu_parent' })
+    expect(parseStreamLine(line('Bash', { command: 'ls' }))).not.toHaveProperty('parentToolUseId')
+  })
+})

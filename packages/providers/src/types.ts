@@ -101,6 +101,14 @@ export type RuntimeEvent =
        * `summary` is what a person reads; this is what the detector compares.
        */
       readonly argsHash: string
+      /** Lead-flow plan A L16 / C1: the session definition a TOP-LEVEL subordinate call named (`subagent_type`). */
+      readonly subagent?: string
+      /**
+       * Lead-flow C1: the line's `parent_tool_use_id` -- the subordinate call whose session made
+       * this call. Absent on the session's own calls (the field is null there, as on every line of
+       * every recorded fixture).
+       */
+      readonly parentToolUseId?: string
     }
   /**
    * M51 R1: what came BACK from one tool call. Vendor-neutral by construction and produced by BOTH

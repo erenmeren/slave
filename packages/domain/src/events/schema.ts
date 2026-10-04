@@ -138,6 +138,10 @@ export const executionEventSchema = z.discriminatedUnion('type', [
         .string()
         .regex(/^[0-9a-f]{64}$/u)
         .optional(),
+      // Lead-flow plan A L16 / C1: the session definition a top-level subordinate call named, and
+      // the subordinate call a nested call was made under. Optional: most calls carry neither.
+      subagent: z.string().min(1).max(200).optional(),
+      parentToolUseId: z.string().min(1).max(200).optional(),
     }),
   }),
   z.object({

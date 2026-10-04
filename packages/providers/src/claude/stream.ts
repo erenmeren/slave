@@ -1,3 +1,4 @@
+import { SUBORDINATE_TOOLS } from '@slave-of-ai/domain'
 import { z } from 'zod'
 import { hashToolInput } from '../hash.js'
 import { CLAUDE_SUMMARY_ARG_KEYS, isRecord, summaryFor } from '../runtime/summary.js'
@@ -385,6 +386,8 @@ const assistantEnvelopeSchema = z.object({
   message: z.object({
     content: z.array(z.unknown()),
   }),
+  // Lead-flow C1: set on a line a subordinate session wrote; null or absent otherwise.
+  parent_tool_use_id: z.string().nullable().optional(),
 })
 
 const toolUseContentSchema = z.object({
@@ -404,6 +407,19 @@ const textContentSchema = z.object({
   text: z.string(),
 })
 
+/**
+ * Lead-flow plan A L16 / C1: which session definition a subordinate call names, or null -- for the
+ * subordinate tool only, only a non-blank string, and only on a call the session made itself
+ * (`parent` null): a subordinate that starts a session of its own did not pick from the roster.
+ * It is the one argument of that call the log keeps beside the summary: it says which roster
+ * person did the work.
+ */
+function subordinateOf(toolName: string, input: unknown, parent: string | null): string | null {
+  if (parent !== null || !SUBORDINATE_TOOLS.includes(toolName) || !isRecord(input)) return null
+  const named = input['subagent_type']
+  return typeof named === 'string' && named.trim() !== '' ? named.trim().slice(0, 200) : null
+}
+
 function parseAssistantLine(raw: unknown, line: string): RuntimeEvent {
   const envelope = assistantEnvelopeSchema.safeParse(raw)
   if (!envelope.success) return { kind: 'unparsable', line }
@@ -422,6 +438,8 @@ function parseAssistantLine(raw: unknown, line: string): RuntimeEvent {
   if (toolUseBlock !== undefined) {
     const result = toolUseContentSchema.safeParse(toolUseBlock)
     if (!result.success) return { kind: 'unparsable', line }
+    const parent = envelope.data.parent_tool_use_id ?? null
+    const subagent = subordinateOf(result.data.name, result.data.input, parent)
     return {
       kind: 'tool_call',
       toolUseId: result.data.id,
@@ -431,6 +449,8 @@ function parseAssistantLine(raw: unknown, line: string): RuntimeEvent {
       // `summary` is derived from it just above and the input is then dropped, so the pump could
       // never compute this itself.
       argsHash: hashToolInput(result.data.input),
+      ...(subagent === null ? {} : { subagent }),
+      ...(parent === null || parent === '' ? {} : { parentToolUseId: parent.slice(0, 200) }),
     }
   }
 
