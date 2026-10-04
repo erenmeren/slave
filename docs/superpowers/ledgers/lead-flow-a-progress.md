@@ -42,6 +42,21 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
   `core.hooksPath` set to `.githooks` (README) so a push runs the pre-push hook. Baseline on main before any
   change: see "Results" at the end.
 
+- Environment, measured on unchanged main (`3d89a10`), whole suite as root: 6 files / 7 tests red of 534 / 9618,
+  44 min. Three are zombies (PID 1 here, `process_api`, reaps nothing: a killed process stays "alive" to
+  `kill -0`) -- `procGroup` "kills a surviving member", `smoke` "kills a timed-out smoke's whole process group"
+  and "settles an attempt whose owner died"; they pass under a child-subreaper wrapper
+  (`scratchpad/reap.py`). Four need a non-root user (root reads a file whose mode forbids it):
+  `pause-gate` and `cursor-shell-gate` "pause flag exists but cannot be read", `runContext` "a copy fails
+  part-way", `pause` "a rollback restores the status". Making a second Linux user was refused by this
+  session's permission system.
+- Ruling (the operator's, asked): the pre-push hook cannot pass here because of those four, so before every push
+  the controller runs `npm run typecheck` and the whole suite under the reaper itself, and pushes with
+  `--no-verify` only when the sole failures are those four -- the hook's gate is kept, run by hand -- a
+  regression hiding inside one of those four files' failing cases would not be seen here.
+- GitHub: after a worker restart, every push is refused (403, "Claude doesn't have GitHub access"); reads
+  work. The work goes on locally and is pushed when access is restored.
+
 ## Tasks
 
 ## Deferred minor findings
