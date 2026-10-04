@@ -542,7 +542,10 @@ function detailFor(type: DomainEventType, payload: Record<string, unknown>): str
   }
   // Human cards plan B D9: a note's own words, as a JSX child like every other quoted detail.
   if (type === 'workspace.package_noted' && typeof payload['note'] === 'string' && payload['note'] !== '') return payload['note']
+  // Lead flow: a report line's own words, as a package note's are.
   if (type === 'workspace.lead_noted' && typeof payload['detail'] === 'string' && payload['detail'] !== '') return payload['detail']
+  // Lead flow: the stop reason in words -- the field loop below would print `no_progress` raw.
+  if (type === 'workspace.lead_state') return typeof payload['reason'] === 'string' ? payload['reason'].replaceAll('_', ' ') : null
   for (const field of ['goal', 'body', 'reason', 'branch', 'summary'] as const) {
     const value = payload[field]
     if (typeof value === 'string' && value !== '') return value
