@@ -66,6 +66,17 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
   and state word, two events, web cards, m56a 78 -> 80). Review: CLEAN, three minor findings; two fixed in a
   review commit (timeline detail for `workspace.lead_state`; `LEAD_SITUATION_KINDS` pinned against
   `SITUATION_KINDS`), the third carried to Task 6/7 (below).
+- Task 2 -- done, reviewed: `8b5a2fb` + review fix `281353b`. Review round 1: FIX (one Important: a planned
+  board with open tasks between runs could be switched; four Minor); round 2: CLEAN. The fix also caught a
+  plan bug: `--auto-merge` is a valueless flag to the CLI parser, so `set-flow --auto-merge off` turned automatic
+  merge ON; the case now reads the value from argv.
+- Ruling: `setFlow` refuses while any task of the board is open (`boardIsBusy`'s rule without its version
+  exclusion), runs as one transaction under the workspace row's lock, and refuses an option it would drop --
+  L1's "a version must end in the flow it started in" also covers a planned board, which has no delivery row --
+  a person must finish or cancel a board's tasks before switching.
+- Ruling: switching back to `packages` closes the three system seats (`closedAt`, `runtimeRoles: []`) --
+  otherwise `staffVerifier` can pick the lead flow's Verifier for a packages version -- each round trip makes
+  three new Person rows (`Lead <id> 2`, ...).
 
 ## Deferred minor findings
 
@@ -73,5 +84,9 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
   which would silently wipe `leadEnded`, `askReplies`, `baseMerges`, `denialContinues`. Task 6 makes
   `progressJson` / `updateLeadProgress` validate with `leadProgressSchema` before writing (a throw inside the
   lock), and Task 7 bounds the C6 continue note it writes into `nextTurn.note`.
+- Task 2 review round 2, left as built: the open-task refusal says "finish or cancel them" where a done task
+  awaiting a hand merge needs merging instead; closing the seats appends no `org.changed` and a round trip makes
+  new persons rather than reopening seats; `set-flow --flow lead --auto-merge on` on a project already so
+  exits non-zero (not idempotent); `setFlow(…, 'packages')` ignores `model`/`autoMerge` without a word.
 
 ## Results
