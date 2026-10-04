@@ -56,6 +56,14 @@ describe('what a goal version spent (lead-flow plan A L6/L7)', () => {
     expect(await goalWorkedMs(f.workspaceId, 1, at(25))).toBe(10 * 60_000)
   })
 
+  it('does not charge a run that was stopped while paused for the span it sat paused', async (): Promise<void> => {
+    // `requestStop` ends a paused run with `endedAt` and leaves `pausedAt` set: only a resume
+    // claim folds the open pause into `pausedMs`.
+    const f = await seed()
+    await prisma.slaveRun.create({ data: { slaveId: f.leadSeat, taskId: f.taskId, kind: 'implementation', status: 'stopped', leadTurn: 'build', startedAt: at(0), pausedAt: at(10), endedAt: at(25) } })
+    expect(await goalWorkedMs(f.workspaceId, 1, at(60))).toBe(10 * 60_000)
+  })
+
   it('builds a roster member from the person\'s profile and their persona\'s one line, in the roster\'s order', async (): Promise<void> => {
     await prisma.slaveTemplate.deleteMany({ where: { id: 't-lead-roster' } })
     await prisma.slaveTemplate.create({ data: { id: 't-lead-roster', name: 'Lead Roster Backend', role: 'backend', description: 'Builds and tests HTTP APIs', profile: 'You are a backend developer.', active: true } })

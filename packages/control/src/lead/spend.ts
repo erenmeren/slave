@@ -1,4 +1,4 @@
-import { prisma } from '@slave-of-ai/db/client'
+import { prisma, type Prisma } from '@slave-of-ai/db/client'
 
 /** What one goal version spent, by who spent it. */
 export interface GoalSpend {
@@ -9,7 +9,8 @@ export interface GoalSpend {
   readonly proofUsd: number
   /** The conductor's model calls for this version (the requirement extraction). */
   readonly conductorUsd: number
-  /** Concluded runs that reported no cost (a cancelled or crashed turn): their spend is not in the sums. */
+  /** Concluded runs that reported no cost (a cancelled or crashed turn), and no later total of its
+   *  session covers it (C2): their spend is not in the sums. */
   readonly unmeasuredRuns: number
 }
 
@@ -48,11 +49,16 @@ function leadSpendOf(turns: readonly LeadTurnCost[]): { readonly usd: number; re
   return { usd, unmeasured }
 }
 
-const runsOf = (workspaceId: string, goalVersion: number) =>
-  ({
-    lead: { leadTurn: { not: null }, task: { workspaceId, workPackage: { goalVersion } } },
-    proof: { kind: 'verification' as const, goalDelivery: { workspaceId, goalVersion } },
-  }) as const
+/** The two kinds of run a goal version's spend and time are made of: its lead turns and its proof runs. */
+interface GoalRunFilters {
+  readonly lead: Prisma.SlaveRunWhereInput
+  readonly proof: Prisma.SlaveRunWhereInput
+}
+
+const runsOf = (workspaceId: string, goalVersion: number): GoalRunFilters => ({
+  lead: { leadTurn: { not: null }, task: { workspaceId, workPackage: { goalVersion } } },
+  proof: { kind: 'verification', goalDelivery: { workspaceId, goalVersion } },
+})
 
 /**
  * Lead-flow spec B4 (plan A L6, C2): the goal version's spend -- the lead's sessions, the proof
@@ -83,7 +89,8 @@ export async function goalSpend(workspaceId: string, goalVersion: number): Promi
 
 /**
  * Lead-flow plan A L7: the working time a goal version has taken -- each of its lead turns and
- * proof runs from start to end (or to `now` while live), less the time it sat paused. The gaps
+ * proof runs from start to end (or to `now` while live), less the time it sat paused (closed spans
+ * in `pausedMs`, and one still open at its end or now). The gaps
  * between runs (a wait for the provider, a halt, the daemon down) are not charged.
  */
 export async function goalWorkedMs(workspaceId: string, goalVersion: number, now: Date = new Date()): Promise<number> {
@@ -94,7 +101,10 @@ export async function goalWorkedMs(workspaceId: string, goalVersion: number, now
   })
   return runs.reduce((total, run) => {
     const end = run.endedAt ?? now
-    const openPause = run.endedAt === null && run.pausedAt !== null ? Math.max(0, now.getTime() - run.pausedAt.getTime()) : 0
+    // A pause still open on the row is not working time, to the run's end or to now -- the sweep's
+    // own rule. A resume claim folds the span into `pausedMs` and clears `pausedAt`, so nothing is
+    // subtracted twice; a stop (`requestStop`) ends a paused run and leaves `pausedAt` set.
+    const openPause = run.pausedAt === null ? 0 : Math.max(0, end.getTime() - run.pausedAt.getTime())
     return total + Math.max(0, end.getTime() - run.startedAt.getTime() - run.pausedMs - openPause)
   }, 0)
 }
