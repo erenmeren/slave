@@ -179,6 +179,13 @@ export function sectionLine(source: SectionSource): SectionLine {
         detail: `Verification required: ${plural(source.requirements, 'requirement')}`,
         missing: [],
       }
+    // Lead flow: which turn of which goal version the lead was briefed for.
+    case 'lead_brief':
+      return {
+        kind: source.kind,
+        detail: `Lead brief for goal v${String(source.goalVersion)} (${source.turn.replaceAll('_', ' ')}${source.resumed ? ', into the same session' : ', a new session'}): ${plural(source.requirements, 'requirement')}, ${plural(source.roster, 'roster member')}`,
+        missing: [],
+      }
     // M40 t1, minimal: a re-plan run's own section. Task 4 gives it the diff a human reads.
     case 'replan':
       return {

@@ -61,3 +61,11 @@ describe('sectionLine — verification_goal and verification_protocol', () => {
     expect(sectionLine({ kind: 'verification_protocol', requirements: 2 }).detail).toBe('Verification required: 2 requirements')
   })
 })
+
+describe('sectionLine — lead_brief', () => {
+  it('says which turn it was and whether the session was continued', () => {
+    expect(sectionLine({ kind: 'lead_brief', goalVersion: 2, turn: 'wrap_up', resumed: true, requirements: 3, roster: 1 }).detail).toBe(
+      'Lead brief for goal v2 (wrap up, into the same session): 3 requirements, 1 roster member',
+    )
+  })
+})

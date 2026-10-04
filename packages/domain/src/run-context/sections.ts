@@ -75,6 +75,9 @@ export type SectionKind =
    *  with, one item per requirement key. Paired with `verification_goal` the way `report_protocol`
    *  pairs with `package`. */
   | 'verification_protocol'
+  /** Lead-flow spec B3: what a lead is told -- the whole brief at the start of a session, or one
+   *  turn's note when the session is continued. The only section of the `lead` kind beside `profile`. */
+  | 'lead_brief'
 
 /**
  * One piece of a run's prompt, as the orchestrator hands it to {@link renderRunContext}: the
@@ -216,11 +219,14 @@ export type SectionSource =
   /** Conductor Plan 4b (Task 3): how many requirement keys the `<slave-verification>` block was
    *  asked to cover -- the `report_protocol.requirements` idiom, for the verifier's own report. */
   | { readonly kind: 'verification_protocol'; readonly requirements: number }
+  /** Lead-flow spec B3: which goal version and turn the lead was briefed for, whether the prompt
+   *  was a note into a continued session, and how many requirements and roster members it named. */
+  | { readonly kind: 'lead_brief'; readonly goalVersion: number; readonly turn: string; readonly resumed: boolean; readonly requirements: number; readonly roster: number }
 
 /** The manifest stored (as `Json`) on `RunContext.sections` -- an ordered record of what produced
  *  the prompt, without the prompt text itself. */
 export interface Manifest {
-  readonly kind: 'implementation' | 'review' | 'planning' | 'verification'
+  readonly kind: 'implementation' | 'review' | 'planning' | 'verification' | 'lead'
   readonly sections: readonly SectionSource[]
 }
 
@@ -353,6 +359,16 @@ const verificationProtocolSourceSchema = z.object({
   requirements: z.number().int().nonnegative(),
 })
 
+// Lead-flow plan A: a NEW kind, so every field REQUIRED (the `verification_goal` rule).
+const leadBriefSourceSchema = z.object({
+  kind: z.literal('lead_brief'),
+  goalVersion: z.number().int().positive(),
+  turn: z.string().min(1),
+  resumed: z.boolean(),
+  requirements: z.number().int().nonnegative(),
+  roster: z.number().int().nonnegative(),
+})
+
 const sectionSourceSchema = z.discriminatedUnion('kind', [
   profileSourceSchema,
   rosterSourceSchema,
@@ -376,6 +392,7 @@ const sectionSourceSchema = z.discriminatedUnion('kind', [
   reportProtocolSourceSchema,
   verificationGoalSourceSchema,
   verificationProtocolSourceSchema,
+  leadBriefSourceSchema,
 ])
 
 /**
@@ -389,6 +406,6 @@ const sectionSourceSchema = z.discriminatedUnion('kind', [
  * -- there is no history of it to be tolerant of.
  */
 export const runContextManifestSchema: z.ZodType<Manifest> = z.object({
-  kind: z.enum(['implementation', 'review', 'planning', 'verification']),
+  kind: z.enum(['implementation', 'review', 'planning', 'verification', 'lead']),
   sections: z.array(sectionSourceSchema),
 })
