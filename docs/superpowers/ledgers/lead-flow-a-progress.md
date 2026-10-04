@@ -99,6 +99,21 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
   and caps at `budget - leadSpent - proofSpent - budget/5`, the conductor's cost not counted -- spec P5 says
   the reserve always covers the final full verification, and proof runs may spend into the lead's unspent
   share -- the lead can be ended for budget earlier than its share alone says, when proof was expensive.
+- Task 6 -- reviewed: `16371dc` + review fixes `fc6d7d3` (+ one more for an unmoved-ref update-ref failure).
+  Round 1: FIX (Important: a lead that rewrote integrated commits made `merge-base --is-ancestor` throw out of
+  the pump's conclusion, stranding the task and looping paid turns); round 2: CLEAN. Also fixed: stop events
+  deduped and written outside the lock honestly; a lost transcript stays lost; an unspawned first turn is not a
+  turn; C7's "at least / at most" in what the lead itself reads; a later reset to the cut is not "nothing
+  built". Deviation, accepted: `tickUntil` reads Prisma's P2025 from its condition as "not yet" (the plan's
+  `merged(f)` reads the delivery before the conductor made it). Two fake switches (`--reset-hard`,
+  `--amend-work`), no-ops unless passed.
+- Ruling: when the lead's tip does not contain the work branch's tip (it amended, rebased or reset), the work
+  branch FOLLOWS the lead's branch by compare-and-swap, with one `branch_rewritten` note -- the work branch is
+  the lead's own and the final full verification proves whatever tip is delivered -- commits the lead threw
+  away leave the delivered history without a word beyond that note.
+- Ruling: `progressJson` cuts a turn note to 20 000 characters and refuses (throws, in the lock) a progress that
+  would not read back -- `readLeadProgress` resets the whole record on one bad field -- a write that is refused
+  fails its tick instead of storing.
 
 ## Deferred minor findings
 
@@ -117,5 +132,9 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
   holds what subordinates wrote; and the pump's `lastToolUse` can be a subordinate's call. Left as built:
   marking text lines is beyond C1, and a subordinate writing a `<slave-ask>` block costs one "decide yourself"
   turn at most.
+- Task 6 re-review, for Task 9: `lead-open`'s "follows a lead that amended" test scripts only the first
+  verifier; once the confirmer exists, run 2 is the confirmer and must fail R1 too, or R1 is disputed.
+- Task 6 re-review, accepted: a stop rolled back inside its transaction leaves its two events in the log (the
+  card is built from the row, so only the goal report trail can show a stale stop line).
 
 ## Results
