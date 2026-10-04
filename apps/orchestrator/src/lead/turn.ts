@@ -148,16 +148,24 @@ export async function noteLeadTurnStarted(plan: LeadTurnRun, runId: string): Pro
  * conclusion ends the lead. The roster and the keep-alive are kept as they were written. What proof
  * already spent is counted too, as `planLeadTurn` counts it (Task 5 review: a leg never eats the
  * proof reserve).
+ *
+ * Task 7 review: what the paused run itself spent is counted too. Its row has no cost until it
+ * concludes (the pump writes `costUsd` only then), so `goalSpend` leaves it out, and the resumed
+ * process's cap counts from zero (M(b)): without it every resume would get the whole leg again.
+ * The pump's own figure for the run so far is the checkpoint's `cumulativeCostUsd` (reported, else
+ * estimated from the tokens it watched across every process of this row); it is added only while
+ * the row carries no cost, so nothing is counted twice.
  */
 export async function refreshLeadSpawn(runId: string, runDir: string): Promise<void> {
-  const run = await prisma.slaveRun.findUnique({ where: { id: runId }, select: { taskId: true } })
+  const run = await prisma.slaveRun.findUnique({ where: { id: runId }, select: { taskId: true, costUsd: true, checkpoint: { select: { cumulativeCostUsd: true } } } })
   const target = run?.taskId == null ? null : await integrationTargetFor(run.taskId)
-  if (target === null) return
+  if (run === null || target === null) return
   const delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { id: target.deliveryId }, include: { workspace: { select: { budgetUsd: true } } } })
   const spend = await goalSpend(delivery.workspaceId, delivery.goalVersion)
+  const pausedSpentUsd = run.costUsd === null ? (run.checkpoint?.cumulativeCostUsd ?? 0) : 0
   const leg = nextLeadLeg({
     budgetUsd: delivery.workspace.budgetUsd,
-    leadSpentUsd: spend.leadUsd,
+    leadSpentUsd: spend.leadUsd + pausedSpentUsd,
     proofSpentUsd: spend.proofUsd,
     wrapUpSent: readLeadProgress(delivery.leadProgress).wrapUpSent,
   })

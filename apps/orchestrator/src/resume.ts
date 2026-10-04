@@ -123,13 +123,14 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
           : await permissionOwnership(run.taskId, checkpoint.worktreePath),
   })
 
+  // Lead flow (plan A L6): a paused lead turn continues under what is left of its budget leg.
+  // `leadTurn` is null on every other run.
+  if (run.leadTurn !== null) await refreshLeadSpawn(run.id, runDir)
+
   // The checkpoint is the whole point of `resume`'s signature: this process may never have called
   // `start()` for that run, so the settings file, the hook path and the git identity exist nowhere
   // else. `resume()` clears the pause flag and verifies it is gone before spawning -- otherwise the
   // gate denies every tool call the resumed run attempts.
-  // Lead flow (plan A L6): a paused lead turn continues under what is left of its budget leg.
-  // `leadTurn` is null on every other run.
-  if (run.leadTurn !== null) await refreshLeadSpawn(run.id, runDir)
   const handle = await adapter.resume(
     brandRunId(run.id),
     {

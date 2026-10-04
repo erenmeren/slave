@@ -204,12 +204,16 @@ describe('the lead flow: one session, whatever interrupts it', () => {
     expect((await leadDelivery(f)).status).toBe('integrating')
     expect(await prisma.supervisorDecision.count({ where: { workspaceId: f.workspaceId, status: 'pending' } })).toBe(0)
 
-    // The person lowers the budget while it is parked, then continues.
+    // The person lowers the budget while it is parked, then continues. The paused process had spent
+    // $5 by the pump's count (its row has no cost until it concludes), and a resumed process's cap
+    // counts from zero (M(b)): the resume gets the leg less those $5 -- 20 less a fifth is 16, four
+    // fifths of that is 12.80, less 5 is 7.80.
     await prisma.workspace.update({ where: { id: f.workspaceId }, data: { budgetUsd: 20 } })
+    await prisma.checkpoint.update({ where: { runId: run.id }, data: { cumulativeCostUsd: 5 } })
     expect((await requestResume(run.id, null, 'operator')).ok).toBe(true)
     await tickUntil(f, merged(f))
 
-    expect(readSpawnExtras(runDir)).toMatchObject({ maxBudgetUsd: 12.8, keepAliveForSubordinates: true })
+    expect(readSpawnExtras(runDir)).toMatchObject({ maxBudgetUsd: 7.8, keepAliveForSubordinates: true })
     expect(leadTurns(f)).toHaveLength(1) // the same run row, not a new turn
     expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('succeeded')
     expect(await prisma.executionEvent.count({ where: { runId: run.id, type: 'run_resumed' } })).toBe(1)
