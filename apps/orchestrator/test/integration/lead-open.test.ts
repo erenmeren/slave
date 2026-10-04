@@ -149,7 +149,10 @@ describe('the lead flow: a goal is built by one lead turn', () => {
 
   // Task 6 review: the lead may rewrite its own branch (amend, rebase, reset) on a later turn.
   const REWRITTEN = 'branch_rewritten: the lead rewrote commits the work branch already had; the work branch now follows the lead\'s branch'
-  const failR1Once = (ordinal: number): readonly object[] | undefined => (ordinal === 1 ? [checked('RUN', 'pass'), checked('R1', 'fail'), checked('R2', 'pass')] : undefined)
+  // Task 9: a failure goes to the confirmer before the lead, so the second verification run (the
+  // confirmer, asked only R1) fails it too -- otherwise R1 is disputed and no rework comes.
+  const failR1Once = (ordinal: number, run: { readonly confirms: boolean }): readonly object[] | undefined =>
+    ordinal === 1 ? [checked('RUN', 'pass'), checked('R1', 'fail'), checked('R2', 'pass')] : run.confirms ? [checked('R1', 'fail')] : undefined
 
   it('follows a lead that amended a commit the work branch already had, says so, and proves and merges the amended tip', async (): Promise<void> => {
     const f = await seedLead({ leadArgs: (ordinal) => (ordinal === 2 ? ['--amend-work'] : []), verify: failR1Once })

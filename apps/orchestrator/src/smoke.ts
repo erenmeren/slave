@@ -15,9 +15,11 @@ import { join, resolve } from 'node:path'
 import { everyPackageIntegrated, goalEventWith, withDeliveryLock } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  SMOKE_FAILING_KEY,
   SMOKE_OUTPUT_MAX_CHARS,
   SMOKE_SCRIPT_PATH,
   SMOKE_STRANDED_GRACE_MS,
+  afterCheckFailure,
   classifySmoke,
   renderSmokeHandOff,
   renderSmokeRework,
@@ -26,6 +28,7 @@ import {
   smokeReworkTarget,
   smokeScriptFailure,
   smokeStopReason,
+  readLeadProgress,
   storableText,
   trimEvidence,
   type SmokeFailure,
@@ -34,6 +37,8 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import { CHILD_ENV_ALLOW, killAttemptGroup, type AttemptGroupKill } from '@slave-of-ai/providers'
 import { needsHumanInLock } from './goal.js'
+import { progressJson } from './lead/record.js'
+import { stopLeadInLock } from './lead/stop.js'
 import { OWNER_INSTANCE, ownerGone } from './runs.js'
 import { runShellCommand } from './shell.js'
 import { pumps } from './tick.js'
@@ -301,10 +306,12 @@ export async function applySmokeOutcome(attemptId: string): Promise<void> {
   if (attempt === null || attempt.status === 'running') return
   const outcome = attempt.status
   await withDeliveryLock(attempt.goalDeliveryId, async (tx) => {
-    const delivery = await tx.goalDelivery.findUniqueOrThrow({ where: { id: attempt.goalDeliveryId }, include: { workspace: { select: { verificationRoundCap: true } } } })
+    const delivery = await tx.goalDelivery.findUniqueOrThrow({ where: { id: attempt.goalDeliveryId }, include: { workspace: { select: { verificationRoundCap: true, flow: true } } } })
     const holds = delivery.activeSmokeId === attempt.id && delivery.status === 'verifying'
     const cap = delivery.workspace.verificationRoundCap
-    const capped = delivery.round - delivery.roundBase >= cap
+    // Lead flow (plan A L12): the round cap does not apply; the lead flow's own stop rules do.
+    const leadFlow = delivery.workspace.flow === 'lead'
+    const capped = !leadFlow && delivery.round - delivery.roundBase >= cap
     const packages = await tx.workPackage.findMany({
       where: { workspaceId: delivery.workspaceId, goalVersion: delivery.goalVersion },
       orderBy: { key: 'asc' },
@@ -313,7 +320,11 @@ export async function applySmokeOutcome(attemptId: string): Promise<void> {
     const failure: SmokeFailure | null = outcome === 'passed' || outcome === 'error' ? null : outcome
     const targetKey = failure === null ? null : smokeReworkTarget(failure, packages)
     const task = packages.find((pkg) => pkg.key === targetKey)?.tasks[0]
-    const reworks = holds && failure !== null && !capped && task?.status === 'done'
+    // Lead flow (spec P2/P7): a failing smoke goes back to the lead like a failing requirement, as
+    // the failing set `SMOKE` -- the same failure twice in a row, or an ended lead, stops the version
+    // instead, and then nothing is sent back (which the event below says).
+    const leadStep = leadFlow && failure !== null ? afterCheckFailure(readLeadProgress(delivery.leadProgress), SMOKE_FAILING_KEY) : null
+    const reworks = holds && failure !== null && !capped && task?.status === 'done' && leadStep?.kind !== 'stop'
 
     if (!(await goalEventWith(tx, delivery.workspaceId, 'workspace_smoke_run', { attemptId: attempt.id }))) {
       await appendEvent({
@@ -344,6 +355,17 @@ export async function applySmokeOutcome(attemptId: string): Promise<void> {
       return
     }
     const stop = smokeStopReason({ outcome: failure, output: attempt.output })
+    // Lead flow: the stop, or the failing set recorded before the rework below sends the smoke's
+    // evidence back exactly as it sends a package's. Nothing was written in this transaction before
+    // the stop, but a stop that did not move the row still throws (house rule: a refusal in a
+    // transaction throws).
+    if (leadStep !== null) {
+      if (leadStep.kind === 'stop') {
+        if (!(await stopLeadInLock(tx, delivery.id, leadStep.reason, leadStep.progress, `the smoke check found ${stop}`))) throw new NotTheSmoke()
+        return
+      }
+      await tx.goalDelivery.update({ where: { id: delivery.id }, data: { leadProgress: progressJson(leadStep.progress) } })
+    }
     if (capped) {
       await needsHumanInLock(tx, delivery.id, null, `the verification round cap (${String(cap)}) was reached on a failing smoke check: ${stop}`)
       return
