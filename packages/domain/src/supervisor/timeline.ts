@@ -59,6 +59,8 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   'workspace.smoke_handed_off': 'work', // Plan B D11: a package sent back, like task.rework.
   'workspace.package_handed_off': 'work', // Supervisor-as-conductor plan A D8: a package sent work, like the smoke hand-off.
   'workspace.package_noted': 'work', // Human cards plan B D9: a worker's note, beside its hand-offs.
+  'workspace.lead_state': 'work', // Lead flow: the version's state word moved.
+  'workspace.lead_noted': 'work', // Lead flow: a line for the report, beside a worker's note.
   // INTERPRETATION -- the delta IS the interpretation; no stored sentence exists (spec §3).
   'workspace.replan_started': 'interpretation',
   'workspace.replanned': 'interpretation',

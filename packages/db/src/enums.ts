@@ -54,6 +54,8 @@ export const EVENT_TYPE_BY_DOMAIN_TYPE = {
   'workspace.package_handed_off': 'workspace_package_handed_off',
   'slave.question_closed': 'slave_question_closed',
   'workspace.package_noted': 'workspace_package_noted',
+  'workspace.lead_state': 'workspace_lead_state',
+  'workspace.lead_noted': 'workspace_lead_noted',
   'workspace.plan_created': 'workspace_plan_created',
   'workspace.replan_started': 'workspace_replan_started',
   'workspace.replanned': 'workspace_replanned',

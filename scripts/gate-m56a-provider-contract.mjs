@@ -1254,11 +1254,11 @@ try {
   // added two events, `workspace.smoke_run` and `workspace.smoke_handed_off`. Supervisor-as-conductor Plan A added one
   // event, `workspace.package_handed_off`. Supervisor-as-conductor Plan B added the `conductor_question` situation.
   // Human-cards Plan A added one event, `slave.question_closed`. Human-cards Plan B added one event,
-  // `workspace.package_noted`.
+  // `workspace.package_noted`. Lead-flow Plan A added two events, `workspace.lead_state` and `workspace.lead_noted`.
   if (SITUATION_KINDS.length !== 25) await fail(`stage 12: SITUATION_KINDS is ${SITUATION_KINDS.length}, expected twenty-five`)
   if (ACTION_KINDS.length !== 25) await fail(`stage 12: ACTION_KINDS is ${ACTION_KINDS.length}, expected twenty-five`)
-  if (Object.keys(LANE_BY_TYPE).length !== 78) {
-    await fail(`stage 12: LANE_BY_TYPE holds ${Object.keys(LANE_BY_TYPE).length} event types, expected 78 -- a provider change adds none`)
+  if (Object.keys(LANE_BY_TYPE).length !== 80) {
+    await fail(`stage 12: LANE_BY_TYPE holds ${Object.keys(LANE_BY_TYPE).length} event types, expected 80 -- a provider change adds none`)
   }
 
   const enumRows = await prisma.$queryRaw`SELECT unnest(enum_range(NULL::"ProviderKind"))::text AS value`

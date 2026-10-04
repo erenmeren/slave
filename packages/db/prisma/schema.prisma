@@ -203,6 +203,16 @@ model Workspace {
   /// Human-cards spec H3 (plan A D12): how long a run paused on an unanswered question waits before it
   /// continues on its own judgement -- 2 hours; 15 minutes to 72 hours (`WORKSPACE_LIMIT_BOUNDS`).
   questionTimeoutMs Int @default(7200000)
+  /// Lead-flow spec R-1 (plan A L1): how this project builds a goal version. `packages` is the
+  /// planner or the conductor, as before; `lead` hands the whole goal to one lead session and lets
+  /// Slave prove it. Switched with `set-flow`.
+  flow WorkspaceFlow @default(packages)
+  /// Lead-flow spec B4 (plan A L7): the working time one goal version may take, in milliseconds;
+  /// null is no limit. Read only in the lead flow.
+  goalTimeLimitMs Int?
+  /// Lead-flow spec B2 (plan A L16): the person ids the lead's subordinate sessions are defined
+  /// from, at most `LEAD_ROSTER_MAX`. Empty: the lead gets no session definitions.
+  leadRoster String[] @default([])
 
   @@index([adoptedFromSimulationId])
 }
@@ -1394,6 +1404,16 @@ model SlaveRun {
   /// lockfile must not throw every verification away. On the row, not in the run directory, where
   /// the verifier's own shell could rewrite it.
   verificationBaseline Json?
+  /// Lead-flow plan A L4: set on every turn of a lead's session, and what the turn is for. Null on
+  /// every other run. The sweep reads it to exempt the run from the per-run limits (spec B4).
+  leadTurn          LeadTurn?
+  /// Lead-flow plan A L4: this turn was spawned onto the previous turn's session (`--resume`).
+  leadResumed       Boolean       @default(false)
+  /// Lead-flow spec P3/P5 (plan A L11): the requirement keys a verification run checks; empty is
+  /// the whole set.
+  verificationKeys  String[]      @default([])
+  /// Lead-flow spec P3: the verification run whose failed requirements this run re-checks.
+  confirmsRunId     String?
   startedAt         DateTime      @default(now())
   terminalAt        DateTime?
   endedAt           DateTime?
@@ -1424,6 +1444,32 @@ model SlaveRun {
 enum Delivery {
   conducted
   planned
+}
+
+/// Lead-flow spec R-1 (plan A L1): mirrors `WORKSPACE_FLOWS`, member for member.
+enum WorkspaceFlow {
+  packages
+  lead
+}
+
+/// Lead-flow spec section 3 (plan A L14): the state of a lead-flow goal version in one word.
+/// `spec` and `hunting` arrive with plan B. Mirrors `LEAD_STATES`.
+enum LeadState {
+  building
+  proving
+  delivered
+  awaiting_decision
+  stopped
+}
+
+/// Lead-flow plan A L4: what one turn of the lead's session is for. Mirrors `LEAD_TURNS`.
+enum LeadTurn {
+  build
+  rework
+  wrap_up
+  continue
+  answer
+  base
 }
 
 enum ConductorStage {
@@ -1561,6 +1607,8 @@ enum GoalDecisionSource {
   conductor_plan
   conductor_answer
   person
+  /// Lead-flow spec B9: a decision the lead recorded in docs/DECISIONS.md.
+  lead
 }
 
 /// Supervisor-as-conductor spec C3 (plan A D10): one shared decision of a goal version, listed in
@@ -1667,6 +1715,13 @@ model GoalDelivery {
   /// Conductor Plan 5 (D10): the resting point (`merged`, `abandoned`, `needs_human:r<n>`,
   /// `awaiting_merge:r<n>`) the Supervisor chat was last given this version's report summary for.
   reportNotedKey    String?
+  /// Lead-flow spec section 3 (plan A L14): the state word, for a version built by a lead; null on
+  /// every other. Derived by `leadStateOf` and stored by the goal pass when it changes.
+  leadState         LeadState?
+  /// Lead-flow spec P7 (plan A L12): why the lead flow's loop ended -- a `StopReason`.
+  stopReason        String?
+  /// Lead-flow plan A L11: what the proof loop carries between rounds (`LeadProgress`).
+  leadProgress      Json?
   createdAt         DateTime           @default(now())
 
   workspace Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -2614,6 +2669,11 @@ enum EventType {
   /// Human cards plan B D9: one note from a package worker's report -- information a person
   /// should know that needs no decision. The feed and the goal report, never a card.
   workspace_package_noted        @map("workspace.package_noted")
+  /// Lead-flow spec section 3: a lead-flow goal version's state word changed.
+  workspace_lead_state           @map("workspace.lead_state")
+  /// Lead-flow plan A: one line for the report about a lead-flow version -- a turn started, a
+  /// decisions file read or missing, a disputed requirement, a limit wait. Never a card.
+  workspace_lead_noted           @map("workspace.lead_noted")
   workspace_plan_created      @map("workspace.plan_created")
   /// M40 §2: the goal moved on a board that already had tasks, so the tick started a DELTA re-plan
   /// run (`workspace.replan_started`, whose `version` is the dedup key for "one re-plan per goal

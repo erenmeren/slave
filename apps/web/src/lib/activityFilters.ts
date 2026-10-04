@@ -119,6 +119,9 @@ export const TYPES_BY_KIND = {
     // Human cards plan B D9: a worker's note, beside its hand-offs -- what a person reading "what
     // happened in this project" should know, which needs no decision.
     'workspace.package_noted',
+    // Lead flow: the version's state word and its report lines, beside the delivery events.
+    'workspace.lead_state',
+    'workspace.lead_noted',
     'workspace.plan_created',
     // M40 t1: a goal change on a non-empty board starts a delta re-plan, and both ends of that are
     // workspace lifecycle for the same reason `workspace.plan_created` is -- neither carries a

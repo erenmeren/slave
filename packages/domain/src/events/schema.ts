@@ -7,6 +7,7 @@ import { GOAL_REPORT_FILES_MAX } from '../goalReport/constants.js'
 import { MEMORY_SCOPES, MEMORY_SOURCE_KINDS, MEMORY_STATUSES, MEMORY_TYPES } from '../memory/types.js'
 import { ACTION_KINDS, DECIDERS, TIERS } from '../supervisor/actions.js'
 import { QUESTION_CLOSE_REASONS } from '../messaging/close.js'
+import { LEAD_NOTE_KINDS, LEAD_STATES, STOP_REASONS } from '../lead/constants.js'
 import { SITUATION_KINDS } from '../supervisor/situations.js'
 
 const envelope = {
@@ -626,6 +627,21 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     ...envelope,
     type: z.literal('workspace.package_noted'),
     payload: z.object({ version: z.number().int().positive(), packageKey: z.string().min(1).max(40), runId: z.string().min(1), note: z.string().min(1).max(1000) }),
+  }),
+  // Lead-flow spec section 3 (plan A L14): a lead-flow goal version's state word changed. `reason`
+  // is why its loop ended, on the states a stop reaches.
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.lead_state'),
+    payload: z.object({ version: z.number().int().positive(), state: z.enum(LEAD_STATES), reason: z.enum(STOP_REASONS).nullable() }),
+  }),
+  // Lead-flow plan A: one line for the report about a lead-flow version. Information, never a card.
+  // `detail` is system text or sanitised, fitted text; `LEAD_NOTE_DETAIL_MAX_CHARS`, spelled here
+  // the way this file spells every stored bound.
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.lead_noted'),
+    payload: z.object({ version: z.number().int().positive(), kind: z.enum(LEAD_NOTE_KINDS), detail: z.string().min(1).max(500), runId: z.string().min(1).nullable() }),
   }),
   // M40 §4: `cancelTask` took a task off the board -- an operator's own call, or an approved
   // `stale_task` proposal. `goalVersion` is the task's own stamp (null for a hand-made task), so

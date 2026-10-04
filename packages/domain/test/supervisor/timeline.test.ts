@@ -15,8 +15,8 @@ describe('LANE_BY_TYPE', () => {
     expect(Object.keys(LANE_BY_TYPE).sort()).toEqual(Object.keys(EVENT_TYPE_BY_DOMAIN_TYPE).sort())
   })
 
-  it('lanes every event type -- 78 as of human-cards Plan B Task 8', () => {
-    expect(Object.keys(LANE_BY_TYPE)).toHaveLength(78)
+  it('lanes every event type -- 80 as of lead-flow Plan A Task 1', () => {
+    expect(Object.keys(LANE_BY_TYPE)).toHaveLength(80)
   })
 
   it('puts BOTH external events on NO lane -- a delivery arriving is plumbing (M54 R5)', () => {
