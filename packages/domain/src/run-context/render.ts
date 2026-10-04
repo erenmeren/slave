@@ -1,4 +1,4 @@
-import { LEAD_RULES } from '../lead/brief.js'
+import { LEAD_RULES } from '../lead/rules.js'
 import { REPLAN_INSTRUCTIONS } from '../planning/delta.js'
 import type { Manifest, Section, SectionKind } from './sections.js'
 

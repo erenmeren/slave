@@ -1,6 +1,7 @@
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   RUN_PROMPT_MAX_BYTES,
+  cents,
   renderLeadBrief,
   renderLeadContinuation,
   renderLeadTurnNote,
@@ -53,7 +54,8 @@ export async function buildLeadContext(input: LeadContextInput): Promise<{ reado
     kind: input.turn,
     note: input.note,
     baseBranch: workspace.baseBranch,
-    budgetLeftUsd: input.budget === null ? null : Math.max(0, input.budget.shareUsd - input.budget.spentUsd),
+    // Cut down to the cent: the lead is never told it has a cent more than it has.
+    budgetLeftUsd: input.budget === null ? null : Math.max(0, cents(input.budget.shareUsd - input.budget.spentUsd)),
     timeLeftMs: input.timeLeftMs,
   })
 

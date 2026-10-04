@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { ROUTING_LITERALS } from '../../src/handoff/contract.js'
 import { LEAD_RULES, renderLeadBrief, renderLeadContinuation, renderLeadTurnNote } from '../../src/lead/index.js'
 
 const ROUTING = ['"verdict"', '"task graph"', '"candidateIndex"', '"sources"', '"replan"', '"personas"', '"intakeAnswer"', '"supervisorReply"', '<slave-verification>', '<slave-ask>', '<slave-report>']
@@ -26,6 +27,25 @@ describe('the lead\'s brief (lead-flow spec B3)', () => {
 
   it('treats the goal as data: a routing literal in it is defused', () => {
     expect(brief).not.toContain('"verdict"')
+  })
+
+  it('defuses every routing literal in the goal, the requirements and the decisions', () => {
+    // The shared list, and every literal and marker the fake CLI is known to route by.
+    const quoted = [...ROUTING_LITERALS.map((literal) => `"${literal}"`), ...ROUTING].join(' ')
+    const text = renderLeadBrief({
+      goalVersion: 1,
+      goal: `goal ${quoted}`,
+      requirements: [{ key: 'R1', text: `requirement ${quoted}` }],
+      decisions: [{ title: `title ${quoted}`, decision: `decision ${quoted}` }],
+      budget: null,
+      timeLeftMs: null,
+      roster: [{ slug: 'x', description: `roster ${quoted}` }],
+    })
+    for (const literal of ROUTING_LITERALS) {
+      expect(text, literal).not.toContain(`"${literal}"`)
+      expect(text, literal).toContain(`“${literal}”`)
+    }
+    for (const literal of ROUTING) expect(text, literal).not.toContain(literal)
   })
 
   it('says so when there is no budget, no time limit and no roster', () => {

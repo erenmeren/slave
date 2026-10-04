@@ -1,7 +1,7 @@
 import { LEAD_MIN_LEG_USD, LEAD_WRAP_UP_RATIO, PROOF_RESERVE_RATIO } from './constants.js'
 
-/** Dollars cut to whole cents, downwards: a cap is never rounded up past what is left. */
-const cents = (usd: number): number => Math.floor(usd * 100 + 1e-6) / 100
+/** Dollars cut to whole cents, downwards: a cap, or a figure of what is left, is never rounded up past it. */
+export const cents = (usd: number): number => Math.floor(usd * 100 + 1e-6) / 100
 
 /** Lead-flow spec B4: the lead's share of a goal's budget -- all but the fifth kept for proof. */
 export function leadShareUsd(budgetUsd: number): number {
@@ -15,13 +15,25 @@ export type LeadLeg = { readonly kind: 'run'; readonly capUsd: number | null; re
  * Lead-flow spec B4 (plan A L6): the lead's next leg. Until the wrap-up was sent, a leg runs to four
  * fifths of the share; the leg after that mark is the wrap-up, capped at the rest of the share. A
  * turn after the wrap-up (a rework) gets what is left. Less than `LEAD_MIN_LEG_USD` left is `spent`.
+ *
+ * Spec P5 ("the reserved budget always covers" the final full verification): proof runs spend from
+ * the whole budget, so once they have eaten into what the lead left unspent, a leg is also held to
+ * what is above the reserve -- the budget less the lead's and proof's spend less the fifth
+ * (`proofSpentUsd`, default 0). The conductor's own calls are not counted here: they are small, and
+ * a leg that the requirement call shaved by two cents would be a wrap-up leg nobody can predict.
  */
-export function nextLeadLeg(input: { readonly budgetUsd: number | null; readonly leadSpentUsd: number; readonly wrapUpSent: boolean }): LeadLeg {
+export function nextLeadLeg(input: {
+  readonly budgetUsd: number | null
+  readonly leadSpentUsd: number
+  readonly wrapUpSent: boolean
+  readonly proofSpentUsd?: number
+}): LeadLeg {
   if (input.budgetUsd === null) return { kind: 'run', capUsd: null, wrapUp: false }
   const share = leadShareUsd(input.budgetUsd)
-  const left = cents(share - input.leadSpentUsd)
+  const aboveReserve = cents(input.budgetUsd - input.leadSpentUsd - (input.proofSpentUsd ?? 0) - input.budgetUsd * PROOF_RESERVE_RATIO)
+  const left = Math.min(cents(share - input.leadSpentUsd), aboveReserve)
   if (left < LEAD_MIN_LEG_USD) return { kind: 'spent' }
-  const toMark = cents(share * LEAD_WRAP_UP_RATIO - input.leadSpentUsd)
+  const toMark = Math.min(cents(share * LEAD_WRAP_UP_RATIO - input.leadSpentUsd), aboveReserve)
   if (!input.wrapUpSent && toMark >= LEAD_MIN_LEG_USD) return { kind: 'run', capUsd: toMark, wrapUp: false }
   return { kind: 'run', capUsd: left, wrapUp: !input.wrapUpSent }
 }

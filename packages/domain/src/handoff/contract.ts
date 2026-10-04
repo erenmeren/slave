@@ -86,6 +86,10 @@ export function parseHandoffContract(value: unknown): Result<HandoffContract, st
  * `requirementsAnswer`/`conductAnswer` join them for the conductor (Conductor Plan 2): a goal quoting either
  * must not steer the conductor's own calls. `conductorAnswers` is the Supervisor's batched answer to
  * the conductor's questions (Plan B D10): a worker quoting it must not steer that call.
+ *
+ * `intakeAnswer` (M59, `INTAKE_ANSWER_MARKER`) and `personas` (`CAPABILITY_MAP_ANSWER_MARKER`) are
+ * two more arms the fake CLI selects by a quoted literal; they join the list with the lead flow,
+ * whose brief quotes a person's goal into a prompt that must route none of them.
  */
 export const ROUTING_LITERALS = [
   'candidateIndex',
@@ -97,6 +101,8 @@ export const ROUTING_LITERALS = [
   'requirementsAnswer',
   'conductAnswer',
   'conductorAnswers',
+  'intakeAnswer',
+  'personas',
 ] as const
 
 /**

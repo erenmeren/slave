@@ -60,6 +60,12 @@ describe('buildLeadContext (lead-flow spec B3)', () => {
     expect(runContextManifestSchema.parse((await prisma.runContext.findUniqueOrThrow({ where: { runId: base.runId } })).sections).sections[0]).toMatchObject({ turn: 'rework', resumed: true })
   })
 
+  it('tells a continued session what is left of its share, cut down to the cent', async (): Promise<void> => {
+    const base = await seed()
+    const { prompt } = await buildLeadContext({ ...base, budget: { totalUsd: 30, shareUsd: 24, spentUsd: 0.004 }, turn: 'rework', resumed: true, continuation: false, note: 'R1: output: 404' })
+    expect(prompt).toContain('Left of your share: $23.99.')
+  })
+
   it('gives a new session after a lost transcript the brief, where the branch stands, and the note', async (): Promise<void> => {
     const base = await seed()
     const { prompt } = await buildLeadContext({ ...base, turn: 'continue', resumed: false, continuation: true, note: 'the earlier transcript is gone' })
