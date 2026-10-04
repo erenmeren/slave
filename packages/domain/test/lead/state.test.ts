@@ -27,6 +27,11 @@ describe('leadStateOf (lead-flow spec section 3)', () => {
 })
 
 describe('readLeadProgress', () => {
+  it('reads a row written before denialContinues existed as none spent (C6)', () => {
+    expect(readLeadProgress({ askReplies: 1 }).denialContinues).toBe(0)
+    expect(readLeadProgress({ denialContinues: 2 }).denialContinues).toBe(2)
+  })
+
   it('reads a null column and a broken value as the initial progress', () => {
     expect(readLeadProgress(null)).toEqual(INITIAL_LEAD_PROGRESS)
     expect(readLeadProgress({ recheckKeys: 'R1' })).toEqual(INITIAL_LEAD_PROGRESS)

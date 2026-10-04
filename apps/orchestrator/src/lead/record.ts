@@ -25,6 +25,19 @@ export async function noteLead(input: { readonly workspaceId: string; readonly v
   })
 }
 
+/** {@link noteLead}, unless the version already has this very line: a standing fact is said once. */
+export async function noteLeadOnce(input: Parameters<typeof noteLead>[0]): Promise<void> {
+  const said = await prisma.executionEvent.findFirst({
+    where: {
+      workspaceId: input.workspaceId,
+      type: 'workspace_lead_noted',
+      AND: [{ payload: { path: ['version'], equals: input.version } }, { payload: { path: ['kind'], equals: input.kind } }, { payload: { path: ['detail'], equals: input.detail } }],
+    },
+    select: { seq: true },
+  })
+  if (said === null) await noteLead(input)
+}
+
 /**
  * `LeadProgress` as the JSON column takes it -- or a throw. The turn note is cut to its stored bound
  * first (it carries a verifier's evidence or a failure: another party's text, of any length). Then

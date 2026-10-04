@@ -24,6 +24,8 @@ export interface LeadProgress {
   readonly wrapUpSent: boolean
   /** How often a lead's question was answered "decide yourself" (plan A L10). */
   readonly askReplies: number
+  /** C6: how often a turn failed only by permission-mode refusals was continued without a charge. */
+  readonly denialContinues: number
   /** How often the base branch was taken in (plan A L15). */
   readonly baseMerges: number
 }
@@ -38,6 +40,7 @@ export const INITIAL_LEAD_PROGRESS: LeadProgress = {
   unverifiable: [],
   wrapUpSent: false,
   askReplies: 0,
+  denialContinues: 0,
   baseMerges: 0,
 }
 
@@ -54,6 +57,7 @@ export const leadProgressSchema = z.object({
   unverifiable: keyList.default([]),
   wrapUpSent: z.boolean().default(false),
   askReplies: z.number().int().nonnegative().default(0),
+  denialContinues: z.number().int().nonnegative().default(0),
   baseMerges: z.number().int().nonnegative().default(0),
 })
 

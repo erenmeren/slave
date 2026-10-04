@@ -1428,7 +1428,10 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // one whose run reported an error or an unexcused denial, did not deliberately stop to ask: its
   // text may be half a message, and treating it as an ask would turn a failure into an
   // indefinite wait with no attempt charged. Those runs conclude below exactly as they always have.
-  if (!failed) {
+  // Lead flow (spec R-6, plan A L10): a lead is never parked on a question and answers nobody's --
+  // its conclusion (`concludeLeadTurn`) reads the block and tells it to decide. `leadTurn` is null
+  // on every other run, which takes the hook exactly as before.
+  if (!failed && startingRow.leadTurn === null) {
     // M36 t3: any questions this run answered, written BEFORE the ask hook below -- a slave that
     // answers somebody and then asks a question of its own does both, in that order. Nothing here
     // touches this run's outcome (see `answer.ts`): the state that moves is the ASKER's, on the

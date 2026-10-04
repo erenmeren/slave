@@ -57,7 +57,7 @@ export async function writeGoalDecisionIn(
     readonly goalVersion: number
     readonly title: string
     readonly decision: string
-    readonly source: 'conductor_answer' | 'person'
+    readonly source: 'conductor_answer' | 'person' | 'lead'
     readonly questionId: string | null
     readonly decisionId: string | null
   },

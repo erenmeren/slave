@@ -37,6 +37,7 @@ export const LEAD_NOTE_KINDS = [
   'decisions_missing',
   'report_missing',
   'ask_refused',
+  'denied',
   'disputed',
   'unverifiable',
   'limit_wait',
@@ -80,6 +81,14 @@ export const LEAD_ROSTER_JSON_MAX_BYTES = 100_000
 /** Spec B9 (plan A L18): where the lead records its decisions, and how much of it is read. */
 export const LEAD_DECISIONS_FILE = 'docs/DECISIONS.md'
 export const LEAD_DECISIONS_FILE_MAX_BYTES = 200_000
+/** Spec B9: how many decisions one read of the lead's file takes -- a version holds at most 40. */
+export const LEAD_DECISIONS_READ_MAX = 40
+/**
+ * C6: how often per goal version a turn failed only by the permission mode's refusals continues
+ * the lead without an attempt charged. Bounded: a lead that keeps calling what is refused is
+ * charged after that, and its attempt cap ends it.
+ */
+export const LEAD_DENIAL_CONTINUES_MAX = 2
 
 /** Plan A L7: the goal's time limit, in milliseconds: ten minutes to a day, whole minutes. */
 export const LEAD_TIME_LIMIT_BOUNDS_MS = { min: 10 * 60_000, max: 24 * 60 * 60_000 } as const

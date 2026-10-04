@@ -1,6 +1,8 @@
 import { goalSpend, goalWorkedMs, loadLeadRoster } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import { buildRosterDefinitions, leadShareUsd, nextLeadLeg, readLeadProgress, type LeadTurn } from '@slave-of-ai/domain'
+import { LEAD_MIN_LEG_USD, buildRosterDefinitions, leadShareUsd, nextLeadLeg, readLeadProgress, type LeadTurn } from '@slave-of-ai/domain'
+import { readSpawnExtras, writeSpawnExtras } from '@slave-of-ai/providers'
+import { integrationTargetFor } from '../goalBranch.js'
 import { endLead, noteLead, updateLeadProgress } from './record.js'
 
 /** One turn of the lead's session, as `startRun` spawns it. */
@@ -137,4 +139,33 @@ export async function noteLeadTurnStarted(plan: LeadTurnRun, runId: string): Pro
   await noteLead({ ...at, kind: 'turn', detail: `turn ${String(plan.ordinal)} (${plan.turn}): ${session}` })
   if (plan.wrapUp) await noteLead({ ...at, kind: 'wrap_up', detail: 'the lead reached four fifths of its share of the budget and was told to wrap up' })
   if (plan.rosterDropped.length > 0) await noteLead({ ...at, kind: 'roster_dropped', detail: `not passed to the lead, the definitions did not fit: ${plan.rosterDropped.join(', ')}` })
+}
+
+/**
+ * Plan A L6: a paused lead turn that is resumed on its own row (`executeResume`) continues under
+ * what is LEFT of its leg, not under the cap it started with -- a `--max-budget-usd` counts per
+ * process. With nothing left it gets the smallest leg: it ends on its cap at once, and its
+ * conclusion ends the lead. The roster and the keep-alive are kept as they were written. What proof
+ * already spent is counted too, as `planLeadTurn` counts it (Task 5 review: a leg never eats the
+ * proof reserve).
+ */
+export async function refreshLeadSpawn(runId: string, runDir: string): Promise<void> {
+  const run = await prisma.slaveRun.findUnique({ where: { id: runId }, select: { taskId: true } })
+  const target = run?.taskId == null ? null : await integrationTargetFor(run.taskId)
+  if (target === null) return
+  const delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { id: target.deliveryId }, include: { workspace: { select: { budgetUsd: true } } } })
+  const spend = await goalSpend(delivery.workspaceId, delivery.goalVersion)
+  const leg = nextLeadLeg({
+    budgetUsd: delivery.workspace.budgetUsd,
+    leadSpentUsd: spend.leadUsd,
+    proofSpentUsd: spend.proofUsd,
+    wrapUpSent: readLeadProgress(delivery.leadProgress).wrapUpSent,
+  })
+  const capUsd = leg.kind === 'spent' ? LEAD_MIN_LEG_USD : leg.capUsd
+  const extras = readSpawnExtras(runDir)
+  writeSpawnExtras(runDir, {
+    ...(extras.sessionDefinitions === undefined ? {} : { sessionDefinitions: extras.sessionDefinitions }),
+    ...(capUsd === null ? {} : { maxBudgetUsd: capUsd }),
+    keepAliveForSubordinates: true,
+  })
 }
