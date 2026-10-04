@@ -114,6 +114,18 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
 - Ruling: `progressJson` cuts a turn note to 20 000 characters and refuses (throws, in the lock) a progress that
   would not read back -- `readLeadProgress` resets the whole record on one bad field -- a write that is refused
   fails its tick instead of storing.
+- Task 7 -- done, reviewed: `84ab662` + review fixes `4873a58`, `5ca2a27`, `83def04`, `aa7930b`. Round 1: FIX
+  (Important: a resumed paused turn got its whole leg again, because a paused run's cost is not yet on its row
+  and `--max-budget-usd` counts from zero per process); round 2: CLEAN. Also fixed: a provider refusal is never
+  a C6 continue; decisions re-read at the 40 cap count recorded titles as known; the refused-call list is
+  defused before it goes into a prompt; C6 releases the claim before it writes; an ended lead is not told to
+  decide; `noteLeadOnce` compares the stored form.
+- Ruling: a resumed paused turn's cap counts the checkpoint's `cumulativeCostUsd` (the pump's figure for this
+  run so far) while the run's `costUsd` is still null -- the measured figure arrives only at the run's end --
+  with no model named (C5) the price estimate can be missing, the figure 0, and the turn gets its whole leg
+  again: bounded by the vendor cap of that leg, not by the share.
+- Deviation, accepted: a lead task with no goal version (`integrationTargetFor` null) releases a failed turn
+  instead of keeping its claim, as Task 6 did.
 
 ## Deferred minor findings
 
