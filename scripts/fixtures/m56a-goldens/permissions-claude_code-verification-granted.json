@@ -93,6 +93,10 @@
       "kind": "run_commands"
     },
     {
+      "tool": "Agent",
+      "kind": "run_commands"
+    },
+    {
       "tool": "TaskStop",
       "kind": "run_commands"
     },
@@ -186,6 +190,7 @@
     "BashOutput": "run_commands",
     "KillShell": "run_commands",
     "Task": "run_commands",
+    "Agent": "run_commands",
     "TaskStop": "run_commands",
     "Skill": "run_commands",
     "Workflow": "run_commands",

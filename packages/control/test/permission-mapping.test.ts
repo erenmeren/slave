@@ -47,6 +47,7 @@ const EXPECTED: Record<PermissionKind, { claude_code: readonly string[]; cursor:
       'BashOutput',
       'KillShell',
       'Task',
+      'Agent',
       'TaskStop',
       'Skill',
       'Workflow',

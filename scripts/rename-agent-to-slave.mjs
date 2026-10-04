@@ -46,6 +46,10 @@ const PROTECTED_TOKENS = [
   // disk, and packages/domain/src/docs/superpowers/specs/2026-08-18-m2-persistence-and-events-
   // design.md's "Parent spec" cross-reference must keep citing its real, un-renamed name.
   /2026-08-17-ai-team-os-design/g,
+  // Lead-flow plan A L17: Claude Code names its subordinate-session tool `Agent`. The name is the
+  // vendor's, like `cursor-agent`, and it is protected only as a QUOTED literal and only in that
+  // exact case -- so a quoted lowercase word, or the bare word in prose, is still an offender.
+  /(["'`])Agent\1/g,
 ]
 
 // Fix round 1 (Task 3 review Minor, folded): the word rules alone turn "an agent" into "an slave"
@@ -194,6 +198,11 @@ function selfTest() {
     // Controller ruling (Task 5): agent_message is protected only when not suffixed with
     // `_sent` -- our own EventType literal `agent_message_sent` must rename.
     ['words', 'agent_message_sent and agent_message', 'slave_message_sent and agent_message'],
+    // Lead-flow plan A L17: Claude Code's tool name survives as a quoted literal, in that case only.
+    ['words', "the 'Agent' tool, \"Agent\", `Agent` and an agent", "the 'Agent' tool, \"Agent\", `Agent` and a slave"],
+    // ...and nothing else: the bare word in prose, a quoted lowercase or upper-case word, a plural,
+    // and mismatched quotes all still rename.
+    ['words', "the Agent tool, 'agent', \"AGENT\", `Agents`, 'Agent\"", "the Slave tool, 'slave', \"SLAVE\", `Slaves`, 'Slave\""],
     // Controller ruling (Task 5): the article post-pass also covers the ALL-CAPS noun the WORD
     // RULES' AGENT->SLAVE rule can produce.
     ['words', 'an AGENT; An AGENT', 'a SLAVE; A SLAVE'],

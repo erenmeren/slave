@@ -81,6 +81,7 @@
     "BashOutput": "run_commands",
     "KillShell": "run_commands",
     "Task": "run_commands",
+    "Agent": "run_commands",
     "TaskStop": "run_commands",
     "Skill": "run_commands",
     "Workflow": "run_commands",

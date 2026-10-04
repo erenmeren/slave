@@ -19,6 +19,10 @@ const PATTERN = '(^|[^a-z])agent|aiteamos|ai-team-os|AITEAMOS_|AI Team OS'
 // and a live doc's cross-reference to it must keep citing the real name, same shape as
 // `0002-derived-agent-status` just before it.
 const PROTECTED = /fake-cursor-agent|cursor-agent|dispatching-parallel-agents|--agents\b|user-agent|agentic|AGENTS\.md|claude-agent-sdk|@anthropic-ai\/[a-z-]+|agent_message(?!_sent)|0002-derived-agent-status|2026-08-17-ai-team-os-design/gi
+// Lead-flow plan A L17: Claude Code names its subordinate-session tool `Agent`. The name is the
+// vendor's, like `cursor-agent`, and it is protected only as a QUOTED literal and only in that
+// exact case -- so a quoted lowercase word, or the bare word in prose, is still an offender.
+const PROTECTED_EXACT = /(["'`])Agent\1/g
 
 let out = ''
 try {
@@ -30,7 +34,7 @@ try {
 const offenders = out
   .split('\n')
   .filter((line) => line !== '')
-  .filter((line) => line.replace(PROTECTED, '').match(new RegExp(PATTERN, 'i')) !== null)
+  .filter((line) => line.replace(PROTECTED, '').replace(PROTECTED_EXACT, '').match(new RegExp(PATTERN, 'i')) !== null)
 if (offenders.length > 0) {
   console.error(`FAIL: the old vocabulary is back in ${offenders.length} line(s):`)
   for (const line of offenders) console.error(`  ${line}`)

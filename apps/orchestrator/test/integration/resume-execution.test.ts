@@ -206,6 +206,7 @@ describe('executing a resume intent from the daemon', () => {
       'BashOutput',
       'KillShell',
       'Task',
+      'Agent',
       'TaskStop',
       'Skill',
       'Workflow',

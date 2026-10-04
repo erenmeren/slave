@@ -158,7 +158,7 @@ const GOLDEN_RUN_TOKEN = 'm56a-golden-token-not-a-secret'
 const GOLDEN_VERIFICATION_OWNERSHIP = { worktreeRoot: '/m56a-golden/verify-worktree', owned: [], excluded: [] }
 // Claude's governed vocabulary, as a count somebody can re-run (M56a erratum E22). The `mcp__*`
 // prefix rule covers every name this list cannot enumerate, and it is asserted separately.
-const CLAUDE_VOCABULARY_NAMES = 38
+const CLAUDE_VOCABULARY_NAMES = 39
 
 /**
  * The spend net's two sentences, as BYTES rather than as a call (spec §3 stage 7, fix round 1).
