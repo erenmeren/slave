@@ -79,23 +79,28 @@ export async function enforceLeadLimits(deps: TickDeps, deliveryId: string): Pro
   if (delivery.status !== 'integrating' && delivery.status !== 'verifying') return
   const task = await prisma.task.findFirst({ where: { workspaceId: delivery.workspaceId, workPackage: { goalVersion: delivery.goalVersion } } })
   if (task === null) return
-  if (task.status === 'failed') {
-    await stopLead(delivery.id, 'lead_failed', task.lastRejectionReason)
-    return
-  }
 
   let ended = readLeadProgress(delivery.leadProgress).leadEnded
   const limit = delivery.workspace.goalTimeLimitMs
-  if (ended === null && limit !== null && (await goalWorkedMs(delivery.workspaceId, delivery.goalVersion)) >= limit) {
+  if (ended === null && task.status !== 'failed' && limit !== null && (await goalWorkedMs(delivery.workspaceId, delivery.goalVersion)) >= limit) {
     await endLead(delivery.id, 'time_spent', `the goal's time limit of ${String(Math.round(limit / 60_000))} minutes is reached`)
     ended = 'time_spent'
+  }
+  // A task out of attempts stops the version -- under the reason the lead was ended for when it was
+  // (task 8 review): a turn the limit cut short is not why the goal stopped.
+  if (task.status === 'failed') {
+    await stopLead(delivery.id, ended ?? 'lead_failed', task.lastRejectionReason)
+    return
   }
   if (ended === null) return
 
   if (task.activeRunId !== null) {
     const live = await prisma.slaveRun.findUnique({ where: { id: task.activeRunId }, select: { id: true, leadTurn: true, pid: true, provider: true } })
     if (live === null || live.leadTurn === null) return
-    const claimed = await prisma.slaveRun.updateMany({ where: { id: live.id, status: { in: [...LIVE] } }, data: { status: 'stopping' } })
+    // `platform`, as the sweep's clock-jump claim is (task 8 review): the goal's limit cut the turn
+    // short, not the lead, so whoever concludes it -- the pump, or the sweep's stopping arm when the
+    // process is gone -- charges no attempt.
+    const claimed = await prisma.slaveRun.updateMany({ where: { id: live.id, status: { in: [...LIVE] } }, data: { status: 'stopping', failureClass: 'platform' } })
     if (claimed.count === 0) return
     try {
       await resolveAdapter(deps.registry, live.provider ?? 'claude_code').cancel(brandRunId(live.id))

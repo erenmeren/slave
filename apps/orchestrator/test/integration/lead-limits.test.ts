@@ -1,11 +1,13 @@
 import { spawn } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { leadStatus } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { readLeadProgress } from '@slave-of-ai/domain'
 import type { SlaveRuntimeAdapter } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { runGoalPass } from '../../src/goal.js'
-import { resetTickObservation } from '../../src/sweep.js'
+import { resetTickObservation, sweep } from '../../src/sweep.js'
 import { drainPumps, tick } from '../../src/tick.js'
 import { LEAD_TRUNCATE, base64, cleanUpLeadRepos, git, leadDelivery, leadNotes, leadTaskOf, merged, seedLead, tickUntil, type LeadFixture } from './lead-helpers.js'
 
@@ -94,6 +96,28 @@ describe('the lead flow: limits belong to the goal', () => {
     expect(git(['ls-tree', '-r', '--name-only', 'main'], f.repoPath).split('\n')).toContain('lead-work-1.txt')
   })
 
+  it('stops the version with one card, under the reason the lead was ended for, when the ended lead\'s work cannot be put on the work branch', async (): Promise<void> => {
+    const failed = ['--result-patch-base64', base64({ is_error: true, subtype: 'error_during_execution', terminal_reason: 'error_during_execution' })]
+    const f = await seedLead({ timeLimitMs: 10 * 60_000, leadArgs: () => failed })
+    await tickUntil(f, async () => (await prisma.slaveRun.count({ where: { leadTurn: { not: null }, status: 'failed' } })) === 1)
+    const turn = await prisma.slaveRun.findFirstOrThrow({ where: { leadTurn: { not: null } } })
+    await prisma.slaveRun.update({ where: { id: turn.id }, data: { startedAt: new Date((turn.endedAt ?? new Date()).getTime() - 11 * 60_000) } })
+    // A stale lock on the work branch's ref: every `update-ref` on it fails while the ref stays put.
+    const before = await leadDelivery(f)
+    writeFileSync(join(f.repoPath, '.git', 'refs', 'heads', `${before.integrationBranch}.lock`), '')
+
+    await tickUntil(f, async () => (await leadDelivery(f)).status === 'needs_human')
+
+    const delivery = await leadDelivery(f)
+    expect([delivery.stopReason, delivery.leadState]).toEqual(['time_spent', 'awaiting_decision'])
+    expect(delivery.needsHumanReason).toMatch(/the work branch could not be moved: .*\.lock/)
+    expect(git(['rev-parse', delivery.integrationBranch], f.repoPath)).toBe(f.initialTip)
+    expect((await leadTaskOf(f)).integratedAt).toBeNull()
+    expect(leadTurns(f)).toHaveLength(1)
+    const stops = await prisma.executionEvent.count({ where: { workspaceId: f.workspaceId, type: 'workspace_goal_needs_human' } })
+    expect(stops).toBe(1)
+  })
+
   it('cancels a live turn when the time runs out', async (): Promise<void> => {
     const f = await seedLead({ timeLimitMs: 10 * 60_000 })
     await tick(f.deps)
@@ -101,6 +125,7 @@ describe('the lead flow: limits belong to the goal', () => {
     await drainPumps()
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60_000)'], { stdio: 'ignore' })
     children.push(child.pid ?? 0)
+    const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()))
     const task = await leadTaskOf(f)
     const lead = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: f.workspaceId }, role: 'Lead' } })
     const live = await prisma.slaveRun.create({
@@ -113,8 +138,17 @@ describe('the lead flow: limits belong to the goal', () => {
     await runGoalPass({ ...f.deps, registry: { resolve: () => stub } }, { mayStartRuns: false })
 
     expect(cancelled).toEqual([live.id])
-    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: live.id } })).status).toBe('stopping')
+    // The goal's limit, not the lead's fault: the claim is the platform's, as a clock jump's is.
+    expect(await prisma.slaveRun.findUniqueOrThrow({ where: { id: live.id } })).toMatchObject({ status: 'stopping', failureClass: 'platform' })
     expect(readLeadProgress((await leadDelivery(f)).leadProgress).leadEnded).toBe('time_spent')
+
+    // The process dies and the sweep's stopping arm concludes the turn: no attempt is charged.
+    child.kill('SIGKILL')
+    await exited
+    const report = await sweep({ ...f.deps, registry: { resolve: () => stub } })
+    expect(report.stoppingConcluded).toEqual([live.id])
+    expect(await prisma.slaveRun.findUniqueOrThrow({ where: { id: live.id } })).toMatchObject({ status: 'failed', failureClass: 'platform' })
+    expect(await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).toMatchObject({ status: 'rework', attempt: task.attempt, activeRunId: null })
   })
 
   it('keeps the state word in step with the version and says each change once', async (): Promise<void> => {

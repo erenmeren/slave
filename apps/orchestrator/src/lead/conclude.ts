@@ -240,9 +240,10 @@ async function followLeadBranch(repoPath: string, branch: string, tip: string, w
  *
  * `idle` (plan A L6/L7): the lead was ended while its task held no claim (`ready` or `rework`), and
  * `run` is its newest turn, whose worktree is settled. Called from the goal pass, so it never throws
- * on git either. With no claim there is nothing to charge or release: a work branch git cannot move
- * (`stuck`) is said once and a lost compare-and-swap is left, both `unreadable`, and the next pass
- * tries again -- no paid turn follows an ended lead, so the retry costs nothing but git calls.
+ * on git either. With no claim there is nothing to charge or release, and no further turn whose
+ * attempt cap would end a fault: a work branch git cannot move (`stuck`) stops the version under the
+ * reason the lead was ended for, with git's reason, so one card says why (task 8 review: a system
+ * fault reaches a person). A lost compare-and-swap is left, `unreadable`, for the next pass.
  */
 export async function settleLeadWork(run: LeadRunRow, task: LeadTaskRow, options: { readonly idle?: boolean } = {}): Promise<'settled' | 'nothing_built' | 'unreadable'> {
   // `idle` (plan A L6/L7): the lead was ended while its task held no claim. The task is settled from
@@ -289,9 +290,11 @@ export async function settleLeadWork(run: LeadRunRow, task: LeadTaskRow, options
         detail: `the work branch could not be moved to the lead's tip ${tip.slice(0, 12)} (${target.branch}): ${followed.error}`,
         runId: run.id,
       }
-      // An idle settle holds no claim to charge and is retried on every pass: said once.
+      // An idle settle has no claim to charge and no turn to come: the version stops, and the card
+      // says why (task 8 review).
       if (idle) {
         await noteLeadOnce(stuck)
+        await stopLead(delivery.id, readLeadProgress(delivery.leadProgress).leadEnded ?? 'lead_failed', `the work branch could not be moved: ${followed.error}`)
         return 'unreadable'
       }
       await noteLead(stuck)
