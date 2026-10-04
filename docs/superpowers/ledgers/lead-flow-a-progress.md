@@ -62,6 +62,16 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
 
 ## Tasks
 
+- Task 1 -- done, reviewed: `6c934c5` (migration `20261004090000_lead_flow`, the domain `lead/` lists, progress
+  and state word, two events, web cards, m56a 78 -> 80). Review: CLEAN, three minor findings; two fixed in a
+  review commit (timeline detail for `workspace.lead_state`; `LEAD_SITUATION_KINDS` pinned against
+  `SITUATION_KINDS`), the third carried to Task 6/7 (below).
+
 ## Deferred minor findings
+
+- Task 1 review, carried forward: `readLeadProgress` resets the WHOLE record when one field fails its schema,
+  which would silently wipe `leadEnded`, `askReplies`, `baseMerges`, `denialContinues`. Task 6 makes
+  `progressJson` / `updateLeadProgress` validate with `leadProgressSchema` before writing (a throw inside the
+  lock), and Task 7 bounds the C6 continue note it writes into `nextTurn.note`.
 
 ## Results
