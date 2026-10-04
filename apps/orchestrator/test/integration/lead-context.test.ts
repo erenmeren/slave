@@ -24,7 +24,7 @@ async function seed(): Promise<Omit<LeadContextInput, 'turn' | 'resumed' | 'cont
   const team = await prisma.team.create({ data: { workspaceId: ws.id, name: 'Lead flow' } })
   const seat = await prisma.slave.create({ data: { teamId: team.id, role: 'Lead', runtimeRoles: ['implementer'], personId: (await prisma.person.create({ data: { name: `Lead ${ws.id.slice(0, 8)}` } })).id } })
   const run = await prisma.slaveRun.create({ data: { slaveId: seat.id, kind: 'implementation', status: 'starting', leadTurn: 'build' } })
-  return { runId: run.id, workspaceId: ws.id, goalVersion: 1, worktreePath: dir, roster: [{ slug: 'backend-developer', description: 'builds APIs' }], budget: { totalUsd: 30, shareUsd: 24, spentUsd: 0 }, timeLeftMs: null }
+  return { runId: run.id, workspaceId: ws.id, goalVersion: 1, worktreePath: dir, roster: [{ slug: 'backend-developer', description: 'builds APIs' }], budget: { totalUsd: 30, shareUsd: 24, spentUsd: 0, unmeasured: false }, timeLeftMs: null }
 }
 
 describe('buildLeadContext (lead-flow spec B3)', () => {
@@ -62,8 +62,15 @@ describe('buildLeadContext (lead-flow spec B3)', () => {
 
   it('tells a continued session what is left of its share, cut down to the cent', async (): Promise<void> => {
     const base = await seed()
-    const { prompt } = await buildLeadContext({ ...base, budget: { totalUsd: 30, shareUsd: 24, spentUsd: 0.004 }, turn: 'rework', resumed: true, continuation: false, note: 'R1: output: 404' })
+    const { prompt } = await buildLeadContext({ ...base, budget: { totalUsd: 30, shareUsd: 24, spentUsd: 0.004, unmeasured: false }, turn: 'rework', resumed: true, continuation: false, note: 'R1: output: 404' })
     expect(prompt).toContain('Left of your share: $23.99.')
+  })
+
+  it('says "at least" spent and "at most" left while part of the spend is unmeasured (C7, task 6 review)', async (): Promise<void> => {
+    const base = await seed()
+    const budget = { totalUsd: 30, shareUsd: 24, spentUsd: 2, unmeasured: true }
+    expect((await buildLeadContext({ ...base, budget, turn: 'build', resumed: false, continuation: false, note: null })).prompt).toContain('Spent of your share so far: at least $2.00.')
+    expect((await buildLeadContext({ ...base, budget, turn: 'continue', resumed: true, continuation: false, note: null })).prompt).toContain('Left of your share: at most $22.00.')
   })
 
   it('gives a new session after a lost transcript the brief, where the branch stands, and the note', async (): Promise<void> => {

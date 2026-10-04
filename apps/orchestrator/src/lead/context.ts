@@ -27,7 +27,8 @@ export interface LeadContextInput {
   /** What came back for this turn: a verifier's evidence, a failure, the reason it was interrupted. */
   readonly note: string | null
   readonly roster: readonly { readonly slug: string; readonly description: string }[]
-  readonly budget: { readonly totalUsd: number; readonly shareUsd: number; readonly spentUsd: number } | null
+  /** `unmeasured`: part of the lead's spend is not known yet (C7), so `spentUsd` is a floor. */
+  readonly budget: { readonly totalUsd: number; readonly shareUsd: number; readonly spentUsd: number; readonly unmeasured: boolean } | null
   readonly timeLeftMs: number | null
 }
 
@@ -56,6 +57,7 @@ export async function buildLeadContext(input: LeadContextInput): Promise<{ reado
     baseBranch: workspace.baseBranch,
     // Cut down to the cent: the lead is never told it has a cent more than it has.
     budgetLeftUsd: input.budget === null ? null : Math.max(0, cents(input.budget.shareUsd - input.budget.spentUsd)),
+    budgetUnmeasured: input.budget?.unmeasured === true,
     timeLeftMs: input.timeLeftMs,
   })
 

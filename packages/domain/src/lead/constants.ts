@@ -44,6 +44,7 @@ export const LEAD_NOTE_KINDS = [
   'lead_ended',
   'base_taken',
   'roster_dropped',
+  'branch_rewritten',
 ] as const
 export type LeadNoteKind = (typeof LEAD_NOTE_KINDS)[number]
 

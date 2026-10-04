@@ -86,7 +86,10 @@
 //                  the two calls with no results; `--final-text-base64
 //                  <base64>` is appended to the final message and the result
 //                  text; `--result-patch-base64 <base64 JSON>` is merged over
-//                  the terminal `result` line.
+//                  the terminal `result` line. Two more, from the task 6
+//                  review: `--reset-hard <rev>` resets the branch before the
+//                  work, and `--amend-work` amends the last commit instead of
+//                  adding one.
 //   M52 R8 hangs three optional side effects off the `--work-fixture` arm,
 //   so they reach every mode that has one and change nothing in any mode
 //   that is not asked for them. `--env-out <path>` appends this child's own
@@ -1504,6 +1507,11 @@ async function main() {
     }
     // Lead-flow plan A: `--no-work` writes and commits nothing (a lead that built nothing);
     // `--no-commit` writes its files and leaves them uncommitted (work the orchestrator commits).
+    // Lead-flow plan A (task 6 review): `--reset-hard <rev>` resets the branch first (a lead that
+    // threw its work away), and `--amend-work` folds this turn's work into the branch's last commit
+    // instead of adding one (a lead that rewrote a commit already integrated).
+    const resetTo = flagValue('--reset-hard')
+    if (resetTo !== undefined) execFileSync('git', ['reset', '-q', '--hard', resetTo], { cwd: process.cwd() })
     if (!args.includes('--no-work')) {
       const workFile = path.join(process.cwd(), flagValue('--work-file') ?? 'm8a-work.txt')
       mkdirSync(path.dirname(workFile), { recursive: true })
@@ -1518,7 +1526,7 @@ async function main() {
         // `--allow-empty`: a REWORK run adopts its previous attempt's worktree, where this same file
         // with the same first line is already committed -- without it the commit finds nothing, git
         // exits non-zero, and the run dies with no terminal result instead of doing its rework.
-        execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '--allow-empty', '-m', 'fake work'], { cwd: process.cwd() })
+        execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '--allow-empty', ...(args.includes('--amend-work') ? ['--amend'] : []), '-m', 'fake work'], { cwd: process.cwd() })
       }
     }
     // Conductor Plan 2: a package worker ends with a `<slave-report>` block. Scripted on argv, and

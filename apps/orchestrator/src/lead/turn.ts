@@ -25,11 +25,26 @@ export interface LeadTurnRun {
   readonly definitions: string | null
   readonly roster: readonly { readonly slug: string; readonly description: string }[]
   readonly rosterDropped: readonly string[]
-  readonly budget: { readonly totalUsd: number; readonly shareUsd: number; readonly spentUsd: number } | null
+  /** `unmeasured`: part of the lead's spend is not known (C7), so `spentUsd` is a floor. */
+  readonly budget: { readonly totalUsd: number; readonly shareUsd: number; readonly spentUsd: number; readonly unmeasured: boolean } | null
   readonly timeLeftMs: number | null
 }
 
 export type LeadTurnPlan = { readonly kind: 'hold' } | LeadTurnRun
+
+/**
+ * The session the next turn continues, from the task's lead turns newest first: the newest one with
+ * a session line, unless a resume that was spawned (it has a pid) and failed before its session line
+ * comes first -- that session's transcript is gone, and a later turn that also died before its
+ * session line does not bring it back (task 6 review). Null: a new session.
+ */
+function sessionToResume(newestFirst: readonly { readonly sessionId: string | null; readonly leadResumed: boolean; readonly status: string; readonly pid: number | null }[]): string | null {
+  for (const run of newestFirst) {
+    if (run.sessionId !== null) return run.sessionId
+    if (run.leadResumed && run.status === 'failed' && run.pid !== null) return null
+  }
+  return null
+}
 
 /**
  * Lead-flow plan A L4/L6: what the lead's next turn is, or `hold`. Held: the version is stopped,
@@ -74,11 +89,11 @@ export async function planLeadTurn(input: {
     orderBy: { startedAt: 'desc' },
     select: { sessionId: true, leadResumed: true, status: true, pid: true },
   })
-  const newest = earlier[0]
-  // A resume that was spawned (it has a pid) and failed before its session line: no transcript.
-  const lost = newest !== undefined && newest.leadResumed && newest.sessionId === null && newest.status === 'failed' && newest.pid !== null
-  const session = lost ? null : (earlier.find((run) => run.sessionId !== null)?.sessionId ?? null)
-  const first = earlier.length === 0
+  const session = sessionToResume(earlier)
+  // Task 6 review: a turn that never spawned (no pid) built nothing and has no session, so the
+  // first SPAWNED turn is the build and the turns are counted by spawns.
+  const spawned = earlier.filter((run) => run.pid !== null).length
+  const first = spawned === 0
   const queued = progress.nextTurn
   const wrapUp = leg.wrapUp || queuedWrapUp
   const turn: LeadTurn = first ? 'build' : wrapUp ? 'wrap_up' : (queued?.kind ?? (input.task.lastRejectionReason !== null ? 'rework' : 'continue'))
@@ -94,7 +109,7 @@ export async function planLeadTurn(input: {
     deliveryId: delivery.id,
     workspaceId: delivery.workspaceId,
     goalVersion: delivery.goalVersion,
-    ordinal: earlier.length + 1,
+    ordinal: spawned + 1,
     turn,
     resumeSessionId: session,
     continuation: !first && session === null,
@@ -104,7 +119,8 @@ export async function planLeadTurn(input: {
     definitions: built.json,
     roster: [...built.slugs.keys()].map((slug) => ({ slug, description: definitions[slug]?.description ?? '' })),
     rosterDropped: built.dropped,
-    budget: total === null ? null : { totalUsd: total, shareUsd: leadShareUsd(total), spentUsd: spend.leadUsd },
+    // C7: a turn that ended with no cost and no later total of its session is not in `spentUsd`.
+    budget: total === null ? null : { totalUsd: total, shareUsd: leadShareUsd(total), spentUsd: spend.leadUsd, unmeasured: spend.unmeasuredRuns > 0 },
     timeLeftMs,
   }
 }

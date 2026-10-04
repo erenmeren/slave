@@ -8,8 +8,9 @@ export interface LeadBriefInput {
   readonly goal: string
   readonly requirements: readonly { readonly key: string; readonly text: string }[]
   readonly decisions: readonly { readonly title: string; readonly decision: string }[]
-  /** Null for an unbudgeted goal. `spentUsd` is what the lead's own turns spent so far. */
-  readonly budget: { readonly totalUsd: number; readonly shareUsd: number; readonly spentUsd: number } | null
+  /** Null for an unbudgeted goal. `spentUsd` is what the lead's own turns spent so far; with
+   *  `unmeasured` part of it is not known yet (C7), and the figure is said as a floor. */
+  readonly budget: { readonly totalUsd: number; readonly shareUsd: number; readonly spentUsd: number; readonly unmeasured?: boolean } | null
   readonly timeLeftMs: number | null
   readonly roster: readonly { readonly slug: string; readonly description: string }[]
 }
@@ -40,7 +41,7 @@ export function renderLeadBrief(input: LeadBriefInput): string {
     budget === null
       ? 'No budget is set for this goal.'
       : `The goal's budget is ${usd(budget.totalUsd)}. Your share is ${usd(budget.shareUsd)}; ${usd(budget.totalUsd - budget.shareUsd)} is kept for proving the result. ` +
-        `Spent of your share so far: ${usd(budget.spentUsd)}. At four fifths of your share you are told to wrap up; at all of it you are stopped and what is committed is judged.`,
+        `Spent of your share so far: ${budget.unmeasured === true ? 'at least ' : ''}${usd(budget.spentUsd)}. At four fifths of your share you are told to wrap up; at all of it you are stopped and what is committed is judged.`,
     input.timeLeftMs === null
       ? 'No time limit is set.'
       : `Time left for this goal: ${minutes(input.timeLeftMs)}. When it runs out you are stopped and what is committed is judged.`,
@@ -79,6 +80,8 @@ export function renderLeadTurnNote(input: {
   readonly note: string | null
   readonly baseBranch: string
   readonly budgetLeftUsd: number | null
+  /** Part of the spend is not known yet (C7): what is left is said as a ceiling. */
+  readonly budgetUnmeasured?: boolean
   readonly timeLeftMs: number | null
 }): string {
   const opening =
@@ -91,7 +94,7 @@ export function renderLeadTurnNote(input: {
     opening,
     ...(input.note === null || input.note.trim() === '' ? [] : ['', trimToFit(input.note, 12_000)]),
     '',
-    ...(input.budgetLeftUsd === null ? [] : [`Left of your share: ${usd(input.budgetLeftUsd)}.`]),
+    ...(input.budgetLeftUsd === null ? [] : [`Left of your share: ${input.budgetUnmeasured === true ? 'at most ' : ''}${usd(input.budgetLeftUsd)}.`]),
     ...(input.timeLeftMs === null ? [] : [`Time left for this goal: ${minutes(input.timeLeftMs)}.`]),
   ]
     .join('\n')

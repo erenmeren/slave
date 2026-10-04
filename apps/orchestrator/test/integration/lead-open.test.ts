@@ -1,9 +1,13 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { INITIAL_LEAD_PROGRESS, LEAD_RULES, LEAD_TEMPLATE_ID, LEAD_TURN_NOTE_MAX_CHARS, integrationBranchName, readLeadProgress } from '@slave-of-ai/domain'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { withDeliveryLock } from '@slave-of-ai/control'
+import { openLeadGoal } from '../../src/lead/open.js'
 import { updateLeadProgress } from '../../src/lead/record.js'
+import { stopLead, stopLeadInLock } from '../../src/lead/stop.js'
+import { planLeadTurn } from '../../src/lead/turn.js'
 import { drainPumps, tick } from '../../src/tick.js'
-import { LEAD_TRUNCATE, base64, cleanUpLeadRepos, git, leadDelivery, leadNotes, leadTaskOf, merged, seedLead, tickUntil } from './lead-helpers.js'
+import { LEAD_TRUNCATE, base64, checked, cleanUpLeadRepos, git, leadDelivery, leadNotes, leadTaskOf, merged, seedLead, tickUntil, type LeadFixture } from './lead-helpers.js'
 
 describe('the lead flow: a goal is built by one lead turn', () => {
   beforeEach(async (): Promise<void> => {
@@ -139,5 +143,92 @@ describe('the lead flow: a goal is built by one lead turn', () => {
     // A progress the schema refuses is thrown inside the lock: nothing is written.
     await expect(updateLeadProgress(id, (progress) => ({ ...progress, askReplies: -1 }))).rejects.toThrow(/lead progress/)
     expect(readLeadProgress((await leadDelivery(f)).leadProgress)).toEqual(stored)
+  })
+
+  // Task 6 review: the lead may rewrite its own branch (amend, rebase, reset) on a later turn.
+  const REWRITTEN = 'branch_rewritten: the lead rewrote commits the work branch already had; the work branch now follows the lead\'s branch'
+  const failR1Once = (ordinal: number): readonly object[] | undefined => (ordinal === 1 ? [checked('RUN', 'pass'), checked('R1', 'fail'), checked('R2', 'pass')] : undefined)
+
+  it('follows a lead that amended a commit the work branch already had, says so, and proves and merges the amended tip', async (): Promise<void> => {
+    const f = await seedLead({ leadArgs: (ordinal) => (ordinal === 2 ? ['--amend-work'] : []), verify: failR1Once })
+    await tickUntil(f, merged(f))
+
+    expect(f.starts.filter((s) => s.kind === 'implementation').map((s) => s.leadTurn)).toEqual(['build', 'rework'])
+    const task = await leadTaskOf(f)
+    const delivery = await leadDelivery(f)
+    const tip = git(['rev-parse', task.branch ?? ''], f.repoPath)
+    expect(git(['rev-parse', delivery.integrationBranch], f.repoPath)).toBe(tip)
+    expect(git(['rev-parse', 'main'], f.repoPath)).toBe(tip)
+    // The amend replaced the first turn's commit: one commit on top of the cut, holding both turns' files.
+    expect(git(['rev-list', '--count', `${f.initialTip}..main`], f.repoPath)).toBe('1')
+    expect(git(['ls-tree', '-r', '--name-only', 'main'], f.repoPath).split('\n')).toEqual(expect.arrayContaining(['lead-work-1.txt', 'lead-work-2.txt']))
+    expect((await leadNotes(f)).filter((line) => line === REWRITTEN)).toHaveLength(1)
+  })
+
+  it('does not call a branch reset to the cut "nothing built" while earlier work is on the work branch', async (): Promise<void> => {
+    const f = await seedLead({ leadArgs: (ordinal) => (ordinal === 2 ? ['--reset-hard', 'HEAD~1', '--no-work'] : []), verify: failR1Once })
+    await tickUntil(f, merged(f))
+
+    const delivery = await leadDelivery(f)
+    expect(delivery.stopReason).not.toBe('nothing_built')
+    expect(git(['rev-parse', delivery.integrationBranch], f.repoPath)).toBe(f.initialTip)
+    expect(await leadNotes(f)).toContain(REWRITTEN)
+  })
+
+  /** A version opened in the lead flow with no turn run yet: the requirement tick, then the plan by hand. */
+  async function opened(f: LeadFixture): Promise<{ readonly taskId: string; readonly seatId: string; readonly deliveryId: string }> {
+    await tick(f.deps)
+    const set = await prisma.requirementSet.findUniqueOrThrow({ where: { workspaceId_goalVersion: { workspaceId: f.workspaceId, goalVersion: 1 } } })
+    expect(await openLeadGoal(f.workspaceId, { repoPath: f.repoPath, baseBranch: 'main', maxAttempts: 3 }, 1, set.items)).toBe('conducted')
+    const task = await leadTaskOf(f)
+    return { taskId: task.id, seatId: task.assigneeId ?? '', deliveryId: (await leadDelivery(f)).id }
+  }
+
+  it('writes the stop\'s two events once, even when a first stop in the lock was rolled back', async (): Promise<void> => {
+    const f = await seedLead()
+    const { deliveryId } = await opened(f)
+    await expect(
+      withDeliveryLock(deliveryId, async (tx) => {
+        await stopLeadInLock(tx, deliveryId, 'lead_failed', INITIAL_LEAD_PROGRESS, null)
+        throw new Error('rolled back')
+      }),
+    ).rejects.toThrow('rolled back')
+    expect((await leadDelivery(f)).status).toBe('integrating')
+    expect(await stopLead(deliveryId, 'lead_failed', null)).toBe(true)
+    expect((await leadDelivery(f)).status).toBe('needs_human')
+    const types = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: { in: ['workspace_goal_needs_human', 'workspace_lead_state'] } }, select: { type: true, payload: true } })
+    expect(types.filter((row) => row.type === 'workspace_goal_needs_human')).toHaveLength(1)
+    expect(types.filter((row) => row.type === 'workspace_lead_state' && (row.payload as { state: string }).state === 'awaiting_decision')).toHaveLength(1)
+  })
+
+  describe('planLeadTurn: which session the next turn continues', () => {
+    let at = Date.now() - 600_000
+    const turn = async (ids: { readonly taskId: string; readonly seatId: string }, row: Partial<{ leadTurn: 'build' | 'rework' | 'continue'; leadResumed: boolean; status: 'succeeded' | 'failed'; pid: number | null; sessionId: string | null; costUsd: number | null }>): Promise<void> => {
+      at += 1000
+      await prisma.slaveRun.create({ data: { taskId: ids.taskId, slaveId: ids.seatId, leadTurn: 'build', status: 'failed', startedAt: new Date(at), endedAt: new Date(at + 500), ...row } })
+    }
+    const plan = (ids: { readonly taskId: string; readonly deliveryId: string }): ReturnType<typeof planLeadTurn> => planLeadTurn({ task: { id: ids.taskId, lastRejectionReason: null }, deliveryId: ids.deliveryId })
+
+    it('treats a first turn that never spawned as no turn at all: the next is the build, in a new session', async (): Promise<void> => {
+      const ids = await opened(await seedLead())
+      await turn(ids, { pid: null, sessionId: null })
+      expect(await plan(ids)).toMatchObject({ kind: 'run', turn: 'build', ordinal: 1, resumeSessionId: null, continuation: false })
+    })
+
+    it('never resumes a session again once a resume of it found the transcript gone', async (): Promise<void> => {
+      const ids = await opened(await seedLead())
+      await turn(ids, { status: 'succeeded', pid: 101, sessionId: 'S1', costUsd: 1 })
+      await turn(ids, { leadTurn: 'rework', leadResumed: true, pid: 102, sessionId: null })
+      await turn(ids, { leadTurn: 'continue', leadResumed: false, pid: 103, sessionId: null })
+      expect(await plan(ids)).toMatchObject({ kind: 'run', turn: 'continue', ordinal: 4, resumeSessionId: null, continuation: true })
+    })
+
+    it('says the lead\'s spend is a floor while a turn of it is unmeasured (C7)', async (): Promise<void> => {
+      const ids = await opened(await seedLead({ budgetUsd: 30 }))
+      await turn(ids, { pid: 101, sessionId: 'S1', costUsd: null })
+      expect(await plan(ids)).toMatchObject({ resumeSessionId: 'S1', budget: { totalUsd: 30, shareUsd: 24, spentUsd: 0, unmeasured: true } })
+      await turn(ids, { leadTurn: 'continue', leadResumed: true, status: 'succeeded', pid: 102, sessionId: 'S1', costUsd: 2 })
+      expect(await plan(ids)).toMatchObject({ resumeSessionId: 'S1', budget: { spentUsd: 2, unmeasured: false } })
+    })
   })
 })

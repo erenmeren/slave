@@ -25,6 +25,12 @@ describe('the lead\'s brief (lead-flow spec B3)', () => {
     expect(brief).toContain('- backend-developer: builds APIs')
   })
 
+  it('says "at least" of what was spent while part of it is unmeasured (C7, task 6 review)', () => {
+    const input = { goalVersion: 1, goal: 'g', requirements: [], decisions: [], timeLeftMs: null, roster: [] }
+    expect(renderLeadBrief({ ...input, budget: { totalUsd: 30, shareUsd: 24, spentUsd: 1.5, unmeasured: true } })).toContain('Spent of your share so far: at least $1.50.')
+    expect(renderLeadBrief({ ...input, budget: { totalUsd: 30, shareUsd: 24, spentUsd: 1.5, unmeasured: false } })).toContain('Spent of your share so far: $1.50.')
+  })
+
   it('treats the goal as data: a routing literal in it is defused', () => {
     expect(brief).not.toContain('"verdict"')
   })
@@ -73,6 +79,11 @@ describe('a later turn\'s note', () => {
     expect(note).toContain('output: 404')
     expect(note).toContain('Left of your share: $4.80.')
     expect(note).toContain('about 20 minutes')
+  })
+
+  it('says "at most" of what is left while part of the spend is unmeasured (C7, task 6 review)', () => {
+    expect(renderLeadTurnNote({ ...base, kind: 'continue', note: null, budgetUnmeasured: true })).toContain('Left of your share: at most $4.80.')
+    expect(renderLeadTurnNote({ ...base, kind: 'continue', note: null, budgetUnmeasured: false })).toContain('Left of your share: $4.80.')
   })
 
   it('tells a wrap-up to commit and report, and an answer turn to decide and record', () => {
