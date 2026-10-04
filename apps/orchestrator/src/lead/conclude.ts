@@ -237,8 +237,18 @@ async function followLeadBranch(repoPath: string, branch: string, tip: string, w
  * branches still at the commit the goal was cut at is "nothing was built": the version stops and no
  * proof starts. Never throws on what git says about the two branches: a throw here would leave the
  * task holding a finished run's claim, to be sent back and fail the same way, turn after turn.
+ *
+ * `idle` (plan A L6/L7): the lead was ended while its task held no claim (`ready` or `rework`), and
+ * `run` is its newest turn, whose worktree is settled. Called from the goal pass, so it never throws
+ * on git either. With no claim there is nothing to charge or release: a work branch git cannot move
+ * (`stuck`) is said once and a lost compare-and-swap is left, both `unreadable`, and the next pass
+ * tries again -- no paid turn follows an ended lead, so the retry costs nothing but git calls.
  */
-export async function settleLeadWork(run: LeadRunRow, task: LeadTaskRow): Promise<'settled' | 'nothing_built' | 'unreadable'> {
+export async function settleLeadWork(run: LeadRunRow, task: LeadTaskRow, options: { readonly idle?: boolean } = {}): Promise<'settled' | 'nothing_built' | 'unreadable'> {
+  // `idle` (plan A L6/L7): the lead was ended while its task held no claim. The task is settled from
+  // its newest turn's worktree, and the guard is the task's own status instead of a run's claim.
+  const idle = options.idle === true
+  const claim = idle ? { id: task.id, activeRunId: null, status: { in: ['ready' as const, 'rework' as const] } } : { id: task.id, activeRunId: run.id }
   const target = await integrationTargetFor(task.id)
   if (target === null || run.worktreePath === null || task.branch === null) {
     console.warn(`[lead] run ${run.id} has no ${target === null ? 'goal version' : run.worktreePath === null ? 'worktree' : 'branch'} recorded: not settling`)
@@ -262,7 +272,7 @@ export async function settleLeadWork(run: LeadRunRow, task: LeadTaskRow): Promis
   // reset its branch to the cut while earlier work is on the work branch rewrote its branch instead.
   if (tip === delivery.baseCommit && workTip === delivery.baseCommit) {
     // Spec section 9: the claim goes back first, so nothing holds the task while the version waits.
-    await prisma.task.updateMany({ where: { id: task.id, activeRunId: run.id }, data: { status: 'rework', activeRunId: null } })
+    await prisma.task.updateMany({ where: claim, data: { status: 'rework', activeRunId: null } })
     await stopLead(delivery.id, 'nothing_built', null)
     return 'nothing_built'
   }
@@ -272,13 +282,19 @@ export async function settleLeadWork(run: LeadRunRow, task: LeadTaskRow): Promis
       // The ref is where it was and git cannot move it: this turn is charged like a failed one, so
       // the attempt cap ends a fault that would otherwise cost a paid turn forever.
       console.warn(`[lead] run ${run.id}: the work branch ${target.branch} could not be moved to ${tip.slice(0, 12)}: ${followed.error}`)
-      await noteLead({
+      const stuck = {
         workspaceId: task.workspaceId,
         version: target.goalVersion,
-        kind: 'turn',
+        kind: 'turn' as const,
         detail: `the work branch could not be moved to the lead's tip ${tip.slice(0, 12)} (${target.branch}): ${followed.error}`,
         runId: run.id,
-      })
+      }
+      // An idle settle holds no claim to charge and is retried on every pass: said once.
+      if (idle) {
+        await noteLeadOnce(stuck)
+        return 'unreadable'
+      }
+      await noteLead(stuck)
       await releaseLeadTurn(task, run.id, { platform: false, deliveryId: delivery.id, detail: `the work branch could not be moved: ${followed.error}` })
       return 'unreadable'
     }
@@ -287,7 +303,7 @@ export async function settleLeadWork(run: LeadRunRow, task: LeadTaskRow): Promis
       // turn is not the lead's fault -- the claim goes back with no attempt charged, as for a
       // platform failure, and the next turn settles again.
       console.warn(`[lead] run ${run.id}: the work branch ${target.branch} moved twice while it was being set to ${tip.slice(0, 12)}; released for another turn`)
-      await releaseTaskAfterFailure(task, run.id, 'rework', { platform: true })
+      if (!idle) await releaseTaskAfterFailure(task, run.id, 'rework', { platform: true })
       return 'unreadable'
     }
     if (followed.kind === 'rewritten') {
@@ -310,7 +326,7 @@ export async function settleLeadWork(run: LeadRunRow, task: LeadTaskRow): Promis
   }
 
   const done = await prisma.task.updateMany({
-    where: { id: task.id, activeRunId: run.id },
+    where: claim,
     data: { status: 'done', integratedAt: new Date(), activeRunId: null, lastRejectionReason: null },
   })
   if (done.count === 0) return 'settled'

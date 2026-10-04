@@ -6,6 +6,7 @@ import { appendEvent } from '@slave-of-ai/events'
 import { mergeOrAbort, primaryCheckoutReady } from './gitMerge.js'
 import { integrationWorktreePath } from './goalBranch.js'
 import { passedSmokeAtTip, settleStrandedSmoke, smokeErrorsInRound, startSmoke } from './smoke.js'
+import { enforceLeadLimits, syncLeadStates } from './lead/pass.js'
 import type { TickDeps } from './tick.js'
 import { dispatchVerification, lastVerificationFailure, settleStrandedClaim } from './verification.js'
 import { gitIn } from './worktree.js'
@@ -27,7 +28,7 @@ export interface GoalPassOptions {
  */
 export async function runGoalPass(deps: TickDeps, options: GoalPassOptions): Promise<void> {
   const workspaceId = deps.workspaceId
-  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId }, select: { autoMerge: true, repoPath: true, baseBranch: true } })
+  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId }, select: { autoMerge: true, repoPath: true, baseBranch: true, flow: true } })
   // A hand merge confirmed from the CLI leaves the integration worktree behind (`packages/control`
   // does not know where worktrees live); it is spent once the branch is in the base branch.
   //
@@ -90,16 +91,30 @@ export async function runGoalPass(deps: TickDeps, options: GoalPassOptions): Pro
       console.error(`[goal] goal delivery ${id} could not be moved on this pass:`, error)
     }
   }
+  // Lead flow (plan A L14): the state word follows whatever this pass moved. Wrapped: a failure here
+  // must not fail the pass.
+  await syncLeadStates(workspaceId).catch((error: unknown) => {
+    console.error(`[goal] the lead state of workspace ${workspaceId} could not be synced:`, error)
+  })
 }
 
 /** One open delivery's step of {@link runGoalPass}. */
 async function advanceDelivery(
   deps: TickDeps,
   options: GoalPassOptions,
-  workspace: { readonly autoMerge: boolean; readonly repoPath: string; readonly baseBranch: string },
+  workspace: { readonly autoMerge: boolean; readonly repoPath: string; readonly baseBranch: string; readonly flow: 'packages' | 'lead' },
   id: string,
 ): Promise<void> {
   const workspaceId = deps.workspaceId
+  // Lead flow (spec B4, plan A L6/L7): the goal's own limits come first -- an ended lead is settled
+  // or cancelled before anything below reads the version. Logged, not thrown, like the two steps below.
+  if (workspace.flow === 'lead') {
+    try {
+      await enforceLeadLimits(deps, id)
+    } catch (error) {
+      console.error(`[goal] goal delivery ${id}: enforceLeadLimits failed on this pass --`, error)
+    }
+  }
   // Supervisor-as-conductor plan A D4: a hand-off to a finished package reopens it before this pass
   // can start a smoke on a tip that lacks it; under the delivery's lock, and only while `integrating`
   // with no claim. An accepted version's undelivered hand-offs expire here. It is also where a

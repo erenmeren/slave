@@ -26,6 +26,7 @@ import {
   createPerson,
   deletePerson,
   joinDepartment,
+  leadStatus,
   leaveDepartment,
   listDepartmentMembers,
   movePerson,
@@ -356,6 +357,11 @@ const USAGE = `usage: orchestrator <command> [options]
                                        a lead-flow project's settings: the goal's working-time
                                        limit, the persons its subordinate sessions are defined
                                        from, and the model of its lead, verifier and confirmer.
+  lead-status --workspace <id> [--version <n>]
+                                       a lead-flow goal version as JSON: its state word, why it
+                                       stopped, spend and time against the limits, the lead's
+                                       turns, the subordinates by person, the last commits and the
+                                       report lines. The newest lead-flow version when none is named.
   conductor --workspace <id> [--version <n>]
                                        what the conductor has decided and done for one goal version
                                        (the current one by default): the extracted requirements, the
@@ -2357,6 +2363,15 @@ export async function main(argv: readonly string[]): Promise<number> {
       })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`${JSON.stringify(result.value)}\n`)
+      return 0
+    }
+
+    case 'lead-status': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const versionText = flagText(flags, 'version')
+      const result = await leadStatus(workspaceId, versionText === undefined ? undefined : goalVersionFlag(versionText))
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`${JSON.stringify(result.value, null, 2)}\n`)
       return 0
     }
 
