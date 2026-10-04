@@ -90,6 +90,15 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
   session definitions kept only when they are one JSON object; more bad-file test cases).
 - Deviation, accepted: the roster's byte bound uses `TextEncoder`, not `Buffer` -- the domain package is
   bundled into the browser build and imports no Node built-in.
+- Task 5 -- done, reviewed: `9625fc3` + review fixes `f41bf6a`, `882f6ea`. Round 1: FIX (Important:
+  `goalWorkedMs` charged the pause of a run stopped while paused -- `requestStop` ends it without folding
+  `pausedAt`); round 2: CLEAN. Also fixed: a new import cycle (`LEAD_RULES` moved to the leaf `lead/rules.ts`);
+  `ROUTING_LITERALS` gained `intakeAnswer` and `personas`, which the fake routes by (a goal quoting them would
+  have sent a lead turn to the intake fixture); the share left is cut down to the cent.
+- Ruling: a lead leg is also capped so the proof reserve stays whole -- `nextLeadLeg` takes `proofSpentUsd`
+  and caps at `budget - leadSpent - proofSpent - budget/5`, the conductor's cost not counted -- spec P5 says
+  the reserve always covers the final full verification, and proof runs may spend into the lead's unspent
+  share -- the lead can be ended for budget earlier than its share alone says, when proof was expensive.
 
 ## Deferred minor findings
 
