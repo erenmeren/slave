@@ -126,6 +126,16 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
   again: bounded by the vendor cap of that leg, not by the share.
 - Deviation, accepted: a lead task with no goal version (`integrationTargetFor` null) releases a failed turn
   instead of keeping its claim, as Task 6 did.
+- Task 8 -- done, reviewed: `2b27467` + review fix `e9ab976`. Review: CLEAN with two minors, both fixed: an
+  ended lead's work branch that git cannot move stops the version with one card (was: retried on every pass,
+  no card); a turn cancelled for the goal's time is claimed `stopping` + `platform`, so whichever path
+  concludes it charges no attempt. The plan's 19.20 / 4.80 legs hold under the Task 5 reserve rule (no proof
+  was paid before the wrap-up). Container restarts stopped the implementer twice; its uncommitted work was in
+  the tree and it resumed from there.
+- Ruling: an idle settle (no claim: the lead was ended) whose work branch git cannot move stops the version
+  under the reason the lead was ended for, with git's error as the card's detail -- spec section 3: a system
+  fault the product cannot work around reaches a person -- a transient git fault (a lock released a second
+  later) stops a version that one more pass would have saved.
 
 ## Deferred minor findings
 
