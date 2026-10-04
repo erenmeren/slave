@@ -63,7 +63,7 @@ The open points at the end of this plan were answered by the controller on 2026-
 - The hook plane (`scripts/pause-gate.sh`, `scripts/cursor-shell-gate.sh`, `scripts/tool-result-tap.sh`, `scripts/lib/pause-flag.sh`, `scripts/lib/permissions.sh`) does not change.
 - Counts: this plan adds two event types (`LANE_BY_TYPE` 78 → 80) and no situation or action kind (25 / 25). Every place that pins the event list is updated in Task 1: `packages/db/prisma/schema.prisma` (`enum EventType`), the migration, `packages/db/src/enums.ts`, `packages/domain/src/events/schema.ts`, `packages/domain/src/supervisor/timeline.ts`, `apps/web/src/components/activity/cards.tsx` (registry), `apps/web/src/lib/activityFilters.ts`, `apps/web/src/server/timeline.ts`, `packages/domain/test/supervisor/timeline.test.ts`, `apps/web/test/activity-cards.test.tsx` (`PAYLOAD_BY_TYPE`), `apps/web/test/activityFilters.test.ts`, `scripts/gate-m56a-provider-contract.mjs` stage 12.
 - A project not in the lead flow is unchanged. Every branch this plan adds is guarded by `workspace.flow === 'lead'` or `run.leadTurn !== null`, both false or null on every existing row. Each task's "Unchanged for `packages`" line says what protects it; Task 11 pins it with a test in which the old pipeline's review still runs.
-- Every commit message ends with exactly `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
+- Every commit message ends with exactly `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - Spec B4 verbatim: "The per-run limits (200 tool calls, 30 minutes) do not apply to the lead. A goal version has a budget (the sum of lead, subordinates, verifier, hunter) and a time limit. One fifth of the budget is reserved for proof and hunt; the lead is told its share. At 80% of its share it is told to wrap up (commit, write the report); at 100% it is stopped and proof starts on what is committed."
 - Spec P3 verbatim: "Before a failed requirement goes back to the lead, a second independent session re-checks only the failed ones. Both say fail: rework. They disagree: the requirement is `disputed`, it is not sent to rework, and the report says so."
 - Spec P5 verbatim: "A round after rework checks the smoke and what failed before. Before delivery a full verification always runs on the final commit; the reserved budget always covers it."
@@ -715,7 +715,7 @@ Beside the `workspace.package_noted` line of the detail function in the same fil
 git add packages/db/prisma packages/db/src/enums.ts packages/db/test/integration/enum-parity.test.ts packages/domain/src/lead packages/domain/src/index.ts packages/domain/src/events/schema.ts packages/domain/src/supervisor/timeline.ts packages/domain/src/supervisor/world.ts packages/domain/src/goalReport packages/domain/test apps/web/src/components/activity/cards.tsx apps/web/src/lib/activityFilters.ts apps/web/src/server/timeline.ts apps/web/test scripts/gate-m56a-provider-contract.mjs
 git commit -m "feat(db): a project has a flow, a lead-flow goal version has a state word and a progress record, and two events say so
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1156,7 +1156,7 @@ In `apps/orchestrator/test/integration/cli.test.ts`, after the two `set-delivery
 git add packages/control/src/lead/flow.ts packages/control/src/index.ts packages/control/src/refusal.ts packages/control/src/stats.ts packages/control/test/integration/lead-flow.test.ts apps/orchestrator/src/supervisor.ts apps/orchestrator/src/cli.ts apps/orchestrator/test/lead-situations.test.ts apps/orchestrator/test/integration/cli.test.ts
 git commit -m "feat(lead): a project can be put into the lead flow, with its three system seats, its time limit and its roster
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1165,9 +1165,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 **Files:**
 - Modify: `packages/domain/src/provider/claude-code.ts:67-73` (`CLAUDE_CODE_TOOLS.run_commands`)
 - Modify: `scripts/gate-m26-vocabulary.mjs` (a second, case-sensitive protected pattern), `scripts/rename-agent-to-slave.mjs` (`PROTECTED_TOKENS` and one `selfTest` case)
-- Modify: `scripts/gate-m56a-provider-contract.mjs:164` (`CLAUDE_VOCABULARY_NAMES` 38 → 39)
+- Modify: `scripts/gate-m56a-provider-contract.mjs:161` (`CLAUDE_VOCABULARY_NAMES` 38 → 39)
 - Modify (regenerated, Step 4): `scripts/fixtures/m56a-goldens/permissions-claude_code-{implementation,review,planning,verification}-{baseline,granted}.json` (8 files); Modify by hand: `scripts/fixtures/m56a-goldens/tools-by-kind.json`, `scripts/fixtures/m56a-goldens/README.md`
-- Test: `packages/domain/test/permission/kinds.test.ts:95-101` (the list) plus one new case, `packages/domain/test/permission/resolve.test.ts:28`, `packages/control/test/permission-mapping.test.ts:49`, `apps/orchestrator/test/integration/resume-execution.test.ts:208`, `apps/orchestrator/test/integration/tick.test.ts:588`
+- Test: `packages/domain/test/permission/kinds.test.ts:95-110` (the list; `'Task'` is at `:99`) plus one new case, `packages/domain/test/permission/resolve.test.ts:28`, `packages/control/test/permission-mapping.test.ts:49`, `apps/orchestrator/test/integration/resume-execution.test.ts:208`, `apps/orchestrator/test/integration/tick.test.ts:588`
 
 **Interfaces:**
 - Produces: `TOOL_VOCABULARY.claude_code['Agent'] === 'run_commands'`; every `permissions.json` written for a Claude run carries the name in its `vocabulary`, and in `allow` when `run_commands` is granted.
@@ -1221,7 +1221,7 @@ and change the offender filter's `line.replace(PROTECTED, '')` to `line.replace(
 
 Run `node scripts/rename-agent-to-slave.mjs --self-test` and `node scripts/gate-m26-vocabulary.mjs` → `PASS: the word is slave everywhere it is ours`.
 
-- [ ] **Step 4: The goldens.** The eight Claude `permissions-*.json` goldens carry the vocabulary byte for byte. Regenerate them with the gate's own fixed inputs (`GOLDEN_RUN_ID`, `GOLDEN_RUN_TOKEN`, `GOLDEN_VERIFICATION_OWNERSHIP` at `scripts/gate-m56a-provider-contract.mjs:153-159`; copy them exactly):
+- [ ] **Step 4: The goldens.** The eight Claude `permissions-*.json` goldens carry the vocabulary byte for byte. Regenerate them with the gate's own fixed inputs (`GOLDEN_RUN_ID`, `GOLDEN_RUN_TOKEN`, `GOLDEN_VERIFICATION_OWNERSHIP` at `scripts/gate-m56a-provider-contract.mjs:153-158`; copy them exactly):
 
 ```bash
 npx tsc --build
@@ -1265,7 +1265,7 @@ hook-plane digests did not change.
 git add packages/domain/src/provider/claude-code.ts packages/domain/test/permission packages/control/test/permission-mapping.test.ts apps/orchestrator/test/integration/resume-execution.test.ts apps/orchestrator/test/integration/tick.test.ts scripts/gate-m26-vocabulary.mjs scripts/rename-agent-to-slave.mjs scripts/gate-m56a-provider-contract.mjs scripts/fixtures/m56a-goldens
 git commit -m "feat(permission): the subordinate-session tool is governed under its current name, beside the old one
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1274,21 +1274,21 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `packages/domain/src/lead/constants.ts` (add `SUBORDINATE_TOOLS`), create `packages/domain/src/lead/roster.ts`, modify `packages/domain/src/lead/index.ts`
-- Modify: `packages/domain/src/events/schema.ts` (`run.tool_call` payload gains `subagent`)
+- Modify: `packages/domain/src/events/schema.ts` (`run.tool_call` payload gains `subagent` and `parentToolUseId`)
 - Modify: `packages/providers/src/runtime/process.ts` (spawn extras; `buildChildEnv`'s `keepAliveForSubordinates`; the package index already re-exports this module whole)
 - Modify: `packages/providers/src/contract/adapter.ts` (`StartRunInput.resumeSessionId`)
-- Modify: `packages/providers/src/claude/adapter.ts` (`spawnRun` at `:263-303`, `resume` at `:620-663`)
-- Modify: `packages/providers/src/types.ts` (`tool_call.subagent`), `packages/providers/src/claude/stream.ts` (`parseAssistantLine` at `:421-435`)
+- Modify: `packages/providers/src/claude/adapter.ts` (`spawnRun` at `:263-303`, `resume` from `:521`)
+- Modify: `packages/providers/src/types.ts` (`tool_call.subagent`, `tool_call.parentToolUseId`), `packages/providers/src/claude/stream.ts` (`assistantEnvelopeSchema` at `:383`, `parseAssistantLine` at `:407-435`)
 - Modify: `apps/orchestrator/src/pump.ts:824-829` (the `run.tool_call` emit)
-- Modify: `packages/providers/test/fake-claude.mjs` (eight knobs on the `m8-flow` work arm at `:1424-1451`)
+- Modify: `packages/providers/test/fake-claude.mjs` (eight knobs on the `m8-flow` work arm at `:1424-1450`)
 - Test: `packages/domain/test/lead/roster.test.ts` (new), `packages/providers/test/adapter-lead.test.ts` (new), `packages/providers/test/stream.test.ts` (two cases), `packages/providers/test/runtime-process.test.ts` (one case), `apps/orchestrator/test/integration/pump.test.ts` (one case after "forwards the parser-derived readable summary…")
 
 **Interfaces:**
 - Produces (domain): `SUBORDINATE_TOOLS: readonly string[]`; `interface RosterMember { readonly personId: string; readonly name: string; readonly description: string; readonly instructions: string }`; `rosterSlug(name: string): string`; `buildRosterDefinitions(members: readonly RosterMember[]): { readonly json: string | null; readonly slugs: ReadonlyMap<string, string>; readonly dropped: readonly string[] }` (`slugs` maps a definition's key to its `personId`; `dropped` are the names that did not fit).
-- Produces (providers): `interface SpawnExtras { readonly sessionDefinitions?: string; readonly maxBudgetUsd?: number; readonly keepAliveForSubordinates?: boolean }`; `spawnExtrasPathFor(runDir: string): string`; `writeSpawnExtras(runDir: string, extras: SpawnExtras): void`; `readSpawnExtras(runDir: string): SpawnExtras`; `StartRunInput.resumeSessionId?: string`; `RuntimeEvent` `tool_call` gains `readonly subagent?: string`.
-- Produces (event): `run.tool_call.payload.subagent?: string` (1..200).
+- Produces (providers): `interface SpawnExtras { readonly sessionDefinitions?: string; readonly maxBudgetUsd?: number; readonly keepAliveForSubordinates?: boolean }`; `spawnExtrasPathFor(runDir: string): string`; `writeSpawnExtras(runDir: string, extras: SpawnExtras): void`; `readSpawnExtras(runDir: string): SpawnExtras`; `StartRunInput.resumeSessionId?: string`; `RuntimeEvent` `tool_call` gains `readonly subagent?: string` (a TOP-LEVEL subordinate call only, C1) and `readonly parentToolUseId?: string` (the line's `parent_tool_use_id`, absent when null: the call was made inside the subordinate session that call started).
+- Produces (event): `run.tool_call.payload.subagent?: string` (1..200); `run.tool_call.payload.parentToolUseId?: string` (1..200).
 - Produces (fake CLI, `m8-flow` work arm only): `--no-work`, `--no-commit`, `--extra-file-base64 <path>:<base64>`, `--final-text-base64 <base64>`, `--result-patch-base64 <base64 JSON>`, `--subordinate <name>`, `--subordinate-unfinished`, `--fail-resume`.
-- Unchanged for `packages`: with no `resumeSessionId` and no `spawn-extras.json` the argv and the environment are byte-identical to today's (`argv.json` golden and `CHILD_ENV_ALLOW` do not move); `subagent` is absent on every call whose tool is not a subordinate tool or whose input names none.
+- Unchanged for `packages`: with no `resumeSessionId` and no `spawn-extras.json` the argv and the environment are byte-identical to today's (`argv.json` golden and `CHILD_ENV_ALLOW` do not move); `subagent` is absent on every call whose tool is not a subordinate tool, whose input names none, or that a subordinate made; `parentToolUseId` is absent on every line whose `parent_tool_use_id` is null, which is every line of every recorded fixture.
 
 - [ ] **Step 1: Failing domain test.** Create `packages/domain/test/lead/roster.test.ts`:
 
@@ -1522,9 +1522,9 @@ describe('ClaudeCodeAdapter and a lead turn (lead-flow plan A L4/L6/L16)', () =>
 In `packages/providers/test/stream.test.ts` add (use the file's own `parseStreamLine` import):
 
 ```ts
-describe('a subordinate call names its session definition (lead flow L16)', () => {
-  const line = (name: string, input: unknown): string =>
-    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu_1', name, input }] } })
+describe('a subordinate call names its session definition (lead flow L16, C1)', () => {
+  const line = (name: string, input: unknown, parent: string | null = null): string =>
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu_1', name, input }] }, parent_tool_use_id: parent })
 
   it('carries subagent_type as `subagent` for the subordinate tool under either name', () => {
     expect(parseStreamLine(line('Agent', { subagent_type: 'backend-developer', description: 'build the API', prompt: 'x' }))).toMatchObject({ kind: 'tool_call', toolName: 'Agent', subagent: 'backend-developer' })
@@ -1535,6 +1535,14 @@ describe('a subordinate call names its session definition (lead flow L16)', () =
     expect(parseStreamLine(line('Bash', { subagent_type: 'x', command: 'ls' }))).not.toHaveProperty('subagent')
     expect(parseStreamLine(line('Agent', { prompt: 'x' }))).not.toHaveProperty('subagent')
     expect(parseStreamLine(line('Agent', { subagent_type: '   ' }))).not.toHaveProperty('subagent')
+  })
+
+  it('carries the parent call on a line a subordinate session wrote, and names no subordinate there (C1)', () => {
+    const inner = parseStreamLine(line('Agent', { subagent_type: 'qa', prompt: 'x' }, 'tu_parent'))
+    expect(inner).toMatchObject({ kind: 'tool_call', toolName: 'Agent', parentToolUseId: 'tu_parent' })
+    expect(inner).not.toHaveProperty('subagent')
+    expect(parseStreamLine(line('Bash', { command: 'ls' }, 'tu_parent'))).toMatchObject({ parentToolUseId: 'tu_parent' })
+    expect(parseStreamLine(line('Bash', { command: 'ls' }))).not.toHaveProperty('parentToolUseId')
   })
 })
 ```
@@ -1552,18 +1560,20 @@ In `packages/providers/test/runtime-process.test.ts` add one case to the `buildC
 In `apps/orchestrator/test/integration/pump.test.ts`, after the case "forwards the parser-derived readable summary on run.tool_call…":
 
 ```ts
-  it('carries the session definition a subordinate call named on run.tool_call, and no such field on any other call (lead flow L16)', async (): Promise<void> => {
+  it('carries the session definition a subordinate call named on run.tool_call, and the parent call on a subordinate\'s own call (lead flow L16, C1)', async (): Promise<void> => {
     await pumpRun({
       ...ids,
       events: fromArray([
         { kind: 'session_started', sessionId: 's-1' },
         { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Agent', summary: 'subordinate: build the API', argsHash: testArgsHash('a'), subagent: 'backend-developer' },
-        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Bash', summary: 'Bash ls', argsHash: testArgsHash('b') },
+        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Bash', summary: 'Bash ls', argsHash: testArgsHash('b'), parentToolUseId: 'tu_1' },
         { kind: 'terminated', outcome: okOutcome },
       ]),
     })
     const rows = await prisma.executionEvent.findMany({ where: { runId: ids.runId, type: 'run_tool_call' }, orderBy: { seq: 'asc' }, select: { payload: true } })
     expect(rows.map((row) => (row.payload as { subagent?: string }).subagent)).toEqual(['backend-developer', undefined])
+    // C1: the subordinate's own call carries the call that started its session.
+    expect(rows.map((row) => (row.payload as { parentToolUseId?: string }).parentToolUseId)).toEqual([undefined, 'tu_1'])
   })
 ```
 
@@ -1670,46 +1680,64 @@ In `spawnRun`, before `const args = [`, add `const extras = readSpawnExtras(inpu
 
 and in its `buildChildEnv({ … })` call add `...(extras.keepAliveForSubordinates === true ? { keepAliveForSubordinates: true } : {}),` after the `verifyDirIfPresent` spread. In `resume`, after `const resumedInput: StartRunInput = { … }`, add `const extras = readSpawnExtras(resumedInput.runDir)`; in its `args`, after `checkpoint.sessionId,`, add `...extrasArgs(extras),`; and in its `buildChildEnv({ … })` call add the same `keepAliveForSubordinates` spread after `...verifyDirIfPresent(resumedInput.runDir),`.
 
-- [ ] **Step 6: The subordinate's name.** In `packages/providers/src/types.ts`, in the `tool_call` variant after `argsHash`:
+- [ ] **Step 6: The subordinate's name and the parent call (L16, C1).** In `packages/providers/src/types.ts`, in the `tool_call` variant after `argsHash`:
 
 ```ts
-      /** Lead-flow plan A L16: the session definition a subordinate call named (`subagent_type`). */
+      /** Lead-flow plan A L16 / C1: the session definition a TOP-LEVEL subordinate call named (`subagent_type`). */
       readonly subagent?: string
+      /**
+       * Lead-flow C1: the line's `parent_tool_use_id` -- the subordinate call whose session made
+       * this call. Absent on the session's own calls (the field is null there, as on every line of
+       * every recorded fixture).
+       */
+      readonly parentToolUseId?: string
 ```
 
-In `packages/providers/src/claude/stream.ts` import `SUBORDINATE_TOOLS` from `@slave-of-ai/domain`, add above `parseAssistantLine`:
+In `packages/providers/src/claude/stream.ts` add `parent_tool_use_id: z.string().nullable().optional(),` to `assistantEnvelopeSchema` (beside `message`; a line without it parses as before), import `SUBORDINATE_TOOLS` from `@slave-of-ai/domain`, and add above `parseAssistantLine`:
 
 ```ts
 /**
- * Lead-flow plan A L16: which session definition a subordinate call names, or null -- for the
- * subordinate tool only, and only a non-blank string. It is the one argument of that call the log
- * keeps beside the summary: it says which roster person did the work.
+ * Lead-flow plan A L16 / C1: which session definition a subordinate call names, or null -- for the
+ * subordinate tool only, only a non-blank string, and only on a call the session made itself
+ * (`parent` null): a subordinate that starts a session of its own did not pick from the roster.
+ * It is the one argument of that call the log keeps beside the summary: it says which roster
+ * person did the work.
  */
-function subordinateOf(toolName: string, input: unknown): string | null {
-  if (!SUBORDINATE_TOOLS.includes(toolName) || !isRecord(input)) return null
+function subordinateOf(toolName: string, input: unknown, parent: string | null): string | null {
+  if (parent !== null || !SUBORDINATE_TOOLS.includes(toolName) || !isRecord(input)) return null
   const named = input['subagent_type']
   return typeof named === 'string' && named.trim() !== '' ? named.trim().slice(0, 200) : null
 }
 ```
 
-In `parseAssistantLine`, directly above the `return { kind: 'tool_call', … }`, add `const subagent = subordinateOf(result.data.name, result.data.input)`, and in the returned object, after `argsHash: hashToolInput(result.data.input),`:
+In `parseAssistantLine`, directly above the `return { kind: 'tool_call', … }`, add
+
+```ts
+    const parent = envelope.data.parent_tool_use_id ?? null
+    const subagent = subordinateOf(result.data.name, result.data.input, parent)
+```
+
+and in the returned object, after `argsHash: hashToolInput(result.data.input),`:
 
 ```ts
       ...(subagent === null ? {} : { subagent }),
+      ...(parent === null || parent === '' ? {} : { parentToolUseId: parent.slice(0, 200) }),
 ```
 
 In `packages/domain/src/events/schema.ts`, in the `run.tool_call` payload after `argsHash`'s line, add:
 
 ```ts
-      // Lead-flow plan A L16: the session definition a subordinate call named. Optional: only the
-      // subordinate tool carries one.
+      // Lead-flow plan A L16 / C1: the session definition a top-level subordinate call named, and
+      // the subordinate call a nested call was made under. Optional: most calls carry neither.
       subagent: z.string().min(1).max(200).optional(),
+      parentToolUseId: z.string().min(1).max(200).optional(),
 ```
 
 In `apps/orchestrator/src/pump.ts`, in `case 'tool_call'`, the `emit('run.tool_call', 'slave', { … })` object gains, after `argsHash: event.argsHash,`:
 
 ```ts
           ...(event.subagent === undefined ? {} : { subagent: event.subagent }),
+          ...(event.parentToolUseId === undefined ? {} : { parentToolUseId: event.parentToolUseId }),
 ```
 
 - [ ] **Step 7: The fake's knobs.** In `packages/providers/test/fake-claude.mjs`, add to the header comment's `m8-flow` entry one paragraph listing the eight flags of this step, and add above `async function main()`:
@@ -1729,9 +1757,10 @@ function extraFile() {
 /**
  * Lead-flow plan A: patches the `complete` capture's lines in place, each knob a no-op unless its
  * flag is on ARGV. Returns whether any applied.
- *   --subordinate <name>          one `Agent` tool call naming that session definition, and its
- *                                 result, right after the init line (`--subordinate-unfinished`:
- *                                 the call alone, with no result)
+ *   --subordinate <name>          one `Agent` tool call naming that session definition, one
+ *                                 `Bash` call the subordinate made under it (C1: its line carries
+ *                                 `parent_tool_use_id`), and both results, right after the init
+ *                                 line (`--subordinate-unfinished`: the two calls, no results)
  *   --final-text-base64 <b64>     appended to the final message and the result text
  *   --result-patch-base64 <b64>   a JSON object merged over the terminal `result` line (a budget
  *                                 cap's ending, a cost)
@@ -1742,11 +1771,15 @@ function applyRunKnobs(lines) {
   if (subordinate !== undefined) {
     const session = JSON.parse(lines[0]).session_id
     const id = 'toolu_fake_subordinate'
+    const innerId = 'toolu_fake_subordinate_inner'
     const call = { type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Agent', input: { subagent_type: subordinate, description: 'fake subordinate work', prompt: 'do it' } }] }, parent_tool_use_id: null, session_id: session }
+    // C1: what the subordinate itself does arrives on this stream under its parent call's id.
+    const inner = { type: 'assistant', message: { content: [{ type: 'tool_use', id: innerId, name: 'Bash', input: { command: 'true', description: 'subordinate check' } }] }, parent_tool_use_id: id, session_id: session }
+    const innerResult = { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: innerId, content: '' }] }, parent_tool_use_id: id, session_id: session }
     const result = { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'done' }] }, parent_tool_use_id: null, session_id: session }
-    // `--subordinate-unfinished`: the call has no result -- the subordinate was still working when the turn ended.
-    if (args.includes('--subordinate-unfinished')) lines.splice(1, 0, JSON.stringify(call))
-    else lines.splice(1, 0, JSON.stringify(call), JSON.stringify(result))
+    // `--subordinate-unfinished`: no results -- the subordinate was still working when the turn ended.
+    if (args.includes('--subordinate-unfinished')) lines.splice(1, 0, JSON.stringify(call), JSON.stringify(inner))
+    else lines.splice(1, 0, JSON.stringify(call), JSON.stringify(inner), JSON.stringify(innerResult), JSON.stringify(result))
     applied = true
   }
   const finalText = flagValue('--final-text-base64')
@@ -1829,7 +1862,7 @@ In the `m8-flow` branch of `main`, replace the work body from `const workFile = 
 git add packages/domain/src/lead packages/domain/src/events/schema.ts packages/domain/test/lead/roster.test.ts packages/providers/src packages/providers/test apps/orchestrator/src/pump.ts apps/orchestrator/test/integration/pump.test.ts
 git commit -m "feat(providers): a run can continue a session at its first spawn, carry a roster and a budget cap, and say which subordinate a call named
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2682,7 +2715,7 @@ Run `npx vitest run apps/orchestrator/test/integration/lead-context.test.ts` →
 git add packages/domain/src/lead packages/domain/src/run-context packages/domain/test packages/control/src/lead packages/control/src/index.ts packages/control/test/integration/lead-spend.test.ts apps/orchestrator/src/lead/context.ts apps/orchestrator/test/integration/lead-context.test.ts apps/web/src/lib/runContextSummary.ts apps/web/test/runContextSummary.test.ts
 git commit -m "feat(lead): the lead's brief, its budget legs, and what a goal version spent and took
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2694,10 +2727,12 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Modify: `apps/orchestrator/src/conductor.ts` (`conduct` at `:57-96`: the `select` and one branch; `export` on `AlreadyConducted` at `:119` and on `materialise` at `:342`)
 - Modify: `apps/orchestrator/src/tick.ts` (`startRun` at `:777-1093`: five insertions, Step 6)
 - Modify: `apps/orchestrator/src/verify.ts` (`verifyConcludedRun` at `:329-337`: one branch)
+- Modify: `packages/control/src/runtime.ts` (`leadRuntime`, after `resolveRuntime`; Step 7f), `apps/orchestrator/src/model.ts` (re-export `leadRuntime`)
 - Create: `apps/orchestrator/test/integration/lead-helpers.ts`
-- Test: `packages/domain/test/lead/stop.test.ts` (new), `apps/orchestrator/test/integration/lead-open.test.ts` (new)
+- Test: `packages/domain/test/lead/stop.test.ts` (new), `apps/orchestrator/test/integration/lead-open.test.ts` (new), `packages/control/test/runtime.test.ts` (one case, Step 7f)
 
 **Interfaces:**
+- Produces (control, `runtime.ts`): `leadRuntime(seat: { readonly model: string | null }): ResolvedRuntime` (C5; Task 9 imports it through `apps/orchestrator/src/model.ts`).
 - Consumes: `ensureLeadSeats`, `goalSpend`, `goalWorkedMs`, `loadLeadRoster`, `withDeliveryLock`, `refusalText` (control); `singlePlan`, `integrationBranchName`, `requirementItemsSchema`, `readLeadProgress`, `nextLeadLeg`, `leadShareUsd`, `buildRosterDefinitions`, `INITIAL_LEAD_PROGRESS`, `LEAD_TEMPLATE_ID` (domain); `buildLeadContext` (Task 5); `writeSpawnExtras`, `StartRunInput.resumeSessionId` (Task 4); `materialise(workspaceId, version, maxAttempts, plan, fallback, seats, items, delivery)`, `tripConductor`, `ensureIntegrationBranch`, `integrationTargetFor`, `commitUncommittedWork`, `releaseTaskAfterFailure`, `taskKeyFor`, `emailLocalPart`, `gitIn` (orchestrator, existing).
 - Produces (domain): `renderLeadStop(input: { readonly version: number; readonly reason: StopReason; readonly failing: readonly string[]; readonly disputed: readonly string[]; readonly unverifiable: readonly string[]; readonly detail: string | null }): string` (at most 2 000 characters).
 - Produces (orchestrator, `lead/record.ts`): `noteLead(input: { readonly workspaceId: string; readonly version: number; readonly kind: LeadNoteKind; readonly detail: string; readonly runId?: string | null }): Promise<void>`; `updateLeadProgress(deliveryId: string, change: (progress: LeadProgress) => LeadProgress): Promise<LeadProgress>` (under the delivery lock); `endLead(deliveryId: string, reason: StopReason, detail: string): Promise<boolean>` (sets `leadEnded` once; true when this call set it).
@@ -2866,6 +2901,8 @@ export interface LeadStart {
   readonly ordinal: number
   readonly prompt: string
   readonly resumeSessionId: string | null
+  /** The model the run was spawned with; null: no `--model` flag (C5). */
+  readonly model: string | null
   readonly extras: SpawnExtras
   readonly verificationKeys: readonly string[]
   readonly confirms: boolean
@@ -2966,6 +3003,7 @@ export async function seedLead(options: LeadSeedOptions = {}): Promise<LeadFixtu
         ordinal,
         prompt: input.prompt,
         resumeSessionId: input.resumeSessionId ?? null,
+        model: input.model ?? null,
         extras: readSpawnExtras(input.runDir),
         verificationKeys: run.verificationKeys,
         confirms: run.confirmsRunId !== null,
@@ -3088,6 +3126,9 @@ describe('the lead flow: a goal is built by one lead turn', () => {
     expect(start?.extras).toEqual({ sessionDefinitions: JSON.stringify({ 'ada-backend': { description: 'a specialist of this organisation', prompt: 'You build APIs.' } }), maxBudgetUsd: 19.2, keepAliveForSubordinates: true })
     const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: start?.runId ?? '' } })
     expect([run.leadTurn, run.leadResumed, run.kind]).toEqual(['build', false, 'implementation'])
+    // C5: no model named, so no `--model` flag -- the installed CLI's default runs the lead.
+    expect(start?.model).toBeNull()
+    expect([run.model, run.provider]).toEqual([null, 'claude_code'])
     expect((await leadNotes(f))[0]).toBe('turn: turn 1 (build): a new session was started')
   })
 
@@ -3323,7 +3364,9 @@ export async function planLeadTurn(input: {
   const queuedWrapUp = progress.nextTurn?.kind === 'wrap_up' && !progress.wrapUpSent
   const leg = nextLeadLeg({ budgetUsd: delivery.workspace.budgetUsd, leadSpentUsd: spend.leadUsd, wrapUpSent: progress.wrapUpSent || queuedWrapUp })
   if (leg.kind === 'spent') {
-    await endLead(delivery.id, 'budget_spent', `the lead's share of the budget is spent ($${spend.leadUsd.toFixed(2)})`)
+    // C7: a turn that ended with no cost and no later total of its session is not in the sum.
+    const spent = `${spend.unmeasuredRuns > 0 ? 'at least ' : ''}$${spend.leadUsd.toFixed(2)}`
+    await endLead(delivery.id, 'budget_spent', `the lead's share of the budget is spent (${spent})`)
     return { kind: 'hold' }
   }
   const limit = delivery.workspace.goalTimeLimitMs
@@ -3650,31 +3693,42 @@ export function leadRuntime(seat: { readonly model: string | null }): ResolvedRu
 
 In `apps/orchestrator/src/model.ts` add `leadRuntime` to the re-export. In `startRun`, import it from `'./model.js'` and replace `const resolved = resolveRuntime(` … `)` with `const resolved = lead !== null ? leadRuntime(slave) : resolveRuntime(` … `)` (the arguments unchanged).
 
-- [ ] **Step 8: Run.** `npx tsc --build && npx vitest run apps/orchestrator/test/integration/lead-open.test.ts` → PASS. Then, one file at a time, the unchanged neighbours: `npx vitest run apps/orchestrator/test/integration/conductor.test.ts`, `…/conductor-e2e.test.ts`, `…/tick.test.ts`, `…/verify.test.ts` → PASS. `npm run typecheck`.
+In `packages/control/test/runtime.test.ts` import `leadRuntime` beside `resolveRuntime` and add:
+
+```ts
+describe('leadRuntime (lead flow C5)', () => {
+  it('runs a lead-flow seat on Claude Code, with its own model when it names one and none otherwise', () => {
+    expect(leadRuntime({ model: null })).toEqual({ provider: 'claude_code', model: undefined })
+    expect(leadRuntime({ model: 'claude-opus-5' })).toEqual({ provider: 'claude_code', model: 'claude-opus-5' })
+  })
+})
+```
+
+- [ ] **Step 8: Run.** `npx tsc --build && npx vitest run packages/control/test/runtime.test.ts apps/orchestrator/test/integration/lead-open.test.ts` → PASS. Then, one file at a time, the unchanged neighbours: `npx vitest run apps/orchestrator/test/integration/conductor.test.ts`, `…/conductor-e2e.test.ts`, `…/tick.test.ts`, `…/verify.test.ts` → PASS. `npm run typecheck`.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add packages/domain/src/lead packages/domain/test/lead/stop.test.ts apps/orchestrator/src/lead apps/orchestrator/src/conductor.ts apps/orchestrator/src/tick.ts apps/orchestrator/src/verify.ts apps/orchestrator/test/integration/lead-helpers.ts apps/orchestrator/test/integration/lead-open.test.ts
+git add packages/domain/src/lead packages/domain/test/lead/stop.test.ts packages/control/src/runtime.ts packages/control/test/runtime.test.ts apps/orchestrator/src/lead apps/orchestrator/src/conductor.ts apps/orchestrator/src/model.ts apps/orchestrator/src/tick.ts apps/orchestrator/src/verify.ts apps/orchestrator/test/integration/lead-helpers.ts apps/orchestrator/test/integration/lead-open.test.ts
 git commit -m "feat(lead): a goal set in the lead flow is planned by rule, built by one lead turn and handed to proof with no review
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 ### Task 7: The same session, whatever interrupts it; questions answered at once; decisions on record (B6, B7, B9, L4, L10, L18)
 
 **Files:**
-- Create: `packages/domain/src/lead/decisions.ts`; modify `packages/domain/src/lead/constants.ts` (`LEAD_DECISIONS_READ_MAX`), `packages/domain/src/lead/index.ts`
+- Create: `packages/domain/src/lead/decisions.ts`; modify `packages/domain/src/lead/constants.ts` (`LEAD_DECISIONS_READ_MAX`, `LEAD_DENIAL_CONTINUES_MAX`, the note kind `denied`), `packages/domain/src/lead/progress.ts` (`denialContinues`, C6), `packages/domain/src/lead/index.ts`
 - Create: `packages/control/src/lead/decisions.ts`; modify `packages/control/src/conductorAnswer.ts:60` (`writeGoalDecisionIn`'s `source` type), `packages/control/src/index.ts`
 - Modify: `apps/orchestrator/src/lead/conclude.ts` (replace `concludeLeadTurn`; `settleLeadWork` gains two steps), `apps/orchestrator/src/lead/record.ts` (`noteLeadOnce`), `apps/orchestrator/src/lead/turn.ts` (`refreshLeadSpawn`)
 - Modify: `apps/orchestrator/src/pump.ts:1429` (the ask hook's condition)
 - Modify: `apps/orchestrator/src/resume.ts` (`executeResume`: one branch before `adapter.resume`)
-- Test: `packages/domain/test/lead/decisions.test.ts` (new), `apps/orchestrator/test/integration/lead-turn.test.ts` (new)
+- Test: `packages/domain/test/lead/decisions.test.ts` (new), `packages/domain/test/lead/state.test.ts` (one case: `denialContinues`), `apps/orchestrator/test/integration/lead-turn.test.ts` (new)
 
 **Interfaces:**
 - Consumes: Task 6's `settleLeadWork`, `stopLead`, `endLead`, `updateLeadProgress`, `noteLead`, `planLeadTurn`; `isBudgetCapReason`, `parseSlaveAsk`, `readLeadProgress`, `nextLeadLeg` (domain); `writeGoalDecisionIn`, `GoalDecisionRefused`, `goalSpend` (control); `joinRunOutput` (`apps/orchestrator/src/runOutput.ts`); `readSpawnExtras`, `writeSpawnExtras` (providers).
-- Produces (domain): `LEAD_DECISIONS_READ_MAX = 40`; `parseLeadDecisions(markdown: string): readonly { readonly title: string; readonly decision: string }[]`.
+- Produces (domain): `LEAD_DECISIONS_READ_MAX = 40`; `LEAD_DENIAL_CONTINUES_MAX = 2`; `LEAD_NOTE_KINDS` gains `denied`; `LeadProgress.denialContinues: number` (default 0); `parseLeadDecisions(markdown: string): readonly { readonly title: string; readonly decision: string }[]`.
 - Produces (control): `recordLeadDecisions(workspaceId: string, goalVersion: number, decisions: readonly { readonly title: string; readonly decision: string }[]): Promise<{ readonly written: number; readonly known: number; readonly refused: number }>`.
 - Produces (orchestrator): `noteLeadOnce(input)` (same input as `noteLead`; skips a line the version already has); `refreshLeadSpawn(runId: string, runDir: string): Promise<void>`.
 - What a failed lead turn means now (replaces Task 6's plain release):
@@ -3728,6 +3782,28 @@ Run `npx vitest run packages/domain/test/lead/decisions.test.ts` → FAIL.
 ```ts
 /** Spec B9: how many decisions one read of the lead's file takes -- a version holds at most 40. */
 export const LEAD_DECISIONS_READ_MAX = 40
+/**
+ * C6: how often per goal version a turn failed only by the permission mode's refusals continues
+ * the lead without an attempt charged. Bounded: a lead that keeps calling what is refused is
+ * charged after that, and its attempt cap ends it.
+ */
+export const LEAD_DENIAL_CONTINUES_MAX = 2
+```
+
+and `'denied',` to `LEAD_NOTE_KINDS` after `'ask_refused',` (C6: the permission mode refused calls and the lead was told). In `packages/domain/src/lead/progress.ts` add to `LeadProgress`, after `askReplies`:
+
+```ts
+  /** C6: how often a turn failed only by permission-mode refusals was continued without a charge. */
+  readonly denialContinues: number
+```
+
+`denialContinues: 0,` to `INITIAL_LEAD_PROGRESS` after `askReplies: 0,`, and `denialContinues: z.number().int().nonnegative().default(0),` to `leadProgressSchema` after `askReplies`. In `packages/domain/test/lead/state.test.ts`, in `describe('readLeadProgress')`, add:
+
+```ts
+  it('reads a row written before denialContinues existed as none spent (C6)', () => {
+    expect(readLeadProgress({ askReplies: 1 }).denialContinues).toBe(0)
+    expect(readLeadProgress({ denialContinues: 2 }).denialContinues).toBe(2)
+  })
 ```
 
 Create `packages/domain/src/lead/decisions.ts`:
@@ -3815,6 +3891,7 @@ import { spawn } from 'node:child_process'
 import { dirname } from 'node:path'
 import { requestResume } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
+import { LEAD_DENIAL_CONTINUES_MAX, readLeadProgress } from '@slave-of-ai/domain'
 import { readSpawnExtras } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { reconcileOrphans, resetTickObservation } from '../../src/sweep.js'
@@ -3952,6 +4029,8 @@ describe('the lead flow: one session, whatever interrupts it', () => {
     await tickUntil(f, merged(f))
     const calls = await prisma.executionEvent.findMany({ where: { runId: leadTurns(f)[0]?.runId ?? '', type: 'run_tool_call' }, orderBy: { seq: 'asc' }, select: { payload: true } })
     expect(calls.map((row) => row.payload as { name: string; subagent?: string }).filter((p) => p.subagent !== undefined)).toEqual([expect.objectContaining({ name: 'Agent', subagent: 'ada-backend' })])
+    // C1: the subordinate's own call is on the lead's log under the call that started it.
+    expect(calls.map((row) => row.payload as { name: string; parentToolUseId?: string }).filter((p) => p.parentToolUseId !== undefined)).toEqual([expect.objectContaining({ name: 'Bash', parentToolUseId: 'toolu_fake_subordinate' })])
     // The subordinate's call tripped nothing: the turn succeeded and no guardrail fired.
     expect(await prisma.executionEvent.count({ where: { workspaceId: f.workspaceId, type: 'guardrail_tripped' } })).toBe(0)
   })
@@ -3971,6 +4050,37 @@ describe('the lead flow: one session, whatever interrupts it', () => {
     await tickUntil(f, merged(f))
     expect(leadTurns(f)[1]?.resumeSessionId).toMatch(SESSION)
     expect(await prisma.supervisorDecision.count({ where: { workspaceId: f.workspaceId, situationKind: { not: 'conduct' } } })).toBe(0)
+  })
+
+  it('continues a turn the permission mode failed in the same session, tells the lead what was refused, and charges nothing (C6)', async (): Promise<void> => {
+    // The recorded `permission-denied` capture: a clean result whose one Edit call the mode refused.
+    const f = await seedLead({ leadArgs: (ordinal) => (ordinal === 1 ? ['--work-fixture', 'permission-denied'] : []) })
+    await tickUntil(f, merged(f))
+
+    const turns = leadTurns(f)
+    expect(turns.map((t) => t.leadTurn)).toEqual(['build', 'continue'])
+    expect(turns[1]?.resumeSessionId).toBe('fake-session-permission-denied')
+    expect(turns[1]?.prompt).toContain('The permission mode refused these calls in your last turn: Edit (toolu_01Tz1SdA9gCmX7DXXkQwh6u3)')
+    expect(turns[1]?.prompt).not.toContain('THE GOAL')
+    expect((await leadTaskOf(f)).attempt).toBe(0)
+    expect((await leadNotes(f)).filter((line) => line.startsWith('denied:'))).toEqual([
+      'denied: the permission mode refused 1 call(s) (Edit (toolu_01Tz1SdA9gCmX7DXXkQwh6u3)); the lead continues in the same session, told what was refused',
+    ])
+    expect(readLeadProgress((await leadDelivery(f)).leadProgress).denialContinues).toBe(1)
+    expect(await prisma.supervisorDecision.count({ where: { workspaceId: f.workspaceId, situationKind: { not: 'conduct' } } })).toBe(0)
+  })
+
+  it('charges a denied turn once the uncharged continues are spent, and the attempt cap ends the lead (C6)', async (): Promise<void> => {
+    const f = await seedLead({ leadArgs: () => ['--work-fixture', 'permission-denied'] })
+    await tickUntil(f, async () => (await leadDelivery(f)).status === 'needs_human')
+
+    // Two continues on the house, then three charged turns: the task's attempt cap.
+    expect(leadTurns(f).map((t) => t.leadTurn)).toEqual(['build', 'continue', 'continue', 'continue', 'continue'])
+    expect(leadTurns(f).slice(1).every((t) => t.resumeSessionId === 'fake-session-permission-denied')).toBe(true)
+    expect((await leadNotes(f)).filter((line) => line.startsWith('denied:'))).toHaveLength(LEAD_DENIAL_CONTINUES_MAX)
+    const delivery = await leadDelivery(f)
+    expect([delivery.stopReason, readLeadProgress(delivery.leadProgress).denialContinues]).toEqual(['lead_failed', LEAD_DENIAL_CONTINUES_MAX])
+    expect((await leadTaskOf(f)).attempt).toBe(3)
   })
 
   it('continues a paused lead turn on its own row, in its own session, under what is left of its leg (spec section 9)', async (): Promise<void> => {
@@ -3996,7 +4106,7 @@ describe('the lead flow: one session, whatever interrupts it', () => {
 })
 ```
 
-Run `npx vitest run apps/orchestrator/test/integration/lead-turn.test.ts` → FAIL (the orphaned-turn case passes already on Task 6's code, and so does the subordinate case; the attempts-spent, lost-transcript, question, decisions, refusal and paused-turn cases fail).
+Run `npx vitest run apps/orchestrator/test/integration/lead-turn.test.ts` → FAIL (the orphaned-turn case passes already on Task 6's code, and so does the subordinate case; the attempts-spent, lost-transcript, question, decisions, refusal, the two permission-mode (C6) and paused-turn cases fail).
 
 - [ ] **Step 4: Notes said once, and the refreshed cap.** Add to `apps/orchestrator/src/lead/record.ts`:
 
@@ -4065,7 +4175,7 @@ to
   if (!failed && startingRow.leadTurn === null) {
 ```
 
-- [ ] **Step 6: The conclusion.** In `apps/orchestrator/src/lead/conclude.ts`, add the imports `recordLeadDecisions` (control); `LEAD_ASK_REPLIES_MAX, LEAD_DECISIONS_FILE, LEAD_DECISIONS_FILE_MAX_BYTES, isBudgetCapReason, parseLeadDecisions, parseSlaveAsk, readLeadProgress` (domain); `joinRunOutput` from `'../runOutput.js'`; `endLead, noteLead, noteLeadOnce` from `'./record.js'`; and replace `concludeLeadTurn` with:
+- [ ] **Step 6: The conclusion.** In `apps/orchestrator/src/lead/conclude.ts`, add the imports `recordLeadDecisions` (control); `LEAD_ASK_REPLIES_MAX, LEAD_DECISIONS_FILE, LEAD_DECISIONS_FILE_MAX_BYTES, LEAD_DENIAL_CONTINUES_MAX, isBudgetCapReason, parseLeadDecisions, parseSlaveAsk, readLeadProgress` (domain); `joinRunOutput` from `'../runOutput.js'`; `endLead, noteLead, noteLeadOnce` from `'./record.js'`; and replace `concludeLeadTurn` with:
 
 ```ts
 const firstLine = (text: string): string => (text.split('\n')[0] ?? '').slice(0, 300)
@@ -4075,6 +4185,28 @@ async function failureReasonOf(runId: string): Promise<string> {
   const event = await prisma.executionEvent.findFirst({ where: { runId, type: 'run_failed' }, orderBy: { seq: 'desc' }, select: { payload: true } })
   const reason = (event?.payload as { readonly reason?: unknown } | undefined)?.reason
   return typeof reason === 'string' ? reason : ''
+}
+
+/**
+ * C6: the calls the permission mode refused, as `Tool (id)`, when they are the whole of why the pump
+ * failed the turn -- every id its `run.failed` reason names (`… tool call(s) were denied: a, b`) was
+ * recorded as a `permission_mode` trip of this run. Empty when the reason names no denial, or names
+ * one the mode did not refuse (a hook's deny is not this).
+ */
+async function permissionDenialsOf(runId: string, reason: string): Promise<readonly string[]> {
+  const named = (/tool call\(s\) were denied: (.+)$/u.exec(reason)?.[1] ?? '').split(',').map((id) => id.trim()).filter((id) => id !== '')
+  if (named.length === 0) return []
+  const trips = await prisma.executionEvent.findMany({
+    where: { runId, type: 'guardrail_tripped', payload: { path: ['guardrail'], equals: 'permission_mode' } },
+    select: { payload: true },
+  })
+  const toolOf = new Map<string, string>()
+  for (const trip of trips) {
+    const detail = (trip.payload as { readonly detail?: unknown }).detail
+    const match = typeof detail === 'string' ? /^(\S+) was denied by the permission mode \((.+)\)$/u.exec(detail) : null
+    if (match?.[1] !== undefined && match[2] !== undefined) toolOf.set(match[2], match[1])
+  }
+  return named.every((id) => toolOf.has(id)) ? named.map((id) => `${toolOf.get(id) ?? ''} (${id})`) : []
 }
 
 /** Everything a run said, as the log holds it. */
@@ -4126,6 +4258,21 @@ export async function concludeLeadTurn(runId: RunId): Promise<void> {
     // continue. Nothing is charged; `planLeadTurn` reads the same fact and starts a new session.
     if (run.leadResumed && run.sessionId === null && run.pid !== null) {
       await releaseTaskAfterFailure(task, run.id, 'rework', { platform: true })
+      return
+    }
+    // C6: the turn failed only because the permission mode refused calls -- the work it did stands.
+    // The lead goes on in the same session, told what was refused; no attempt, at most
+    // `LEAD_DENIAL_CONTINUES_MAX` times per version. Past that it is charged below like any failure.
+    const refused = await permissionDenialsOf(run.id, reason)
+    if (refused.length > 0 && progress.denialContinues < LEAD_DENIAL_CONTINUES_MAX) {
+      const named = refused.join(', ')
+      await updateLeadProgress(delivery.id, (p) => ({
+        ...p,
+        denialContinues: p.denialContinues + 1,
+        nextTurn: { kind: 'continue', note: `The permission mode refused these calls in your last turn: ${named}. They will be refused again: do that work another way, and carry on with the goal.` },
+      }))
+      await releaseTaskAfterFailure(task, run.id, 'rework', { platform: true })
+      await noteLead({ ...at, kind: 'denied', detail: `the permission mode refused ${String(refused.length)} call(s) (${named}); the lead continues in the same session, told what was refused` })
       return
     }
     const release = await releaseTaskAfterFailure(task, run.id, 'rework', { platform: run.failureClass === 'platform' })
@@ -4191,15 +4338,15 @@ async function readDecisions(repoPath: string, tip: string, at: { readonly works
 
 (`settleLeadWork` is also called for a FAILED turn now -- one the goal's limit or the budget cap ended. Its `done` write is guarded on the claim, which such a turn still holds.)
 
-- [ ] **Step 7: Run.** `npx tsc --build && npx vitest run packages/domain/test/lead/decisions.test.ts`, then `npx vitest run apps/orchestrator/test/integration/lead-turn.test.ts` → PASS, then `npx vitest run apps/orchestrator/test/integration/lead-open.test.ts` → PASS (the missing-file note is new there and asserted nowhere). Unchanged neighbours, one file at a time: `…/pump.test.ts`, `…/ask.test.ts`, `…/resume-execution.test.ts`, `…/sweep.test.ts` → PASS. `npm run typecheck`.
+- [ ] **Step 7: Run.** `npx tsc --build && npx vitest run packages/domain/test/lead/decisions.test.ts packages/domain/test/lead/state.test.ts packages/domain/test/lead/events.test.ts`, then `npx vitest run apps/orchestrator/test/integration/lead-turn.test.ts` → PASS, then `npx vitest run apps/orchestrator/test/integration/lead-open.test.ts` → PASS (the missing-file note is new there and asserted nowhere). Unchanged neighbours, one file at a time: `…/pump.test.ts`, `…/ask.test.ts`, `…/resume-execution.test.ts`, `…/sweep.test.ts` → PASS. `npm run typecheck`.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add packages/domain/src/lead packages/domain/test/lead/decisions.test.ts packages/control/src/lead/decisions.ts packages/control/src/conductorAnswer.ts packages/control/src/index.ts apps/orchestrator/src/lead apps/orchestrator/src/pump.ts apps/orchestrator/src/resume.ts apps/orchestrator/test/integration/lead-turn.test.ts
+git add packages/domain/src/lead packages/domain/test/lead/decisions.test.ts packages/domain/test/lead/state.test.ts packages/control/src/lead/decisions.ts packages/control/src/conductorAnswer.ts packages/control/src/index.ts apps/orchestrator/src/lead apps/orchestrator/src/pump.ts apps/orchestrator/src/resume.ts apps/orchestrator/test/integration/lead-turn.test.ts
 git commit -m "feat(lead): the lead's session is continued after a restart, a failure, a refusal and a pause; a question is answered at once; its decisions are recorded
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -4698,8 +4845,9 @@ export async function leadStatus(workspaceId: string, goalVersion?: number): Pro
   const byName = new Map<string, { calls: number; running: number }>()
   for (const event of events) {
     if (event.type !== 'run_tool_call') continue
-    const payload = event.payload as { readonly name?: string; readonly subagent?: string; readonly toolUseId?: string }
-    if (payload.name === undefined || !SUBORDINATE_TOOLS.includes(payload.name)) continue
+    const payload = event.payload as { readonly name?: string; readonly subagent?: string; readonly toolUseId?: string; readonly parentToolUseId?: string }
+    // C1: top-level calls only -- a subordinate starting a session of its own is its own business.
+    if (payload.name === undefined || !SUBORDINATE_TOOLS.includes(payload.name) || payload.parentToolUseId !== undefined) continue
     const name = payload.subagent ?? 'general-purpose'
     const entry = byName.get(name) ?? { calls: 0, running: 0 }
     entry.calls += 1
@@ -4776,7 +4924,7 @@ and after `case 'set-lead'`:
 git add apps/orchestrator/src/sweep.ts apps/orchestrator/src/goal.ts apps/orchestrator/src/lead apps/orchestrator/src/cli.ts apps/orchestrator/test/integration/sweep.test.ts apps/orchestrator/test/integration/lead-limits.test.ts packages/control/src/lead/status.ts packages/control/src/index.ts
 git commit -m "feat(lead): the goal's budget share, time limit and stall rule bound the lead; the state word follows the version; lead-status shows it
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -5044,6 +5192,9 @@ describe('the lead flow: proof gates', () => {
     expect(seats.map((run) => run.slave.role)).toEqual(['Verifier', 'Confirmer', 'Verifier', 'Verifier'])
     expect(proofRuns(f)[1]?.prompt).toContain('Requirement keys: R1\n')
     expect(proofRuns(f)[1]?.prompt).not.toContain('R2:')
+    // C5: the verifier and the confirmer run on Claude Code with no `--model` either.
+    expect(proofRuns(f).map((run) => run.model)).toEqual([null, null, null, null])
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification', model: { not: null } } })).toBe(0)
 
     expect(leadTurns(f).map((turn) => turn.leadTurn)).toEqual(['build', 'rework'])
     const rework = leadTurns(f)[1]
@@ -5438,7 +5589,7 @@ and directly after `const stop = smokeStopReason({ outcome: failure, output: att
 git add packages/domain/src/lead packages/domain/test/lead/proof.test.ts apps/orchestrator/src/lead/proofRun.ts apps/orchestrator/src/verification.ts apps/orchestrator/src/smoke.ts apps/orchestrator/test/integration/lead-proof.test.ts
 git commit -m "feat(lead): a failure is confirmed before it is reworked, a disagreement is disputed, unverifiable never stops the loop, and two rounds with the same failures do
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -5920,7 +6071,7 @@ to
 git add packages/control/src/lead/card.ts packages/control/src/index.ts packages/control/src/supervisor.ts packages/control/test/integration/lead-card.test.ts apps/orchestrator/src/lead apps/orchestrator/src/goal.ts apps/orchestrator/test/integration/lead-delivery.test.ts
 git commit -m "feat(lead): one card for a version that is not all proven, with accept-as-is and leave; a moved base branch is taken in and verified again
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -6071,7 +6222,7 @@ Run `npx vitest run apps/orchestrator/test/integration/conductor-e2e.test.ts` �
 git add apps/orchestrator/test/integration/lead-e2e.test.ts apps/orchestrator/test/integration/conductor-e2e.test.ts
 git commit -m "test(lead): a goal version goes through the lead flow end to end, and the packages flow still reviews
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -6095,7 +6246,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   No gate drives a conducted goal end to end today; Tasks 6 to 11's integration tests are that coverage for both flows, and Plan B adds the lead flow's own gate.
   Expected: all green. Known red on main and not regressions: m44 m46 m47 m48 m49 m50 m52 m54 m55 m57 m58. m52 (the broker) reads the permission vocabulary this plan changed: run it too, on this branch and on a second worktree of `5e165508`, and report "same failure as main" or the difference.
 
-- [ ] **Step 5: Read the branch as a reviewer would.** `git log --oneline 19c85b9e..HEAD` shows one commit per task and the plan's own. `git diff 19c85b9e..HEAD --stat -- scripts/pause-gate.sh scripts/cursor-shell-gate.sh scripts/tool-result-tap.sh scripts/lib` prints nothing. Every commit ends with the trailer `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (`git log --format=%B 19c85b9e..HEAD | grep -c "Claude Fable 5.1"` equals the commit count).
+- [ ] **Step 5: Read the branch as a reviewer would.** `git log --oneline 19c85b9e..HEAD` shows one commit per task and the plan's own. `git diff 19c85b9e..HEAD --stat -- scripts/pause-gate.sh scripts/cursor-shell-gate.sh scripts/tool-result-tap.sh scripts/lib` prints nothing. Every commit ends with the trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` (`git log --format=%B 19c85b9e..HEAD | grep -c "Claude Opus 5.5"` equals the commit count of this build (the spec and plan commits carry the earlier trailer)).
 
 - [ ] **Step 6: Report.** To the controller: the suite's file and test counts, each gate's result, any open point below that the build settled or sharpened, and what Plan B can now rely on (the list in this plan's header).
 
