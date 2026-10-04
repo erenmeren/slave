@@ -34,7 +34,7 @@ try {
 const offenders = out
   .split('\n')
   .filter((line) => line !== '')
-  .filter((line) => line.replace(PROTECTED, '').replace(PROTECTED_EXACT, '').match(new RegExp(PATTERN, 'i')) !== null)
+  .filter((line) => line.replace(PROTECTED, ' ').replace(PROTECTED_EXACT, ' ').match(new RegExp(PATTERN, 'i')) !== null)
 if (offenders.length > 0) {
   console.error(`FAIL: the old vocabulary is back in ${offenders.length} line(s):`)
   for (const line of offenders) console.error(`  ${line}`)
