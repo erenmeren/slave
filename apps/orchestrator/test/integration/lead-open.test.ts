@@ -1,3 +1,5 @@
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import { INITIAL_LEAD_PROGRESS, LEAD_RULES, LEAD_TEMPLATE_ID, LEAD_TURN_NOTE_MAX_CHARS, integrationBranchName, readLeadProgress } from '@slave-of-ai/domain'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -173,6 +175,28 @@ describe('the lead flow: a goal is built by one lead turn', () => {
     expect(delivery.stopReason).not.toBe('nothing_built')
     expect(git(['rev-parse', delivery.integrationBranch], f.repoPath)).toBe(f.initialTip)
     expect(await leadNotes(f)).toContain(REWRITTEN)
+  })
+
+  it('charges a turn whose work branch cannot be moved, says why, and stops the version lead_failed at the attempt cap', async (): Promise<void> => {
+    // A stale lock on the work branch's ref: every `update-ref` on it fails while the ref stays put.
+    const f = await seedLead({
+      onStart: async (start) => {
+        if (start.kind !== 'implementation') return
+        const delivery = await prisma.goalDelivery.findFirstOrThrow({ include: { workspace: { select: { repoPath: true } } } })
+        writeFileSync(join(delivery.workspace.repoPath, '.git', 'refs', 'heads', `${delivery.integrationBranch}.lock`), '')
+      },
+    })
+    await tickUntil(f, async () => (await leadDelivery(f)).status === 'needs_human')
+
+    const delivery = await leadDelivery(f)
+    expect([delivery.stopReason, delivery.leadState]).toEqual(['lead_failed', 'awaiting_decision'])
+    const task = await leadTaskOf(f)
+    expect([task.status, task.attempt, task.integratedAt]).toEqual(['failed', 3, null])
+    expect(f.starts.filter((s) => s.kind === 'implementation')).toHaveLength(3)
+    expect(git(['rev-parse', delivery.integrationBranch], f.repoPath)).toBe(f.initialTip)
+    const stuck = (await leadNotes(f)).filter((line) => line.startsWith("turn: the work branch could not be moved to the lead's tip"))
+    expect(stuck).toHaveLength(3)
+    expect(stuck[0]).toContain('.lock')
   })
 
   /** A version opened in the lead flow with no turn run yet: the requirement tick, then the plan by hand. */

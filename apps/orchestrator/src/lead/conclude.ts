@@ -27,10 +27,7 @@ export async function concludeLeadTurn(runId: RunId): Promise<void> {
   if (task.activeRunId !== run.id) return
 
   if (run.status === 'failed') {
-    const release = await releaseTaskAfterFailure(task, run.id, 'rework', { platform: run.failureClass === 'platform' })
-    if (release.exhausted) {
-      await appendEvent({ type: 'task.failed', workspaceId: task.workspaceId, taskId: task.id, actor: 'system', payload: { reason: `the lead's turn failed after ${String(release.attempt)} attempt(s)` } })
-    }
+    await releaseLeadTurn(task, run.id, { platform: run.failureClass === 'platform', deliveryId: null, detail: null })
     return
   }
   if (run.status !== 'succeeded') return
@@ -38,31 +35,58 @@ export async function concludeLeadTurn(runId: RunId): Promise<void> {
 }
 
 /**
+ * A lead turn that came to nothing goes back to `rework`, charged unless `platform`; at the attempt
+ * cap the task is `failed` and said so. With `deliveryId`, an exhausted task also stops the version
+ * `lead_failed` (a settle that could not integrate). A failed RUN does not, until Task 7.
+ */
+async function releaseLeadTurn(task: LeadTaskRow, runId: string, options: { readonly platform: boolean; readonly deliveryId: string | null; readonly detail: string | null }): Promise<void> {
+  const release = await releaseTaskAfterFailure(task, runId, 'rework', { platform: options.platform })
+  if (!release.exhausted) return
+  await appendEvent({ type: 'task.failed', workspaceId: task.workspaceId, taskId: task.id, actor: 'system', payload: { reason: `the lead's turn failed after ${String(release.attempt)} attempt(s)` } })
+  if (options.deliveryId !== null) await stopLead(options.deliveryId, 'lead_failed', options.detail)
+}
+
+/** What {@link followLeadBranch} did with the work branch. */
+type Followed =
+  | { readonly kind: 'moved' | 'rewritten' | 'lost' }
+  /** `update-ref` failed while the ref stayed where it was (a stale lock, a full disk): git's reason. */
+  | { readonly kind: 'stuck'; readonly error: string }
+
+/** The first line of what a failed git call said: its stderr, else the error's own message. */
+function gitError(error: unknown): string {
+  const stderr = typeof error === 'object' && error !== null ? (error as { readonly stderr?: unknown }).stderr : undefined
+  const text = typeof stderr === 'string' && stderr.trim() !== '' ? stderr : error instanceof Error ? error.message : String(error)
+  return text.trim().split('\n')[0] ?? ''
+}
+
+/**
  * Task 6 review: moves the goal's work branch to the lead's tip, never throwing. The work branch is
  * the lead's own and the final full verification proves whatever tip is delivered, so a lead tip
  * that does not contain the work branch's tip (the lead amended, rebased or reset commits already
- * integrated) is followed too, and said (`rewritten`). The move is a compare-and-swap on the ref;
- * one that loses is retried once on the re-read tip, then given up (`lost`).
+ * integrated) is followed too, and said (`rewritten`). The move is a compare-and-swap on the ref.
+ * One that lost because the ref MOVED is retried once on the re-read tip, then given up (`lost`).
+ * One that failed while the ref stayed put will fail the same way next time (`stuck`): the caller
+ * charges it, so the task's attempt cap bounds it.
  */
-async function followLeadBranch(repoPath: string, branch: string, tip: string, workTip: string): Promise<'moved' | 'rewritten' | 'lost'> {
+async function followLeadBranch(repoPath: string, branch: string, tip: string, workTip: string): Promise<Followed> {
   let expected = workTip
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    if (expected === tip) return 'moved'
+    if (expected === tip) return { kind: 'moved' }
     // Exit 1 is "not an ancestor"; any other failure reads the same way: the move is said.
     const contains = await gitIn(repoPath, 'merge-base', '--is-ancestor', expected, tip).then(
       () => true,
       () => false,
     )
-    const swapped = await gitIn(repoPath, 'update-ref', `refs/heads/${branch}`, tip, expected).then(
-      () => true,
-      () => false,
+    const failed = await gitIn(repoPath, 'update-ref', `refs/heads/${branch}`, tip, expected).then(
+      () => null,
+      (error: unknown) => gitError(error),
     )
-    if (swapped) return contains ? 'moved' : 'rewritten'
+    if (failed === null) return { kind: contains ? 'moved' : 'rewritten' }
     const reread = await gitIn(repoPath, 'rev-parse', `refs/heads/${branch}`).catch(() => null)
-    if (reread === null) return 'lost'
+    if (reread === null || reread === expected) return { kind: 'stuck', error: failed }
     expected = reread
   }
-  return 'lost'
+  return { kind: 'lost' }
 }
 
 /**
@@ -104,7 +128,21 @@ export async function settleLeadWork(run: LeadRunRow, task: LeadTaskRow): Promis
   }
   if (tip !== workTip) {
     const followed = await followLeadBranch(repoPath, target.branch, tip, workTip)
-    if (followed === 'lost') {
+    if (followed.kind === 'stuck') {
+      // The ref is where it was and git cannot move it: this turn is charged like a failed one, so
+      // the attempt cap ends a fault that would otherwise cost a paid turn forever.
+      console.warn(`[lead] run ${run.id}: the work branch ${target.branch} could not be moved to ${tip.slice(0, 12)}: ${followed.error}`)
+      await noteLead({
+        workspaceId: task.workspaceId,
+        version: target.goalVersion,
+        kind: 'turn',
+        detail: `the work branch could not be moved to the lead's tip ${tip.slice(0, 12)} (${target.branch}): ${followed.error}`,
+        runId: run.id,
+      })
+      await releaseLeadTurn(task, run.id, { platform: false, deliveryId: delivery.id, detail: `the work branch could not be moved: ${followed.error}` })
+      return 'unreadable'
+    }
+    if (followed.kind === 'lost') {
       // The work branch kept moving under two compare-and-swaps: nothing is integrated, and the
       // turn is not the lead's fault -- the claim goes back with no attempt charged, as for a
       // platform failure, and the next turn settles again.
@@ -112,7 +150,7 @@ export async function settleLeadWork(run: LeadRunRow, task: LeadTaskRow): Promis
       await releaseTaskAfterFailure(task, run.id, 'rework', { platform: true })
       return 'unreadable'
     }
-    if (followed === 'rewritten') {
+    if (followed.kind === 'rewritten') {
       await noteLead({
         workspaceId: task.workspaceId,
         version: target.goalVersion,
