@@ -54,8 +54,11 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
   the controller runs `npm run typecheck` and the whole suite under the reaper itself, and pushes with
   `--no-verify` only when the sole failures are those four -- the hook's gate is kept, run by hand -- a
   regression hiding inside one of those four files' failing cases would not be seen here.
-- GitHub: after a worker restart, every push is refused (403, "Claude doesn't have GitHub access"); reads
-  work. The work goes on locally and is pushed when access is restored.
+- GitHub: after a worker restart, every push was refused (403); the operator installed the app and pushes work.
+- Ruling (the operator's, superseding the one above): every push is `--no-verify`, with no whole-suite run
+  before it -- each task still runs its own tests and `npm run typecheck`, and the whole suite runs once, in
+  Task 12 -- the hook's 45 minutes per push here are not worth it -- a cross-file regression is found at Task
+  12 instead of at the task that caused it.
 
 ## Tasks
 
