@@ -2330,7 +2330,12 @@ export async function main(argv: readonly string[]): Promise<number> {
       const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
       const flow = oneOfFlag(flags, 'flow', ['packages', 'lead'] as const)
       if (flow === undefined) throw new Error('--flow is required')
-      const autoMerge = oneOfFlag(flags, 'auto-merge', ['on', 'off'] as const)
+      // `auto-merge` is a bare switch to `parseArgs` (`create-workspace --auto-merge`), so it keeps
+      // no value: `--auto-merge off` is read off the raw argv here, `--auto-merge=off` from the
+      // flags. Without this the `off` was dropped and automatic merge went on (task 2 review).
+      const autoMergeAt = argv.indexOf('--auto-merge')
+      const autoMerge = autoMergeAt >= 0 ? argv[autoMergeAt + 1] : flagText(flags, 'auto-merge')
+      if ('auto-merge' in flags && autoMerge !== 'on' && autoMerge !== 'off') throw new Error('--auto-merge must be one of on, off')
       const model = flagText(flags, 'model')
       const result = await setFlow(workspaceId, flow, { ...(autoMerge === undefined ? {} : { autoMerge: autoMerge === 'on' }), ...(model === undefined ? {} : { model }) })
       if (!result.ok) throw new Error(refusalText(result.error))

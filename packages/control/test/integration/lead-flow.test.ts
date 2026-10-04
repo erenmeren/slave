@@ -65,6 +65,55 @@ describe('the lead flow switch (plan A L1/L2)', () => {
     expect((await prisma.workspace.findUniqueOrThrow({ where: { id: live } })).flow).toBe('packages')
   })
 
+  it('refuses while a task of the board is still open, and counts no finished one (task 2 review)', async (): Promise<void> => {
+    const id = await workspace()
+    const task = (status: 'ready' | 'done' | 'cancelled' | 'failed', integratedAt: Date | null = null) =>
+      prisma.task.create({ data: { workspaceId: id, title: `T ${status}`, description: 'd', status, requiredRole: 'backend', maxAttempts: 3, integratedAt } })
+    await task('done', new Date())
+    await task('cancelled')
+    await task('failed')
+    await task('done')
+    await task('ready')
+    expect(await setFlow(id, 'lead')).toMatchObject({ ok: false, error: { kind: 'flow_refused', reason: '2 task(s) are still open; finish or cancel them first' } })
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id } })).flow).toBe('packages')
+    expect(await prisma.team.count({ where: { workspaceId: id } })).toBe(0)
+  })
+
+  it('refuses a model or an automatic merge given for the flow the project is already in, and checks the model first (task 2 review)', async (): Promise<void> => {
+    const id = await workspace()
+    await setFlow(id, 'lead')
+    expect(await setFlow(id, 'lead', { model: 'claude-opus-5' })).toMatchObject({ ok: false, error: { kind: 'flow_refused', reason: expect.stringContaining('set-lead --workspace') } })
+    expect(await setFlow(id, 'lead', { autoMerge: false })).toMatchObject({ ok: false, error: { kind: 'flow_refused', reason: expect.stringContaining('set-auto-merge --workspace') } })
+    expect(await setFlow(id, 'lead', { model: 'not a model!' })).toMatchObject({ ok: false, error: { kind: 'invalid_model' } })
+    const row = await prisma.workspace.findUniqueOrThrow({ where: { id } })
+    expect(row.autoMerge).toBe(true)
+    expect((await prisma.slave.findMany({ where: { team: { workspaceId: id } } })).every((s) => s.model === null)).toBe(true)
+  })
+
+  it('closes the three system seats on the way back to packages, and makes them again on the way into lead (task 2 review)', async (): Promise<void> => {
+    const id = await workspace()
+    await setFlow(id, 'lead')
+    expect(await setFlow(id, 'packages')).toEqual({ ok: true, value: { flow: 'packages', changed: true } })
+    expect(await prisma.slave.count({ where: { team: { workspaceId: id, name: LEAD_TEAM_NAME }, closedAt: null } })).toBe(0)
+    expect(await prisma.slave.count({ where: { team: { workspaceId: id, name: LEAD_TEAM_NAME } } })).toBe(3)
+    await setFlow(id, 'lead')
+    expect(await prisma.slave.count({ where: { team: { workspaceId: id, name: LEAD_TEAM_NAME }, closedAt: null } })).toBe(3)
+  })
+
+  it('returns seats that exist without waiting on the workspace row lock (task 2 review)', async (): Promise<void> => {
+    const id = await workspace()
+    const first = await ensureLeadSeats(id)
+    let call: ReturnType<typeof ensureLeadSeats> | undefined
+    const raced = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${id} FOR UPDATE`
+      call = ensureLeadSeats(id)
+      return Promise.race([call, new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 2_000))])
+    }, { timeout: 10_000 })
+    // Settled before the next case's TRUNCATE, whichever way the race went.
+    await call
+    expect(raced).toEqual(first)
+  })
+
   it('sets the time limit and the roster, and refuses a limit out of bounds, an unknown person and a project not in the lead flow', async (): Promise<void> => {
     const id = await workspace()
     expect(await setLeadSettings(id, { timeLimitMs: 3_600_000 })).toMatchObject({ ok: false, error: { kind: 'not_lead_flow' } })

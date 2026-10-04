@@ -75,7 +75,8 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   // Final wave I2: `confirmGoalMerge` on a version whose branch moved after verification. 409.
   goal_tip_not_verified: true,
   // Lead flow plan A (Task 2): the flow cannot change now, a lead setting out of its rule, a verb
-  // for a lead-flow project on one that is not. All three name a project that exists: 409.
+  // for a lead-flow project on one that is not. None is a missing row -- each is a request that
+  // does not make sense against what exists: 409.
   flow_refused: true,
   lead_setting_invalid: true,
   not_lead_flow: true,

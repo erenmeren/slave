@@ -434,15 +434,34 @@ describe('the orchestrator CLI', () => {
     expect(`${result.stdout}${result.stderr}`).toMatch(/--delivery must be one of/)
   })
 
+  /** The lead-flow cases' own project: `fixture`'s board holds a `ready` task, which `set-flow`
+   *  refuses (task 2 review), so these switch a bare project with only a Claude Code provider. */
+  async function bareProject(name: string): Promise<string> {
+    const row = await prisma.workspace.create({ data: { name, repoPath: fixture.repoPath, verifyCommands: ['true'], setupCommands: [] } })
+    await prisma.providerConfiguration.create({ data: { workspaceId: row.id, kind: 'claude_code', settings: {} } })
+    return row.id
+  }
+
   it('set-flow puts a workspace into the lead flow and set-lead sets its time limit', async (): Promise<void> => {
-    await prisma.providerConfiguration.create({ data: { workspaceId: fixture.workspaceId, kind: 'claude_code', settings: {} } }).catch(() => undefined)
-    const flow = await runCli(['set-flow', '--workspace', fixture.workspaceId, '--flow', 'lead'])
+    const workspaceId = await bareProject('Lead flow project')
+    const flow = await runCli(['set-flow', '--workspace', workspaceId, '--flow', 'lead'])
     expect(flow.code).toBe(0)
     expect(JSON.parse(flow.stdout)).toEqual({ flow: 'lead', changed: true })
-    const limit = await runCli(['set-lead', '--workspace', fixture.workspaceId, '--time-limit-min', '90'])
+    const limit = await runCli(['set-lead', '--workspace', workspaceId, '--time-limit-min', '90'])
     expect(JSON.parse(limit.stdout)).toEqual({ timeLimitMs: 5_400_000, roster: [] })
-    const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
+    const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
     expect([ws.flow, ws.delivery, ws.autoMerge, ws.goalTimeLimitMs]).toEqual(['lead', 'conducted', true, 5_400_000])
+  })
+
+  it('set-flow --auto-merge off keeps automatic merge off, and refuses the board of a project with an open task (task 2 review)', async (): Promise<void> => {
+    const workspaceId = await bareProject('Lead flow project')
+    const flow = await runCli(['set-flow', '--workspace', workspaceId, '--flow', 'lead', '--auto-merge', 'off'])
+    expect(flow.code).toBe(0)
+    const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
+    expect([ws.flow, ws.autoMerge]).toEqual(['lead', false])
+    const busy = await runCli(['set-flow', '--workspace', fixture.workspaceId, '--flow', 'lead'])
+    expect(busy.code).not.toBe(0)
+    expect(`${busy.stdout}${busy.stderr}`).toMatch(/1 task\(s\) are still open/)
   })
 
   it('exits non-zero for set-lead on a workspace that is not in the lead flow', async (): Promise<void> => {
