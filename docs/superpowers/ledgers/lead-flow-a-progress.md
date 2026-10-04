@@ -84,6 +84,12 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
   case-sensitive, the same quote on both sides -- `'Agent'`, `"Agent"`, `` `Agent` `` pass; the bare word, any
   other case, a plural and mismatched quotes are still offenders (probed with seven lines and a self-test case).
   Review fix: a removed protected token leaves a space, so `x'Agent'agent` no longer glues into a pass.
+- Task 4 -- done, reviewed: `020eafd` + review fix `b13e696`. Review: CLEAN (argv/env byte-identical without a
+  resume id or extras file; the fake's m8-flow arm byte-identical without the new flags); four minor fixes
+  (a parent id of another shape no longer makes a line unparsable; one reading of the parent for both fields;
+  session definitions kept only when they are one JSON object; more bad-file test cases).
+- Deviation, accepted: the roster's byte bound uses `TextEncoder`, not `Buffer` -- the domain package is
+  bundled into the browser build and imports no Node built-in.
 
 ## Deferred minor findings
 
@@ -97,5 +103,10 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
   exits non-zero (not idempotent); `setFlow(…, 'packages')` ignores `model`/`autoMerge` without a word.
 - Task 3 review, left as designed: `PROTECTED_EXACT` also passes the old table name when written `"Agent"` (L17's
   design; nothing tracked does it); the codemod's copied comment says "offender" where it means "renamed".
+- Task 4 review, for Task 7: a subordinate's TEXT lines arrive on the lead's stream as plain `text` events
+  with no parent marker, so the turn's joined output (the ask detection, the "closing report" check) also
+  holds what subordinates wrote; and the pump's `lastToolUse` can be a subordinate's call. Left as built:
+  marking text lines is beyond C1, and a subordinate writing a `<slave-ask>` block costs one "decide yourself"
+  turn at most.
 
 ## Results
