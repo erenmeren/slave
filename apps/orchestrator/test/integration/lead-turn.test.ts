@@ -2,9 +2,10 @@ import { spawn } from 'node:child_process'
 import { dirname } from 'node:path'
 import { requestResume } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import { LEAD_DENIAL_CONTINUES_MAX, readLeadProgress } from '@slave-of-ai/domain'
+import { LEAD_DENIAL_CONTINUES_MAX, LEAD_NOTE_DETAIL_MAX_CHARS, readLeadProgress } from '@slave-of-ai/domain'
 import { readSpawnExtras } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { noteLeadOnce } from '../../src/lead/record.js'
 import { reconcileOrphans, resetTickObservation } from '../../src/sweep.js'
 import { drainPumps, tick } from '../../src/tick.js'
 import { LEAD_TRUNCATE, base64, cleanUpLeadRepos, leadDelivery, leadNotes, leadTaskOf, merged, seedLead, tickUntil, type LeadFixture } from './lead-helpers.js'
@@ -217,5 +218,14 @@ describe('the lead flow: one session, whatever interrupts it', () => {
     expect(leadTurns(f)).toHaveLength(1) // the same run row, not a new turn
     expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('succeeded')
     expect(await prisma.executionEvent.count({ where: { runId: run.id, type: 'run_resumed' } })).toBe(1)
+  })
+
+  it('says a standing fact once, compared in the form it is stored in (task 7 review)', async (): Promise<void> => {
+    const f = await seedLead()
+    // Longer than a note holds, with whitespace around it: the stored line is trimmed and cut.
+    const note = { workspaceId: f.workspaceId, version: 1, kind: 'decisions_missing' as const, detail: `  ${'x'.repeat(LEAD_NOTE_DETAIL_MAX_CHARS + 100)}  ` }
+    await noteLeadOnce(note)
+    await noteLeadOnce(note)
+    expect((await leadNotes(f)).filter((line) => line.startsWith('decisions_missing:'))).toHaveLength(1)
   })
 })

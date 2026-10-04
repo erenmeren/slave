@@ -13,25 +13,35 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 
+/** A note's `detail` as `workspace.lead_noted` stores it: storable, trimmed, bounded; the kind when empty. */
+function storedNoteDetail(kind: LeadNoteKind, detail: string): string {
+  const stored = trimToFit(storableText(detail).trim(), LEAD_NOTE_DETAIL_MAX_CHARS)
+  return stored === '' ? kind : stored
+}
+
 /** One line for the report about a lead-flow version (`workspace.lead_noted`). Never a card. */
 export async function noteLead(input: { readonly workspaceId: string; readonly version: number; readonly kind: LeadNoteKind; readonly detail: string; readonly runId?: string | null }): Promise<void> {
-  const detail = trimToFit(storableText(input.detail).trim(), LEAD_NOTE_DETAIL_MAX_CHARS)
   await appendEvent({
     type: 'workspace.lead_noted',
     workspaceId: input.workspaceId,
     actor: 'system',
     ...(input.runId == null ? {} : { runId: input.runId }),
-    payload: { version: input.version, kind: input.kind, detail: detail === '' ? input.kind : detail, runId: input.runId ?? null },
+    payload: { version: input.version, kind: input.kind, detail: storedNoteDetail(input.kind, input.detail), runId: input.runId ?? null },
   })
 }
 
-/** {@link noteLead}, unless the version already has this very line: a standing fact is said once. */
+/**
+ * {@link noteLead}, unless the version already has this very line: a standing fact is said once.
+ * Compared in the form the line is stored in (task 7 review), so a detail the store trims or cuts
+ * still matches its own earlier line.
+ */
 export async function noteLeadOnce(input: Parameters<typeof noteLead>[0]): Promise<void> {
+  const detail = storedNoteDetail(input.kind, input.detail)
   const said = await prisma.executionEvent.findFirst({
     where: {
       workspaceId: input.workspaceId,
       type: 'workspace_lead_noted',
-      AND: [{ payload: { path: ['version'], equals: input.version } }, { payload: { path: ['kind'], equals: input.kind } }, { payload: { path: ['detail'], equals: input.detail } }],
+      AND: [{ payload: { path: ['version'], equals: input.version } }, { payload: { path: ['kind'], equals: input.kind } }, { payload: { path: ['detail'], equals: detail } }],
     },
     select: { seq: true },
   })
