@@ -913,4 +913,14 @@ describe('a subordinate call names its session definition (lead flow L16, C1)', 
     expect(parseStreamLine(line('Bash', { command: 'ls' }, 'tu_parent'))).toMatchObject({ parentToolUseId: 'tu_parent' })
     expect(parseStreamLine(line('Bash', { command: 'ls' }))).not.toHaveProperty('parentToolUseId')
   })
+
+  it('reads a parent that is not a non-empty string as none: the line still parses, as a top-level call', () => {
+    const raw = (parent: unknown): string =>
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu_1', name: 'Agent', input: { subagent_type: 'qa', prompt: 'x' } }] }, parent_tool_use_id: parent })
+    for (const parent of [42, { id: 'tu_parent' }, '']) {
+      const parsed = parseStreamLine(raw(parent))
+      expect(parsed).toMatchObject({ kind: 'tool_call', toolName: 'Agent', subagent: 'qa' })
+      expect(parsed).not.toHaveProperty('parentToolUseId')
+    }
+  })
 })

@@ -386,8 +386,11 @@ const assistantEnvelopeSchema = z.object({
   message: z.object({
     content: z.array(z.unknown()),
   }),
-  // Lead-flow C1: set on a line a subordinate session wrote; null or absent otherwise.
-  parent_tool_use_id: z.string().nullable().optional(),
+  // Lead-flow C1: set on a line a subordinate session wrote; null or absent otherwise. `unknown`,
+  // not `string | null`: a value of another shape must not make the whole line unparsable (before
+  // this field was declared, zod dropped the key); `parentOf` reads anything but a non-empty
+  // string as none.
+  parent_tool_use_id: z.unknown().optional(),
 })
 
 const toolUseContentSchema = z.object({
@@ -414,6 +417,11 @@ const textContentSchema = z.object({
  * It is the one argument of that call the log keeps beside the summary: it says which roster
  * person did the work.
  */
+/** Lead-flow C1: the line's parent call id, or null for anything but a non-empty string. */
+function parentOf(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null
+}
+
 function subordinateOf(toolName: string, input: unknown, parent: string | null): string | null {
   if (parent !== null || !SUBORDINATE_TOOLS.includes(toolName) || !isRecord(input)) return null
   const named = input['subagent_type']
@@ -438,7 +446,9 @@ function parseAssistantLine(raw: unknown, line: string): RuntimeEvent {
   if (toolUseBlock !== undefined) {
     const result = toolUseContentSchema.safeParse(toolUseBlock)
     if (!result.success) return { kind: 'unparsable', line }
-    const parent = envelope.data.parent_tool_use_id ?? null
+    // ONE reading of the parent for both fields below, so a call is never nested for one and
+    // top-level for the other.
+    const parent = parentOf(envelope.data.parent_tool_use_id)
     const subagent = subordinateOf(result.data.name, result.data.input, parent)
     return {
       kind: 'tool_call',
@@ -450,7 +460,7 @@ function parseAssistantLine(raw: unknown, line: string): RuntimeEvent {
       // never compute this itself.
       argsHash: hashToolInput(result.data.input),
       ...(subagent === null ? {} : { subagent }),
-      ...(parent === null || parent === '' ? {} : { parentToolUseId: parent.slice(0, 200) }),
+      ...(parent === null ? {} : { parentToolUseId: parent.slice(0, 200) }),
     }
   }
 

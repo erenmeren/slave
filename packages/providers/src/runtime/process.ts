@@ -154,11 +154,23 @@ export function writeSpawnExtras(runDir: string, extras: SpawnExtras): void {
   writeFileSync(spawnExtrasPathFor(runDir), JSON.stringify(extras), { mode: 0o600 })
 }
 
+/** Whether `value` is text that parses to one plain JSON object -- the only shape `--agents` takes. */
+function isJsonObjectText(value: unknown): value is string {
+  if (typeof value !== 'string' || value === '') return false
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+  } catch {
+    return false
+  }
+}
+
 /**
  * The run's extras, or `{}`: the file's presence is the declaration (the `verifyDirIfPresent`
  * idiom), so a resume -- which has only the run directory -- spawns with what the start did. A
- * missing file, an unreadable one, and any field of the wrong shape all read as absent: an extras
- * file may never be the reason a run cannot spawn.
+ * missing file, an unreadable one, and any field of the wrong shape (session definitions that are
+ * not one JSON object among them) all read as absent: an extras file may never be the reason a run
+ * cannot spawn.
  */
 export function readSpawnExtras(runDir: string): SpawnExtras {
   let raw: unknown
@@ -170,7 +182,7 @@ export function readSpawnExtras(runDir: string): SpawnExtras {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {}
   const { sessionDefinitions, maxBudgetUsd, keepAliveForSubordinates } = raw as Record<string, unknown>
   return {
-    ...(typeof sessionDefinitions === 'string' && sessionDefinitions !== '' ? { sessionDefinitions } : {}),
+    ...(isJsonObjectText(sessionDefinitions) ? { sessionDefinitions } : {}),
     ...(typeof maxBudgetUsd === 'number' && Number.isFinite(maxBudgetUsd) && maxBudgetUsd > 0 ? { maxBudgetUsd } : {}),
     ...(keepAliveForSubordinates === true ? { keepAliveForSubordinates: true } : {}),
   }

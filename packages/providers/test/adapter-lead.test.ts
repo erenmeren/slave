@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -6,7 +6,7 @@ import { runId, type RunId } from '@slave-of-ai/domain'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { ClaudeCodeAdapter, type StartRunInput } from '../src/claude/adapter.js'
-import { readSpawnExtras, writeSpawnExtras } from '../src/runtime/process.js'
+import { readSpawnExtras, spawnExtrasPathFor, writeSpawnExtras } from '../src/runtime/process.js'
 import { copyGateInto } from './helpers/gate-fixture.js'
 
 const FAKE = fileURLToPath(new URL('./fake-claude.mjs', import.meta.url))
@@ -74,6 +74,17 @@ describe('ClaudeCodeAdapter and a lead turn (lead-flow plan A L4/L6/L16)', () =>
   it('reads an unreadable or wrongly shaped extras file as none', () => {
     writeSpawnExtras(dir, { maxBudgetUsd: -1, sessionDefinitions: '' })
     expect(readSpawnExtras(dir)).toEqual({})
+    writeFileSync(spawnExtrasPathFor(dir), '{ not json')
+    expect(readSpawnExtras(dir)).toEqual({})
+    writeFileSync(spawnExtrasPathFor(dir), JSON.stringify([{ maxBudgetUsd: 3 }]))
+    expect(readSpawnExtras(dir)).toEqual({})
+  })
+
+  it('drops session definitions that are not one JSON object, and keeps the rest', () => {
+    for (const sessionDefinitions of ['not json', '[]', 'null', '"x"', '42']) {
+      writeSpawnExtras(dir, { sessionDefinitions, maxBudgetUsd: 2 })
+      expect(readSpawnExtras(dir)).toEqual({ maxBudgetUsd: 2 })
+    }
   })
 
   it('carries the same extras into a resume of a paused turn', async (): Promise<void> => {
