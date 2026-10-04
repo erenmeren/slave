@@ -7,11 +7,13 @@ import {
   refusalText,
   retireClosedQuestionCards,
   supervisorSettings,
+  workspaceFlow,
   type LoadedSupervisorWorld,
   type ModelDecider,
   type WorkspaceStatsSnapshot,
 } from '@slave-of-ai/control'
 import {
+  LEAD_SITUATION_KINDS,
   SUPERVISOR_MAX_MODEL_DECISIONS_PER_TICK,
   SUPERVISOR_PER_CALL_CAP_USD,
   answerTier,
@@ -36,6 +38,7 @@ import {
   type SituationKind,
   type SupervisorWorld,
   type Tier,
+  type WorkspaceFlow,
 } from '@slave-of-ai/domain'
 import { answerConductorQuestions, type ConductorPass } from './conductorAnswers.js'
 
@@ -181,6 +184,15 @@ export function modelSeam(decider: ModelDecider | undefined, model: string | und
 const NO_CONDUCTOR_PASS: ConductorPass = { decided: 0, applied: 0, proposed: 0, skippedCooldown: 0, answered: 0, drafted: 0, calls: 0, answeredIds: new Set() }
 
 /**
+ * Lead flow (plan A L13, spec section 3: "no card is raised while the lead builds"): in a lead-flow
+ * project only a stopped goal version and a halt reach a person. Every other project's situations
+ * pass through untouched -- the same array, not a copy.
+ */
+export function leadSituations<T extends { readonly kind: string }>(flow: WorkspaceFlow | null, situations: readonly T[]): readonly T[] {
+  return flow === 'lead' ? situations.filter((situation) => LEAD_SITUATION_KINDS.includes(situation.kind)) : situations
+}
+
+/**
  * One Supervisor pass over one workspace (M38 §5), run at the end of every tick.
  *
  * The whole loop, and nothing else: the world comes from `packages/control/src/supervisorWorld.ts`,
@@ -236,7 +248,7 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
     ...(deps.stats === undefined ? {} : { stats: deps.stats }),
   })
 
-  const situations = filterFresh(observe(world), world)
+  const situations = filterFresh([...leadSituations(await workspaceFlow(deps.workspaceId), observe(world))], world)
   // The seam, resolved once for the pass: a decider AND a model to aim it at, a budget that is not
   // gone, and a workspace that is still running. Held as a pair rather than re-tested per
   // situation so the two halves cannot be checked in one place and read in another.

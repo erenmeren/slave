@@ -220,6 +220,12 @@ export type ControlRefusal =
   /** Conductor Plan 4b D9: `retryGoal` on a version the verification loop has not stopped on
    *  (`needs_human`) -- nothing to retry. */
   | { readonly kind: 'goal_not_needs_human'; readonly goalVersion: number; readonly status: string }
+  /** Lead flow (plan A L1): the flow cannot change now, and why. */
+  | { readonly kind: 'flow_refused'; readonly workspaceId: string; readonly reason: string }
+  /** Lead flow (plan A L7/L16): a lead setting is out of its rule. */
+  | { readonly kind: 'lead_setting_invalid'; readonly field: string; readonly rule: string }
+  /** Lead flow: the verb is for a project in the lead flow, and this one is not. */
+  | { readonly kind: 'not_lead_flow'; readonly workspaceId: string }
   // Final wave I2: a hand merge is confirmed only for the commit the version's verification passed
   // on; the integration branch has moved past it since.
   | { readonly kind: 'goal_tip_not_verified'; readonly goalVersion: number; readonly branch: string; readonly verifiedCommit: string; readonly tip: string }
@@ -784,6 +790,12 @@ export function refusalText(refusal: ControlRefusal): string {
       return `goal v${String(refusal.goalVersion)} is ${refusal.status}, not accepted; there is nothing to confirm yet`
     case 'goal_not_needs_human':
       return `goal v${String(refusal.goalVersion)} is ${refusal.status}, not waiting for a person; there is nothing to retry`
+    case 'flow_refused':
+      return `the flow of ${refusal.workspaceId} cannot change now: ${refusal.reason}`
+    case 'lead_setting_invalid':
+      return `${refusal.field}: ${refusal.rule}`
+    case 'not_lead_flow':
+      return `${refusal.workspaceId} is not in the lead flow; run set-flow --workspace ${refusal.workspaceId} --flow lead first`
     case 'goal_not_merged':
       return `${refusal.branch} is not merged into ${refusal.into}; merge it by hand first`
     case 'goal_tip_not_verified': {

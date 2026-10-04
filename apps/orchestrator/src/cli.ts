@@ -124,7 +124,9 @@ import {
   setSlaveModel,
   setSlaveRole,
   setDelivery,
+  setFlow,
   setGoal,
+  setLeadSettings,
   setPassword,
   setSupervisorSettings,
   setWorkspaceIntegration,
@@ -345,6 +347,15 @@ const USAGE = `usage: orchestrator <command> [options]
                                        before the conductor's first pass; switching AWAY FROM
                                        conducted leaves a materialised version's packages and their
                                        pinned tasks exactly as they are.
+  set-flow --workspace <id> --flow <packages|lead> [--auto-merge <on|off>] [--model <id>]
+                                       put a project into the lead flow (one lead builds a goal
+                                       version, Slave proves it) or back. Refused while a goal
+                                       version is open or a run is live. Into lead: the project is
+                                       conducted, automatic merge goes on unless --auto-merge off.
+  set-lead --workspace <id> [--time-limit-min <n|none>] [--roster <id,id,...|none>] [--model <id>]
+                                       a lead-flow project's settings: the goal's working-time
+                                       limit, the persons its subordinate sessions are defined
+                                       from, and the model of its lead, verifier and confirmer.
   conductor --workspace <id> [--version <n>]
                                        what the conductor has decided and done for one goal version
                                        (the current one by default): the extracted requirements, the
@@ -2310,6 +2321,35 @@ export async function main(argv: readonly string[]): Promise<number> {
       const delivery = oneOfFlag(flags, 'delivery', ['conducted', 'planned'] as const)
       if (delivery === undefined) throw new Error('--delivery is required')
       const result = await setDelivery(workspaceId, delivery)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`${JSON.stringify(result.value)}\n`)
+      return 0
+    }
+
+    case 'set-flow': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const flow = oneOfFlag(flags, 'flow', ['packages', 'lead'] as const)
+      if (flow === undefined) throw new Error('--flow is required')
+      const autoMerge = oneOfFlag(flags, 'auto-merge', ['on', 'off'] as const)
+      const model = flagText(flags, 'model')
+      const result = await setFlow(workspaceId, flow, { ...(autoMerge === undefined ? {} : { autoMerge: autoMerge === 'on' }), ...(model === undefined ? {} : { model }) })
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`${JSON.stringify(result.value)}\n`)
+      return 0
+    }
+
+    case 'set-lead': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const limitText = flagText(flags, 'time-limit-min')
+      const rosterText = flagText(flags, 'roster')
+      const model = flagText(flags, 'model')
+      if (limitText === undefined && rosterText === undefined && model === undefined) throw new Error('one of --time-limit-min, --roster or --model is required')
+      // Handed on as a number and NOT checked here: `setLeadSettings` owns the bounds and the sentence.
+      const result = await setLeadSettings(workspaceId, {
+        ...(limitText === undefined ? {} : { timeLimitMs: limitText === 'none' ? null : Number(limitText) * 60_000 }),
+        ...(rosterText === undefined ? {} : { roster: rosterText === 'none' ? [] : rosterText.split(',').map((id) => id.trim()).filter((id) => id !== '') }),
+        ...(model === undefined ? {} : { model }),
+      })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`${JSON.stringify(result.value)}\n`)
       return 0
