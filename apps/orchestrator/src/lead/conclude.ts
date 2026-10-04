@@ -9,6 +9,7 @@ import {
   parseLeadDecisions,
   parseSlaveAsk,
   readLeadProgress,
+  sanitisePersonText,
   trimToFit,
   type RunId,
 } from '@slave-of-ai/domain'
@@ -129,15 +130,21 @@ export async function concludeLeadTurn(runId: RunId): Promise<void> {
     // C6: the turn failed only because the permission mode refused calls -- the work it did stands.
     // The lead goes on in the same session, told what was refused; no attempt, at most
     // `LEAD_DENIAL_CONTINUES_MAX` times per version. Past that it is charged below like any failure.
-    const refused = await permissionDenialsOf(run.id, reason)
+    // A `platform` failure (a provider refusal) is the platform's row below, whatever else it had
+    // (task 7 review): it spends no continue and is waited out.
+    const refused = run.failureClass === 'platform' ? [] : await permissionDenialsOf(run.id, reason)
     if (refused.length > 0 && progress.denialContinues < LEAD_DENIAL_CONTINUES_MAX) {
-      const named = trimToFit(refused.join(', '), DENIED_LIST_MAX_CHARS)
+      // Task 7 review: the claim goes back first, uncharged and guarded -- a replay that lost it
+      // writes nothing -- as the ask path does.
+      const released = await prisma.task.updateMany({ where: { id: task.id, activeRunId: run.id }, data: { status: 'rework', activeRunId: null } })
+      if (released.count === 0) return
+      // The names came off the stream: defused before they reach the next prompt (task 7 review).
+      const named = trimToFit(sanitisePersonText(refused.join(', ')), DENIED_LIST_MAX_CHARS)
       await updateLeadProgress(delivery.id, (p) => ({
         ...p,
         denialContinues: p.denialContinues + 1,
         nextTurn: { kind: 'continue', note: `The permission mode refused these calls in your last turn: ${named}. They will be refused again: do that work another way, and carry on with the goal.` },
       }))
-      await releaseTaskAfterFailure(task, run.id, 'rework', { platform: true })
       await noteLead({ ...at, kind: 'denied', detail: `the permission mode refused ${String(refused.length)} call(s) (${named}); the lead continues in the same session, told what was refused` })
       return
     }
@@ -151,8 +158,10 @@ export async function concludeLeadTurn(runId: RunId): Promise<void> {
     return
   }
 
-  // Spec R-6 (plan A L10): the lead asked a question although none is offered. Answered at once.
-  if (progress.askReplies < LEAD_ASK_REPLIES_MAX && parseSlaveAsk(await finalTextOf(run.id)).kind !== 'absent') {
+  // Spec R-6 (plan A L10): the lead asked a question although none is offered. Answered at once --
+  // unless the lead was ended meanwhile (task 7 review): it gets no further turn, so what it
+  // committed is settled and proved, and no reply is spent.
+  if (progress.leadEnded === null && progress.askReplies < LEAD_ASK_REPLIES_MAX && parseSlaveAsk(await finalTextOf(run.id)).kind !== 'absent') {
     const released = await prisma.task.updateMany({ where: { id: task.id, activeRunId: run.id }, data: { status: 'rework', activeRunId: null } })
     if (released.count === 0) return
     await updateLeadProgress(delivery.id, (p) => ({ ...p, askReplies: p.askReplies + 1, nextTurn: { kind: 'answer', note: '' } }))
