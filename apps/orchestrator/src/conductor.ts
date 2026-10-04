@@ -30,6 +30,7 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import { loadConductCatalogue, loadRepositoryFacts } from './conductFacts.js'
 import { ensureIntegrationBranch } from './goalBranch.js'
+import { openLeadGoal } from './lead/open.js'
 import { modelSeam } from './supervisor.js'
 import type { TickDeps } from './tick.js'
 
@@ -66,6 +67,7 @@ export async function conduct(deps: TickDeps): Promise<ConductStep> {
       repoPath: true,
       baseBranch: true,
       maxAttempts: true,
+      flow: true,
     },
   })
   if (workspace.delivery !== 'conducted' || workspace.goal === null || workspace.goalVersion === 0) return 'none'
@@ -92,6 +94,9 @@ export async function conduct(deps: TickDeps): Promise<ConductStep> {
     select: { items: true },
   })
   if (set === null) return extractRequirements(deps.workspaceId, call, workspace.goal, version, workspace.haltClearedAt)
+  // Lead flow (spec B1, plan A L3): one package and one task for the lead, by rule -- no model call
+  // for the plan. The requirement extraction above is the conductor's still (spec S8 moves it in plan B).
+  if (workspace.flow === 'lead') return openLeadGoal(deps.workspaceId, workspace, version, set.items)
   return decideAndMaterialise(deps.workspaceId, call, { ...workspace, goal: workspace.goal }, version, set.items)
 }
 
@@ -116,7 +121,7 @@ interface ConductedWorkspace {
 
 /** Thrown inside `materialise`'s transaction when another tick conducted this version first: a
  *  refusal inside a Prisma interactive transaction must THROW, or what was written commits. */
-class AlreadyConducted extends Error {}
+export class AlreadyConducted extends Error {}
 
 /**
  * Spec R2/R3/R5: the size decision of one goal version, then its staffing, then its packages as
@@ -339,7 +344,7 @@ function taskDescription(pkg: PackageSpec, items: readonly { readonly key: strin
  *
  * Returns the decision's id.
  */
-async function materialise(
+export async function materialise(
   workspaceId: string,
   version: number,
   maxAttempts: number,

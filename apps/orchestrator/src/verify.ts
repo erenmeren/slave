@@ -13,6 +13,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { baseRefFor } from './goalBranch.js'
+import { concludeLeadTurn } from './lead/conclude.js'
 import { promote } from './memory.js'
 import { auditOwnership, ownershipRuleForTask } from './ownership.js'
 import { concludePlanning } from './planning.js'
@@ -335,6 +336,13 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
     },
   })
   if (run === null) return
+  // Lead flow (spec B1, plan A L5): a turn of a lead's session is concluded by its own path -- no
+  // ownership audit, no report block, no verify command, no review. `leadTurn` is null on every
+  // other run.
+  if (run.leadTurn !== null) {
+    await concludeLeadTurn(brandRunId(run.id))
+    return
+  }
 
   // M35 Task 1: `pump.ts`'s terminal conclusion writes `SlaveRun.status = 'failed'` and emits
   // `run.failed`, but touches no `Task` -- that write is this function's caller's whole reason for

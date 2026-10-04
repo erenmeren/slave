@@ -49,6 +49,8 @@ export type LeadNoteKind = (typeof LEAD_NOTE_KINDS)[number]
 
 /** Bounds `workspace.lead_noted.detail`. */
 export const LEAD_NOTE_DETAIL_MAX_CHARS = 500
+/** Bounds `LeadProgress.nextTurn.note`: what a queued turn is told (a verifier's evidence, a reason). */
+export const LEAD_TURN_NOTE_MAX_CHARS = 20_000
 
 /** Plan A L2: `WorkPackage.templateId` of a lead's package -- no catalogue persona stands behind it. */
 export const LEAD_TEMPLATE_ID = 'lead'

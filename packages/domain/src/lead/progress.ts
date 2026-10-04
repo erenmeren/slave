@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { LEAD_TURNS, STOP_REASONS, type LeadTurn, type StopReason } from './constants.js'
+import { LEAD_TURNS, LEAD_TURN_NOTE_MAX_CHARS, STOP_REASONS, type LeadTurn, type StopReason } from './constants.js'
 
 /**
  * Lead-flow plan A L11: what a lead-flow version carries between turns and proof rounds, stored on
@@ -45,7 +45,7 @@ const keyList = z.array(z.string().min(1).max(20)).max(400)
 
 /** READ-tolerant: every field defaults, so a row written before a field existed still parses. */
 export const leadProgressSchema = z.object({
-  nextTurn: z.object({ kind: z.enum(LEAD_TURNS), note: z.string().max(20_000) }).nullable().default(null),
+  nextTurn: z.object({ kind: z.enum(LEAD_TURNS), note: z.string().max(LEAD_TURN_NOTE_MAX_CHARS) }).nullable().default(null),
   leadEnded: z.enum(STOP_REASONS).nullable().default(null),
   recheckKeys: keyList.default([]),
   confirm: z.object({ runId: z.string().min(1), keys: keyList, scope: z.enum(['full', 'partial']) }).nullable().default(null),

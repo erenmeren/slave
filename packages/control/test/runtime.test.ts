@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveRuntime } from '../src/runtime.js'
+import { leadRuntime, resolveRuntime } from '../src/runtime.js'
 
 const template = (defaultModel: string | null, provider: 'claude_code' | 'cursor' | null) =>
   ({ defaultModel, provider })
@@ -96,5 +96,12 @@ describe('resolveRuntime', () => {
       provider: null,
       model: undefined,
     })
+  })
+})
+
+describe('leadRuntime (lead flow C5)', () => {
+  it('runs a lead-flow seat on Claude Code, with its own model when it names one and none otherwise', () => {
+    expect(leadRuntime({ model: null })).toEqual({ provider: 'claude_code', model: undefined })
+    expect(leadRuntime({ model: 'claude-opus-5' })).toEqual({ provider: 'claude_code', model: 'claude-opus-5' })
   })
 })
