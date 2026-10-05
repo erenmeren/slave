@@ -136,6 +136,14 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
   under the reason the lead was ended for, with git's error as the card's detail -- spec section 3: a system
   fault the product cannot work around reaches a person -- a transient git fault (a lock released a second
   later) stops a version that one more pass would have saved.
+- Task 9 -- done, reviewed: `46a761e` + review fix `ed02bc3`. Review: CLEAN with eight minors, seven fixed: a
+  smoke or verdict that cannot reach the lead's task stops the version the lead flow's way; the task's
+  `done -> rework` write is checked; an unpaid confirmation is named on the card; a resumed lead-flow
+  VERIFICATION run is re-capped at what the goal has left (`refreshLeadProofSpawn`, M(b)); a confirmer's
+  "unverifiable" is not noted as unverifiable; a missing confirmer seat holds rather than letting the verifier
+  confirm itself. Adapted, not weakened: `lead-open`'s `failR1Once` now fails R1 for the confirmer too.
+  Deviations, accepted: the smoke step is decided before `workspace.smoke_run` so a stop records
+  `reworkedPackage: null`; a lead-flow confirmation re-checks `everyPackageIntegrated` in its locked claim.
 
 ## Deferred minor findings
 
@@ -158,5 +166,9 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
   verifier; once the confirmer exists, run 2 is the confirmer and must fail R1 too, or R1 is disputed.
 - Task 6 re-review, accepted: a stop rolled back inside its transaction leaves its two events in the log (the
   card is built from the row, so only the goal report trail can show a stale stop line).
+- Task 9 review, not fixed: `afterConfirm` ignores the tip (a confirmation on another commit than the first
+  verifier's would still decide) -- the work branch cannot move while a version is `verifying` in this plan.
+- Task 9 review, for Task 10/11: a version ended by the unusable-run cap (`endInNeedsHuman`, not `stopLead`)
+  keeps a pending `confirm`; a later `retry-goal` would open with a confirmation run. Harmless.
 
 ## Results
