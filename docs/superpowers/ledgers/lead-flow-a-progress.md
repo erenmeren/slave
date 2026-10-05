@@ -24,7 +24,7 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
 - Ruling: C6 detection reads the pump's own `run.failed` reason ("N tool call(s) were denied: ids") and the
   run's `permission_mode` guardrail trips; a turn that both errored AND had a denial is also continued --
   the row does not keep `isError`, and adding a column for it is beyond this plan -- at most
-  `LEAD_DENIAL_CONTINUES_MAX` (2) error turns per version go uncharged.
+  `LEAD_DENIAL_CONTINUES_MAX` (2; 3 since the 2026-10-05 reconciliation) error turns per version go uncharged.
 - Plan defects fixed in one commit ("fix the plan's blocking defects"): B1 (`runtime.ts` in Task 6's files,
   `git add` and a unit test), B2 (the fixture records `model: input.model ?? null`; asserted null in lead-open's
   second case -- the first never starts a run -- and in lead-proof's first case, plus `SlaveRun.model`), B3 (the
