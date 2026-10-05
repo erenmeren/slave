@@ -6,6 +6,7 @@ import { appendEvent } from '@slave-of-ai/events'
 import { mergeOrAbort, primaryCheckoutReady } from './gitMerge.js'
 import { integrationWorktreePath } from './goalBranch.js'
 import { passedSmokeAtTip, settleStrandedSmoke, smokeErrorsInRound, startSmoke } from './smoke.js'
+import { leadTakeBaseIn } from './lead/base.js'
 import { enforceLeadLimits, syncLeadStates } from './lead/pass.js'
 import type { TickDeps } from './tick.js'
 import { dispatchVerification, lastVerificationFailure, settleStrandedClaim } from './verification.js'
@@ -186,6 +187,10 @@ async function advanceDelivery(
   // verified again, whether or not this pass would merge it -- never handed to a person to merge.
   if (await withDeliveryLock(delivery.id, async (tx) => reopenIfMovedInLock(tx, delivery.id))) return
   if (workspace.autoMerge) {
+    // Lead flow (spec D3, plan A L15): a base branch that moved is taken into the work branch first
+    // -- by a clean merge, or by a turn for the lead -- and the merged tree is verified again.
+    // `unmoved` leaves the merge step below to decide, as for every other workspace.
+    if (workspace.flow === 'lead' && (await leadTakeBaseIn(delivery.id)) !== 'unmoved') return
     await mergeGoalIntoBase(delivery.id)
   } else {
     // Final wave I2: the version waits for the person, and so does every later version (D6) --

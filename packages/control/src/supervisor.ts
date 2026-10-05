@@ -52,6 +52,7 @@ import { steerRun } from './breaker.js'
 import { hireFromTemplate, seatMember, mergeRuntimeRoles } from './capability.js'
 import { applyConductorOutcome } from './conductorAnswer.js'
 import { clearHalt } from './emergency.js'
+import { acceptLeadGoalAsIs, leaveLeadGoal } from './lead/card.js'
 import { requestChange } from './goal.js'
 import { releasePerson } from './persons.js'
 import { discardStaleCandidates, recordMemory } from './memory.js'
@@ -856,6 +857,17 @@ async function carryOut(
       if (origin === 'human' && decision.situation.kind === 'workspace_halted' && decision.situation.facts['reason'] === 'circuit_breaker') {
         return liftPlatformBreakerHalt(decision.workspaceId)
       }
+      // Lead flow (spec D2 in its smallest form, plan A L13): a person saying yes to a stopped
+      // lead-flow version's card accepts it as it is. `'none'` for every other version, which
+      // leaves this approval exactly what it was -- a question only the person can act on.
+      if (origin === 'human' && decision.situation.kind === 'goal_needs_human') {
+        const version = decision.situation.facts['goalVersion']
+        if (typeof version === 'number') {
+          const accepted = await acceptLeadGoalAsIs(decision.workspaceId, version, principal)
+          if (!accepted.ok) return accepted
+          if (accepted.value === 'applied') return ok('applied')
+        }
+      }
       return ok('none')
     case 'no_action':
       return ok('none')
@@ -1175,11 +1187,27 @@ export async function rejectDecision(
     userId: principal?.userId ?? null,
   })
   await afterCardClose(claim.value.workspaceId, decisionId, claim.value.close, new Date())
+  // Lead flow (plan A L13): a person saying no to a stopped lead-flow version's card leaves it.
+  await leaveLeadGoalOnReject(decisionId, principal)
 
   // M49 R2(c), the same hook as an approval's: a rejection is a decision too, and the reason a
   // person gave for it is the part a later plan most needs to read.
   await rememberDecision(decisionId, 'rejected', trimmed === undefined || trimmed === '' ? null : trimmed, principal)
   return ok(undefined)
+}
+
+/**
+ * Plan A L13: Reject on a lead-flow version's `goal_needs_human` card is "leave it". Nothing for
+ * any other card. A version that cannot be left now (a run still holds it) is said and left for the
+ * person's `abandon-goal`: the rejection itself stands.
+ */
+async function leaveLeadGoalOnReject(decisionId: string, principal?: Principal): Promise<void> {
+  const row = await prisma.supervisorDecision.findUnique({ where: { id: decisionId }, select: { workspaceId: true, situationKind: true, situation: true } })
+  if (row === null || row.situationKind !== 'goal_needs_human') return
+  const version = (row.situation as { readonly facts?: { readonly goalVersion?: unknown } } | null)?.facts?.goalVersion
+  if (typeof version !== 'number') return
+  const left = await leaveLeadGoal(row.workspaceId, version, principal)
+  if (!left.ok) console.warn(`[supervisor] decision ${decisionId} was rejected, but goal v${String(version)} could not be left: ${refusalText(left.error)}`)
 }
 
 /**

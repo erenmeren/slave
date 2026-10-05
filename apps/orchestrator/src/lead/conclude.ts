@@ -320,6 +320,19 @@ export async function settleLeadWork(run: LeadRunRow, task: LeadTaskRow, options
     }
   }
 
+  // Plan A L15: a turn that took the base branch in puts the version on top of it -- `baseCommit`
+  // follows, so the final merge is a fast-forward again and the verifier's diff is the goal's own.
+  // Never throws (task 6 review): a base git cannot read, or an ancestry it cannot answer, leaves
+  // `baseCommit` where it was.
+  const baseTip = await gitIn(repoPath, 'rev-parse', `refs/heads/${task.workspace.baseBranch}`).catch(() => null)
+  if (baseTip !== null && baseTip !== delivery.baseCommit) {
+    const inside = await gitIn(repoPath, 'merge-base', '--is-ancestor', baseTip, tip).then(
+      () => true,
+      () => false,
+    )
+    if (inside) await prisma.goalDelivery.update({ where: { id: delivery.id }, data: { baseCommit: baseTip } })
+  }
+
   await readDecisions(repoPath, tip, { workspaceId: task.workspaceId, version: delivery.goalVersion, runId: run.id })
   // Spec section 9: proof starts whether or not the lead reported.
   if (run.status !== 'succeeded') {
