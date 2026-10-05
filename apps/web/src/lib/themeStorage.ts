@@ -1,16 +1,18 @@
 /**
- * The `localStorage` key the operator's theme choice is remembered under (M57 R2).
+ * The `localStorage` key the theme choice is remembered under, and the pre-hydration script that
+ * reads it.
  *
- * A PLAIN module — no `'use client'` — and that is the whole reason it exists rather than living
- * beside the provider that reads it. `app/layout.tsx` is a SERVER component, and a server component
- * importing a value out of a `'use client'` module does not get the value: Next replaces that
- * module's exports with client references, so `${JSON.stringify(THEME_STORAGE_KEY)}` interpolated
- * into the pre-hydration script rendered as the literal `undefined` and the script read
- * `localStorage.getItem(undefined)` — which is never anything, so a pinned operator's choice was
- * never stamped before the first paint and the flash erratum E8 exists to kill was still there.
- * (M57 erratum E20; `gate:m57-ui-redesign` stage 1 is what caught it, and is what keeps it caught:
- * no jsdom test can see this, because in a test both sides import the same real module.)
- *
- * `ThemeProvider` re-exports this name, so every existing importer is unchanged.
+ * A PLAIN module -- no `'use client'` -- and that is why both live here rather than beside the
+ * provider: `app/layout.tsx` is a server component, and a server component importing a value out
+ * of a `'use client'` module gets a client reference instead of the value (M57 erratum E20).
  */
 export const THEME_STORAGE_KEY = 'theme'
+
+const DARK_QUERY = '(prefers-color-scheme: dark)'
+
+/**
+ * Stamps the class `dark` on `<html>` before the first paint (lead UX design U-8: shadcn/ui's dark
+ * variant reads the class): when the stored choice is Dark, or it is System (nothing stored) and
+ * the operating system is dark. It cannot import anything: it runs before the bundle exists.
+ */
+export const THEME_BOOT_SCRIPT = `(function(){try{var t=localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)});var d=t==='dark'||(t!=='light'&&window.matchMedia(${JSON.stringify(DARK_QUERY)}).matches);if(d){document.documentElement.classList.add('dark')}document.documentElement.style.colorScheme=d?'dark':'light'}catch(e){}})()`

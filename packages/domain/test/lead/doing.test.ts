@@ -10,7 +10,8 @@ describe('doingSentence (lead UX design section 6.3)', () => {
   })
 
   it('reads a subordinate call as handing work to a helper, under either tool name', () => {
-    expect(doingSentence('Agent', 'Agent build the login page')).toBe('Handing work to a helper')
+    const tool = 'Agent'
+    expect(doingSentence(tool, `${tool} build the login page`)).toBe('Handing work to a helper')
     expect(doingSentence('Task', 'Task build the login page')).toBe('Handing work to a helper')
   })
 

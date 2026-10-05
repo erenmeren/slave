@@ -6,6 +6,8 @@ import { listProjects } from '../../src/projectList.js'
 import { projectView } from '../../src/projectView.js'
 
 const UNKNOWN = '00000000-0000-4000-8000-000000000000'
+/** The vendor's name for the subordinate-session tool (lead-flow plan A L17). */
+const SUBORDINATE = 'Agent'
 
 interface Lead {
   readonly workspaceId: string
@@ -41,7 +43,7 @@ async function leadProject(): Promise<Lead> {
   const base = { workspaceId: ws.id, taskId: task.id, slaveId: leadSeat.id, runId: turn.id, actor: 'slave' as const }
   await appendEvent({ ...base, type: 'run.tool_call', payload: { name: 'Edit', summary: 'Edit /work/src/app.ts', toolUseId: 'call-0' } })
   await appendEvent({ ...base, type: 'run.tool_result', payload: { toolUseId: 'call-0', toolName: 'Edit', outcome: 'ok', errorClass: null } })
-  await appendEvent({ ...base, type: 'run.tool_call', payload: { name: 'Agent', summary: 'Agent fix the delete route', toolUseId: 'call-1', subagent: 'backend-dev' } })
+  await appendEvent({ ...base, type: 'run.tool_call', payload: { name: SUBORDINATE, summary: `${SUBORDINATE} fix the delete route`, toolUseId: 'call-1', subagent: 'backend-dev' } })
   await appendEvent({ ...base, type: 'run.tool_call', payload: { name: 'Bash', summary: 'Bash npm test', toolUseId: 'call-2', parentToolUseId: 'call-1' } })
   return { workspaceId: ws.id, deliveryId: delivery.id, leadSeat: leadSeat.id, verifierSeat: verifierSeat.id, taskId: task.id }
 }

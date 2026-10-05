@@ -1,74 +1,50 @@
-/**
- * `860000` → `14m 20s`; `45000` → `45s`.
- *
- * Lives here, not in `server/analytics.ts` where it was first written, because it is also needed by
- * `'use client'` components -- `AnalyticsClient.tsx`'s per-slave table until M53 R12 deleted it, and
- * the Evidence tab's median-duration column since. `server/analytics.ts` imports
- * `@slave-of-ai/db/client` at module scope, and Next's
- * client bundler resolves an entire module's imports before any tree-shaking of unused exports
- * happens — a client component that value-imports even one pure export from that file drags
- * `pg`'s Node-only dependency graph (`fs`, `net`, `tls`, `dns`) into the browser bundle and fails
- * `next build`. This module has no such side effect, so both the server aggregator and the client
- * table can import it directly instead of one re-implementing the other's formatting and risking
- * the two disagreeing.
- */
-export function formatDuration(ms: number): string {
-  const seconds = Math.round(ms / 1000)
-  const minutes = Math.floor(seconds / 60)
-  const rest = seconds % 60
-  return minutes === 0 ? `${rest}s` : `${minutes}m ${String(rest).padStart(2, '0')}s`
+/** Lead UX design: the figures a person reads, said one way everywhere. */
+
+/** `$4.20`; whole dollars stay whole (`$20`). */
+export function formatUsd(usd: number): string {
+  const rounded = Math.round(usd * 100) / 100
+  return Number.isInteger(rounded) ? `$${String(rounded)}` : `$${rounded.toFixed(2)}`
 }
 
-/** `1800000` → `30m`; `90000` → `1m30s`; `45000` → `45s`. A duration a person reads, not a
- *  millisecond count — moved here from `Sidebar.tsx` (M24 §2.1) so Task 4's Runtime panel can
- *  import it too. */
-export function formatTimeout(ms: number): string {
-  const totalSeconds = Math.round(ms / 1000)
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  if (minutes === 0) return `${seconds}s`
-  return seconds === 0 ? `${minutes}m` : `${minutes}m${seconds}s`
+/** The Limits card's spend line: "$4.20 of $20", "at least $4.20 of $20", "$4.20, no budget". */
+export function spendLine(spentUsd: number, unmeasured: boolean, budgetUsd: number | null): string {
+  const spent = `${unmeasured ? 'at least ' : ''}${formatUsd(spentUsd)}`
+  return budgetUsd === null ? `${spent}, no budget` : `${spent} of ${formatUsd(budgetUsd)}`
 }
 
-/** `7200000` → `2h`; `259200000` → `72h`; `5400000` → `90m`. The question timeout (human cards H3)
- *  runs from 15 minutes to 72 hours, where `120m`/`4320m` read badly -- so whole hours are hours, and
- *  anything else is {@link formatTimeout}'s minutes. Its own function, so the run timeout's format
- *  stays exactly what it was. */
-export function formatQuestionTimeout(ms: number): string {
-  return ms > 0 && ms % 3_600_000 === 0 ? `${String(ms / 3_600_000)}h` : formatTimeout(ms)
-}
-
-/** `2026-10-02T10:00:00.000Z` → `2026-10-02 10:00 UTC` (human cards plan A): when a question closed,
- *  as both the settled notice (rendered on the server) and a question card (rendered in the browser)
- *  say it -- one formatter, so the two never disagree. It names its zone rather than guessing the
- *  reader's. */
-export function formatUtcMinute(iso: string): string {
-  return `${iso.slice(0, 16).replace('T', ' ')} UTC`
-}
-
-/**
- * `2026-09-19T10:58:00.000Z` (with `now` five minutes later) → `5m ago`; under a minute →
- * `just now` (M61 R7).
- *
- * The Command strip's `NeedsYouBar` is this function's first caller -- a needs-you item's age
- * beside its title, the way the handoff's rows read. Nothing in this tree had a RELATIVE clock
- * before this (`GoalHistory.tsx`/`NeedsYouCard.tsx` both print the absolute `toLocaleString()`
- * stamp instead), so this is a new function rather than a moved one. `now` is a parameter, not
- * `Date.now()` read inside, so a test can pin the age without faking the system clock.
- */
-export function formatAge(iso: string, now: number = Date.now()): string {
-  const ms = Math.max(0, now - Date.parse(iso))
+/** Working time: "38 min", "1 h 5 min", "under a minute". */
+export function formatMinutes(ms: number): string {
   const minutes = Math.floor(ms / 60_000)
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${String(minutes)}m ago`
+  if (minutes < 1) return 'under a minute'
+  if (minutes < 60) return `${String(minutes)} min`
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${String(hours)}h ago`
-  const days = Math.floor(hours / 24)
-  return `${String(days)}d ago`
+  const rest = minutes % 60
+  return rest === 0 ? `${String(hours)} h` : `${String(hours)} h ${String(rest)} min`
 }
 
-// `formatTokens` was deleted by M53 R12 with the per-slave Analytics table, which its own docstring
-// already named as "this function's one remaining caller" -- the flat worker list it was written for
-// went in M24 and `AllSlavesTable` has no Tokens column. Nothing in this tree calls it, no test
-// covers it, and no tile on `/analytics` has ever shown a token figure. An exported helper with no
-// caller is a second thing to keep working for nobody.
+/** The Limits card's time line: "38 min of 1 h 30 min", "38 min, no time limit". */
+export function timeLine(workedMs: number, limitMs: number | null): string {
+  return limitMs === null ? `${formatMinutes(workedMs)}, no time limit` : `${formatMinutes(workedMs)} of ${formatMinutes(limitMs)}`
+}
+
+/** How long ago: "just now", "3 min ago", "2 h ago", "4 days ago". */
+export function formatAgo(iso: string, now: number = Date.now()): string {
+  const seconds = Math.max(0, Math.round((now - Date.parse(iso)) / 1000))
+  if (seconds < 60) return 'just now'
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${String(minutes)} min ago`
+  const hours = Math.round(minutes / 60)
+  if (hours < 48) return `${String(hours)} h ago`
+  return `${String(Math.round(hours / 24))} days ago`
+}
+
+/** A part of a whole as a bar's percentage, 0 to 100; null when there is no whole to measure against. */
+export function percentOf(part: number, whole: number | null): number | null {
+  if (whole === null || whole <= 0) return null
+  return Math.min(100, Math.max(0, (part / whole) * 100))
+}
+
+/** "1 task", "3 tasks". */
+export function plural(count: number, noun: string, many = `${noun}s`): string {
+  return `${String(count)} ${count === 1 ? noun : many}`
+}

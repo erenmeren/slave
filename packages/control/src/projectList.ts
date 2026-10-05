@@ -10,6 +10,8 @@ export interface ProjectListItem {
   readonly flow: WorkspaceFlow
   readonly phase: ProjectPhase
   readonly archived: boolean
+  /** The repository the project points at: a delete says it is left on disk. */
+  readonly repoPath: string
   readonly baseBranch: string
   readonly haltedReason: string | null
   /** The newest build's number, 0 before the first. */
@@ -39,7 +41,7 @@ export interface ProjectListItem {
 export async function listProjects(): Promise<readonly ProjectListItem[]> {
   const workspaces = await prisma.workspace.findMany({
     orderBy: [{ archivedAt: { sort: 'asc', nulls: 'first' } }, { name: 'asc' }],
-    select: { id: true, name: true, flow: true, archivedAt: true, baseBranch: true, haltedReason: true, goalVersion: true, budgetUsd: true, createdAt: true },
+    select: { id: true, name: true, flow: true, archivedAt: true, repoPath: true, baseBranch: true, haltedReason: true, goalVersion: true, budgetUsd: true, createdAt: true },
   })
   return Promise.all(
     workspaces.map(async (workspace): Promise<ProjectListItem> => {
@@ -95,6 +97,7 @@ export async function listProjects(): Promise<readonly ProjectListItem[]> {
         flow: workspace.flow,
         phase,
         archived: workspace.archivedAt !== null,
+        repoPath: workspace.repoPath,
         baseBranch: workspace.baseBranch,
         haltedReason: workspace.haltedReason,
         goalVersion: workspace.goalVersion,

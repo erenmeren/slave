@@ -127,9 +127,9 @@ Why a build stopped (`stopReason`), as the decision card and the report say it:
 
 ## 6. The screens
 
-The frame (U-2) at desktop width (1024 px and up): sidebar 260 px on the left, the screen to its right with a
-max content width of 1200 px. Below 1024 px the sidebar collapses behind a menu button (shadcn `Sheet`) and the
-screen takes the whole width; the screens are single-column below 768 px.
+The frame (U-2) at desktop width: sidebar 256 px on the left, the screen to its right with a max content width
+of 1200 px. Below 768 px (shadcn's own breakpoint) the sidebar slides in behind a menu button (shadcn `Sheet`)
+and the screen takes the whole width; the Project screen's two columns fold to one below 1024 px.
 
 The sidebar, top to bottom: the product mark "Slave of AI"; **New project** (a button); **Projects**, one row
 per project: the state dot, the name, and on the right either an amber pill with the count of decisions waiting
@@ -194,8 +194,9 @@ States and words:
 - creating: as above.
 - failed: the step that failed is red with its reason in words, and **Try again** continues from that step; if
   the project was already made, a link "Open the project it made".
-- the conversation used all its turns: "This conversation has used all its turns. Fill in the card yourself and
-  start." (the card is shown empty and editable).
+- the conversation used all its turns without a draft: "This conversation has used all its turns without a
+  draft. Start a new one." (Amended in the build: a hand-filled card cannot name an existing repository the
+  conversation never saw, so a fresh conversation is the way on.)
 
 ### 6.3 Project -- `/w/:id`
 
@@ -290,10 +291,10 @@ project and wait for its work to end first."
 One printable column, outcome first: the title "Build n of `<project>`", the state badge and the stop reason;
 **Download as Markdown**; then the sections Requirements (as the Project screen's Proof, with every check's
 history), Smoke check (each attempt: outcome, exit code, output), Decisions (the person's and the lead's, each
-with its reason), Spend (this build and the project, against the budget), What a person must do before release
-(from the lead's report when it wrote one), and the Trail (time, sentence, quoted detail). Builds of the older
-flow also show their packages. Empty sections are left out; a build with no report reads "This build has no
-report yet: its requirements have not been read."
+with its reason) and Spend (this build and the project, against the budget). The step-by-step trail and the
+report's caveats are written in Slave's internal vocabulary, so they stay in the Markdown download, and the page
+says so. Empty sections are left out; a build with no report reads "This build has no report yet: its
+requirements have not been read."
 
 ### 6.5 Helpers -- `/helpers`
 
@@ -371,8 +372,8 @@ in the sidebar and Home ("Waiting for you" says "Answer it from the command line
 | `/w/:id/{tasks,activity,graph,office,knowledge,organization,settings}`, `/workforce`, `/slaves`, `/skills`, `/analytics`, `/sim*` | Redirected (307) to `/w/:id`, `/helpers` or `/`, so a bookmark still lands somewhere. |
 | The hand-made primitives in `components/ui/` and their tokens (`tokens/simple.css`, `tokens/developer.css`) | Replaced by shadcn/ui (U-8). |
 
-API routes that only fed a removed screen go with it (section 11); routes that are a thin envelope over a control
-verb stay, because a route over a verb is an API and costs nothing to keep.
+Every API route that only a removed screen called goes with it (section 11). The control verbs behind them stay,
+and the CLI reaches every one; a route nothing in the interface calls is surface nobody exercises.
 
 ## 10. What the control layer gains
 
@@ -415,9 +416,10 @@ All new logic lives in `packages/control`, with route files as thin envelopes:
 | Sign in | -- | `POST /api/auth/login` (kept) |
 
 Kept untouched because something outside the web reads them: `/api/hooks/:source/:hookId` (external triggers),
-`/api/auth/*`. Removed with their screens: the read models and routes of the sidebar, home snapshot, overview,
-team live, activity river and digest, graph, communication graph, skill graph, office, shell facts, knowledge,
-analytics, the org/catalogue editors, people pages, the Supervisor panel, and the simulation pages.
+`/api/auth/*`. Removed with their screens, read and write alike: `/api/{org,persons,slaves,teams,skills,sim,home,
+sidebar}/*`, and under `/api/w/:id`: activity, events, graph, organization, overview, shell, skill-graph, team,
+teams, tasks, needs-you, memories, runbook, staffing, slaves, supervisor, messages, runs, company, limits,
+provider, goal/history and clear-halt (Continue replaces it).
 
 ## 12. Not in this design
 

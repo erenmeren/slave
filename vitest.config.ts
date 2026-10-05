@@ -1,5 +1,12 @@
+import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
+
+// Lead UX design U-8: `apps/web` imports its shadcn/ui components and helpers as `@/...`
+// (`components.json`'s aliases, `apps/web/tsconfig.json`'s `paths`). Next resolves that from the
+// tsconfig; vitest does not, so both projects map it here. A regex on `@/` only, so a scoped
+// package (`@slave-of-ai/...`, `@testing-library/...`) is never touched.
+const webAlias = [{ find: /^@\//u, replacement: `${fileURLToPath(new URL('./apps/web/src/', import.meta.url))}` }]
 
 export default defineConfig({
   test: {
@@ -16,6 +23,7 @@ export default defineConfig({
         // `plugins` array declared at this file's root, so the react plugin (JSX
         // transform for the `.test.tsx` shell tests) has to live on the project itself.
         plugins: [react()],
+        resolve: { alias: webAlias },
         test: {
           name: 'unit',
           include: ['packages/**/test/**/*.test.{ts,tsx}', 'apps/**/test/**/*.test.{ts,tsx}'],
@@ -34,6 +42,7 @@ export default defineConfig({
         // its URL), so the automatic runtime is set here rather than a `React` global faked in a
         // test file.
         esbuild: { jsx: 'automatic' },
+        resolve: { alias: webAlias },
         test: {
           name: 'integration',
           include: ['packages/**/test/integration/**/*.test.ts', 'apps/**/test/integration/**/*.test.ts'],

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { PROVIDER_ADAPTERS, capabilitiesOf, type ProviderKind } from '@slave-of-ai/control'
-import { PERMISSION_KINDS, PROVIDER_KINDS, PROVIDER_LABEL, manifestFor, type PermissionKind } from '@slave-of-ai/domain'
+import { PROVIDER_KINDS, PROVIDER_LABEL, manifestFor } from '@slave-of-ai/domain'
 import { prisma } from '@slave-of-ai/db/client'
 
 const run = promisify(execFile)
@@ -133,91 +133,4 @@ export async function buildProviderAdapters(
       }),
     ),
   ]
-}
-
-export interface PermissionRow {
-  readonly slaveId: string
-  readonly name: string
-  readonly role: string
-  /** One entry per `PERMISSION_KINDS` member, in that order (M52 R1 -- the six prose rows became
-   *  six OPERATIONS). `mode` is `null` when no `SlavePermission` row exists -- unset, which the
-   *  matrix shows as `–` and a click turns into a grant; it is NOT the same as an explicit deny,
-   *  and the cell says which it is.
-   *
-   *  `kind`, not `tool` (M52 Task 5): three of the six prose values collapsed onto `Bash` and one
-   *  named no tool at all, so a field called `tool` carrying `deploy_release` was the vocabulary
-   *  this milestone came to fix, spelled in a type. */
-  readonly cells: readonly { readonly kind: PermissionKind; readonly mode: 'allow' | 'deny' | null }[]
-}
-
-/**
- * One workspace's slice of the matrix (fix round 1, finding 2).
- *
- * The matrix used to be a flat list of EVERY `Slave` row in the database. Two projects
- * materialized from the same roster then produced indistinguishable duplicate rows -- "Alex ·
- * backend" twice, with nothing on either to say which project it governed -- and the query was
- * unbounded besides. Grouping by workspace makes the row's owner part of the structure rather
- * than something a reader has to infer, and bounds each grid to one project's roster.
- */
-export interface PermissionSection {
-  readonly workspaceId: string
-  readonly workspaceName: string
-  readonly rows: readonly PermissionRow[]
-}
-
-/**
- * @param workspaceId Scopes the workspace query to that one row (M24 §4: the project Settings
- * tab's own permission matrix) -- an empty array, not an error, when it names no workspace.
- * Omitted, the original org-wide Settings behaviour: every workspace, in name order.
- */
-export async function buildPermissionMatrix(workspaceId?: string): Promise<readonly PermissionSection[]> {
-  // TWO queries regardless of how many workspaces exist -- the slaves ride in on the workspace
-  // query's `include`, and the permissions come back in one sweep keyed by slave. No per-workspace
-  // and no per-slave round trip. `SlavePermission` carries no `workspaceId` of its own (it is keyed
-  // by `slaveId` only), so scoping the workspace query is enough: the map below only ever gets
-  // consulted for the slaves `workspaces` actually returned, and a permission row for some other
-  // project's slave is fetched but never looked up.
-  const [workspaces, permissions] = await Promise.all([
-    prisma.workspace.findMany({
-      // `{}` rather than an omitted key -- `exactOptionalPropertyTypes` refuses a `where` typed
-      // to allow `undefined` explicitly, and an empty filter matches every row exactly as
-      // omitting `where` would.
-      where: workspaceId === undefined ? {} : { id: workspaceId },
-      orderBy: { name: 'asc' },
-      select: {
-        id: true,
-        name: true,
-        // M58 R17: OPEN seats only, named by the person in each (R2).
-        teams: { select: { slaves: { where: { closedAt: null }, select: { id: true, role: true, person: { select: { name: true } } } } } },
-      },
-    }),
-    prisma.slavePermission.findMany(),
-  ])
-
-  const bySlave = new Map<string, Map<string, 'allow' | 'deny'>>()
-  for (const row of permissions) {
-    const map = bySlave.get(row.slaveId) ?? new Map<string, 'allow' | 'deny'>()
-    map.set(row.kind, row.mode)
-    bySlave.set(row.slaveId, map)
-  }
-
-  return workspaces.map((workspace) => ({
-    workspaceId: workspace.id,
-    workspaceName: workspace.name,
-    // Flattened then sorted, NOT ordered inside the `include`: a Prisma `orderBy` there sorts
-    // within each team, so a two-team workspace would come back as two separately-sorted runs
-    // concatenated rather than one roster in name order.
-    rows: workspace.teams
-      .flatMap((team) => team.slaves)
-      .sort((a, b) => a.person.name.localeCompare(b.person.name))
-      .map((slave) => ({
-        slaveId: slave.id,
-        name: slave.person.name,
-        role: slave.role,
-        // `null` is UNSET, and the cell says so: a slave nobody has decided about is not the
-        // same as one explicitly denied, and collapsing them would make the matrix claim a
-        // decision that was never taken.
-        cells: PERMISSION_KINDS.map((kind) => ({ kind, mode: bySlave.get(slave.id)?.get(kind) ?? null })),
-      })),
-  }))
 }

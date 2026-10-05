@@ -1,40 +1,37 @@
-import { LoginForm } from '../../components/LoginForm'
+import Link from 'next/link'
+import { LoginForm } from '@/components/login/LoginForm'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { boundaryMode } from '../../lib/authEnv'
 import { safeNext } from '../../lib/safeNext'
 
 export const dynamic = 'force-dynamic'
+export const metadata = { title: 'Sign in · Slave of AI' }
 
-/** The login page (M20 spec §3.3; M61 R12/R13, Task 9): a single glass card on the app's own
- *  chrome, no sidebar (the shell is a logged-in surface — `Sidebar` steps aside on this path).
- *  In loopback mode there is nothing to log in to, and the page says so instead of rendering a
- *  form. The mark above the form is the SAME `S` tile `shell/Rail.tsx` draws for its own
- *  `aria-label="Slave of AI"` mark, copied verbatim rather than pulled into a shared component
- *  neither side needs a second prop surface for. */
-export default async function LoginPage({
-  searchParams,
-}: {
-  readonly searchParams: Promise<{ readonly next?: string }>
-}): Promise<React.JSX.Element> {
+/** Sign in (lead UX design section 6.7): one centred card, no sidebar. With no accounts on this
+ *  installation there is nothing to sign in to, and the card says so. */
+export default async function LoginPage({ searchParams }: { readonly searchParams: Promise<{ readonly next?: string }> }): Promise<React.JSX.Element> {
   const { next } = await searchParams
-  const mode = boundaryMode()
+  const accounts = boundaryMode() === 'accounts'
   return (
-    <div className="glass mx-auto mt-[12dvh] w-[380px] rounded-sheet border border-line p-6">
-      <div
-        aria-hidden
-        className="mb-4 grid h-8 w-8 place-items-center rounded-control bg-accent text-accent-ink font-semibold"
-      >
-        S
-      </div>
-      {mode === 'accounts' ? (
-        <LoginForm next={safeNext(next ?? null)} />
-      ) : (
-        <p data-testid="login-unconfigured" className="font-mono text-[10px] text-text-3">
-          accounts are not configured on this instance — loopback-only.{' '}
-          <a href="/" className="underline">
-            open the app
-          </a>
-        </p>
-      )}
+    <div className="grid min-h-dvh place-items-center px-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader className="gap-3">
+          <span aria-hidden className="grid size-9 place-items-center rounded-md bg-primary font-semibold text-primary-foreground">
+            S
+          </span>
+          <CardTitle className="text-lg">Sign in to Slave of AI</CardTitle>
+          {!accounts && <CardDescription data-testid="login-unconfigured">This installation has no accounts: only this machine can open it, and there is nothing to sign in to.</CardDescription>}
+        </CardHeader>
+        <CardContent>
+          {accounts ? (
+            <LoginForm next={safeNext(next ?? null)} />
+          ) : (
+            <Link href="/" className="text-sm underline underline-offset-4">
+              Open Slave of AI
+            </Link>
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }

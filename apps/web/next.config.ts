@@ -4,14 +4,17 @@ const config: NextConfig = {
   // Workspace packages ship compiled ESM with .js specifiers; transpile keeps Next's bundler
   // from tripping on them and keeps one build graph.
   transpilePackages: ['@slave-of-ai/control', '@slave-of-ai/db', '@slave-of-ai/domain', '@slave-of-ai/events'],
-  // The first redirects in this repository (M44 R1). `/slaves` and `/skills` are two of the four
-  // surfaces for "a slave" the M44 audit found; they are Workforce tabs now, and their old URLs
-  // still work because a bookmark is a promise. `permanent: false` (307) deliberately: a 308 is
-  // cached by the browser forever, and M45/M46 rearrange this page again.
+  // Lead UX design section 9: every screen the new interface removed still lands somewhere, so a
+  // bookmark is not a dead end. `permanent: false` (307): a 308 is cached by the browser forever.
   async redirects() {
     return [
-      { source: '/slaves', destination: '/workforce', permanent: false },
-      { source: '/skills', destination: '/workforce?tab=skills', permanent: false },
+      { source: '/slaves', destination: '/helpers', permanent: false },
+      { source: '/skills', destination: '/helpers', permanent: false },
+      { source: '/workforce', destination: '/helpers', permanent: false },
+      { source: '/analytics', destination: '/', permanent: false },
+      { source: '/sim', destination: '/', permanent: false },
+      { source: '/sim/:path*', destination: '/', permanent: false },
+      { source: '/w/:workspaceId/:tab(tasks|activity|graph|office|knowledge|organization|settings)', destination: '/w/:workspaceId', permanent: false },
     ]
   },
   // Gate-only (M17 Task 7, Flake 6 investigation): `scripts/gate-m14-fidelity.mjs` sets

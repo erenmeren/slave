@@ -1,479 +1,182 @@
 @import 'tailwindcss';
-@import './tokens/simple.css';
-@import './tokens/developer.css';
+@import 'tw-animate-css';
 
-/* ============================================================================================
- * M57 R1 — ONE sheet, TWO themes, and every name that ever meant something still meaning it.
+/* =============================================================================================
+ * Lead UX design (2026-10-05) U-8: shadcn/ui's tokens, one set of names in two themes. Light is
+ * `:root`; dark is the class `dark` on `<html>`, which the pre-hydration script and
+ * `ThemeProvider` stamp (System follows the operating system). Every colour a component uses is a
+ * variable here and a Tailwind colour in `@theme inline` below -- no component spells a hex value.
  *
- * The first block below is the handoff README's own vocabulary (`design_handoff_ui_redesign`,
- * "Design Tokens"), in its LIGHT values. The second block is the same names in dark, applied when
- * the operating system asks for dark AND the operator has not pinned light. The third is the same
- * names again under an explicit `data-theme="dark"`, so the toggle wins in both directions -- a
- * person on a light OS who chooses Dark gets dark, and a person on a dark OS who chooses Light
- * gets light. The ABSENCE of `data-theme` is "follow the system": that is why the media query is
- * guarded by `:not([data-theme='light'])` and not by the attribute's presence.
- *
- * The third block after that is the ALIAS LAYER, and it is the reason this milestone can land one
- * page at a time. Ninety-odd files in `src/` spell utilities like `bg-bg-1`, `text-text-2`,
- * `border-line`, `text-tone-blocked`. Deleting those tokens would break the build in one file and
- * the render in eighty-nine. Every one of them is still declared here, with its value rewritten to
- * `var(<the new token that means what it meant>)` -- so a component nobody has restyled yet keeps
- * rendering, and keeps rendering CORRECTLY IN BOTH THEMES, from the moment the switch exists. The
- * old six-rung text ramp collapses onto the new three deliberately: `--text-1`/`--text-body` are
- * primary, `--text-2`/`--text-dim` are muted, `--text-faint`/`--text-3` are labels. As each page is
- * restyled its file stops spelling the old name; when no file spells one, it can go. Not before.
+ * Beyond shadcn's own names, four state colours the design needs (section 5): `warning` is a
+ * person being needed (amber: the decision card, the sidebar marker), `success` is delivered and
+ * "Works", `info` is building, `checking` is the checker at work. Each has a `-foreground` for text
+ * on it and a `-muted` wash for a tinted surface.
  * ========================================================================================== */
 
+@custom-variant dark (&:is(.dark *));
+
 :root {
-  /* ---- M61 R2: the palette moved to `tokens/simple.css` / `tokens/developer.css` -- the same
-   *      twenty names, imported above, and still every other declaration in this block points at
-   *      them by `var()`, so nothing here had to change to keep pointing at the right colour. */
-
-  /* ---- M61 R3: three radii, and every old name is an alias of one of them ------------------ */
-  --radius-control: 8px;
-  --radius-surface: 12px;
-  --radius-sheet: 16px;
-  --radius-chip: var(--radius-control);
-  --radius-nav: var(--radius-control);
-  --radius-tile: var(--radius-control);
-  --radius-card: var(--radius-control);
-  --radius-panel: var(--radius-control);
-  --radius-tile-lg: var(--radius-surface);
-  --radius-panel-card: var(--radius-surface);
-  --radius-page-card: var(--radius-sheet);
-  --radius-bubble: var(--radius-sheet);
-  --radius-pill: 999px;
-  --radius-hair: 2px;
-  /* ---- density (developer overrides below) and motion ------------------------------------- */
-  --fs-body: 14px;
-  --row-h: 40px;
-  --gap-1: 8px;
-  --gap-2: 12px;
-  --gap-3: 16px;
-  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
-  --dur-fast: 120ms;
-  --dur-base: 180ms;
-  --dur-slow: 240ms;
-
-  /* ---- Shadows. The README allows cards exactly one (`0 1px 2px rgba(0,0,0,.04)`); that is
-   *      `--shadow-card`. `--shadow-resting` is NOT that and is not being replaced by it: it names
-   *      a FLOATING surface (a popover, a detail panel) and four components already ask for it. */
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-resting: 0 4px 16px rgba(0, 0, 0, 0.12);
-
-  /* ---- Type (M57 R3). Four `next/font/local` calls hand us four variables, one per family per
-   *      subset, each carrying its own `unicode-range`; a codepoint outside the latin face's range
-   *      falls through to the latin-ext face exactly as it would between two faces of one family.
-   *      The literal fallbacks at the end are what a context rendering OUTSIDE this layout gets
-   *      (a component test mounting a `ui/` component with no `<html>` wrapper). */
-  --font-sans: var(--font-sans-latin), var(--font-sans-ext), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-mono-latin), var(--font-mono-ext), ui-monospace, monospace;
-
-  /* ---- The alias layer (see the header comment). NOTHING here is a colour; every one is a
-   *      pointer at one of the twenty names above, so all of them theme for free. */
-  --bg-0: var(--bg);
-  --bg-1: var(--panel);
-  --bg-2: var(--card);
-  --bg-selected: var(--sel);
-  --bg-card-alt: var(--card);
-  --bg-canvas: var(--bg);
-  --bg-floor: var(--bg);
-  --line-hover: var(--line2);
-  --text-1: var(--t1);
-  --text-body: var(--t1);
-  --text-2: var(--t2);
-  --text-dim: var(--t2);
-  --text-faint: var(--t3);
-  --text-3: var(--t3);
-  --tone-working: var(--s-working);
-  --tone-planning: var(--s-planning);
-  --tone-review: var(--s-review);
-  --tone-waiting: var(--s-waiting);
-  --tone-blocked: var(--s-blocked);
-  --tone-done: var(--s-done);
-  --tone-paused: var(--s-paused);
-  --tone-idle: var(--s-idle);
+  --radius: 0.625rem;
+  --background: oklch(0.985 0.002 264);
+  --foreground: oklch(0.2 0.02 264);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.02 264);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0.02 264);
+  --primary: oklch(0.5 0.2 275);
+  --primary-foreground: oklch(0.985 0.005 275);
+  --secondary: oklch(0.955 0.006 264);
+  --secondary-foreground: oklch(0.25 0.02 264);
+  --muted: oklch(0.955 0.006 264);
+  --muted-foreground: oklch(0.5 0.02 264);
+  --accent: oklch(0.95 0.015 275);
+  --accent-foreground: oklch(0.3 0.08 275);
+  --destructive: oklch(0.577 0.215 27);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(0.91 0.008 264);
+  --input: oklch(0.89 0.01 264);
+  --ring: oklch(0.6 0.17 275);
+  --warning: oklch(0.72 0.17 65);
+  --warning-foreground: oklch(0.32 0.08 55);
+  --warning-muted: oklch(0.97 0.04 85);
+  --success: oklch(0.6 0.15 155);
+  --success-foreground: oklch(0.32 0.08 155);
+  --success-muted: oklch(0.96 0.04 155);
+  --info: oklch(0.6 0.16 245);
+  --info-foreground: oklch(0.33 0.1 245);
+  --info-muted: oklch(0.96 0.03 245);
+  --checking: oklch(0.58 0.2 300);
+  --checking-foreground: oklch(0.34 0.12 300);
+  --checking-muted: oklch(0.96 0.03 300);
+  --sidebar: oklch(0.97 0.004 264);
+  --sidebar-foreground: oklch(0.25 0.02 264);
+  --sidebar-primary: oklch(0.5 0.2 275);
+  --sidebar-primary-foreground: oklch(0.985 0.005 275);
+  --sidebar-accent: oklch(0.93 0.01 264);
+  --sidebar-accent-foreground: oklch(0.2 0.02 264);
+  --sidebar-border: oklch(0.91 0.008 264);
+  --sidebar-ring: oklch(0.6 0.17 275);
+  --app-font-sans: var(--font-sans-latin), var(--font-sans-ext), ui-sans-serif, system-ui, sans-serif;
+  --app-font-mono: var(--font-mono-latin), var(--font-mono-ext), ui-monospace, monospace;
 }
 
-/* M61 R2 -- both dark palette blocks (system-dark and pinned-dark) moved to `tokens/simple.css`
- * and `tokens/developer.css`; their selectors carry more specificity than the bare `:root` above,
- * so they win in dark mode regardless of import order -- the light default above is what a mode
- * with no dark override would fall back to, and neither token file leaves one unset. */
+.dark {
+  --background: oklch(0.165 0.012 264);
+  --foreground: oklch(0.95 0.006 264);
+  --card: oklch(0.205 0.014 264);
+  --card-foreground: oklch(0.95 0.006 264);
+  --popover: oklch(0.225 0.014 264);
+  --popover-foreground: oklch(0.95 0.006 264);
+  --primary: oklch(0.7 0.15 277);
+  --primary-foreground: oklch(0.18 0.03 277);
+  --secondary: oklch(0.27 0.014 264);
+  --secondary-foreground: oklch(0.95 0.006 264);
+  --muted: oklch(0.27 0.014 264);
+  --muted-foreground: oklch(0.72 0.015 264);
+  --accent: oklch(0.29 0.03 275);
+  --accent-foreground: oklch(0.92 0.03 275);
+  --destructive: oklch(0.68 0.19 22);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(1 0 0 / 11%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.6 0.13 277);
+  --warning: oklch(0.8 0.15 75);
+  --warning-foreground: oklch(0.9 0.09 85);
+  --warning-muted: oklch(0.3 0.06 70);
+  --success: oklch(0.72 0.15 155);
+  --success-foreground: oklch(0.88 0.08 155);
+  --success-muted: oklch(0.28 0.05 155);
+  --info: oklch(0.72 0.13 245);
+  --info-foreground: oklch(0.88 0.06 245);
+  --info-muted: oklch(0.28 0.05 245);
+  --checking: oklch(0.74 0.15 300);
+  --checking-foreground: oklch(0.9 0.06 300);
+  --checking-muted: oklch(0.29 0.06 300);
+  --sidebar: oklch(0.185 0.013 264);
+  --sidebar-foreground: oklch(0.93 0.006 264);
+  --sidebar-primary: oklch(0.7 0.15 277);
+  --sidebar-primary-foreground: oklch(0.18 0.03 277);
+  --sidebar-accent: oklch(0.26 0.016 264);
+  --sidebar-accent-foreground: oklch(0.95 0.006 264);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.6 0.13 277);
+}
 
 @theme inline {
-  /* The handoff's own names. */
-  --color-bg: var(--bg);
-  --color-panel: var(--panel);
+  --font-sans: var(--app-font-sans);
+  --font-mono: var(--app-font-mono);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
   --color-card: var(--card);
-  --color-line: var(--line);
-  --color-line2: var(--line2);
-  --color-t1: var(--t1);
-  --color-t2: var(--t2);
-  --color-t3: var(--t3);
-  --color-hover: var(--hover);
-  --color-sel: var(--sel);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
-  --color-accent-ink: var(--accent-ink);
-  --color-s-working: var(--s-working);
-  --color-s-planning: var(--s-planning);
-  --color-s-review: var(--s-review);
-  --color-s-waiting: var(--s-waiting);
-  --color-s-blocked: var(--s-blocked);
-  --color-s-done: var(--s-done);
-  --color-s-paused: var(--s-paused);
-  --color-s-idle: var(--s-idle);
-
-  /* Every mapping that existed before M57, kept so that not one utility class in `src/` stops
-   * resolving. These point at the aliases, which point at the names above. */
-  --color-bg-0: var(--bg-0);
-  --color-bg-1: var(--bg-1);
-  --color-bg-2: var(--bg-2);
-  --color-text-1: var(--text-1);
-  --color-text-2: var(--text-2);
-  --color-text-faint: var(--text-faint);
-  --color-text-3: var(--text-3);
-  --color-text-body: var(--text-body);
-  --color-text-dim: var(--text-dim);
-  --color-bg-selected: var(--bg-selected);
-  --color-bg-card-alt: var(--bg-card-alt);
-  --color-bg-canvas: var(--bg-canvas);
-  --color-bg-floor: var(--bg-floor);
-  --color-line-hover: var(--line-hover);
-  --color-tone-working: var(--tone-working);
-  --color-tone-planning: var(--tone-planning);
-  --color-tone-review: var(--tone-review);
-  --color-tone-waiting: var(--tone-waiting);
-  --color-tone-blocked: var(--tone-blocked);
-  --color-tone-done: var(--tone-done);
-  --color-tone-paused: var(--tone-paused);
-  --color-tone-idle: var(--tone-idle);
-
-  --radius-chip: var(--radius-chip);
-  --radius-nav: var(--radius-nav);
-  --radius-tile: var(--radius-tile);
-  --radius-card: var(--radius-card);
-  --radius-panel: var(--radius-panel);
-  --radius-tile-lg: var(--radius-tile-lg);
-  --radius-panel-card: var(--radius-panel-card);
-  --radius-page-card: var(--radius-page-card);
-  --radius-pill: var(--radius-pill);
-  --radius-hair: var(--radius-hair);
-  --radius-bubble: var(--radius-bubble);
-  --shadow-card: var(--shadow-card);
-  --shadow-resting: var(--shadow-resting);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-mono);
-
-  /* M61 R3 -- the surface tokens and the three new radii. */
-  --color-glass: var(--glass);
-  --color-glass-strong: var(--glass-strong);
-  --color-edge: var(--edge);
-  --radius-control: var(--radius-control);
-  --radius-surface: var(--radius-surface);
-  --radius-sheet: var(--radius-sheet);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-muted: var(--warning-muted);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-success-muted: var(--success-muted);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-info-muted: var(--info-muted);
+  --color-checking: var(--checking);
+  --color-checking-foreground: var(--checking-foreground);
+  --color-checking-muted: var(--checking-muted);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
 }
 
-/* `color-scheme` tells the browser which way to paint the things CSS does not own -- form
- * controls, the scrollbar's own gutter, the canvas behind an over-scroll. Without it a light page
- * gets dark native widgets and vice versa. It follows the same three-way rule the palette does. */
-:root {
-  color-scheme: light;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    color-scheme: dark;
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
   }
-}
-:root[data-theme='dark'] {
-  color-scheme: dark;
-}
-
-/* M61 R3 -- developer mode is the denser cousin: a smaller body size, a shorter row, tighter
- * gaps. Nothing here is a colour, so it lives in `globals.css`, not in either token file. */
-:root[data-mode='developer'] {
-  --fs-body: 13px;
-  --row-h: 34px;
-  --gap-1: 6px;
-  --gap-2: 8px;
-  --gap-3: 12px;
-}
-
-/* A translucent surface degrades to its opaque `--panel` colour, blur off, for anybody who asked
- * the OS for less transparency -- the same `prefers-*` guarantee the motion tokens give below. */
-@media (prefers-reduced-transparency: reduce) {
-  :root {
-    --glass: var(--panel);
-    --glass-strong: var(--panel);
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--app-font-sans);
   }
 }
 
-/* M61 R4 -- the page never scrolls; the frame is 100dvh and every region scrolls through its own
- * `ui/ScrollArea` instead. `body` stays `min-h-screen`-free (`layout.tsx` no longer stamps it). */
-html,
-body {
-  height: 100%;
-  overflow: hidden;
-}
-
-body {
-  background: var(--bg);
-  color: var(--t1);
-  font-family: var(--font-sans);
-  /* README "Type": body follows the density token, so developer mode reads one size smaller. */
-  font-size: var(--fs-body);
-  line-height: 1.4;
-  text-wrap: pretty;
-}
-
-/* M61 R3 -- the glass surface: the rail, the header, the right panel and every `Sheet`. */
-.glass {
-  background: var(--glass);
-  backdrop-filter: blur(20px) saturate(160%);
-  -webkit-backdrop-filter: blur(20px) saturate(160%);
-}
-@media (prefers-reduced-transparency: reduce) {
-  .glass {
-    /* Fixed at class level (final-review wave, E12): the bare `:root` override above loses the
-     * cascade to the dark/developer palette blocks below it, which set `--glass` again on a more
-     * specific selector (`:root[data-theme=…]`/`:root[data-mode=…]`). `.glass` itself always wins
-     * over `--glass`'s value at the point it is READ, so the opaque fallback belongs here. */
-    background: var(--panel);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
-}
-
-/* M61 R3 -- the type scale, as utilities. Uppercase tracked mono labels are gone in simple mode:
- * `SectionLabel` becomes `.type-label` sentence case in `--t2`; mono is reserved for `technical`
- * lines and developer-mode identifiers. */
-.type-label {
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  color: var(--t2);
-}
-.type-meta {
-  font-size: 12.5px;
-  font-weight: 400;
-}
-.type-body {
-  font-size: var(--fs-body);
-  font-weight: 400;
-}
-.type-title {
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  line-height: 1.25;
-}
-.type-heading {
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-  line-height: 1.2;
-}
-.type-display {
-  font-size: 28px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1.1;
-}
-
-/* README "Scrollbars": 8px, transparent track, `--line2` thumb at radius 8, `--t3` on hover.
- * The prototype draws these on every descendant (`App.dc.html:19-24`); so do we. */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--line2) transparent;
-}
-*::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-*::-webkit-scrollbar-track {
-  background: transparent;
-}
-*::-webkit-scrollbar-thumb {
-  background: var(--line2);
-  border-radius: 8px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
-}
-*::-webkit-scrollbar-thumb:hover {
-  background: var(--t3);
-}
-*::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-/* Motion pass (spec §8 / M4 deferral). Every consumer gates these behind Tailwind's
- * `motion-safe:` variant, so `prefers-reduced-motion: reduce` drops the utility class entirely
- * and the corresponding state change renders instantly with no animation. */
-
-/* Action line cross-fade: ~120ms opacity swap, no layout shift (the wrapper's height is fixed by
- * its own `h-5`, not by this keyframe). */
-@keyframes action-line-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-/* Card border flash: takes the status colour on a status change, decays back to the line colour
- * over ~800ms. `--flash-color` is set inline per-status from the existing status tokens — no new
- * colour tokens. */
-@keyframes border-flash {
+/* A working face's pulse (section 6.3): a soft ring that grows and fades. Quiet for a person who
+ * asked the system for less motion. */
+@keyframes working-pulse {
   0% {
-    border-color: var(--flash-color, currentColor);
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--success) 55%, transparent);
   }
   100% {
-    border-color: var(--color-line);
+    box-shadow: 0 0 0 6px color-mix(in oklch, var(--success) 0%, transparent);
   }
 }
 
-/* Status-dot pulse (spec §3 / handoff "Motion"): in-flight tones only (`working`, `planning`,
- * `review`, `waiting` — the pipeline's active-class states, as opposed to the at-rest
- * `blocked`/`done`/`paused`/`idle` tones), a 1.5s ease-in-out opacity breathe. `StatusPill`
- * applies this via `motion-safe:animate-[status-pulse_1.5s_ease-in-out_infinite]` per tone. */
-@keyframes status-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.4;
-  }
+.working-pulse {
+  animation: working-pulse 1.6s ease-out infinite;
 }
 
-/* ---- M14 motion vocabulary (design README "Interactions & Behavior" > Motion) ---------------
- * The mockup's `pulsedot` is this file's existing `status-pulse` above and is deliberately NOT
- * renamed -- every M11/M12 call site references it by that name. The four below are new.
- * Every consumer applies these through Tailwind's `motion-safe:` variant; the media block at the
- * bottom of this section is the belt-and-braces guarantee for anything that cannot (a literal
- * class on a React Flow-owned element, for instance). */
-
-/* Cable dash travel: `stroke-dasharray: 5 11` animated to `stroke-dashoffset: -32` over 1.15s
- * linear infinite (design README "1b — Cables"). The dasharray itself is an ATTRIBUTE on the
- * path, not part of this keyframe -- only the offset moves. */
-@keyframes dash {
-  to {
-    stroke-dashoffset: -32;
-  }
-}
-
-/* The slave card's activity sweep: a 2.2s cubic-bezier(.4,0,.2,1) gradient across the top
- * hairline while a card is `working` (design README "1a"; byte-for-byte match to
- * `mockups/Slave of AI Web.dc.html:20`, `@keyframes sweep{0%{transform:translateX(-100%)}
- * 100%{transform:translateX(320%)}}`). The mockup's `.sweep` element (`Web.dc.html:151`) is
- * `width:30%` inside a 1px-tall `overflow:hidden` hairline strip, so `-100%` sits it just off the
- * strip's left edge and `320%` (320% of the element's own 30%-wide box = 96% of the strip) carries
- * it fully past the right edge -- a full-width shimmer, not a partial one. Named `card-sweep`, not
- * `sweep`: `sweep` is already an orchestrator concept (the guardrail sweep) and this file is read
- * beside that vocabulary. */
-@keyframes card-sweep {
-  0% {
-    transform: translateX(-100%);
-  }
-  100% {
-    transform: translateX(320%);
-  }
-}
-
-/* New-row entry: 0.3s from `translateY(5px)`. M11's deferred "new-row rise" lands here. */
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(5px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* A pending spinner. The handoff lists `spin` in its motion vocabulary; the only consumer today
- * is the Skills page's sync indicator. */
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* Decision 8: under `prefers-reduced-motion: reduce` NOTHING animates. `animation-name` is what
- * the milestone gate reads back off every element, so it is what this sets -- the duration and
- * iteration count are belt-and-braces for a browser that resolves `animation-name` lazily.
- * `!important` because Tailwind's `motion-safe:` utilities and any literal `animation:` shorthand
- * both land at the same specificity. */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-name: none !important;
-    animation-duration: 0s !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0s !important;
-  }
-}
-
-/* Panel slide-in: a short transform, CSS animation only (no springs library). */
-@keyframes panel-in {
-  from {
-    transform: translateX(16px);
-    opacity: 0;
-  }
-  to {
-    transform: translateX(0);
-    opacity: 1;
-  }
-}
-
-/* Graph flow visualization (spec §6, M7 task 8). */
-
-/* Tool-call particle: travels its edge's `offset-path` (set inline per-particle, `Particles.tsx`)
- * over ~600ms, fading in/out at the ends so it never pops in/out mid-edge. `offset-distance` (not
- * `transform`) is what actually moves the circle along the path. */
-@keyframes particle-travel {
-  0% {
-    offset-distance: 0%;
-    opacity: 0;
-  }
-  15% {
-    opacity: 1;
-  }
-  85% {
-    opacity: 1;
-  }
-  100% {
-    offset-distance: 100%;
-    opacity: 0;
-  }
-}
-
-/* Completion-wave edge flash: "the way is clear" once a task turns `done` (its outgoing edges flash
- * once). `border-flash` (above) targets the CSS `border-color` property, which does nothing on an
- * SVG `<path>` -- edges paint via `stroke`, not `border` -- so it cannot serve here, and React
- * Flow's own edge `className` lands on the wrapping `<g>`, not directly on the `<path>` a
- * descendant-selector rule needs to reach; that combination is why this is a second keyframe rather
- * than a `motion-safe:animate-[border-flash_800ms_ease-out]` reuse. Same 800ms decay language, same
- * "no new colour tokens" rule (reuses `--color-tone-working`), and the same reduced-motion
- * guarantee `motion-safe:` gives everywhere else -- just hand-written as the
- * `prefers-reduced-motion: no-preference` media query `motion-safe:` itself compiles to, because a
- * plain literal edge `className` (not a Tailwind utility) is what has to carry it here. */
-@media (prefers-reduced-motion: no-preference) {
-  .edge-flash .react-flow__edge-path {
-    animation: edge-flash 800ms ease-out;
-  }
-}
-
-@keyframes edge-flash {
-  0%,
-  100% {
-    stroke-width: 1;
-  }
-  50% {
-    stroke: var(--color-tone-working);
-    stroke-width: 3;
+  .working-pulse {
+    animation: none;
   }
 }
