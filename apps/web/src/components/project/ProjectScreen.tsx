@@ -2,18 +2,20 @@
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArchiveIcon, CircleStopIcon, EllipsisIcon, FileTextIcon, PlayIcon, SettingsIcon, Trash2Icon } from 'lucide-react'
 import { toast } from 'sonner'
 import { phaseIsActive, projectPhaseSentence } from '@slave-of-ai/domain'
 import type { ProjectView } from '@slave-of-ai/control'
 import { DeleteProjectDialog } from '@/components/app/DeleteProjectDialog'
+import { DiagramView } from '@/components/diagram/DiagramView'
 import { PhaseBadge } from '@/components/app/phase'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { usePoll } from '@/hooks/usePoll'
 import { api, notifyProjectsChanged } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { ActivityFeed } from './ActivityFeed'
 import { BuildStats } from './BuildStats'
 import { CostSection } from './CostSection'
@@ -25,6 +27,8 @@ import { ProofSection } from './ProofSection'
 import { ResultSection } from './ResultSection'
 import { SettingsSheet } from './SettingsSheet'
 import { SideColumn } from './SideColumn'
+import { ViewSwitch } from './ViewSwitch'
+import { viewHref, type ProjectViewName } from './views'
 import { WhoIsWorking } from './WhoIsWorking'
 
 /** Lead UX design U-9: 3 seconds while something runs, 15 otherwise. */
@@ -41,12 +45,22 @@ export function headerAction(project: ProjectView): 'stop' | 'continue' | null {
 }
 
 /**
- * Lead UX design section 6.3: what is happening to this project, and does it need me? One screen,
- * no tabs: the header with Stop or Continue, the decision card when the person is needed, what
- * was asked for, who is working, the proof and the result, beside Limits, Builds and Notes.
+ * Lead UX design section 6.3: what is happening to this project, and does it need me? One screen:
+ * the header with Stop or Continue, the decision card when the person is needed, what was asked
+ * for, who is working, the proof and the result, beside Limits, Builds and Notes. Under the
+ * header a switch swaps that Overview for the build as a team diagram or as a timeline; the view
+ * is in the URL (`?view=diagram`), so it can be linked and a re-read never changes it.
  */
-export function ProjectScreen({ initial }: { readonly initial: ProjectView }): React.JSX.Element {
+export function ProjectScreen({ initial, view: asked = 'overview' }: { readonly initial: ProjectView; readonly view?: ProjectViewName }): React.JSX.Element {
   const router = useRouter()
+  const [view, setView] = useState<ProjectViewName>(asked)
+  // The URL is the page's to read: a navigation that changes it (a link to this project) is followed.
+  useEffect(() => setView(asked), [asked])
+  // Written with the History API, so switching is instant: no page is re-read to swap a view.
+  const show = (next: ProjectViewName): void => {
+    setView(next)
+    window.history.replaceState(null, '', viewHref(window.location.pathname, next))
+  }
   const { data: polled, error, refresh } = usePoll<{ readonly project: ProjectView }>(`/api/w/${initial.id}/project`, { project: initial }, (data) => projectPollMs(data.project))
   const project = polled.project
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -167,7 +181,11 @@ export function ProjectScreen({ initial }: { readonly initial: ProjectView }): R
 
       {lead && <BuildStats project={project} />}
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <ViewSwitch view={view} onChange={show} />
+
+      {view !== 'overview' && <DiagramView project={project} view={view} pollMs={projectPollMs(project)} />}
+
+      <div className={cn('grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]', view !== 'overview' && 'hidden')} data-testid="overview">
         <div className="flex min-w-0 flex-col gap-6">
           <GoalSection project={project} onDone={refresh} />
           {lead && working && (build === null || build.people.length === 0) && <WhoIsWorking build={build} paused={project.phase === 'paused'} />}
