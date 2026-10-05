@@ -25,6 +25,14 @@ describe('the lead\'s brief (lead-flow spec B3)', () => {
     expect(brief).toContain('- backend-developer: builds APIs')
   })
 
+  it('tells the lead to give a specialist the work in their field, and to start a general session only when nobody fits', () => {
+    const lines = brief.split('\n')
+    const heading = lines.indexOf('YOUR ROSTER (specialists defined as subordinate sessions for this goal; start one by its name):')
+    expect(heading).toBeGreaterThan(-1)
+    expect(lines[heading + 1]).toBe('- backend-developer: builds APIs')
+    expect(lines[heading + 2]).toBe("Give work in a specialist's field to that specialist. Start a general subordinate session only when nobody on the roster fits the work.")
+  })
+
   it('says "at least" of what was spent while part of it is unmeasured (C7, task 6 review)', () => {
     const input = { goalVersion: 1, goal: 'g', requirements: [], decisions: [], timeLeftMs: null, roster: [] }
     expect(renderLeadBrief({ ...input, budget: { totalUsd: 30, shareUsd: 24, spentUsd: 1.5, unmeasured: true } })).toContain('Spent of your share so far: at least $1.50.')
@@ -59,6 +67,7 @@ describe('the lead\'s brief (lead-flow spec B3)', () => {
     expect(bare).toContain('No budget is set for this goal.')
     expect(bare).toContain('No time limit is set.')
     expect(bare).not.toContain('YOUR ROSTER')
+    expect(bare).not.toContain('specialist')
     expect(bare).not.toContain('DECISIONS ALREADY MADE')
   })
 

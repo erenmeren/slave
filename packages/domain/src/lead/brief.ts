@@ -49,8 +49,9 @@ export function renderLeadBrief(input: LeadBriefInput): string {
       ? []
       : [
           '',
-          'YOUR ROSTER (subordinate sessions defined for this goal; start one by its name, or a general one):',
+          'YOUR ROSTER (specialists defined as subordinate sessions for this goal; start one by its name):',
           ...input.roster.map((member) => `- ${member.slug}: ${sanitisePersonText(member.description)}`),
+          'Give work in a specialist\'s field to that specialist. Start a general subordinate session only when nobody on the roster fits the work.',
         ]),
     '',
     '---',
