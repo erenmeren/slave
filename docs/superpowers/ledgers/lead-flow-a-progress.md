@@ -219,3 +219,22 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
   pause "a rollback restores the status"). Main here: 534 files / 9618 tests, the same four plus the three
   zombie tests the reaper fixes. 49 minutes.
 - Typecheck clean; vocabulary gate PASS; drift check "No difference detected"; `web:build` passes.
+- Gates, on `GATE_DATABASE_URL` (migrated and seeded as ci.yml does), with ci.yml's fake-CLI environment, under
+  the reaper, one at a time, CHROMIUM_PATH = the container's Playwright Chromium 1194 (the installed
+  playwright-core expects 1234):
+  - Green on the branch (23): m26-vocabulary, m56a-provider-contract (80 events, 39 names, goldens, hook-plane
+    digests, drift), m18-skill-and-teeth, m35-pipeline-honesty, m37-run-context, m38-supervisor, m51-breaker,
+    h9-restart-chaos, m15-boundary, m20-auth, m21-loose-ends, m23-onboarding, m30-simulation-compare,
+    m31a-llm-decisions, m31b-software-sector, m33-adopt, m36-messaging, m39-supervisor-mailbox,
+    m40-requirement-versioning, m41-scenario, m42-catalog-import, m45-project-experience, m53-evidence; and,
+    on a second run, m29-simulation and m59-intake (their first run timed out on a page click under load;
+    both pass on main here too).
+  - Red on the branch AND on a worktree of main `3d89a10` in this container, same failure: m12-providers (the
+    gate queries `slave.name`, a column the schema no longer has -- a stale gate, not in ci.yml), m13-runtime
+    (a page card never appears -- not in ci.yml), m52-broker ("timed out waiting for the permission matrix
+    to become visible" on both; m52 reads the vocabulary this plan changed, and fails before reaching it).
+  - m61-simple-mode: red on both, with different symptoms (the branch: interactive transactions timing out
+    under the page's load; main: the web server refused a connection). Not judged here; it is in ci.yml's list
+    and not in the operator's known-red list -- the operator's run decides.
+  - Not run: m44 m46 m47 m48 m49 m50 m54 m55 m57 m58 (known red on main), and the gates outside ci.yml other
+    than the plan's m12/m13.
