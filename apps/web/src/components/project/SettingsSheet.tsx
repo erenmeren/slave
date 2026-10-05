@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArchiveIcon, CheckIcon, PlusIcon, Trash2Icon, XIcon } from 'lucide-react'
@@ -154,7 +155,9 @@ function RosterField({ project, onDone }: { readonly project: ProjectView; reado
         <div className="flex flex-wrap gap-1.5" data-testid="roster">
           {project.roster.map((member) => (
             <Badge key={member.id} variant="secondary" className="gap-1 pr-1" data-testid="roster-member">
-              {member.name}
+              <Link href={`/people?person=${member.id}`} className="hover:underline" title={`Open ${member.name}: profile, skills and instructions`} data-testid="roster-member-link">
+                {member.name}
+              </Link>
               {member.role !== null && <span className="font-normal text-muted-foreground">· {member.role}</span>}
               <button type="button" aria-label={`Remove ${member.name}`} className="rounded-sm p-0.5 hover:bg-background" onClick={() => save(ids.filter((id) => id !== member.id))}>
                 <XIcon className="size-3" />
@@ -198,6 +201,12 @@ function RosterField({ project, onDone }: { readonly project: ProjectView; reado
           </Command>
         </PopoverContent>
       </Popover>
+      <p className="text-xs text-muted-foreground">
+        A helper knows what their profile and skills say.{' '}
+        <Link href="/people" className="underline underline-offset-2" data-testid="roster-people-link">
+          Create and edit people
+        </Link>
+      </p>
     </div>
   )
 }
