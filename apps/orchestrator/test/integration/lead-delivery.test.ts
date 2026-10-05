@@ -121,4 +121,34 @@ describe('the lead flow: delivery', () => {
     expect((await leadTaskOf(f)).status).toBe('done')
     expect(leadTurns(f)).toHaveLength(1 + LEAD_BASE_MERGES_MAX)
   })
+
+  it('leaves a moved base to the hand merge when the lead\'s worktree is gone, and says why once (task 10 review)', async (): Promise<void> => {
+    let repo = ''
+    const move = moveBaseOnce(() => repo, 'elsewhere.txt', 'not the lead\'s\n')
+    let removed = false
+    const f = await seedLead({
+      onStart: async (start) => {
+        if (!removed && start.kind === 'verification') {
+          removed = true
+          const turn = await prisma.slaveRun.findFirstOrThrow({ where: { leadTurn: { not: null }, worktreePath: { not: null } } })
+          git(['worktree', 'remove', '--force', turn.worktreePath ?? ''], repo)
+        }
+        await move(start)
+      },
+    })
+    repo = f.repoPath
+    const waitsForAHandMerge = async (): Promise<boolean> =>
+      (await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'guardrail_tripped' }, select: { payload: true } })).some((row) =>
+        (row.payload as { detail: string }).detail.includes('has moved since the goal was cut'),
+      )
+    await tickUntil(f, waitsForAHandMerge)
+    await tick(f.deps)
+    await drainPumps()
+
+    const delivery = await leadDelivery(f)
+    expect(delivery.mergedAt).toBeNull()
+    expect(readLeadProgress(delivery.leadProgress).baseMerges).toBe(0)
+    expect(leadTurns(f)).toHaveLength(1)
+    expect((await leadNotes(f)).filter((line) => line.startsWith('base_taken:') && line.includes('worktree'))).toHaveLength(1)
+  })
 })
