@@ -49,7 +49,9 @@ export async function syncLeadStates(workspaceId: string): Promise<void> {
               ? (delivery.stopReason ?? 'proof_unusable')
               : delivery.stopReason
     if (state === delivery.leadState && reason === delivery.stopReason) continue
-    const moved = await prisma.goalDelivery.updateMany({ where: { id: delivery.id, leadState: delivery.leadState }, data: { leadState: state, stopReason: reason } })
+    // Compare-and-set on both columns (task 10 review): a reason written meanwhile -- `left` by a
+    // person's Reject, `accepted_as_is` by their Approve -- is not overwritten by this pass's read.
+    const moved = await prisma.goalDelivery.updateMany({ where: { id: delivery.id, leadState: delivery.leadState, stopReason: delivery.stopReason }, data: { leadState: state, stopReason: reason } })
     if (moved.count > 0 && state !== delivery.leadState) {
       await appendEvent({ type: 'workspace.lead_state', workspaceId, actor: 'system', payload: { version: delivery.goalVersion, state, reason: asStopReason(reason) } })
     }
@@ -73,12 +75,21 @@ const LIVE = ['starting', 'working', 'pause_requested', 'resuming'] as const
  *   nothing, and the version stops with the reason it was ended for.
  *
  * A paused turn (a person's stop) is left alone: its claim stands until the person continues it.
+ *
+ * An accepted version is checked too while its lead's task is not done (task 10 review): a base
+ * turn (plan A L15) pending or running. Past the limit the lead is ended and a live base turn is
+ * cancelled; a pending one is never started, and `leadTakeBaseIn` leaves the version to the hand
+ * merge.
  */
 export async function enforceLeadLimits(deps: TickDeps, deliveryId: string): Promise<void> {
   const delivery = await prisma.goalDelivery.findUniqueOrThrow({ where: { id: deliveryId }, include: { workspace: { select: { goalTimeLimitMs: true } } } })
-  if (delivery.status !== 'integrating' && delivery.status !== 'verifying') return
+  // Task 10 review: an accepted version still waiting to merge is held by the limits too, while its
+  // lead has a base turn pending or running (plan A L15).
+  const accepted = delivery.status === 'accepted' && delivery.mergedAt === null
+  if (delivery.status !== 'integrating' && delivery.status !== 'verifying' && !accepted) return
   const task = await prisma.task.findFirst({ where: { workspaceId: delivery.workspaceId, workPackage: { goalVersion: delivery.goalVersion } } })
   if (task === null) return
+  if (accepted && (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled')) return
 
   let ended = readLeadProgress(delivery.leadProgress).leadEnded
   const limit = delivery.workspace.goalTimeLimitMs
@@ -110,7 +121,9 @@ export async function enforceLeadLimits(deps: TickDeps, deliveryId: string): Pro
     }
     return
   }
-  if (task.status !== 'ready' && task.status !== 'rework') return
+  // An accepted version's pending base turn is left to `leadTakeBaseIn`: with the lead ended it
+  // marks the task done, and the verified work waits for the hand merge.
+  if (accepted || (task.status !== 'ready' && task.status !== 'rework')) return
 
   const last = await prisma.slaveRun.findFirst({
     where: { taskId: task.id, leadTurn: { not: null }, worktreePath: { not: null } },

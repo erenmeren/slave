@@ -151,6 +151,42 @@ describe('the lead flow: limits belong to the goal', () => {
     expect(await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).toMatchObject({ status: 'rework', attempt: task.attempt, activeRunId: null })
   })
 
+  it('cancels a live base turn of an accepted version when the time runs out (task 10 review)', async (): Promise<void> => {
+    // Automatic merge off: the accepted version stays accepted, as one waiting for its base turn does.
+    const f = await seedLead({ timeLimitMs: 10 * 60_000, autoMerge: false })
+    await tickUntil(f, async () => (await leadDelivery(f)).status === 'accepted')
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60_000)'], { stdio: 'ignore' })
+    children.push(child.pid ?? 0)
+    const task = await leadTaskOf(f)
+    const lead = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: f.workspaceId }, role: 'Lead' } })
+    const live = await prisma.slaveRun.create({
+      data: { taskId: task.id, slaveId: lead.id, kind: 'implementation', status: 'working', leadTurn: 'base', pid: child.pid ?? 0, provider: 'claude_code', startedAt: new Date(Date.now() - 11 * 60_000) },
+    })
+    await prisma.task.update({ where: { id: task.id }, data: { status: 'running', activeRunId: live.id } })
+    const cancelled: string[] = []
+    const stub = { cancel: async (runId: string): Promise<void> => void cancelled.push(runId) } as unknown as SlaveRuntimeAdapter
+
+    await runGoalPass({ ...f.deps, registry: { resolve: () => stub } }, { mayStartRuns: false })
+
+    expect(cancelled).toEqual([live.id])
+    expect(await prisma.slaveRun.findUniqueOrThrow({ where: { id: live.id } })).toMatchObject({ status: 'stopping', failureClass: 'platform' })
+    expect(readLeadProgress((await leadDelivery(f)).leadProgress).leadEnded).toBe('time_spent')
+    expect((await leadDelivery(f)).status).toBe('accepted')
+    child.kill('SIGKILL')
+  })
+
+  it('leaves an accepted version whose lead is done alone, whatever the time (task 10 review)', async (): Promise<void> => {
+    const f = await seedLead({ timeLimitMs: 10 * 60_000, autoMerge: false })
+    await tickUntil(f, async () => (await leadDelivery(f)).status === 'accepted')
+    const turn = await prisma.slaveRun.findFirstOrThrow({ where: { leadTurn: { not: null } } })
+    await prisma.slaveRun.update({ where: { id: turn.id }, data: { startedAt: new Date((turn.endedAt ?? new Date()).getTime() - 11 * 60_000) } })
+
+    await runGoalPass(f.deps, { mayStartRuns: false })
+
+    expect(readLeadProgress((await leadDelivery(f)).leadProgress).leadEnded).toBeNull()
+    expect((await leadTaskOf(f)).status).toBe('done')
+  })
+
   it('keeps the state word in step with the version and says each change once', async (): Promise<void> => {
     const f = await seedLead()
     await tickUntil(f, merged(f))
