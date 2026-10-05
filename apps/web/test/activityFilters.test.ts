@@ -105,6 +105,8 @@ describe('parseActivityFilters', () => {
       'workspace.goal_retried',
       'workspace.goal_set',
       'workspace.goal_waiting',
+      'workspace.lead_noted',
+      'workspace.lead_state',
       'workspace.package_handed_off',
       // Human cards plan B D9: a worker's note, beside its hand-offs.
       'workspace.package_noted',

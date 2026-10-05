@@ -890,3 +890,96 @@ describe('parseStreamResults (M51 R1, fix round 1 -- review Important 4)', () =>
     expect(parseStreamLine(parallel)).toEqual(first)
   })
 })
+
+describe('a subordinate call names its session definition (lead flow L16, C1)', () => {
+  const line = (name: string, input: unknown, parent: string | null = null): string =>
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu_1', name, input }] }, parent_tool_use_id: parent })
+
+  it('carries subagent_type as `subagent` for the subordinate tool under either name', () => {
+    expect(parseStreamLine(line('Agent', { subagent_type: 'backend-developer', description: 'build the API', prompt: 'x' }))).toMatchObject({ kind: 'tool_call', toolName: 'Agent', subagent: 'backend-developer' })
+    expect(parseStreamLine(line('Task', { subagent_type: 'general-purpose', prompt: 'x' }))).toMatchObject({ kind: 'tool_call', subagent: 'general-purpose' })
+  })
+
+  it('carries no such field for any other tool, or when the input names none', () => {
+    expect(parseStreamLine(line('Bash', { subagent_type: 'x', command: 'ls' }))).not.toHaveProperty('subagent')
+    expect(parseStreamLine(line('Agent', { prompt: 'x' }))).not.toHaveProperty('subagent')
+    expect(parseStreamLine(line('Agent', { subagent_type: '   ' }))).not.toHaveProperty('subagent')
+  })
+
+  it('carries the parent call on a line a subordinate session wrote, and names no subordinate there (C1)', () => {
+    const inner = parseStreamLine(line('Agent', { subagent_type: 'qa', prompt: 'x' }, 'tu_parent'))
+    expect(inner).toMatchObject({ kind: 'tool_call', toolName: 'Agent', parentToolUseId: 'tu_parent' })
+    expect(inner).not.toHaveProperty('subagent')
+    expect(parseStreamLine(line('Bash', { command: 'ls' }, 'tu_parent'))).toMatchObject({ parentToolUseId: 'tu_parent' })
+    expect(parseStreamLine(line('Bash', { command: 'ls' }))).not.toHaveProperty('parentToolUseId')
+  })
+
+  it('reads a parent that is not a non-empty string as none: the line still parses, as a top-level call', () => {
+    const raw = (parent: unknown): string =>
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu_1', name: 'Agent', input: { subagent_type: 'qa', prompt: 'x' } }] }, parent_tool_use_id: parent })
+    for (const parent of [42, { id: 'tu_parent' }, '']) {
+      const parsed = parseStreamLine(raw(parent))
+      expect(parsed).toMatchObject({ kind: 'tool_call', toolName: 'Agent', subagent: 'qa' })
+      expect(parsed).not.toHaveProperty('parentToolUseId')
+    }
+  })
+})
+
+describe("a subordinate's init and result lines are never the lead's (lead flow C1)", () => {
+  const init = (parent: unknown): string =>
+    JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess_inner', parent_tool_use_id: parent })
+  const result = (parent: unknown): string =>
+    JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      terminal_reason: 'completed',
+      num_turns: 1,
+      total_cost_usd: 0.01,
+      parent_tool_use_id: parent,
+    })
+  const userResult = (parent: unknown): string =>
+    JSON.stringify({
+      type: 'user',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok', is_error: false }] },
+      parent_tool_use_id: parent,
+    })
+
+  it('ignores an init line a subordinate session wrote -- it must not replace the session id `--resume` needs', () => {
+    const line = init('tu_parent')
+    expect(parseStreamLine(line)).toEqual({ kind: 'ignored', line })
+  })
+
+  it('ignores a result line a subordinate session wrote -- it must not replace the lead’s outcome', () => {
+    const line = result('tu_parent')
+    expect(parseStreamLine(line)).toEqual({ kind: 'ignored', line })
+  })
+
+  it('reads a top-level init and result exactly as before, whether the parent is null, absent or not a non-empty string', () => {
+    const absentInit = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess_inner' })
+    for (const line of [init(null), init(''), init(42), absentInit]) {
+      expect(parseStreamLine(line)).toEqual({ kind: 'session_started', sessionId: 'sess_inner' })
+    }
+    const absentResult = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, terminal_reason: 'completed', num_turns: 1, total_cost_usd: 0.01 })
+    for (const line of [result(null), result(''), absentResult]) {
+      expect(parseStreamLine(line)).toMatchObject({ kind: 'terminated', outcome: { isError: false, terminalReason: 'completed', costUsd: 0.01 } })
+    }
+  })
+
+  it('carries the parent call on a tool_result a subordinate session received, and no such key on the session’s own', () => {
+    expect(parseStreamLine(userResult('tu_parent'))).toEqual({
+      kind: 'tool_result',
+      toolUseId: 'toolu_1',
+      toolName: '',
+      outcome: 'ok',
+      errorClass: null,
+      parentToolUseId: 'tu_parent',
+    })
+    expect(parseStreamResults(userResult('tu_parent'))).toEqual([expect.objectContaining({ parentToolUseId: 'tu_parent' })])
+    expect(parseStreamResults(userResult('x'.repeat(300)))[0]?.parentToolUseId).toHaveLength(200)
+    for (const parent of [null, '', 42]) {
+      expect(parseStreamLine(userResult(parent))).not.toHaveProperty('parentToolUseId')
+      expect(parseStreamResults(userResult(parent))[0]).not.toHaveProperty('parentToolUseId')
+    }
+  })
+})

@@ -15,11 +15,11 @@
 Numbered L1 to L18, so that none is mistaken for the spec's own D1 to D5.
 
 - **L1. The switch is one enum column, `Workspace.flow` (`packages` | `lead`), default `packages`.** `setFlow(workspaceId, 'lead')` (CLI `set-flow`) also sets `delivery = conducted` and `autoMerge = true` (spec D1: the lead flow's default is automatic merge; `--auto-merge off` keeps it off), creates the three system seats (L2) and refuses while a goal version is open (a `GoalDelivery` neither merged nor abandoned) or a run is live. Switching back to `packages` is allowed under the same refusals and touches nothing else. A lead-flow workspace is a `conducted` workspace: every existing reader of `delivery` keeps working. *Cost if wrong:* a flow chosen per goal version rather than per project would need the column on `GoalVersion`; the readers all go through `workspace.flow` in eight places, so the move is mechanical.
-- **L2. Identities without a team: three system seats, no catalogue persona.** `ensureLeadSeats` makes, once per workspace, a `Team` named `Lead flow` and three `Person` + `Slave` rows with no template: `Lead` (runtime role `implementer`), `Verifier` and `Confirmer` (runtime role `verifier`). Person names are `Lead <first 8 of workspace id>` and so on (`Person.name` is unique across the installation). Each seat carries the pair `(model, provider = claude_code)`; the model is `setFlow`'s `model` option, default `LEAD_DEFAULT_MODEL = 'opus'`. The package row's required `templateId` is the sentinel `LEAD_TEMPLATE_ID = 'lead'` (it is a plain string column, and its two readers tolerate an unknown id). No hiring, no pool, no reviewer seat. Spec P1 holds as built (a fresh detached checkout, the tamper check, a verdict per requirement, no access to the lead's report: `workerLeads` reads `RunReport` rows and the lead files none). The verifier "implemented nothing in the version" (existing rule) because it is a different seat from the lead; the confirmer is a third seat so the report can say who said what. *Cost if wrong:* if the verifier must be a catalogue persona (spec P8, Plan B), `ensureLeadSeats` gains a template id per seat; nothing else reads how the seats were made.
+- **L2. Identities without a team: three system seats, no catalogue persona.** `ensureLeadSeats` makes, once per workspace, a `Team` named `Lead flow` and three `Person` + `Slave` rows with no template: `Lead` (runtime role `implementer`), `Verifier` and `Confirmer` (runtime role `verifier`). Person names are `Lead <first 8 of workspace id>` and so on (`Person.name` is unique across the installation). A seat carries no model and no provider unless `setFlow`'s or `setLeadSettings`' `model` option names one, and then the pair `(model, provider = claude_code)` (C5: no default model; the CLI's own default is used, and `leadRuntime` resolves such a seat to Claude Code with no `--model`). The package row's required `templateId` is the sentinel `LEAD_TEMPLATE_ID = 'lead'` (it is a plain string column, and its two readers tolerate an unknown id). No hiring, no pool, no reviewer seat. Spec P1 holds as built (a fresh detached checkout, the tamper check, a verdict per requirement, no access to the lead's report: `workerLeads` reads `RunReport` rows and the lead files none). The verifier "implemented nothing in the version" (existing rule) because it is a different seat from the lead; the confirmer is a third seat so the report can say who said what. *Cost if wrong:* if the verifier must be a catalogue persona (spec P8, Plan B), `ensureLeadSeats` gains a template id per seat; nothing else reads how the seats were made.
 - **L3. The lead's task is the conductor's `single` package, materialised without the size call.** `conduct()` extracts requirements as today, then, for `flow = lead`, calls `openLeadGoal`: `singlePlan(LEAD_TEMPLATE_ID, keys, …)` through the existing `materialise` (exported), with the lead seat pinned and the verifier seat recorded. So the version has its `GoalDelivery`, its integration branch (the goal's work branch), one `WorkPackage` `main` owning `**`, and one task. The `conduct` decision row is recorded `decidedBy: rules`, and `workspace.conducted` carries `fallback: true`, both as the existing rules-made single plan does. *Cost if wrong:* none known; this is the shape the conductor already produces at its retry cap.
-- **L4. A lead turn is its own `SlaveRun` row that resumes the previous turn's session.** Every turn (build, rework, wrap-up, continue, answer, base) is an `implementation` run of the lead's task with `SlaveRun.leadTurn` set. Its first spawn passes `--resume <sessionId>` of the task's newest lead run that has a session (`StartRunInput.resumeSessionId`, new), and a short turn note as the prompt; only the first turn, or a turn after a lost transcript, gets the whole brief. This is how B6 (restart, crash), B5 (stall), B7 (provider refusal) and B8 (rework) all continue the same session: the existing paths already put the task back to `rework` (`reconcileOrphans`, `concludeDeadRun`, `verifyConcludedRun`, `concludeVerification`), and the next dispatch resumes instead of starting fresh. A paused lead run (a person's stop) is resumed by the existing `executeResume` on the same row. A resumed turn that fails before its session line (`leadResumed` true, `sessionId` null) is read as "the transcript is gone": no attempt is charged, and the next turn is a new session with a continuation note. Both kinds are recorded (`workspace.lead_noted { kind: 'turn' }`). *Cost if wrong:* ADR 0001 Q3 never settled whether a resumed session's `total_cost_usd` is that invocation's or cumulative. This plan sums the turn rows; if the figure is cumulative, spend is over-counted and the lead stops early (the safe direction). Open point 1.
+- **L4. A lead turn is its own `SlaveRun` row that resumes the previous turn's session.** Every turn (build, rework, wrap-up, continue, answer, base) is an `implementation` run of the lead's task with `SlaveRun.leadTurn` set. Its first spawn passes `--resume <sessionId>` of the task's newest lead run that has a session (`StartRunInput.resumeSessionId`, new), and a short turn note as the prompt; only the first turn, or a turn after a lost transcript, gets the whole brief. This is how B6 (restart, crash), B5 (stall), B7 (provider refusal) and B8 (rework) all continue the same session: the existing paths already put the task back to `rework` (`reconcileOrphans`, `concludeDeadRun`, `verifyConcludedRun`, `concludeVerification`), and the next dispatch resumes instead of starting fresh. A paused lead run (a person's stop) is resumed by the existing `executeResume` on the same row. A resumed turn that fails before its session line (`leadResumed` true, `sessionId` null) is read as "the transcript is gone": no attempt is charged, and the next turn is a new session with a continuation note. Both kinds are recorded (`workspace.lead_noted { kind: 'turn' }`). *Settled by the measurement (M, C2):* a resumed session's `total_cost_usd` is the session's running total, so `goalSpend` takes the largest reported total per session and sums the sessions. *Cost if wrong:* if a later CLI reports per invocation again, spend is under-counted by every earlier turn of a session and the lead overspends its share by them.
 - **L5. Nothing replaces review; the lead's turn is integrated by a fast-forward.** A concluded lead turn is handled by `concludeLeadTurn`, never by `advance`: leftover work is committed (`commitUncommittedWork`, no ownership filter), the goal's integration branch is fast-forwarded to the task branch tip (`git update-ref`, compare-and-swap; only the lead writes there, so it is always an ancestor), the task goes `running → done` with `integratedAt`, and the existing goal pass starts the smoke check and the verification. No workspace verify command, no ownership audit, no `<slave-report>`, no review, no merge pass, no hand-off. The product's own smoke script and the verifier are the gate (spec B1, P1, P2). *Cost if wrong:* a project whose verify commands catch what a smoke script does not loses that check in the lead flow; adding `runVerify` back into `concludeLeadTurn` is one call.
-- **L6. Limits belong to the goal, and the vendor enforces the budget legs.** A live run's cost is unknown until its result line, so the orchestrator cannot stop a lead at a figure by watching. The lead is spawned with `--max-budget-usd` (new; it counts subordinate sessions, which share the process). The budget of a lead-flow workspace (`Workspace.budgetUsd`) is the goal version's; one fifth is reserved for proof (`PROOF_RESERVE_RATIO`). Leg 1 is capped at 80% of the lead's share less what its earlier turns spent. A leg that ends on the cap (`isBudgetCapReason`: the result's terminal reason contains `max_budget`) is not a failure: the next turn is `wrap_up` (the spec's "told to wrap up", delivered between turns by resuming the session, because a `-p` run has no channel into a running turn), capped at the rest of the share. When that leg ends on the cap too, or nothing is left, the lead is ended (`leadProgress.leadEnded = 'budget_spent'`) and proof starts on what is committed. A verification run is capped at whatever the goal has left, reserve included; with nothing left the version stops `budget_spent` and its text says the result is unproven. The workspace-level budget halt and warning do not apply to a lead-flow workspace (`workspaceStats` reports `budgetUsd: null` for it), because a halt would stop the goal pass before it could raise the delivery card. An unbudgeted workspace (`budgetUsd` null) gets no cap and no wrap-up. *Cost if wrong:* if `--max-budget-usd` does not count subordinate sessions, or its result line is shaped differently, the 80% and 100% marks are late or missed. Open point 2 asks for one cheap measurement before Task 8.
+- **L6. Limits belong to the goal, and the vendor enforces the budget legs.** A live run's cost is unknown until its result line, so the orchestrator cannot stop a lead at a figure by watching. The lead is spawned with `--max-budget-usd` (new; it counts subordinate sessions, which share the process). The budget of a lead-flow workspace (`Workspace.budgetUsd`) is the goal version's; one fifth is reserved for proof (`PROOF_RESERVE_RATIO`). Leg 1 is capped at 80% of the lead's share less what its earlier turns spent. A leg that ends on the cap (`isBudgetCapReason`: the result's terminal reason is `budget_exhausted`, measured -- C3; `max_budget` is matched too) is not a failure: the next turn is `wrap_up` (the spec's "told to wrap up", delivered between turns by resuming the session, because a `-p` run has no channel into a running turn), capped at the rest of the share. When that leg ends on the cap too, or nothing is left, the lead is ended (`leadProgress.leadEnded = 'budget_spent'`) and proof starts on what is committed. A verification run is capped at whatever the goal has left, reserve included; with nothing left the version stops `budget_spent` and its text says the result is unproven. The workspace-level budget halt and warning do not apply to a lead-flow workspace (`workspaceStats` reports `budgetUsd: null` for it), because a halt would stop the goal pass before it could raise the delivery card. An unbudgeted workspace (`budgetUsd` null) gets no cap and no wrap-up. *Measured (M):* the cap counts from zero per process and ends with `terminal_reason: "budget_exhausted"`. *Cost if wrong:* if `--max-budget-usd` does not count subordinate sessions, the 80% and 100% marks are late.
 - **L7. Time is working time of the goal's runs.** `Workspace.goalTimeLimitMs` (null: no limit; 10 minutes to 24 hours, set with `set-lead --time-limit-min`). Time spent is the sum over the version's lead turns and verification runs of `endedAt (or now) − startedAt − pausedMs`. A wait for a provider reset, a halt and daemon downtime are not charged; smoke checks are not counted (bounded by `smokeTimeoutMs`). Past the limit the lead is ended (`time_spent`): a live turn is cancelled, proof runs on what is committed, and no rework turn follows. The per-run timeout, the tool-call ceiling and the behavioural breaker do not apply to a lead turn. *Cost if wrong:* a person who meant wall-clock time sees a goal run past it across a limit wait; the sum is one function (`goalWorkedMs`).
 - **L8. "No progress" (B5) is 30 minutes with no line on the lead's stream, tool call open or not.** `LEAD_STALL_MS`. The existing stall rule exempts a run with a tool call open; a lead with a subordinate running always has one open, so that rule could never fire. Subordinate activity arrives on the lead's stream, so a working subordinate keeps it alive. The stalled turn is cancelled through the sweep's existing claim (`run_stalled`), the pump concludes it `failed`, an attempt is charged as for any stall, and the next turn resumes the session with a continuation note. Three such failures in a row end the lead (`lead_failed`) through the task's attempt cap, which is the bound on a session that never recovers. *Cost if wrong:* a single command silent for more than 30 minutes with no subordinate running is restarted. Open point 3.
 - **L9. Provider limit (B7) rides the existing platform path.** A turn refused by the provider (`isProviderRefusal`) is `platform`: no attempt, the task waits out `providerBackoffUntil`, and the next turn resumes the session. The circuit breaker cannot halt a lead-flow workspace over it or over anything else (`workspaceStats` reports `consecutiveFailures: 0` for it; the goal's own stop rules take its place, L12). The wait is one `workspace.lead_noted { kind: 'limit_wait' }` line; the Supervisor raises no card (L13). The reset time the provider names is not read. *Cost if wrong:* a subscription limit that the CLI reports as something other than `api_error` is charged as a worker failure and ends the lead after three. Open point 4.
@@ -29,10 +29,25 @@ Numbered L1 to L18, so that none is mistaken for the spec's own D1 to D5.
 - **L13. One card, by the existing `goal_needs_human` situation, and nothing else while the lead works.** `stopLead` writes `needsHumanReason`; the Supervisor's existing rule raises one `goal_needs_human` card per stop. In a lead-flow workspace the Supervisor pass keeps only `goal_needs_human` and `workspace_halted` situations (`LEAD_SITUATION_KINDS`): no `task_failed`, no `verification_failed`, no stale-wait card. On that card, **Approve means accept as it is**: the version moves `needs_human → accepted` with `verifiedCommit` = the work branch's tip, the lead's unfinished task is cancelled, `stopReason` becomes `accepted_as_is`, and the goal pass merges it as any accepted version. **Reject means leave it**: the existing `abandonGoal` (the branch stays, the next goal version may start), `stopReason = left`. Plan B replaces the pair with the three decisions of spec D2. `retry-goal` still works and verifies again; with the lead ended it can only confirm the same stop. *Cost if wrong:* an Approve that a person meant as "seen" merges unproven work; the card's text says in its last sentence what each button does.
 - **L14. The state word is derived and stored.** `leadStateOf(status, merged, everyPackageIntegrated, autoMerge, mergeError)`: `abandoned → stopped`; merged → `delivered`; `needs_human → awaiting_decision`; `accepted` with automatic merge on and no merge error → `proving` (merging on the next pass), otherwise `awaiting_decision` (a person merges by hand, as today); `verifying`, or `integrating` with the task integrated → `proving`; else `building`. `syncLeadStates` runs at the end of every goal pass, writes `GoalDelivery.leadState` when it changed and appends `workspace.lead_state`. `spec` and `hunting` arrive with Plan B.
 - **L15. Base moved (spec D3).** Before the final merge of an accepted lead version, if the base branch moved since the cut, Slave merges it into the lead's branch in the lead's worktree. Clean: the work branch is fast-forwarded, `baseCommit` moves to the new base tip, and the existing `reopenIfMovedInLock` sends the version round again for a full verification. Conflict: the merge is aborted, the lead's task goes back to `rework` with the turn `base`, and the same reopening follows its commit. At most `LEAD_BASE_MERGES_MAX = 3` per version; past that the existing "base moved, merge by hand" wait stands. The spec names only the conflicting case; the clean case is merged without a lead turn because a merged tree nobody verified must be verified either way.
-- **L16. The roster is person ids on the workspace, passed as `--agents`.** `Workspace.leadRoster` (at most 15 ids, `set-lead --roster a,b,c`; Plan B's spec stage fills it). Each member becomes one session definition: key = a slug of the person's name, `description` = the persona's one line, `prompt` = the person's effective profile followed by their skills' instructions, each bounded at 6 000 characters, the whole JSON at 100 000 bytes (one argv string; members that do not fit are dropped from the end and noted). Empty roster: no `--agents`. Which member a subordinate call used is recorded on the call's own event: `run.tool_call` gains the optional `subagent` (the tool input's `subagent_type`), and `leadStatus` maps it back to the person through the same slug. *Cost if wrong:* a long persona is cut at 6 000 characters; `.claude/agents/` files in the worktree would lift the bound and are the fallback.
+- **L16. The roster is person ids on the workspace, passed as `--agents`.** `Workspace.leadRoster` (at most 15 ids, `set-lead --roster a,b,c`; Plan B's spec stage fills it). Each member becomes one session definition: key = a slug of the person's name, `description` = the persona's one line, `prompt` = the person's effective profile followed by their skills' instructions, each bounded at 6 000 characters, the whole JSON at 100 000 bytes (one argv string; members that do not fit are dropped from the end and noted). Empty roster: no `--agents`. Which member a subordinate call used is recorded on the call's own event: `run.tool_call` gains the optional `subagent` (the tool input's `subagent_type`, on a top-level call only -- C1) and `parentToolUseId`, and `leadStatus` maps `subagent` back to the person through the same slug. *Cost if wrong:* a long persona is cut at 6 000 characters; `.claude/agents/` files in the worktree would lift the bound and are the fallback.
 - **L17. The tool vocabulary is data; the hook plane does not change.** `scripts/lib/permissions.sh` reads the allowed tool names from the run's `permissions.json`, which `writePermissionsFile` writes from `CLAUDE_CODE_TOOLS` (`packages/domain/src/provider/claude-code.ts`). Adding the name `Agent` there (beside `Task`, under `run_commands`) is the whole change: the five hook-plane scripts stay byte-identical and their digests in `hook-plane-sha256.json` stand. It changes what every Claude run kind with `run_commands` may call, in both flows: today the installed CLI's subordinate tool is denied `ungoverned_tool` in every run, where the same tool under its old name was allowed. The nine goldens that carry the vocabulary are re-pinned in the same commit, the m56a count goes 38 → 39, and the vocabulary gate (`gate-m26`) learns the quoted tool name as a protected token.
 - **L18. Decisions on record (B9).** At every concluded lead turn, `docs/DECISIONS.md` at the turn's tip is read (`git show`), bounded at 200 000 bytes, split at `## ` headings, and each one written through the existing `writeGoalDecisionIn` with source `lead` (sanitised, bounded at 80 / 600 characters, at most 40 per version, a title the version already has is skipped). A missing or unreadable file is one `workspace.lead_noted { kind: 'decisions_missing' }` and stops nothing.
 - **Left out on purpose (Plan B):** the spec stage and `docs/spec.md`, moving requirement extraction out of the conductor, quality levels and the hunt, estimate records, the three card decisions and "add budget and continue", the report page, any new interface, the end-to-end gate script, verifier personas from the catalogue (P8), the lead's model as a project setting beyond `set-flow --model`, a subordinate model setting.
+
+## Controller answers (C1 to C9) and the measurement
+
+The open points at the end of this plan were answered by the controller on 2026-10-04, after one measured pair of paid calls. **Provenance:** the operator's own patched copy of this plan was not reachable from the cloud session that built it, so the answers below were rewritten there from the build prompt's account of them (the measurement, C1, C5 as the "no `--model` by default" test, C6, C7); C4, C8 and C9 had no account and are the builder's rulings, marked so. Reconciled on 2026-10-05 against the operator's own patched plan: C1 (a subordinate's `init` and `result` lines, and `parentToolUseId` on `tool_result`) and C6 (the limit is 3) were the only code differences, and both are amended below. Where an answer and the text of a task differ, the answer wins; every task below has been brought in line with it.
+
+- **M. The measurement (open points 1 and 2).** (a) A `claude -p --resume <session>` process reports in its result line's `total_cost_usd` the SESSION's running total -- every earlier invocation of that session included -- not what that process spent. (b) `--max-budget-usd` counts from zero in every process, whatever the session spent before it. (c) A process stopped by that cap ends with `terminal_reason: "budget_exhausted"`.
+- **C1. Subordinate lines on the lead's stream (open point 3).** A subordinate's own lines arrive on the lead's stream with `parent_tool_use_id` set to the id of the subordinate call that started it, so the stall rule (L8) stands as written. The parser carries that field on a `tool_call` as `parentToolUseId` (absent when null), and the pump writes it on `run.tool_call`; it carries the same field on a `tool_result` (absent when null), and the pump writes it on `run.tool_result`. A `system`/`init` line or a `result` line that carries a non-null `parent_tool_use_id` is a subordinate's, never the lead's: the parser returns `ignored` for it -- otherwise a subordinate's init would overwrite the session id `--resume` needs, and its result would overwrite the lead's outcome (recorded fixtures carry `parent_tool_use_id: null` on every line, so no existing run changes). `subagent` is recorded on a TOP-LEVEL subordinate call only (`parent_tool_use_id` null): a subordinate that starts a session of its own did not pick from the roster, and `leadStatus` counts top-level calls only.
+- **C2. A turn's cost (open point 1, from M(a)).** `SlaveRun.costUsd` of a lead turn is the session's total at that turn's end, as the CLI reports it (the pump's replace stays right). What the lead spent is therefore, per session, the LARGEST reported total of that session's turns, summed over its sessions (a new session after a lost transcript is a second session); `goalSpend.leadUsd` is that sum. A turn that ended with no cost (cancelled, crashed) is unmeasured only until a later turn of the same session reports: that total includes it. `unmeasuredRuns` counts only runs no later total covers.
+- **C3. The budget legs (open point 2, from M(b) and M(c)).** Because every process counts from zero, a leg's `--max-budget-usd` is what that ONE turn may spend from now -- the mark (or the share) less what the lead has spent -- which is the formula `nextLeadLeg` already has; a resumed paused turn needs `refreshLeadSpawn` (Task 7) for the same reason. `isBudgetCapReason` matches `budget_exhausted` (and still `max_budget`, the result line's older subtype spelling). A capped turn's reported total is the session's, so test fixtures for a second capped turn report the running total (19.20 then 24.00), not the leg alone. That the cap counts subordinate sessions is taken on the 2026-10-04 run's word (`modelUsage` carries every model's cost).
+- **C4. A subscription limit's shape (open point 4) -- builder's ruling.** Unchanged: `isProviderRefusal` is the test, and a limit the CLI reports otherwise is charged as a worker failure. Measured when it first happens; the reset time is not read.
+- **C5. The default model (open point 5).** No default: the system seats carry no model unless `set-flow --model` / `set-lead --model` names one, and a run of the lead, the verifier or the confirmer is spawned with NO `--model` flag -- the installed CLI's own default is "the most capable available" as the operator configured it. `LEAD_DEFAULT_MODEL` is not added. A seat with no model resolves its runtime by `leadRuntime` (Task 6), not through the workspace-default chain, so a second provider row on the workspace cannot refuse the lead.
+- **C6. A permission-mode denial (open point 7).** A lead turn that the pump failed only because tool calls were refused by the permission mode is not charged an attempt: the lead continues in the SAME session (`continue`), and its turn note names the refused calls and tells it to do the work another way. At most `LEAD_DENIAL_CONTINUES_MAX` (3, the operator's ruling) per version; past that such a turn is charged as any failure. Each is one `workspace.lead_noted { kind: 'denied' }` line.
+- **C7. An unknown part of the spend (open point 9).** Wherever a figure of spend is written for a person or the lead while part of it is unmeasured (`unmeasuredRuns > 0`), it reads "at least $X".
+- **C8. The web (open point 6) -- builder's ruling.** Not granted in plan A: the spec does not ask for it, and a grant is one `SlavePermission` row in `ensureLeadSeats` when it does.
+- **C9. `retry-goal` on a stopped version and the sentinel template id (open points 8 and 10) -- builder's ruling.** As written: the card names only Approve and Reject; the readers of `WorkPackage.templateId` tolerate `lead`, and Task 11 runs `loadGoalReport` on a lead-flow version to prove it.
 
 ## Global Constraints
 
@@ -48,7 +63,7 @@ Numbered L1 to L18, so that none is mistaken for the spec's own D1 to D5.
 - The hook plane (`scripts/pause-gate.sh`, `scripts/cursor-shell-gate.sh`, `scripts/tool-result-tap.sh`, `scripts/lib/pause-flag.sh`, `scripts/lib/permissions.sh`) does not change.
 - Counts: this plan adds two event types (`LANE_BY_TYPE` 78 → 80) and no situation or action kind (25 / 25). Every place that pins the event list is updated in Task 1: `packages/db/prisma/schema.prisma` (`enum EventType`), the migration, `packages/db/src/enums.ts`, `packages/domain/src/events/schema.ts`, `packages/domain/src/supervisor/timeline.ts`, `apps/web/src/components/activity/cards.tsx` (registry), `apps/web/src/lib/activityFilters.ts`, `apps/web/src/server/timeline.ts`, `packages/domain/test/supervisor/timeline.test.ts`, `apps/web/test/activity-cards.test.tsx` (`PAYLOAD_BY_TYPE`), `apps/web/test/activityFilters.test.ts`, `scripts/gate-m56a-provider-contract.mjs` stage 12.
 - A project not in the lead flow is unchanged. Every branch this plan adds is guarded by `workspace.flow === 'lead'` or `run.leadTurn !== null`, both false or null on every existing row. Each task's "Unchanged for `packages`" line says what protects it; Task 11 pins it with a test in which the old pipeline's review still runs.
-- Every commit message ends with exactly `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
+- Every commit message ends with exactly `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - Spec B4 verbatim: "The per-run limits (200 tool calls, 30 minutes) do not apply to the lead. A goal version has a budget (the sum of lead, subordinates, verifier, hunter) and a time limit. One fifth of the budget is reserved for proof and hunt; the lead is told its share. At 80% of its share it is told to wrap up (commit, write the report); at 100% it is stopped and proof starts on what is committed."
 - Spec P3 verbatim: "Before a failed requirement goes back to the lead, a second independent session re-checks only the failed ones. Both say fail: rework. They disagree: the requirement is `disputed`, it is not sent to rework, and the report says so."
 - Spec P5 verbatim: "A round after rework checks the smoke and what failed before. Before delivery a full verification always runs on the final commit; the reserved budget always covers it."
@@ -362,9 +377,6 @@ export const LEAD_TEMPLATE_ID = 'lead'
 /** Plan A L2: the team the three system seats sit in, and the seats' `Slave.role` titles. */
 export const LEAD_TEAM_NAME = 'Lead flow'
 export const LEAD_SEAT_ROLES = { lead: 'Lead', verifier: 'Verifier', confirmer: 'Confirmer' } as const
-/** Plan A L2: the model the system seats run on unless `set-flow --model` names one. */
-export const LEAD_DEFAULT_MODEL = 'opus'
-
 /** Spec B4: one fifth of the goal's budget is kept for proof. */
 export const PROOF_RESERVE_RATIO = 0.2
 /** Spec B4: at this part of its share the lead is told to wrap up. */
@@ -703,7 +715,7 @@ Beside the `workspace.package_noted` line of the detail function in the same fil
 git add packages/db/prisma packages/db/src/enums.ts packages/db/test/integration/enum-parity.test.ts packages/domain/src/lead packages/domain/src/index.ts packages/domain/src/events/schema.ts packages/domain/src/supervisor/timeline.ts packages/domain/src/supervisor/world.ts packages/domain/src/goalReport packages/domain/test apps/web/src/components/activity/cards.tsx apps/web/src/lib/activityFilters.ts apps/web/src/server/timeline.ts apps/web/test scripts/gate-m56a-provider-contract.mjs
 git commit -m "feat(db): a project has a flow, a lead-flow goal version has a state word and a progress record, and two events say so
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -735,7 +747,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ```ts
 import { prisma } from '@slave-of-ai/db/client'
-import { LEAD_DEFAULT_MODEL, LEAD_TEAM_NAME } from '@slave-of-ai/domain'
+import { LEAD_TEAM_NAME } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { ensureLeadSeats, setFlow, setLeadSettings } from '../../src/lead/flow.js'
 import { workspaceStats } from '../../src/stats.js'
@@ -757,7 +769,7 @@ describe('the lead flow switch (plan A L1/L2)', () => {
     await prisma.$disconnect()
   })
 
-  it('switches a project to the lead flow: conducted, automatic merge, three system seats on Claude Code', async (): Promise<void> => {
+  it('switches a project to the lead flow: conducted, automatic merge, three system seats with no model of their own (C5)', async (): Promise<void> => {
     const id = await workspace()
     const result = await setFlow(id, 'lead')
     expect(result).toEqual({ ok: true, value: { flow: 'lead', changed: true } })
@@ -765,9 +777,9 @@ describe('the lead flow switch (plan A L1/L2)', () => {
     expect([row.flow, row.delivery, row.autoMerge]).toEqual(['lead', 'conducted', true])
     const seats = await prisma.slave.findMany({ where: { team: { workspaceId: id, name: LEAD_TEAM_NAME } }, orderBy: { role: 'asc' }, include: { person: true } })
     expect(seats.map((s) => [s.role, s.runtimeRoles, s.model, s.provider, s.person.templateId])).toEqual([
-      ['Confirmer', ['verifier'], LEAD_DEFAULT_MODEL, 'claude_code', null],
-      ['Lead', ['implementer'], LEAD_DEFAULT_MODEL, 'claude_code', null],
-      ['Verifier', ['verifier'], LEAD_DEFAULT_MODEL, 'claude_code', null],
+      ['Confirmer', ['verifier'], null, null, null],
+      ['Lead', ['implementer'], null, null, null],
+      ['Verifier', ['verifier'], null, null, null],
     ])
     expect(await setFlow(id, 'lead')).toEqual({ ok: true, value: { flow: 'lead', changed: false } })
   })
@@ -778,7 +790,7 @@ describe('the lead flow switch (plan A L1/L2)', () => {
     const second = await ensureLeadSeats(id, 'claude-opus-5')
     expect(first.ok && second.ok && second.value).toEqual(first.ok ? first.value : null)
     expect(await prisma.slave.count({ where: { team: { workspaceId: id } } })).toBe(3)
-    expect((await prisma.slave.findMany({ where: { team: { workspaceId: id } } })).every((s) => s.model === 'claude-opus-5')).toBe(true)
+    expect((await prisma.slave.findMany({ where: { team: { workspaceId: id } } })).every((s) => s.model === 'claude-opus-5' && s.provider === 'claude_code')).toBe(true)
   })
 
   it('keeps automatic merge off when asked, and refuses without a Claude Code provider, with an open goal version or a live run', async (): Promise<void> => {
@@ -859,7 +871,6 @@ In `refusalText`, after `case 'goal_not_needs_human':`'s return:
 ```ts
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
-  LEAD_DEFAULT_MODEL,
   LEAD_ROSTER_MAX,
   LEAD_SEAT_ROLES,
   LEAD_TEAM_NAME,
@@ -898,7 +909,8 @@ async function freePersonName(tx: Prisma.TransactionClient, base: string): Promi
 /**
  * Plan A L2: the lead, the verifier and the confirmer of a lead-flow project -- three seats with no
  * catalogue persona behind them, in a team of their own, made once. A seat that exists is returned
- * as it is; `model`, when given, is written on all three (the pair with `claude_code`). Serialised
+ * as it is; `model`, when given, is written on all three (the pair with `claude_code`); without
+ * it a new seat has no model (C5) and `leadRuntime` runs it on Claude Code with the CLI's default. Serialised
  * on the workspace row, so two callers make one set. The one refusal is returned before the first
  * write, so returning it commits nothing.
  */
@@ -917,7 +929,9 @@ export async function ensureLeadSeats(workspaceId: string, model?: string): Prom
       }
       const person = await tx.person.create({ data: { name: await freePersonName(tx, `${role} ${workspaceId.slice(0, 8)}`) } })
       const made = await tx.slave.create({
-        data: { teamId: team.id, personId: person.id, role, runtimeRoles: [runtimeRole], model: model ?? LEAD_DEFAULT_MODEL, provider: 'claude_code' },
+        // C5: no model unless one is named -- the run then carries no `--model` and the installed
+        // CLI's own default is used. Never a provider without its model (M12 Task 7's half-pair).
+        data: { teamId: team.id, personId: person.id, role, runtimeRoles: [runtimeRole], ...(model === undefined ? {} : { model, provider: 'claude_code' as const }) },
         select: { id: true },
       })
       return made.id
@@ -1142,7 +1156,7 @@ In `apps/orchestrator/test/integration/cli.test.ts`, after the two `set-delivery
 git add packages/control/src/lead/flow.ts packages/control/src/index.ts packages/control/src/refusal.ts packages/control/src/stats.ts packages/control/test/integration/lead-flow.test.ts apps/orchestrator/src/supervisor.ts apps/orchestrator/src/cli.ts apps/orchestrator/test/lead-situations.test.ts apps/orchestrator/test/integration/cli.test.ts
 git commit -m "feat(lead): a project can be put into the lead flow, with its three system seats, its time limit and its roster
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1151,9 +1165,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 **Files:**
 - Modify: `packages/domain/src/provider/claude-code.ts:67-73` (`CLAUDE_CODE_TOOLS.run_commands`)
 - Modify: `scripts/gate-m26-vocabulary.mjs` (a second, case-sensitive protected pattern), `scripts/rename-agent-to-slave.mjs` (`PROTECTED_TOKENS` and one `selfTest` case)
-- Modify: `scripts/gate-m56a-provider-contract.mjs:164` (`CLAUDE_VOCABULARY_NAMES` 38 → 39)
+- Modify: `scripts/gate-m56a-provider-contract.mjs:161` (`CLAUDE_VOCABULARY_NAMES` 38 → 39)
 - Modify (regenerated, Step 4): `scripts/fixtures/m56a-goldens/permissions-claude_code-{implementation,review,planning,verification}-{baseline,granted}.json` (8 files); Modify by hand: `scripts/fixtures/m56a-goldens/tools-by-kind.json`, `scripts/fixtures/m56a-goldens/README.md`
-- Test: `packages/domain/test/permission/kinds.test.ts:95-101` (the list) plus one new case, `packages/domain/test/permission/resolve.test.ts:28`, `packages/control/test/permission-mapping.test.ts:49`, `apps/orchestrator/test/integration/resume-execution.test.ts:208`, `apps/orchestrator/test/integration/tick.test.ts:588`
+- Test: `packages/domain/test/permission/kinds.test.ts:95-110` (the list; `'Task'` is at `:99`) plus one new case, `packages/domain/test/permission/resolve.test.ts:28`, `packages/control/test/permission-mapping.test.ts:49`, `apps/orchestrator/test/integration/resume-execution.test.ts:208`, `apps/orchestrator/test/integration/tick.test.ts:588`
 
 **Interfaces:**
 - Produces: `TOOL_VOCABULARY.claude_code['Agent'] === 'run_commands'`; every `permissions.json` written for a Claude run carries the name in its `vocabulary`, and in `allow` when `run_commands` is granted.
@@ -1207,7 +1221,7 @@ and change the offender filter's `line.replace(PROTECTED, '')` to `line.replace(
 
 Run `node scripts/rename-agent-to-slave.mjs --self-test` and `node scripts/gate-m26-vocabulary.mjs` → `PASS: the word is slave everywhere it is ours`.
 
-- [ ] **Step 4: The goldens.** The eight Claude `permissions-*.json` goldens carry the vocabulary byte for byte. Regenerate them with the gate's own fixed inputs (`GOLDEN_RUN_ID`, `GOLDEN_RUN_TOKEN`, `GOLDEN_VERIFICATION_OWNERSHIP` at `scripts/gate-m56a-provider-contract.mjs:153-159`; copy them exactly):
+- [ ] **Step 4: The goldens.** The eight Claude `permissions-*.json` goldens carry the vocabulary byte for byte. Regenerate them with the gate's own fixed inputs (`GOLDEN_RUN_ID`, `GOLDEN_RUN_TOKEN`, `GOLDEN_VERIFICATION_OWNERSHIP` at `scripts/gate-m56a-provider-contract.mjs:153-158`; copy them exactly):
 
 ```bash
 npx tsc --build
@@ -1251,7 +1265,7 @@ hook-plane digests did not change.
 git add packages/domain/src/provider/claude-code.ts packages/domain/test/permission packages/control/test/permission-mapping.test.ts apps/orchestrator/test/integration/resume-execution.test.ts apps/orchestrator/test/integration/tick.test.ts scripts/gate-m26-vocabulary.mjs scripts/rename-agent-to-slave.mjs scripts/gate-m56a-provider-contract.mjs scripts/fixtures/m56a-goldens
 git commit -m "feat(permission): the subordinate-session tool is governed under its current name, beside the old one
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1260,21 +1274,21 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `packages/domain/src/lead/constants.ts` (add `SUBORDINATE_TOOLS`), create `packages/domain/src/lead/roster.ts`, modify `packages/domain/src/lead/index.ts`
-- Modify: `packages/domain/src/events/schema.ts` (`run.tool_call` payload gains `subagent`)
+- Modify: `packages/domain/src/events/schema.ts` (`run.tool_call` payload gains `subagent` and `parentToolUseId`)
 - Modify: `packages/providers/src/runtime/process.ts` (spawn extras; `buildChildEnv`'s `keepAliveForSubordinates`; the package index already re-exports this module whole)
 - Modify: `packages/providers/src/contract/adapter.ts` (`StartRunInput.resumeSessionId`)
-- Modify: `packages/providers/src/claude/adapter.ts` (`spawnRun` at `:263-303`, `resume` at `:620-663`)
-- Modify: `packages/providers/src/types.ts` (`tool_call.subagent`), `packages/providers/src/claude/stream.ts` (`parseAssistantLine` at `:421-435`)
+- Modify: `packages/providers/src/claude/adapter.ts` (`spawnRun` at `:263-303`, `resume` from `:521`)
+- Modify: `packages/providers/src/types.ts` (`tool_call.subagent`, `tool_call.parentToolUseId`), `packages/providers/src/claude/stream.ts` (`assistantEnvelopeSchema` at `:383`, `parseAssistantLine` at `:407-435`)
 - Modify: `apps/orchestrator/src/pump.ts:824-829` (the `run.tool_call` emit)
-- Modify: `packages/providers/test/fake-claude.mjs` (eight knobs on the `m8-flow` work arm at `:1424-1451`)
+- Modify: `packages/providers/test/fake-claude.mjs` (eight knobs on the `m8-flow` work arm at `:1424-1450`)
 - Test: `packages/domain/test/lead/roster.test.ts` (new), `packages/providers/test/adapter-lead.test.ts` (new), `packages/providers/test/stream.test.ts` (two cases), `packages/providers/test/runtime-process.test.ts` (one case), `apps/orchestrator/test/integration/pump.test.ts` (one case after "forwards the parser-derived readable summary…")
 
 **Interfaces:**
 - Produces (domain): `SUBORDINATE_TOOLS: readonly string[]`; `interface RosterMember { readonly personId: string; readonly name: string; readonly description: string; readonly instructions: string }`; `rosterSlug(name: string): string`; `buildRosterDefinitions(members: readonly RosterMember[]): { readonly json: string | null; readonly slugs: ReadonlyMap<string, string>; readonly dropped: readonly string[] }` (`slugs` maps a definition's key to its `personId`; `dropped` are the names that did not fit).
-- Produces (providers): `interface SpawnExtras { readonly sessionDefinitions?: string; readonly maxBudgetUsd?: number; readonly keepAliveForSubordinates?: boolean }`; `spawnExtrasPathFor(runDir: string): string`; `writeSpawnExtras(runDir: string, extras: SpawnExtras): void`; `readSpawnExtras(runDir: string): SpawnExtras`; `StartRunInput.resumeSessionId?: string`; `RuntimeEvent` `tool_call` gains `readonly subagent?: string`.
-- Produces (event): `run.tool_call.payload.subagent?: string` (1..200).
+- Produces (providers): `interface SpawnExtras { readonly sessionDefinitions?: string; readonly maxBudgetUsd?: number; readonly keepAliveForSubordinates?: boolean }`; `spawnExtrasPathFor(runDir: string): string`; `writeSpawnExtras(runDir: string, extras: SpawnExtras): void`; `readSpawnExtras(runDir: string): SpawnExtras`; `StartRunInput.resumeSessionId?: string`; `RuntimeEvent` `tool_call` gains `readonly subagent?: string` (a TOP-LEVEL subordinate call only, C1) and `readonly parentToolUseId?: string` (the line's `parent_tool_use_id`, absent when null: the call was made inside the subordinate session that call started).
+- Produces (event): `run.tool_call.payload.subagent?: string` (1..200); `run.tool_call.payload.parentToolUseId?: string` (1..200).
 - Produces (fake CLI, `m8-flow` work arm only): `--no-work`, `--no-commit`, `--extra-file-base64 <path>:<base64>`, `--final-text-base64 <base64>`, `--result-patch-base64 <base64 JSON>`, `--subordinate <name>`, `--subordinate-unfinished`, `--fail-resume`.
-- Unchanged for `packages`: with no `resumeSessionId` and no `spawn-extras.json` the argv and the environment are byte-identical to today's (`argv.json` golden and `CHILD_ENV_ALLOW` do not move); `subagent` is absent on every call whose tool is not a subordinate tool or whose input names none.
+- Unchanged for `packages`: with no `resumeSessionId` and no `spawn-extras.json` the argv and the environment are byte-identical to today's (`argv.json` golden and `CHILD_ENV_ALLOW` do not move); `subagent` is absent on every call whose tool is not a subordinate tool, whose input names none, or that a subordinate made; `parentToolUseId` is absent on every line whose `parent_tool_use_id` is null, which is every line of every recorded fixture.
 
 - [ ] **Step 1: Failing domain test.** Create `packages/domain/test/lead/roster.test.ts`:
 
@@ -1508,9 +1522,9 @@ describe('ClaudeCodeAdapter and a lead turn (lead-flow plan A L4/L6/L16)', () =>
 In `packages/providers/test/stream.test.ts` add (use the file's own `parseStreamLine` import):
 
 ```ts
-describe('a subordinate call names its session definition (lead flow L16)', () => {
-  const line = (name: string, input: unknown): string =>
-    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu_1', name, input }] } })
+describe('a subordinate call names its session definition (lead flow L16, C1)', () => {
+  const line = (name: string, input: unknown, parent: string | null = null): string =>
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu_1', name, input }] }, parent_tool_use_id: parent })
 
   it('carries subagent_type as `subagent` for the subordinate tool under either name', () => {
     expect(parseStreamLine(line('Agent', { subagent_type: 'backend-developer', description: 'build the API', prompt: 'x' }))).toMatchObject({ kind: 'tool_call', toolName: 'Agent', subagent: 'backend-developer' })
@@ -1521,6 +1535,14 @@ describe('a subordinate call names its session definition (lead flow L16)', () =
     expect(parseStreamLine(line('Bash', { subagent_type: 'x', command: 'ls' }))).not.toHaveProperty('subagent')
     expect(parseStreamLine(line('Agent', { prompt: 'x' }))).not.toHaveProperty('subagent')
     expect(parseStreamLine(line('Agent', { subagent_type: '   ' }))).not.toHaveProperty('subagent')
+  })
+
+  it('carries the parent call on a line a subordinate session wrote, and names no subordinate there (C1)', () => {
+    const inner = parseStreamLine(line('Agent', { subagent_type: 'qa', prompt: 'x' }, 'tu_parent'))
+    expect(inner).toMatchObject({ kind: 'tool_call', toolName: 'Agent', parentToolUseId: 'tu_parent' })
+    expect(inner).not.toHaveProperty('subagent')
+    expect(parseStreamLine(line('Bash', { command: 'ls' }, 'tu_parent'))).toMatchObject({ parentToolUseId: 'tu_parent' })
+    expect(parseStreamLine(line('Bash', { command: 'ls' }))).not.toHaveProperty('parentToolUseId')
   })
 })
 ```
@@ -1538,18 +1560,20 @@ In `packages/providers/test/runtime-process.test.ts` add one case to the `buildC
 In `apps/orchestrator/test/integration/pump.test.ts`, after the case "forwards the parser-derived readable summary on run.tool_call…":
 
 ```ts
-  it('carries the session definition a subordinate call named on run.tool_call, and no such field on any other call (lead flow L16)', async (): Promise<void> => {
+  it('carries the session definition a subordinate call named on run.tool_call, and the parent call on a subordinate\'s own call (lead flow L16, C1)', async (): Promise<void> => {
     await pumpRun({
       ...ids,
       events: fromArray([
         { kind: 'session_started', sessionId: 's-1' },
         { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Agent', summary: 'subordinate: build the API', argsHash: testArgsHash('a'), subagent: 'backend-developer' },
-        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Bash', summary: 'Bash ls', argsHash: testArgsHash('b') },
+        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Bash', summary: 'Bash ls', argsHash: testArgsHash('b'), parentToolUseId: 'tu_1' },
         { kind: 'terminated', outcome: okOutcome },
       ]),
     })
     const rows = await prisma.executionEvent.findMany({ where: { runId: ids.runId, type: 'run_tool_call' }, orderBy: { seq: 'asc' }, select: { payload: true } })
     expect(rows.map((row) => (row.payload as { subagent?: string }).subagent)).toEqual(['backend-developer', undefined])
+    // C1: the subordinate's own call carries the call that started its session.
+    expect(rows.map((row) => (row.payload as { parentToolUseId?: string }).parentToolUseId)).toEqual([undefined, 'tu_1'])
   })
 ```
 
@@ -1656,46 +1680,64 @@ In `spawnRun`, before `const args = [`, add `const extras = readSpawnExtras(inpu
 
 and in its `buildChildEnv({ … })` call add `...(extras.keepAliveForSubordinates === true ? { keepAliveForSubordinates: true } : {}),` after the `verifyDirIfPresent` spread. In `resume`, after `const resumedInput: StartRunInput = { … }`, add `const extras = readSpawnExtras(resumedInput.runDir)`; in its `args`, after `checkpoint.sessionId,`, add `...extrasArgs(extras),`; and in its `buildChildEnv({ … })` call add the same `keepAliveForSubordinates` spread after `...verifyDirIfPresent(resumedInput.runDir),`.
 
-- [ ] **Step 6: The subordinate's name.** In `packages/providers/src/types.ts`, in the `tool_call` variant after `argsHash`:
+- [ ] **Step 6: The subordinate's name and the parent call (L16, C1).** In `packages/providers/src/types.ts`, in the `tool_call` variant after `argsHash`:
 
 ```ts
-      /** Lead-flow plan A L16: the session definition a subordinate call named (`subagent_type`). */
+      /** Lead-flow plan A L16 / C1: the session definition a TOP-LEVEL subordinate call named (`subagent_type`). */
       readonly subagent?: string
+      /**
+       * Lead-flow C1: the line's `parent_tool_use_id` -- the subordinate call whose session made
+       * this call. Absent on the session's own calls (the field is null there, as on every line of
+       * every recorded fixture).
+       */
+      readonly parentToolUseId?: string
 ```
 
-In `packages/providers/src/claude/stream.ts` import `SUBORDINATE_TOOLS` from `@slave-of-ai/domain`, add above `parseAssistantLine`:
+In `packages/providers/src/claude/stream.ts` add `parent_tool_use_id: z.string().nullable().optional(),` to `assistantEnvelopeSchema` (beside `message`; a line without it parses as before), import `SUBORDINATE_TOOLS` from `@slave-of-ai/domain`, and add above `parseAssistantLine`:
 
 ```ts
 /**
- * Lead-flow plan A L16: which session definition a subordinate call names, or null -- for the
- * subordinate tool only, and only a non-blank string. It is the one argument of that call the log
- * keeps beside the summary: it says which roster person did the work.
+ * Lead-flow plan A L16 / C1: which session definition a subordinate call names, or null -- for the
+ * subordinate tool only, only a non-blank string, and only on a call the session made itself
+ * (`parent` null): a subordinate that starts a session of its own did not pick from the roster.
+ * It is the one argument of that call the log keeps beside the summary: it says which roster
+ * person did the work.
  */
-function subordinateOf(toolName: string, input: unknown): string | null {
-  if (!SUBORDINATE_TOOLS.includes(toolName) || !isRecord(input)) return null
+function subordinateOf(toolName: string, input: unknown, parent: string | null): string | null {
+  if (parent !== null || !SUBORDINATE_TOOLS.includes(toolName) || !isRecord(input)) return null
   const named = input['subagent_type']
   return typeof named === 'string' && named.trim() !== '' ? named.trim().slice(0, 200) : null
 }
 ```
 
-In `parseAssistantLine`, directly above the `return { kind: 'tool_call', … }`, add `const subagent = subordinateOf(result.data.name, result.data.input)`, and in the returned object, after `argsHash: hashToolInput(result.data.input),`:
+In `parseAssistantLine`, directly above the `return { kind: 'tool_call', … }`, add
+
+```ts
+    const parent = envelope.data.parent_tool_use_id ?? null
+    const subagent = subordinateOf(result.data.name, result.data.input, parent)
+```
+
+and in the returned object, after `argsHash: hashToolInput(result.data.input),`:
 
 ```ts
       ...(subagent === null ? {} : { subagent }),
+      ...(parent === null || parent === '' ? {} : { parentToolUseId: parent.slice(0, 200) }),
 ```
 
 In `packages/domain/src/events/schema.ts`, in the `run.tool_call` payload after `argsHash`'s line, add:
 
 ```ts
-      // Lead-flow plan A L16: the session definition a subordinate call named. Optional: only the
-      // subordinate tool carries one.
+      // Lead-flow plan A L16 / C1: the session definition a top-level subordinate call named, and
+      // the subordinate call a nested call was made under. Optional: most calls carry neither.
       subagent: z.string().min(1).max(200).optional(),
+      parentToolUseId: z.string().min(1).max(200).optional(),
 ```
 
 In `apps/orchestrator/src/pump.ts`, in `case 'tool_call'`, the `emit('run.tool_call', 'slave', { … })` object gains, after `argsHash: event.argsHash,`:
 
 ```ts
           ...(event.subagent === undefined ? {} : { subagent: event.subagent }),
+          ...(event.parentToolUseId === undefined ? {} : { parentToolUseId: event.parentToolUseId }),
 ```
 
 - [ ] **Step 7: The fake's knobs.** In `packages/providers/test/fake-claude.mjs`, add to the header comment's `m8-flow` entry one paragraph listing the eight flags of this step, and add above `async function main()`:
@@ -1715,9 +1757,10 @@ function extraFile() {
 /**
  * Lead-flow plan A: patches the `complete` capture's lines in place, each knob a no-op unless its
  * flag is on ARGV. Returns whether any applied.
- *   --subordinate <name>          one `Agent` tool call naming that session definition, and its
- *                                 result, right after the init line (`--subordinate-unfinished`:
- *                                 the call alone, with no result)
+ *   --subordinate <name>          one `Agent` tool call naming that session definition, one
+ *                                 `Bash` call the subordinate made under it (C1: its line carries
+ *                                 `parent_tool_use_id`), and both results, right after the init
+ *                                 line (`--subordinate-unfinished`: the two calls, no results)
  *   --final-text-base64 <b64>     appended to the final message and the result text
  *   --result-patch-base64 <b64>   a JSON object merged over the terminal `result` line (a budget
  *                                 cap's ending, a cost)
@@ -1728,11 +1771,15 @@ function applyRunKnobs(lines) {
   if (subordinate !== undefined) {
     const session = JSON.parse(lines[0]).session_id
     const id = 'toolu_fake_subordinate'
+    const innerId = 'toolu_fake_subordinate_inner'
     const call = { type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Agent', input: { subagent_type: subordinate, description: 'fake subordinate work', prompt: 'do it' } }] }, parent_tool_use_id: null, session_id: session }
+    // C1: what the subordinate itself does arrives on this stream under its parent call's id.
+    const inner = { type: 'assistant', message: { content: [{ type: 'tool_use', id: innerId, name: 'Bash', input: { command: 'true', description: 'subordinate check' } }] }, parent_tool_use_id: id, session_id: session }
+    const innerResult = { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: innerId, content: '' }] }, parent_tool_use_id: id, session_id: session }
     const result = { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'done' }] }, parent_tool_use_id: null, session_id: session }
-    // `--subordinate-unfinished`: the call has no result -- the subordinate was still working when the turn ended.
-    if (args.includes('--subordinate-unfinished')) lines.splice(1, 0, JSON.stringify(call))
-    else lines.splice(1, 0, JSON.stringify(call), JSON.stringify(result))
+    // `--subordinate-unfinished`: no results -- the subordinate was still working when the turn ended.
+    if (args.includes('--subordinate-unfinished')) lines.splice(1, 0, JSON.stringify(call), JSON.stringify(inner))
+    else lines.splice(1, 0, JSON.stringify(call), JSON.stringify(inner), JSON.stringify(innerResult), JSON.stringify(result))
     applied = true
   }
   const finalText = flagValue('--final-text-base64')
@@ -1815,7 +1862,7 @@ In the `m8-flow` branch of `main`, replace the work body from `const workFile = 
 git add packages/domain/src/lead packages/domain/src/events/schema.ts packages/domain/test/lead/roster.test.ts packages/providers/src packages/providers/test apps/orchestrator/src/pump.ts apps/orchestrator/test/integration/pump.test.ts
 git commit -m "feat(providers): a run can continue a session at its first spawn, carry a roster and a budget cap, and say which subordinate a call named
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1879,6 +1926,7 @@ describe('the lead\'s budget legs (lead-flow spec B4)', () => {
   })
 
   it('reads a budget cap out of a run\'s terminal reason', () => {
+    expect(isBudgetCapReason('budget_exhausted')).toBe(true)
     expect(isBudgetCapReason('error_max_budget_usd.')).toBe(true)
     expect(isBudgetCapReason('error_during_execution.')).toBe(false)
   })
@@ -2011,9 +2059,13 @@ export function proofCapUsd(budgetUsd: number | null, goalSpentUsd: number): num
   return left < LEAD_MIN_LEG_USD ? 'spent' : left
 }
 
-/** Whether a run's terminal reason is the vendor's budget cap (`error_max_budget_usd`). */
+/**
+ * Whether a run's terminal reason is the vendor's budget cap. Measured 2026-10-04 (C3): the result
+ * line reads `terminal_reason: "budget_exhausted"`; `max_budget` is the subtype's spelling, kept for
+ * a line that names only that.
+ */
 export function isBudgetCapReason(reason: string): boolean {
-  return /max_budget/i.test(reason)
+  return /budget_exhausted|max_budget/i.test(reason)
 }
 ```
 
@@ -2275,22 +2327,28 @@ describe('what a goal version spent (lead-flow plan A L6/L7)', () => {
     await prisma.$disconnect()
   })
 
-  it('sums the lead\'s turns, the proof runs and the conductor\'s calls of that version, and counts a concluded run with no cost', async (): Promise<void> => {
+  it('takes each lead session\'s running total once, and sums the sessions, the proof runs and the conductor\'s calls of that version (C2)', async (): Promise<void> => {
     const f = await seed()
     await prisma.slaveRun.createMany({
       data: [
-        { slaveId: f.leadSeat, taskId: f.taskId, kind: 'implementation', status: 'succeeded', leadTurn: 'build', costUsd: 10, startedAt: at(0), endedAt: at(30) },
-        { slaveId: f.leadSeat, taskId: f.taskId, kind: 'implementation', status: 'failed', leadTurn: 'continue', costUsd: null, startedAt: at(31), endedAt: at(32) },
-        { slaveId: f.leadSeat, taskId: f.taskId, kind: 'implementation', status: 'succeeded', leadTurn: 'rework', costUsd: 2.5, startedAt: at(40), endedAt: at(50), pausedMs: 120_000 },
+        // Session s1: the build reported 10; a continue crashed with no cost; the rework, resumed
+        // on s1, reported the session's running total, 12.5 -- which covers the crashed turn too.
+        { slaveId: f.leadSeat, taskId: f.taskId, kind: 'implementation', status: 'succeeded', leadTurn: 'build', sessionId: 's1', costUsd: 10, startedAt: at(0), endedAt: at(30) },
+        { slaveId: f.leadSeat, taskId: f.taskId, kind: 'implementation', status: 'failed', leadTurn: 'continue', sessionId: 's1', costUsd: null, startedAt: at(31), endedAt: at(32) },
+        { slaveId: f.leadSeat, taskId: f.taskId, kind: 'implementation', status: 'succeeded', leadTurn: 'rework', sessionId: 's1', costUsd: 12.5, startedAt: at(40), endedAt: at(50), pausedMs: 120_000 },
+        // Session s2 (the transcript of s1 was lost): it reported 2, then a turn ended with no cost
+        // and nothing after it on s2 says what it spent.
+        { slaveId: f.leadSeat, taskId: f.taskId, kind: 'implementation', status: 'succeeded', leadTurn: 'continue', sessionId: 's2', costUsd: 2, startedAt: at(51), endedAt: at(53) },
+        { slaveId: f.leadSeat, taskId: f.taskId, kind: 'implementation', status: 'failed', leadTurn: 'wrap_up', sessionId: 's2', costUsd: null, startedAt: at(54), endedAt: at(55) },
         { slaveId: f.verifierSeat, kind: 'verification', status: 'succeeded', goalDeliveryId: f.deliveryId, costUsd: 3, startedAt: at(33), endedAt: at(39) },
       ],
     })
     await prisma.conductorCall.create({ data: { workspaceId: f.workspaceId, goalVersion: 1, stage: 'requirements', outcome: 'ok', modelCostUsd: 0.02 } })
     await prisma.conductorCall.create({ data: { workspaceId: f.workspaceId, goalVersion: 2, stage: 'requirements', outcome: 'ok', modelCostUsd: 9 } })
 
-    expect(await goalSpend(f.workspaceId, 1)).toEqual({ totalUsd: 15.52, leadUsd: 12.5, proofUsd: 3, conductorUsd: 0.02, unmeasuredRuns: 1 })
-    // 30 + 1 + (10 - 2 paused) + 6 minutes of work; the gaps between runs are not charged.
-    expect(await goalWorkedMs(f.workspaceId, 1, at(60))).toBe(45 * 60_000)
+    expect(await goalSpend(f.workspaceId, 1)).toEqual({ totalUsd: 17.52, leadUsd: 14.5, proofUsd: 3, conductorUsd: 0.02, unmeasuredRuns: 1 })
+    // 30 + 1 + (10 - 2 paused) + 2 + 1 + 6 minutes of work; the gaps between runs are not charged.
+    expect(await goalWorkedMs(f.workspaceId, 1, at(60))).toBe(48 * 60_000)
   })
 
   it('counts a live run up to now, less the span it has sat paused', async (): Promise<void> => {
@@ -2324,7 +2382,7 @@ import { prisma } from '@slave-of-ai/db/client'
 /** What one goal version spent, by who spent it. */
 export interface GoalSpend {
   readonly totalUsd: number
-  /** The lead's turns (its subordinate sessions' cost is inside each turn's figure). */
+  /** The lead's sessions, each at its running total (C2); its subordinate sessions' cost is inside it. */
   readonly leadUsd: number
   /** The verification and confirmation runs. */
   readonly proofUsd: number
@@ -2337,6 +2395,38 @@ export interface GoalSpend {
 const sum = (rows: readonly { readonly costUsd: number | null }[]): number => rows.reduce((total, row) => total + (row.costUsd ?? 0), 0)
 const round = (usd: number): number => Math.round(usd * 1e6) / 1e6
 
+interface LeadTurnCost {
+  readonly id: string
+  readonly sessionId: string | null
+  readonly costUsd: number | null
+  readonly startedAt: Date
+  readonly endedAt: Date | null
+}
+
+/**
+ * Lead-flow C2 (measured 2026-10-04): a resumed session reports its RUNNING total, so a lead
+ * turn's `costUsd` already holds every earlier turn of its session. What the lead spent is each
+ * session's largest reported total, summed over its sessions; a turn with no session line is a
+ * session of its own. A concluded turn with no cost is unmeasured only when no later turn of the
+ * same session reported -- a later total includes it.
+ */
+function leadSpendOf(turns: readonly LeadTurnCost[]): { readonly usd: number; readonly unmeasured: number } {
+  const bySession = new Map<string, LeadTurnCost[]>()
+  for (const turn of turns) {
+    const key = turn.sessionId ?? `run:${turn.id}`
+    bySession.set(key, [...(bySession.get(key) ?? []), turn])
+  }
+  let usd = 0
+  let unmeasured = 0
+  for (const session of bySession.values()) {
+    usd += Math.max(0, ...session.map((turn) => turn.costUsd ?? 0))
+    unmeasured += session.filter(
+      (turn) => turn.endedAt !== null && turn.costUsd === null && !session.some((later) => later.costUsd !== null && later.startedAt > turn.startedAt),
+    ).length
+  }
+  return { usd, unmeasured }
+}
+
 const runsOf = (workspaceId: string, goalVersion: number) =>
   ({
     lead: { leadTurn: { not: null }, task: { workspaceId, workPackage: { goalVersion } } },
@@ -2344,19 +2434,21 @@ const runsOf = (workspaceId: string, goalVersion: number) =>
   }) as const
 
 /**
- * Lead-flow spec B4 (plan A L6): the goal version's spend -- the lead's turns, the proof runs and
- * the conductor's calls for that version. A run's cost is known only once it concluded with a
- * result line; one that ended without is counted in `unmeasuredRuns` and adds nothing.
+ * Lead-flow spec B4 (plan A L6, C2): the goal version's spend -- the lead's sessions, the proof
+ * runs and the conductor's calls for that version. A proof run is a session of its own, so its
+ * cost is its own; a lead turn's is its session's running total ({@link leadSpendOf}). A run's
+ * cost is known only once it concluded with a result line; one that ended without, and that no
+ * later total covers, is counted in `unmeasuredRuns` and adds nothing.
  */
 export async function goalSpend(workspaceId: string, goalVersion: number): Promise<GoalSpend> {
   const where = runsOf(workspaceId, goalVersion)
-  const select = { costUsd: true, endedAt: true } as const
   const [lead, proof, calls] = await Promise.all([
-    prisma.slaveRun.findMany({ where: where.lead, select }),
-    prisma.slaveRun.findMany({ where: where.proof, select }),
+    prisma.slaveRun.findMany({ where: where.lead, select: { id: true, sessionId: true, costUsd: true, startedAt: true, endedAt: true } }),
+    prisma.slaveRun.findMany({ where: where.proof, select: { costUsd: true, endedAt: true } }),
     prisma.conductorCall.aggregate({ where: { workspaceId, goalVersion }, _sum: { modelCostUsd: true } }),
   ])
-  const leadUsd = round(sum(lead))
+  const leadSpend = leadSpendOf(lead)
+  const leadUsd = round(leadSpend.usd)
   const proofUsd = round(sum(proof))
   const conductorUsd = round(calls._sum.modelCostUsd ?? 0)
   return {
@@ -2364,7 +2456,7 @@ export async function goalSpend(workspaceId: string, goalVersion: number): Promi
     leadUsd,
     proofUsd,
     conductorUsd,
-    unmeasuredRuns: [...lead, ...proof].filter((run) => run.endedAt !== null && run.costUsd === null).length,
+    unmeasuredRuns: leadSpend.unmeasured + proof.filter((run) => run.endedAt !== null && run.costUsd === null).length,
   }
 }
 
@@ -2623,7 +2715,7 @@ Run `npx vitest run apps/orchestrator/test/integration/lead-context.test.ts` →
 git add packages/domain/src/lead packages/domain/src/run-context packages/domain/test packages/control/src/lead packages/control/src/index.ts packages/control/test/integration/lead-spend.test.ts apps/orchestrator/src/lead/context.ts apps/orchestrator/test/integration/lead-context.test.ts apps/web/src/lib/runContextSummary.ts apps/web/test/runContextSummary.test.ts
 git commit -m "feat(lead): the lead's brief, its budget legs, and what a goal version spent and took
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2635,10 +2727,12 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Modify: `apps/orchestrator/src/conductor.ts` (`conduct` at `:57-96`: the `select` and one branch; `export` on `AlreadyConducted` at `:119` and on `materialise` at `:342`)
 - Modify: `apps/orchestrator/src/tick.ts` (`startRun` at `:777-1093`: five insertions, Step 6)
 - Modify: `apps/orchestrator/src/verify.ts` (`verifyConcludedRun` at `:329-337`: one branch)
+- Modify: `packages/control/src/runtime.ts` (`leadRuntime`, after `resolveRuntime`; Step 7f), `apps/orchestrator/src/model.ts` (re-export `leadRuntime`)
 - Create: `apps/orchestrator/test/integration/lead-helpers.ts`
-- Test: `packages/domain/test/lead/stop.test.ts` (new), `apps/orchestrator/test/integration/lead-open.test.ts` (new)
+- Test: `packages/domain/test/lead/stop.test.ts` (new), `apps/orchestrator/test/integration/lead-open.test.ts` (new), `packages/control/test/runtime.test.ts` (one case, Step 7f)
 
 **Interfaces:**
+- Produces (control, `runtime.ts`): `leadRuntime(seat: { readonly model: string | null }): ResolvedRuntime` (C5; Task 9 imports it through `apps/orchestrator/src/model.ts`).
 - Consumes: `ensureLeadSeats`, `goalSpend`, `goalWorkedMs`, `loadLeadRoster`, `withDeliveryLock`, `refusalText` (control); `singlePlan`, `integrationBranchName`, `requirementItemsSchema`, `readLeadProgress`, `nextLeadLeg`, `leadShareUsd`, `buildRosterDefinitions`, `INITIAL_LEAD_PROGRESS`, `LEAD_TEMPLATE_ID` (domain); `buildLeadContext` (Task 5); `writeSpawnExtras`, `StartRunInput.resumeSessionId` (Task 4); `materialise(workspaceId, version, maxAttempts, plan, fallback, seats, items, delivery)`, `tripConductor`, `ensureIntegrationBranch`, `integrationTargetFor`, `commitUncommittedWork`, `releaseTaskAfterFailure`, `taskKeyFor`, `emailLocalPart`, `gitIn` (orchestrator, existing).
 - Produces (domain): `renderLeadStop(input: { readonly version: number; readonly reason: StopReason; readonly failing: readonly string[]; readonly disputed: readonly string[]; readonly unverifiable: readonly string[]; readonly detail: string | null }): string` (at most 2 000 characters).
 - Produces (orchestrator, `lead/record.ts`): `noteLead(input: { readonly workspaceId: string; readonly version: number; readonly kind: LeadNoteKind; readonly detail: string; readonly runId?: string | null }): Promise<void>`; `updateLeadProgress(deliveryId: string, change: (progress: LeadProgress) => LeadProgress): Promise<LeadProgress>` (under the delivery lock); `endLead(deliveryId: string, reason: StopReason, detail: string): Promise<boolean>` (sets `leadEnded` once; true when this call set it).
@@ -2807,6 +2901,8 @@ export interface LeadStart {
   readonly ordinal: number
   readonly prompt: string
   readonly resumeSessionId: string | null
+  /** The model the run was spawned with; null: no `--model` flag (C5). */
+  readonly model: string | null
   readonly extras: SpawnExtras
   readonly verificationKeys: readonly string[]
   readonly confirms: boolean
@@ -2907,6 +3003,7 @@ export async function seedLead(options: LeadSeedOptions = {}): Promise<LeadFixtu
         ordinal,
         prompt: input.prompt,
         resumeSessionId: input.resumeSessionId ?? null,
+        model: input.model ?? null,
         extras: readSpawnExtras(input.runDir),
         verificationKeys: run.verificationKeys,
         confirms: run.confirmsRunId !== null,
@@ -3029,6 +3126,9 @@ describe('the lead flow: a goal is built by one lead turn', () => {
     expect(start?.extras).toEqual({ sessionDefinitions: JSON.stringify({ 'ada-backend': { description: 'a specialist of this organisation', prompt: 'You build APIs.' } }), maxBudgetUsd: 19.2, keepAliveForSubordinates: true })
     const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: start?.runId ?? '' } })
     expect([run.leadTurn, run.leadResumed, run.kind]).toEqual(['build', false, 'implementation'])
+    // C5: no model named, so no `--model` flag -- the installed CLI's default runs the lead.
+    expect(start?.model).toBeNull()
+    expect([run.model, run.provider]).toEqual([null, 'claude_code'])
     expect((await leadNotes(f))[0]).toBe('turn: turn 1 (build): a new session was started')
   })
 
@@ -3264,7 +3364,9 @@ export async function planLeadTurn(input: {
   const queuedWrapUp = progress.nextTurn?.kind === 'wrap_up' && !progress.wrapUpSent
   const leg = nextLeadLeg({ budgetUsd: delivery.workspace.budgetUsd, leadSpentUsd: spend.leadUsd, wrapUpSent: progress.wrapUpSent || queuedWrapUp })
   if (leg.kind === 'spent') {
-    await endLead(delivery.id, 'budget_spent', `the lead's share of the budget is spent ($${spend.leadUsd.toFixed(2)})`)
+    // C7: a turn that ended with no cost and no later total of its session is not in the sum.
+    const spent = `${spend.unmeasuredRuns > 0 ? 'at least ' : ''}$${spend.leadUsd.toFixed(2)}`
+    await endLead(delivery.id, 'budget_spent', `the lead's share of the budget is spent (${spent})`)
     return { kind: 'hold' }
   }
   const limit = delivery.workspace.goalTimeLimitMs
@@ -3573,31 +3675,60 @@ add
 
 (e) After the `await prisma.slaveRun.update({ where: { id: run.id }, data: { pid: handle.pid, … } })` statement, add `if (lead !== null) await noteLeadTurnStarted(lead, run.id)`.
 
-- [ ] **Step 8: Run.** `npx tsc --build && npx vitest run apps/orchestrator/test/integration/lead-open.test.ts` → PASS. Then, one file at a time, the unchanged neighbours: `npx vitest run apps/orchestrator/test/integration/conductor.test.ts`, `…/conductor-e2e.test.ts`, `…/tick.test.ts`, `…/verify.test.ts` → PASS. `npm run typecheck`.
+(f) The lead's runtime (C5). In `packages/control/src/runtime.ts`, after `resolveRuntime`:
+
+```ts
+/**
+ * Lead flow (C5): the runtime of a lead-flow system seat -- the lead, the verifier, the confirmer.
+ * Always Claude Code (the flow runs on nothing else, `setFlow` checks it), with the seat's own model
+ * when `set-flow --model` / `set-lead --model` named one and NONE otherwise: no `--model` flag, so
+ * the installed CLI's own default -- "the most capable available" as the operator set it up -- is
+ * used. Not through the chain above: a seat with no model would fall to the workspace default,
+ * which a second `ProviderConfiguration` row turns into a refusal.
+ */
+export function leadRuntime(seat: { readonly model: string | null }): ResolvedRuntime {
+  return { provider: 'claude_code', model: seat.model ?? undefined }
+}
+```
+
+In `apps/orchestrator/src/model.ts` add `leadRuntime` to the re-export. In `startRun`, import it from `'./model.js'` and replace `const resolved = resolveRuntime(` … `)` with `const resolved = lead !== null ? leadRuntime(slave) : resolveRuntime(` … `)` (the arguments unchanged).
+
+In `packages/control/test/runtime.test.ts` import `leadRuntime` beside `resolveRuntime` and add:
+
+```ts
+describe('leadRuntime (lead flow C5)', () => {
+  it('runs a lead-flow seat on Claude Code, with its own model when it names one and none otherwise', () => {
+    expect(leadRuntime({ model: null })).toEqual({ provider: 'claude_code', model: undefined })
+    expect(leadRuntime({ model: 'claude-opus-5' })).toEqual({ provider: 'claude_code', model: 'claude-opus-5' })
+  })
+})
+```
+
+- [ ] **Step 8: Run.** `npx tsc --build && npx vitest run packages/control/test/runtime.test.ts apps/orchestrator/test/integration/lead-open.test.ts` → PASS. Then, one file at a time, the unchanged neighbours: `npx vitest run apps/orchestrator/test/integration/conductor.test.ts`, `…/conductor-e2e.test.ts`, `…/tick.test.ts`, `…/verify.test.ts` → PASS. `npm run typecheck`.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add packages/domain/src/lead packages/domain/test/lead/stop.test.ts apps/orchestrator/src/lead apps/orchestrator/src/conductor.ts apps/orchestrator/src/tick.ts apps/orchestrator/src/verify.ts apps/orchestrator/test/integration/lead-helpers.ts apps/orchestrator/test/integration/lead-open.test.ts
+git add packages/domain/src/lead packages/domain/test/lead/stop.test.ts packages/control/src/runtime.ts packages/control/test/runtime.test.ts apps/orchestrator/src/lead apps/orchestrator/src/conductor.ts apps/orchestrator/src/model.ts apps/orchestrator/src/tick.ts apps/orchestrator/src/verify.ts apps/orchestrator/test/integration/lead-helpers.ts apps/orchestrator/test/integration/lead-open.test.ts
 git commit -m "feat(lead): a goal set in the lead flow is planned by rule, built by one lead turn and handed to proof with no review
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 ### Task 7: The same session, whatever interrupts it; questions answered at once; decisions on record (B6, B7, B9, L4, L10, L18)
 
 **Files:**
-- Create: `packages/domain/src/lead/decisions.ts`; modify `packages/domain/src/lead/constants.ts` (`LEAD_DECISIONS_READ_MAX`), `packages/domain/src/lead/index.ts`
+- Create: `packages/domain/src/lead/decisions.ts`; modify `packages/domain/src/lead/constants.ts` (`LEAD_DECISIONS_READ_MAX`, `LEAD_DENIAL_CONTINUES_MAX`, the note kind `denied`), `packages/domain/src/lead/progress.ts` (`denialContinues`, C6), `packages/domain/src/lead/index.ts`
 - Create: `packages/control/src/lead/decisions.ts`; modify `packages/control/src/conductorAnswer.ts:60` (`writeGoalDecisionIn`'s `source` type), `packages/control/src/index.ts`
 - Modify: `apps/orchestrator/src/lead/conclude.ts` (replace `concludeLeadTurn`; `settleLeadWork` gains two steps), `apps/orchestrator/src/lead/record.ts` (`noteLeadOnce`), `apps/orchestrator/src/lead/turn.ts` (`refreshLeadSpawn`)
 - Modify: `apps/orchestrator/src/pump.ts:1429` (the ask hook's condition)
 - Modify: `apps/orchestrator/src/resume.ts` (`executeResume`: one branch before `adapter.resume`)
-- Test: `packages/domain/test/lead/decisions.test.ts` (new), `apps/orchestrator/test/integration/lead-turn.test.ts` (new)
+- Test: `packages/domain/test/lead/decisions.test.ts` (new), `packages/domain/test/lead/state.test.ts` (one case: `denialContinues`), `apps/orchestrator/test/integration/lead-turn.test.ts` (new)
 
 **Interfaces:**
 - Consumes: Task 6's `settleLeadWork`, `stopLead`, `endLead`, `updateLeadProgress`, `noteLead`, `planLeadTurn`; `isBudgetCapReason`, `parseSlaveAsk`, `readLeadProgress`, `nextLeadLeg` (domain); `writeGoalDecisionIn`, `GoalDecisionRefused`, `goalSpend` (control); `joinRunOutput` (`apps/orchestrator/src/runOutput.ts`); `readSpawnExtras`, `writeSpawnExtras` (providers).
-- Produces (domain): `LEAD_DECISIONS_READ_MAX = 40`; `parseLeadDecisions(markdown: string): readonly { readonly title: string; readonly decision: string }[]`.
+- Produces (domain): `LEAD_DECISIONS_READ_MAX = 40`; `LEAD_DENIAL_CONTINUES_MAX = 3`; `LEAD_NOTE_KINDS` gains `denied`; `LeadProgress.denialContinues: number` (default 0); `parseLeadDecisions(markdown: string): readonly { readonly title: string; readonly decision: string }[]`.
 - Produces (control): `recordLeadDecisions(workspaceId: string, goalVersion: number, decisions: readonly { readonly title: string; readonly decision: string }[]): Promise<{ readonly written: number; readonly known: number; readonly refused: number }>`.
 - Produces (orchestrator): `noteLeadOnce(input)` (same input as `noteLead`; skips a line the version already has); `refreshLeadSpawn(runId: string, runDir: string): Promise<void>`.
 - What a failed lead turn means now (replaces Task 6's plain release):
@@ -3609,6 +3740,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   | on the vendor's budget cap, wrap-up sent | none | the lead is ended `budget_spent`; what is committed is settled and proved |
   | as a resume that never reached its session line | none | a new session with a continuation note |
   | `platform` (orphaned by a restart, provider refusal) | none | `continue` (or the queued turn), same session; a refusal waits out its backoff and is noted |
+  | only because calls were refused by the permission mode (C6) | none, `LEAD_DENIAL_CONTINUES_MAX` times per version | `continue`, same session, told which calls were refused; past the bound, as the next row |
   | any other way (an error result, a stall, a crash) | one | `continue`, same session; at the attempt cap the version stops `lead_failed` |
 
 - Unchanged for `packages`: the pump's hook is skipped only for a run with `leadTurn` set; `executeResume`'s branch runs only for such a run; `writeGoalDecisionIn` accepts one more source and writes exactly what it wrote.
@@ -3650,6 +3782,28 @@ Run `npx vitest run packages/domain/test/lead/decisions.test.ts` → FAIL.
 ```ts
 /** Spec B9: how many decisions one read of the lead's file takes -- a version holds at most 40. */
 export const LEAD_DECISIONS_READ_MAX = 40
+/**
+ * C6: how often per goal version a turn failed only by the permission mode's refusals continues
+ * the lead without an attempt charged. Bounded: a lead that keeps calling what is refused is
+ * charged after that, and its attempt cap ends it.
+ */
+export const LEAD_DENIAL_CONTINUES_MAX = 3
+```
+
+and `'denied',` to `LEAD_NOTE_KINDS` after `'ask_refused',` (C6: the permission mode refused calls and the lead was told). In `packages/domain/src/lead/progress.ts` add to `LeadProgress`, after `askReplies`:
+
+```ts
+  /** C6: how often a turn failed only by permission-mode refusals was continued without a charge. */
+  readonly denialContinues: number
+```
+
+`denialContinues: 0,` to `INITIAL_LEAD_PROGRESS` after `askReplies: 0,`, and `denialContinues: z.number().int().nonnegative().default(0),` to `leadProgressSchema` after `askReplies`. In `packages/domain/test/lead/state.test.ts`, in `describe('readLeadProgress')`, add:
+
+```ts
+  it('reads a row written before denialContinues existed as none spent (C6)', () => {
+    expect(readLeadProgress({ askReplies: 1 }).denialContinues).toBe(0)
+    expect(readLeadProgress({ denialContinues: 2 }).denialContinues).toBe(2)
+  })
 ```
 
 Create `packages/domain/src/lead/decisions.ts`:
@@ -3737,6 +3891,7 @@ import { spawn } from 'node:child_process'
 import { dirname } from 'node:path'
 import { requestResume } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
+import { LEAD_DENIAL_CONTINUES_MAX, readLeadProgress } from '@slave-of-ai/domain'
 import { readSpawnExtras } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { reconcileOrphans, resetTickObservation } from '../../src/sweep.js'
@@ -3874,6 +4029,8 @@ describe('the lead flow: one session, whatever interrupts it', () => {
     await tickUntil(f, merged(f))
     const calls = await prisma.executionEvent.findMany({ where: { runId: leadTurns(f)[0]?.runId ?? '', type: 'run_tool_call' }, orderBy: { seq: 'asc' }, select: { payload: true } })
     expect(calls.map((row) => row.payload as { name: string; subagent?: string }).filter((p) => p.subagent !== undefined)).toEqual([expect.objectContaining({ name: 'Agent', subagent: 'ada-backend' })])
+    // C1: the subordinate's own call is on the lead's log under the call that started it.
+    expect(calls.map((row) => row.payload as { name: string; parentToolUseId?: string }).filter((p) => p.parentToolUseId !== undefined)).toEqual([expect.objectContaining({ name: 'Bash', parentToolUseId: 'toolu_fake_subordinate' })])
     // The subordinate's call tripped nothing: the turn succeeded and no guardrail fired.
     expect(await prisma.executionEvent.count({ where: { workspaceId: f.workspaceId, type: 'guardrail_tripped' } })).toBe(0)
   })
@@ -3893,6 +4050,38 @@ describe('the lead flow: one session, whatever interrupts it', () => {
     await tickUntil(f, merged(f))
     expect(leadTurns(f)[1]?.resumeSessionId).toMatch(SESSION)
     expect(await prisma.supervisorDecision.count({ where: { workspaceId: f.workspaceId, situationKind: { not: 'conduct' } } })).toBe(0)
+  })
+
+  it('continues a turn the permission mode failed in the same session, tells the lead what was refused, and charges nothing (C6)', async (): Promise<void> => {
+    // The recorded `permission-denied` capture: a clean result whose one Edit call the mode refused.
+    const f = await seedLead({ leadArgs: (ordinal) => (ordinal === 1 ? ['--work-fixture', 'permission-denied'] : []) })
+    await tickUntil(f, merged(f))
+
+    const turns = leadTurns(f)
+    expect(turns.map((t) => t.leadTurn)).toEqual(['build', 'continue'])
+    expect(turns[1]?.resumeSessionId).toBe('fake-session-permission-denied')
+    expect(turns[1]?.prompt).toContain('The permission mode refused these calls in your last turn: Edit (toolu_01Tz1SdA9gCmX7DXXkQwh6u3)')
+    expect(turns[1]?.prompt).not.toContain('THE GOAL')
+    expect((await leadTaskOf(f)).attempt).toBe(0)
+    expect((await leadNotes(f)).filter((line) => line.startsWith('denied:'))).toEqual([
+      'denied: the permission mode refused 1 call(s) (Edit (toolu_01Tz1SdA9gCmX7DXXkQwh6u3)); the lead continues in the same session, told what was refused',
+    ])
+    expect(readLeadProgress((await leadDelivery(f)).leadProgress).denialContinues).toBe(1)
+    expect(await prisma.supervisorDecision.count({ where: { workspaceId: f.workspaceId, situationKind: { not: 'conduct' } } })).toBe(0)
+  })
+
+  it('charges a denied turn once the uncharged continues are spent, and the attempt cap ends the lead (C6)', async (): Promise<void> => {
+    const f = await seedLead({ leadArgs: () => ['--work-fixture', 'permission-denied'] })
+    await tickUntil(f, async () => (await leadDelivery(f)).status === 'needs_human')
+
+    // `LEAD_DENIAL_CONTINUES_MAX` turns on the house (the build and the first continues), then three
+    // charged turns: the task's attempt cap.
+    expect(leadTurns(f).map((t) => t.leadTurn)).toEqual(['build', ...Array<string>(LEAD_DENIAL_CONTINUES_MAX + 2).fill('continue')])
+    expect(leadTurns(f).slice(1).every((t) => t.resumeSessionId === 'fake-session-permission-denied')).toBe(true)
+    expect((await leadNotes(f)).filter((line) => line.startsWith('denied:'))).toHaveLength(LEAD_DENIAL_CONTINUES_MAX)
+    const delivery = await leadDelivery(f)
+    expect([delivery.stopReason, readLeadProgress(delivery.leadProgress).denialContinues]).toEqual(['lead_failed', LEAD_DENIAL_CONTINUES_MAX])
+    expect((await leadTaskOf(f)).attempt).toBe(3)
   })
 
   it('continues a paused lead turn on its own row, in its own session, under what is left of its leg (spec section 9)', async (): Promise<void> => {
@@ -3918,7 +4107,7 @@ describe('the lead flow: one session, whatever interrupts it', () => {
 })
 ```
 
-Run `npx vitest run apps/orchestrator/test/integration/lead-turn.test.ts` → FAIL (the orphaned-turn case passes already on Task 6's code, and so does the subordinate case; the attempts-spent, lost-transcript, question, decisions, refusal and paused-turn cases fail).
+Run `npx vitest run apps/orchestrator/test/integration/lead-turn.test.ts` → FAIL (the orphaned-turn case passes already on Task 6's code, and so does the subordinate case; the attempts-spent, lost-transcript, question, decisions, refusal, the two permission-mode (C6) and paused-turn cases fail).
 
 - [ ] **Step 4: Notes said once, and the refreshed cap.** Add to `apps/orchestrator/src/lead/record.ts`:
 
@@ -3987,7 +4176,7 @@ to
   if (!failed && startingRow.leadTurn === null) {
 ```
 
-- [ ] **Step 6: The conclusion.** In `apps/orchestrator/src/lead/conclude.ts`, add the imports `recordLeadDecisions` (control); `LEAD_ASK_REPLIES_MAX, LEAD_DECISIONS_FILE, LEAD_DECISIONS_FILE_MAX_BYTES, isBudgetCapReason, parseLeadDecisions, parseSlaveAsk, readLeadProgress` (domain); `joinRunOutput` from `'../runOutput.js'`; `endLead, noteLead, noteLeadOnce` from `'./record.js'`; and replace `concludeLeadTurn` with:
+- [ ] **Step 6: The conclusion.** In `apps/orchestrator/src/lead/conclude.ts`, add the imports `recordLeadDecisions` (control); `LEAD_ASK_REPLIES_MAX, LEAD_DECISIONS_FILE, LEAD_DECISIONS_FILE_MAX_BYTES, LEAD_DENIAL_CONTINUES_MAX, isBudgetCapReason, parseLeadDecisions, parseSlaveAsk, readLeadProgress` (domain); `joinRunOutput` from `'../runOutput.js'`; `endLead, noteLead, noteLeadOnce` from `'./record.js'`; and replace `concludeLeadTurn` with:
 
 ```ts
 const firstLine = (text: string): string => (text.split('\n')[0] ?? '').slice(0, 300)
@@ -3997,6 +4186,28 @@ async function failureReasonOf(runId: string): Promise<string> {
   const event = await prisma.executionEvent.findFirst({ where: { runId, type: 'run_failed' }, orderBy: { seq: 'desc' }, select: { payload: true } })
   const reason = (event?.payload as { readonly reason?: unknown } | undefined)?.reason
   return typeof reason === 'string' ? reason : ''
+}
+
+/**
+ * C6: the calls the permission mode refused, as `Tool (id)`, when they are the whole of why the pump
+ * failed the turn -- every id its `run.failed` reason names (`… tool call(s) were denied: a, b`) was
+ * recorded as a `permission_mode` trip of this run. Empty when the reason names no denial, or names
+ * one the mode did not refuse (a hook's deny is not this).
+ */
+async function permissionDenialsOf(runId: string, reason: string): Promise<readonly string[]> {
+  const named = (/tool call\(s\) were denied: (.+)$/u.exec(reason)?.[1] ?? '').split(',').map((id) => id.trim()).filter((id) => id !== '')
+  if (named.length === 0) return []
+  const trips = await prisma.executionEvent.findMany({
+    where: { runId, type: 'guardrail_tripped', payload: { path: ['guardrail'], equals: 'permission_mode' } },
+    select: { payload: true },
+  })
+  const toolOf = new Map<string, string>()
+  for (const trip of trips) {
+    const detail = (trip.payload as { readonly detail?: unknown }).detail
+    const match = typeof detail === 'string' ? /^(\S+) was denied by the permission mode \((.+)\)$/u.exec(detail) : null
+    if (match?.[1] !== undefined && match[2] !== undefined) toolOf.set(match[2], match[1])
+  }
+  return named.every((id) => toolOf.has(id)) ? named.map((id) => `${toolOf.get(id) ?? ''} (${id})`) : []
 }
 
 /** Everything a run said, as the log holds it. */
@@ -4048,6 +4259,21 @@ export async function concludeLeadTurn(runId: RunId): Promise<void> {
     // continue. Nothing is charged; `planLeadTurn` reads the same fact and starts a new session.
     if (run.leadResumed && run.sessionId === null && run.pid !== null) {
       await releaseTaskAfterFailure(task, run.id, 'rework', { platform: true })
+      return
+    }
+    // C6: the turn failed only because the permission mode refused calls -- the work it did stands.
+    // The lead goes on in the same session, told what was refused; no attempt, at most
+    // `LEAD_DENIAL_CONTINUES_MAX` times per version. Past that it is charged below like any failure.
+    const refused = await permissionDenialsOf(run.id, reason)
+    if (refused.length > 0 && progress.denialContinues < LEAD_DENIAL_CONTINUES_MAX) {
+      const named = refused.join(', ')
+      await updateLeadProgress(delivery.id, (p) => ({
+        ...p,
+        denialContinues: p.denialContinues + 1,
+        nextTurn: { kind: 'continue', note: `The permission mode refused these calls in your last turn: ${named}. They will be refused again: do that work another way, and carry on with the goal.` },
+      }))
+      await releaseTaskAfterFailure(task, run.id, 'rework', { platform: true })
+      await noteLead({ ...at, kind: 'denied', detail: `the permission mode refused ${String(refused.length)} call(s) (${named}); the lead continues in the same session, told what was refused` })
       return
     }
     const release = await releaseTaskAfterFailure(task, run.id, 'rework', { platform: run.failureClass === 'platform' })
@@ -4113,15 +4339,15 @@ async function readDecisions(repoPath: string, tip: string, at: { readonly works
 
 (`settleLeadWork` is also called for a FAILED turn now -- one the goal's limit or the budget cap ended. Its `done` write is guarded on the claim, which such a turn still holds.)
 
-- [ ] **Step 7: Run.** `npx tsc --build && npx vitest run packages/domain/test/lead/decisions.test.ts`, then `npx vitest run apps/orchestrator/test/integration/lead-turn.test.ts` → PASS, then `npx vitest run apps/orchestrator/test/integration/lead-open.test.ts` → PASS (the missing-file note is new there and asserted nowhere). Unchanged neighbours, one file at a time: `…/pump.test.ts`, `…/ask.test.ts`, `…/resume-execution.test.ts`, `…/sweep.test.ts` → PASS. `npm run typecheck`.
+- [ ] **Step 7: Run.** `npx tsc --build && npx vitest run packages/domain/test/lead/decisions.test.ts packages/domain/test/lead/state.test.ts packages/domain/test/lead/events.test.ts`, then `npx vitest run apps/orchestrator/test/integration/lead-turn.test.ts` → PASS, then `npx vitest run apps/orchestrator/test/integration/lead-open.test.ts` → PASS (the missing-file note is new there and asserted nowhere). Unchanged neighbours, one file at a time: `…/pump.test.ts`, `…/ask.test.ts`, `…/resume-execution.test.ts`, `…/sweep.test.ts` → PASS. `npm run typecheck`.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add packages/domain/src/lead packages/domain/test/lead/decisions.test.ts packages/control/src/lead/decisions.ts packages/control/src/conductorAnswer.ts packages/control/src/index.ts apps/orchestrator/src/lead apps/orchestrator/src/pump.ts apps/orchestrator/src/resume.ts apps/orchestrator/test/integration/lead-turn.test.ts
+git add packages/domain/src/lead packages/domain/test/lead/decisions.test.ts packages/domain/test/lead/state.test.ts packages/control/src/lead/decisions.ts packages/control/src/conductorAnswer.ts packages/control/src/index.ts apps/orchestrator/src/lead apps/orchestrator/src/pump.ts apps/orchestrator/src/resume.ts apps/orchestrator/test/integration/lead-turn.test.ts
 git commit -m "feat(lead): the lead's session is continued after a restart, a failure, a refusal and a pause; a question is answered at once; its decisions are recorded
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -4255,8 +4481,12 @@ import { drainPumps, tick } from '../../src/tick.js'
 import { LEAD_TRUNCATE, base64, cleanUpLeadRepos, git, leadDelivery, leadNotes, leadTaskOf, merged, seedLead, tickUntil, type LeadFixture } from './lead-helpers.js'
 
 const leadTurns = (f: LeadFixture) => f.starts.filter((s) => s.kind === 'implementation')
-/** A turn the vendor stopped at its budget cap, having spent `usd`. */
-const capped = (usd: number): readonly string[] => ['--result-patch-base64', base64({ is_error: true, subtype: 'error_max_budget_usd', terminal_reason: 'error_max_budget_usd', total_cost_usd: usd })]
+/**
+ * A turn the vendor stopped at its budget cap (measured: `terminal_reason: "budget_exhausted"`, C3).
+ * `usd` is the SESSION's running total at its end, as a resumed process reports it (C2).
+ */
+const capped = (usd: number): readonly string[] => ['--result-patch-base64', base64({ is_error: true, subtype: 'error_during_execution', terminal_reason: 'budget_exhausted', total_cost_usd: usd })]
+/** A turn that ended normally with the session's running total at `usd`. */
 const cost = (usd: number): readonly string[] => ['--result-patch-base64', base64({ total_cost_usd: usd })]
 const children: number[] = []
 
@@ -4283,7 +4513,8 @@ describe('the lead flow: limits belong to the goal', () => {
   })
 
   it('tells the lead to wrap up at four fifths of its share, in the same session, and charges no attempt', async (): Promise<void> => {
-    const f = await seedLead({ budgetUsd: 30, leadArgs: (ordinal) => (ordinal === 1 ? capped(19.2) : cost(1)) })
+    // The wrap-up turn resumes the session and reports its running total: 19.20 + 1.00.
+    const f = await seedLead({ budgetUsd: 30, leadArgs: (ordinal) => (ordinal === 1 ? capped(19.2) : cost(20.2)) })
     await tickUntil(f, merged(f))
 
     const turns = leadTurns(f)
@@ -4299,7 +4530,8 @@ describe('the lead flow: limits belong to the goal', () => {
   it('ends the lead at 100% of its share and proves what is committed, with a subordinate still at work', async (): Promise<void> => {
     const f = await seedLead({
       budgetUsd: 30,
-      leadArgs: (ordinal) => (ordinal === 1 ? capped(19.2) : [...capped(4.8), '--subordinate', 'general-purpose', '--subordinate-unfinished']),
+      // The second leg spends its 4.80; the session's running total is then the whole share, 24.00.
+      leadArgs: (ordinal) => (ordinal === 1 ? capped(19.2) : [...capped(24), '--subordinate', 'general-purpose', '--subordinate-unfinished']),
     })
     await tickUntil(f, merged(f))
 
@@ -4614,8 +4846,9 @@ export async function leadStatus(workspaceId: string, goalVersion?: number): Pro
   const byName = new Map<string, { calls: number; running: number }>()
   for (const event of events) {
     if (event.type !== 'run_tool_call') continue
-    const payload = event.payload as { readonly name?: string; readonly subagent?: string; readonly toolUseId?: string }
-    if (payload.name === undefined || !SUBORDINATE_TOOLS.includes(payload.name)) continue
+    const payload = event.payload as { readonly name?: string; readonly subagent?: string; readonly toolUseId?: string; readonly parentToolUseId?: string }
+    // C1: top-level calls only -- a subordinate starting a session of its own is its own business.
+    if (payload.name === undefined || !SUBORDINATE_TOOLS.includes(payload.name) || payload.parentToolUseId !== undefined) continue
     const name = payload.subagent ?? 'general-purpose'
     const entry = byName.get(name) ?? { calls: 0, running: 0 }
     entry.calls += 1
@@ -4692,7 +4925,7 @@ and after `case 'set-lead'`:
 git add apps/orchestrator/src/sweep.ts apps/orchestrator/src/goal.ts apps/orchestrator/src/lead apps/orchestrator/src/cli.ts apps/orchestrator/test/integration/sweep.test.ts apps/orchestrator/test/integration/lead-limits.test.ts packages/control/src/lead/status.ts packages/control/src/index.ts
 git commit -m "feat(lead): the goal's budget share, time limit and stall rule bound the lead; the state word follows the version; lead-status shows it
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -4960,6 +5193,9 @@ describe('the lead flow: proof gates', () => {
     expect(seats.map((run) => run.slave.role)).toEqual(['Verifier', 'Confirmer', 'Verifier', 'Verifier'])
     expect(proofRuns(f)[1]?.prompt).toContain('Requirement keys: R1\n')
     expect(proofRuns(f)[1]?.prompt).not.toContain('R2:')
+    // C5: the verifier and the confirmer run on Claude Code with no `--model` either.
+    expect(proofRuns(f).map((run) => run.model)).toEqual([null, null, null, null])
+    expect(await prisma.slaveRun.count({ where: { kind: 'verification', model: { not: null } } })).toBe(0)
 
     expect(leadTurns(f).map((turn) => turn.leadTurn)).toEqual(['build', 'rework'])
     const rework = leadTurns(f)[1]
@@ -5298,6 +5534,8 @@ and pass `requirements: asked,` in `buildRunContext`'s `verification` object (in
     if (lead !== null && lead.capUsd !== null) writeSpawnExtras(runDir, { maxBudgetUsd: lead.capUsd })
 ```
 
+(e) The seat's runtime (C5): import `leadRuntime` from `'./model.js'` and replace `const resolved = resolveRuntime(` … `)` with `const resolved = lead !== null ? leadRuntime(seat) : resolveRuntime(` … `)` (the arguments unchanged). A lead-flow verifier and confirmer run on Claude Code with no `--model` unless their seat names one.
+
 In `concludeVerification`, after the block
 
 ```ts
@@ -5352,7 +5590,7 @@ and directly after `const stop = smokeStopReason({ outcome: failure, output: att
 git add packages/domain/src/lead packages/domain/test/lead/proof.test.ts apps/orchestrator/src/lead/proofRun.ts apps/orchestrator/src/verification.ts apps/orchestrator/src/smoke.ts apps/orchestrator/test/integration/lead-proof.test.ts
 git commit -m "feat(lead): a failure is confirmed before it is reworked, a disagreement is disputed, unverifiable never stops the loop, and two rounds with the same failures do
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -5834,7 +6072,7 @@ to
 git add packages/control/src/lead/card.ts packages/control/src/index.ts packages/control/src/supervisor.ts packages/control/test/integration/lead-card.test.ts apps/orchestrator/src/lead apps/orchestrator/src/goal.ts apps/orchestrator/test/integration/lead-delivery.test.ts
 git commit -m "feat(lead): one card for a version that is not all proven, with accept-as-is and leave; a moved base branch is taken in and verified again
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -5891,7 +6129,8 @@ describe('the lead flow, end to end', () => {
       budgetUsd: 40,
       timeLimitMs: 120 * 60_000,
       roster: [ada.id],
-      leadArgs: (ordinal) => (ordinal === 1 ? ['--subordinate', 'ada-backend', '--extra-file-base64', `docs/DECISIONS.md:${decisions}`, '--result-patch-base64', base64({ total_cost_usd: 6 })] : ['--result-patch-base64', base64({ total_cost_usd: 1.5 })]),
+      // The rework resumes the session: its result line reports the running total, 6.00 + 1.50 (C2).
+      leadArgs: (ordinal) => (ordinal === 1 ? ['--subordinate', 'ada-backend', '--extra-file-base64', `docs/DECISIONS.md:${decisions}`, '--result-patch-base64', base64({ total_cost_usd: 6 })] : ['--result-patch-base64', base64({ total_cost_usd: 7.5 })]),
       // Run 1 (full) fails R2; run 2 (the confirmer) fails it too; run 3 (partial) and run 4 (full) pass.
       verify: (ordinal, run) => (run.keys.length === 0 ? ALL : run.keys).map((key) => checked(key, ordinal <= 2 && key === 'R2' ? 'fail' : 'pass')),
     })
@@ -5984,7 +6223,7 @@ Run `npx vitest run apps/orchestrator/test/integration/conductor-e2e.test.ts` �
 git add apps/orchestrator/test/integration/lead-e2e.test.ts apps/orchestrator/test/integration/conductor-e2e.test.ts
 git commit -m "test(lead): a goal version goes through the lead flow end to end, and the packages flow still reviews
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -6008,7 +6247,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   No gate drives a conducted goal end to end today; Tasks 6 to 11's integration tests are that coverage for both flows, and Plan B adds the lead flow's own gate.
   Expected: all green. Known red on main and not regressions: m44 m46 m47 m48 m49 m50 m52 m54 m55 m57 m58. m52 (the broker) reads the permission vocabulary this plan changed: run it too, on this branch and on a second worktree of `5e165508`, and report "same failure as main" or the difference.
 
-- [ ] **Step 5: Read the branch as a reviewer would.** `git log --oneline 19c85b9e..HEAD` shows one commit per task and the plan's own. `git diff 19c85b9e..HEAD --stat -- scripts/pause-gate.sh scripts/cursor-shell-gate.sh scripts/tool-result-tap.sh scripts/lib` prints nothing. Every commit ends with the trailer `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (`git log --format=%B 19c85b9e..HEAD | grep -c "Claude Fable 5.1"` equals the commit count).
+- [ ] **Step 5: Read the branch as a reviewer would.** `git log --oneline 19c85b9e..HEAD` shows one commit per task and the plan's own. `git diff 19c85b9e..HEAD --stat -- scripts/pause-gate.sh scripts/cursor-shell-gate.sh scripts/tool-result-tap.sh scripts/lib` prints nothing. Every commit ends with the trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` (`git log --format=%B 19c85b9e..HEAD | grep -c "Claude Opus 5.5"` equals the commit count of this build (the spec and plan commits carry the earlier trailer)).
 
 - [ ] **Step 6: Report.** To the controller: the suite's file and test counts, each gate's result, any open point below that the build settled or sharpened, and what Plan B can now rely on (the list in this plan's header).
 
@@ -6016,13 +6255,13 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ## Open points for the controller
 
-1. **A resumed session's cost (L4).** ADR 0001 Q3 is unresolved (`docs/decisions/0001-pause-semantics.md:169`): whether `total_cost_usd` of `claude -p --resume` is that invocation's or the session's running total. `pump.ts:1475` REPLACES `SlaveRun.costUsd`, and this plan gives each turn its own row and sums them (`goalSpend`). If the figure is cumulative, a goal's spend is over-counted by every earlier turn of the session; if it is per invocation, a PAUSED turn resumed on its own row loses its pre-pause cost. One measured pair of result lines settles both; until then the plan errs towards stopping early.
-2. **`--max-budget-usd` (L6).** Not passed anywhere today (`packages/providers/src/claude/flags.ts:38-56`), so nothing in the repository has measured: whether the cap counts subordinate sessions; what the result line's `subtype` / `terminal_reason` read when it is hit (`isBudgetCapReason` matches `max_budget`); whether `total_cost_usd` is on that line. One cheap paid call (`claude -p "count to three" --max-budget-usd 0.01 --output-format stream-json --verbose`) before Task 8 is built. The 2026-10-04 run is said to show `modelUsage` carrying every model's cost; the capture is not in `/home/meren/slaveofai-logs/solo-comparison-2026-10-04/`, so `total_cost_usd` including subordinates is taken on that word.
-3. **The lead's stream while a subordinate works (L8).** The stall rule assumes the lead's stream carries the subordinate's lines (the recorded fixtures show `parent_tool_use_id` on every line, always null: `packages/providers/test/fixtures/complete.ndjson`). If a subordinate's work is silent on the parent stream, a subordinate working for more than 30 minutes restarts the lead. Also unmeasured: whether a background subordinate keeps the stream alive under `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`.
-4. **A subscription limit's shape (L9).** `isProviderRefusal` is `terminalReason.startsWith('api_error')` (`packages/providers/src/types.ts`). A usage limit that ends a run some other way is charged as a worker failure, and three end the lead. `rate_limit_event` lines are ignored by the parser (`packages/providers/src/claude/stream.ts:53`); the reset time they may carry is not read.
-5. **The default model (L2).** `LEAD_DEFAULT_MODEL = 'opus'` is this plan's guess at "the most capable available" (`packages/domain/src/provider/claude-code.ts:18-30` lists `fable`, `opus`, `sonnet`, `haiku` aliases). Name the one to use.
-6. **The lead cannot read the web.** The implementation baseline grants `read_repo`, `write_repo`, `run_commands` (`packages/domain/src/permission/kinds.ts`, `BASELINE_GRANTS`); `WebFetch`, `WebSearch` and every `mcp__*` tool are denied to the lead and its subordinates. Granting `network_fetch` to the lead seat is one `SlavePermission` row in `ensureLeadSeats`; the plan leaves it out because the spec does not say.
-7. **A permission-mode denial fails a whole turn.** `pump.ts:1415` fails a run that finished cleanly with a denied call unless it was a matrix or question denial. For a 45-minute lead turn that is one attempt and a `continue` turn; the work is committed and nothing is lost, but it is a wasted spawn. Not changed here.
-8. **`retry-goal` on a stopped lead-flow version** verifies again but cannot give an ended lead another turn (`leadEnded` stays set). "Add budget and continue" is Plan B's decision; until then the remedy text of the card names only Approve and Reject.
-9. **A cancelled or crashed turn reports no cost** (`goalSpend.unmeasuredRuns`). The budget cannot see what such a turn spent; a lead that stalls repeatedly can overspend by the cost of the stalled turns, bounded by three attempts.
-10. **`WorkPackage.templateId = 'lead'`** names no `SlaveTemplate`. The two readers found (`packages/control/src/goalReport.ts:259-282`, `apps/orchestrator/src/verification.ts:321-331`) tolerate it; a reader added since the survey may not.
+1. **A resumed session's cost (L4).** *Answered: M and C2 -- the running total.* ADR 0001 Q3 is unresolved (`docs/decisions/0001-pause-semantics.md:169`): whether `total_cost_usd` of `claude -p --resume` is that invocation's or the session's running total. `pump.ts:1475` REPLACES `SlaveRun.costUsd`, and this plan gives each turn its own row and sums them (`goalSpend`). If the figure is cumulative, a goal's spend is over-counted by every earlier turn of the session; if it is per invocation, a PAUSED turn resumed on its own row loses its pre-pause cost. One measured pair of result lines settles both; until then the plan errs towards stopping early.
+2. **`--max-budget-usd` (L6).** *Answered: M and C3 -- per process from zero; `budget_exhausted`.* Not passed anywhere today (`packages/providers/src/claude/flags.ts:38-56`), so nothing in the repository has measured: whether the cap counts subordinate sessions; what the result line's `subtype` / `terminal_reason` read when it is hit (`isBudgetCapReason` matches `max_budget`); whether `total_cost_usd` is on that line. One cheap paid call (`claude -p "count to three" --max-budget-usd 0.01 --output-format stream-json --verbose`) before Task 8 is built. The 2026-10-04 run is said to show `modelUsage` carrying every model's cost; the capture is not in `/home/meren/slaveofai-logs/solo-comparison-2026-10-04/`, so `total_cost_usd` including subordinates is taken on that word.
+3. **The lead's stream while a subordinate works (L8).** *Answered: C1 -- `parent_tool_use_id` is set on the subordinate's lines.* The stall rule assumes the lead's stream carries the subordinate's lines (the recorded fixtures show `parent_tool_use_id` on every line, always null: `packages/providers/test/fixtures/complete.ndjson`). If a subordinate's work is silent on the parent stream, a subordinate working for more than 30 minutes restarts the lead. Also unmeasured: whether a background subordinate keeps the stream alive under `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`.
+4. **A subscription limit's shape (L9).** *C4 (builder's ruling): unchanged.* `isProviderRefusal` is `terminalReason.startsWith('api_error')` (`packages/providers/src/types.ts`). A usage limit that ends a run some other way is charged as a worker failure, and three end the lead. `rate_limit_event` lines are ignored by the parser (`packages/providers/src/claude/stream.ts:53`); the reset time they may carry is not read.
+5. **The default model (L2).** *Answered: C5 -- no default model; no `--model` flag.* (Was: `LEAD_DEFAULT_MODEL = 'opus'` as a guess at "the most capable available".)
+6. **The lead cannot read the web.** *C8 (builder's ruling): not granted in plan A.* The implementation baseline grants `read_repo`, `write_repo`, `run_commands` (`packages/domain/src/permission/kinds.ts`, `BASELINE_GRANTS`); `WebFetch`, `WebSearch` and every `mcp__*` tool are denied to the lead and its subordinates. Granting `network_fetch` to the lead seat is one `SlavePermission` row in `ensureLeadSeats`; the plan leaves it out because the spec does not say.
+7. **A permission-mode denial fails a whole turn.** *Answered: C6 -- the lead continues in the same session, told what was refused, uncharged up to `LEAD_DENIAL_CONTINUES_MAX`.* `pump.ts:1415` fails a run that finished cleanly with a denied call unless it was a matrix or question denial. For a 45-minute lead turn that is one attempt and a `continue` turn; the work is committed and nothing is lost, but it is a wasted spawn. Not changed here.
+8. *C9 (builder's ruling): as written.* **`retry-goal` on a stopped lead-flow version** verifies again but cannot give an ended lead another turn (`leadEnded` stays set). "Add budget and continue" is Plan B's decision; until then the remedy text of the card names only Approve and Reject.
+9. *Answered: C2 (a later total of the same session covers it) and C7 ("at least $X").* **A cancelled or crashed turn reports no cost** (`goalSpend.unmeasuredRuns`). The budget cannot see what such a turn spent; a lead that stalls repeatedly can overspend by the cost of the stalled turns, bounded by three attempts.
+10. *C9 (builder's ruling): as written; Task 11 proves `loadGoalReport` reads it.* **`WorkPackage.templateId = 'lead'`** names no `SlaveTemplate`. The two readers found (`packages/control/src/goalReport.ts:259-282`, `apps/orchestrator/src/verification.ts:321-331`) tolerate it; a reader added since the survey may not.

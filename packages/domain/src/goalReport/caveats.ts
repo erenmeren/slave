@@ -97,6 +97,7 @@ export const DECISION_SOURCE_LABEL: Record<GoalReportSharedDecision['source'], s
   conductor_plan: "the conductor's plan",
   conductor_answer: "the conductor's answer",
   person: 'a person',
+  lead: 'the lead',
 }
 
 /** What the page and the export print for a version with no packages: "yet" only before conduct,

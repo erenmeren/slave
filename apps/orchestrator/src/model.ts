@@ -23,4 +23,4 @@
  * `packages/control/test/`, where they import the source directly. If a future task adds a test
  * for `resolveRuntime`, it belongs there and not here.
  */
-export { resolveRuntime, workspaceDefaultProvider, type ResolvedRuntime } from '@slave-of-ai/control'
+export { leadRuntime, resolveRuntime, workspaceDefaultProvider, type ResolvedRuntime } from '@slave-of-ai/control'

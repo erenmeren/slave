@@ -321,6 +321,18 @@ describe('buildSupervisorTimeline', () => {
     ])
   })
 
+  // Lead-flow plan A: the state word's stop reason reads as words, never the raw `no_progress`.
+  it('shows a lead-flow stop reason in words as the detail of its state line', async (): Promise<void> => {
+    const { workspaceId } = await seedWorkspace({})
+    await appendEvent({ type: 'workspace.lead_state', workspaceId, actor: 'system', payload: { version: 2, state: 'awaiting_decision', reason: 'no_progress' } })
+
+    const entries = await buildSupervisorTimeline(workspaceId)
+
+    expect(entries.map((entry) => [entry.lane, entry.title, entry.detail, entry.eventType])).toEqual([
+      ['work', 'goal v2: awaiting decision', 'no progress', 'workspace.lead_state'],
+    ])
+  })
+
   // Pre-flight F65 / section (e) carry: a package-less hand-off is named as the goal report and the
   // workers' prompts name it (`handOffViews` + `handOffFromName`) -- never "the conductor" for all.
   it('names who a package-less hand-off came from: the operator, a worker by its seat, the conductor', async (): Promise<void> => {

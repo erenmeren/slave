@@ -14,6 +14,7 @@ import {
   BREAKER_BEAT_MS,
   BREAKER_WINDOW,
   CONSTRAIN_GRACE_CALLS,
+  LEAD_STALL_MS,
   type BreakerRow,
   type BreakerVerdict,
   detectBehaviour,
@@ -706,12 +707,17 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
       where: { id: run.id, endedAt: null },
       data: { observedWorkingMs: workingMs, observedAt: new Date(now) },
     })
-    const timedOutNow = workingMs > workspace.runTimeoutMs
+    // Lead flow (spec B4/B5, plan A L7/L8): the per-run limits do not apply to a turn of a lead's
+    // session. The goal's budget and time bound it (`enforceLeadLimits`, the vendor's budget cap),
+    // and its stall rule is its own: a lead with a subordinate at work always has a tool call open.
+    // `leadTurn` is null on every other run, which is judged exactly as before.
+    const leadTurn = run.leadTurn !== null
+    const timedOutNow = !leadTurn && workingMs > workspace.runTimeoutMs
     // M51 R3: the run's OWN cap when the breaker wrote one, the workspace's otherwise -- one
     // comparison and one new column, and the breach it produces is the EXISTING `tool_call_ceiling`.
     // A constrained run really is past its tool-call ceiling; giving the same fact a second name is
     // how a filter comes to miss half of it.
-    const overCapNow = run.toolCalls > (run.toolCallCap ?? workspace.maxToolCallsPerRun)
+    const overCapNow = !leadTurn && run.toolCalls > (run.toolCallCap ?? workspace.maxToolCallsPerRun)
     // Conductor R0: a working (or `pause_requested`, below) run whose stream has said nothing for
     // RUN_STALL_MS with no tool call open is a dead connection, not a slow answer. Wall clock since the last output -- the stream
     // either spoke or it did not -- and never on a clock-jump pass, whose silence is the host's.
@@ -741,13 +747,15 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
       !clockJumped &&
       !firstPassOfProcess &&
       (run.status === 'working' || run.status === 'pause_requested') &&
-      run.toolCallOpenSince === null &&
-      now - silentFrom > RUN_STALL_MS
+      (leadTurn ? now - silentFrom > LEAD_STALL_MS : run.toolCallOpenSince === null && now - silentFrom > RUN_STALL_MS)
     // M51 R2/E6. The breaker is evaluated here, INSIDE the branch that used to `continue`, which is
     // also exactly what "after the hard limits" means: a run past its timeout or its ceiling is
     // stopped for THAT reason and never reaches the breaker, so one run is never stopped twice
     // under two names. Everything below this line is the hard-limit path, untouched.
     if (!timedOutNow && !overCapNow && !stalledNow) {
+      // No behavioural breaker on a lead turn: its constrain rung is a per-run tool-call cap, and
+      // subordinates repeating a call is not a loop.
+      if (leadTurn) continue
       // The one `try` in this loop, and it is the breaker's whole "nothing here may throw" promise
       // made good at the boundary rather than asserted inside: this pass spawns git, reads the
       // event log and calls two control verbs, and one of them (`requestPause`, through
@@ -783,7 +791,11 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
       breaches.push(`it has made ${run.toolCalls} tool calls, past the ceiling of ${ceiling}`)
     }
     if (stalledNow) {
-      breaches.push(`silent for ${Math.round((now - silentFrom) / 60_000)} min with no tool call open`)
+      breaches.push(
+        leadTurn
+          ? `silent for ${Math.round((now - silentFrom) / 60_000)} min (a lead turn: it is restarted in its own session with a continuation note)`
+          : `silent for ${Math.round((now - silentFrom) / 60_000)} min with no tool call open`,
+      )
     }
 
     // Claim the run before cancelling it, exactly as the tick claims a task. `cancel` awaits the

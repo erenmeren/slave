@@ -109,6 +109,10 @@ describe('renderHandoff', () => {
     // Read off the constant rather than re-spelt: a seventh literal added later is covered here the
     // moment it is added, which is the whole reason the list is a constant.
     expect(ROUTING_LITERALS).toContain('supervisorReply')
+    // Every quoted literal the fake CLI routes a prompt by (packages/providers/test/fake-claude.mjs).
+    for (const sniffed of ['candidateIndex', 'sources', 'replan', 'task graph', 'verdict', 'supervisorReply', 'intakeAnswer', 'personas']) {
+      expect(ROUTING_LITERALS).toContain(sniffed)
+    }
     for (const literal of ROUTING_LITERALS) {
       expect(text, literal).not.toContain(`"${literal}"`)
     }

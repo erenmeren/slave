@@ -13,6 +13,7 @@ import {
   neutraliseMarkers,
   renderRunContext,
 } from '../../src/run-context/render.js'
+import { LEAD_RULES } from '../../src/lead/brief.js'
 // M37 Task 2: this file used to cross-check the two constants against LIVE calls to
 // `buildReviewPrompt`/`buildPlanningPrompt` in apps/orchestrator, which is why it reached across
 // the package boundary. Those two functions are gone -- `buildRunContext` is the only builder now
@@ -48,6 +49,7 @@ describe('SECTION_ORDER', () => {
       review: ['profile', 'skills', 'task', 'handoff', 'review_diff'],
       planning: ['profile', 'planning_goal', 'replan', 'roles', 'capabilities', 'runbook', 'handoff_protocol', 'memory'],
       verification: ['profile', 'verification_goal', 'verification_protocol'],
+      lead: ['profile', 'lead_brief'],
     })
   })
 })
@@ -506,5 +508,18 @@ describe('M48 section order', () => {
         { kind: 'memory', text: 'KNOWLEDGE', source: { kind: 'memory', memoryIds: [], capped: false } },
       ]),
     ).toThrow('unknown section memory for run kind review')
+  })
+})
+
+describe('the lead kind (lead-flow spec B3)', () => {
+  it('ends a lead render with LEAD_RULES and records the brief\'s source', () => {
+    const source = { kind: 'lead_brief', goalVersion: 1, turn: 'build', resumed: false, requirements: 2, roster: 0 } as const
+    const { prompt, manifest } = renderRunContext('lead', [{ kind: 'lead_brief', text: 'THE GOAL (v1)', source }])
+    expect(prompt).toBe(`THE GOAL (v1)\n\n${LEAD_RULES}`)
+    expect(manifest).toEqual({ kind: 'lead', sections: [source] })
+  })
+
+  it('has no place for the ask protocol', () => {
+    expect(() => renderRunContext('lead', [{ kind: 'ask_protocol', text: 'x', source: { kind: 'ask_protocol' } }])).toThrow(/unknown section ask_protocol for run kind lead/)
   })
 })

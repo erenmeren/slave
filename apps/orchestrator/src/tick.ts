@@ -33,6 +33,7 @@ import {
   type AdapterRegistry,
   type SlaveRuntimeAdapter,
   type RunHandle,
+  writeSpawnExtras,
 } from '@slave-of-ai/providers'
 import { conduct, type ConductStep } from './conductor.js'
 import { deliverAnswers } from './deliver.js'
@@ -40,7 +41,9 @@ import { cancelIfVersionAbandoned, integrationTargetFor } from './goalBranch.js'
 import { runGoalPass } from './goal.js'
 import { postGoalReportNotes } from './goalReportNotes.js'
 import { runMergePass } from './merge.js'
-import { resolveRuntime, workspaceDefaultProvider } from './model.js'
+import { buildLeadContext } from './lead/context.js'
+import { noteLeadTurnStarted, planLeadTurn } from './lead/turn.js'
+import { leadRuntime, resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { permissionOwnership } from './ownership.js'
 import { dispatchPlanning } from './planning.js'
 import { resolveAdapter } from './provider.js'
@@ -795,6 +798,12 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
   if (task.status === 'ready' || task.status === 'rework') {
     if (await cancelIfVersionAbandoned(task, target, task.status)) return null
   }
+  // Lead flow (spec B1/B6/B8, plan A L4): the lead's task is dispatched as a TURN of its session.
+  // `hold` is not a failure and writes nothing -- the version is stopped or the lead is ended --
+  // so it returns before the run row, like the abandoned-version case above.
+  const leadPlan = workspace.flow === 'lead' && target !== null ? await planLeadTurn({ task, deliveryId: target.deliveryId }) : null
+  if (leadPlan?.kind === 'hold') return null
+  const lead = leadPlan?.kind === 'run' ? leadPlan : null
 
   const taskKey = taskKeyFor(task.id)
   const prefix = `slaveofai/${taskKey}-`
@@ -810,7 +819,12 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
   // transaction, so an archive that commits between the read above and this write is seen. `null`
   // means the project was archived out from under this dispatch -- nothing was attempted, so this
   // returns like the lost claim race below rather than recording a failed run against the task.
-  const run = await createRunUnlessArchived(workspace.id, { taskId: task.id, slaveId: slave.id, status: 'starting' })
+  const run = await createRunUnlessArchived(workspace.id, {
+    taskId: task.id,
+    slaveId: slave.id,
+    status: 'starting',
+    ...(lead === null ? {} : { leadTurn: lead.turn, leadResumed: lead.resumeSessionId !== null }),
+  })
   if (run === null) return null
   const runId = brandRunId(run.id)
 
@@ -877,14 +891,18 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
     // does not resolve itself on the next tick, so the operator needs to see it as a failure,
     // counted against the task's attempt cap, not silently retried forever.
     const workspaceDefault = await workspaceDefaultProvider(workspace.id)
-    const resolved = resolveRuntime(
-      {
-        model: slave.model,
-        provider: slave.provider,
-        person: { model: slave.person.model, provider: slave.person.provider, template: slave.person.template },
-      },
-      workspaceDefault,
-    )
+    // Lead flow (C5): a system seat runs on Claude Code with its own model or none (the CLI's default).
+    const resolved =
+      lead !== null
+        ? leadRuntime(slave)
+        : resolveRuntime(
+            {
+              model: slave.model,
+              provider: slave.provider,
+              person: { model: slave.person.model, provider: slave.person.provider, template: slave.person.template },
+            },
+            workspaceDefault,
+          )
     if (resolved.provider === null) {
       throw new Error(
         'no runtime could be resolved for this run: either this workspace has no configured ' +
@@ -967,15 +985,39 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
     // worktree exists and before anything is spawned (spec §4). A `RunContextRefused` (a profile
     // over the cap, or a whole prompt over the byte budget one CLI argument can carry) lands in this function's own `catch` and is recorded as a run that failed to
     // start, exactly like an unprovisionable worktree.
-    const built = await buildRunContext({
-      runId,
-      kind: 'implementation',
-      slaveId: slave.id,
-      workspaceId: workspace.id,
-      taskId: task.id,
-      worktreePath: worktree.path,
-      provider: resolved.provider,
-    })
+    const built =
+      lead === null
+        ? await buildRunContext({
+            runId,
+            kind: 'implementation',
+            slaveId: slave.id,
+            workspaceId: workspace.id,
+            taskId: task.id,
+            worktreePath: worktree.path,
+            provider: resolved.provider,
+          })
+        : await buildLeadContext({
+            runId,
+            workspaceId: workspace.id,
+            goalVersion: lead.goalVersion,
+            worktreePath: worktree.path,
+            turn: lead.turn,
+            resumed: lead.resumeSessionId !== null,
+            continuation: lead.continuation,
+            note: lead.note,
+            roster: lead.roster,
+            budget: lead.budget,
+            timeLeftMs: lead.timeLeftMs,
+          })
+    // Lead flow (plan A L6/L16): the roster, the leg's budget cap and the keep-alive ride in the
+    // run directory, where a resume of this same row finds them again.
+    if (lead !== null) {
+      writeSpawnExtras(runDir, {
+        ...(lead.definitions === null ? {} : { sessionDefinitions: lead.definitions }),
+        ...(lead.capUsd === null ? {} : { maxBudgetUsd: lead.capUsd }),
+        keepAliveForSubordinates: true,
+      })
+    }
 
     handle = await runAdapter.start({
       runId,
@@ -989,6 +1031,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
       // Conditional spread, not `model`, because `exactOptionalPropertyTypes` treats an explicit
       // `model: undefined` as a different (and disallowed) thing from the key being absent.
       ...(model !== undefined ? { model } : {}),
+      ...(lead === null || lead.resumeSessionId === null ? {} : { resumeSessionId: lead.resumeSessionId }),
     })
 
     await prisma.slaveRun.update({
@@ -1015,6 +1058,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
         model: resolved.model ?? null,
       },
     })
+    if (lead !== null) await noteLeadTurnStarted(lead, run.id)
 
     // Only ever a *first* pump for this run: the tick never resumes anything, so the second
     // `run.started` a resumed run would produce (T12's carry, spec §5.7 wants `run.resumed`) is

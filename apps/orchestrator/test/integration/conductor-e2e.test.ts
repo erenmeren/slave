@@ -39,7 +39,7 @@ import {
   reportCaveats,
   workspaceId as brandWorkspaceId,
 } from '@slave-of-ai/domain'
-import { ClaudeCodeAdapter, type SlaveRuntimeAdapter } from '@slave-of-ai/providers'
+import { ClaudeCodeAdapter, readSpawnExtras, type SlaveRuntimeAdapter } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 import { worktreeRootFor } from '../../src/worktree.js'
@@ -609,6 +609,32 @@ describe('conductor end to end', () => {
     expect(notes[0]?.text).toContain('the verified commit')
     expect(notes[0]?.text).toContain('Requirements: 3 of 3 pass (round 1).')
     expect((await delivery(f, 1))?.reportNotedKey).toBe('merged')
+  })
+
+  it('the packages flow still reviews: a conducted goal in a project that is not in the lead flow takes none of the lead flow\'s paths', async (): Promise<void> => {
+    const f = await seed()
+    await tickUntil(f, merged(f, 1))
+
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })
+    expect(workspace.flow).toBe('packages')
+    // The size decision was the model's, the package was reviewed, and its branch went through the merge pass.
+    expect((await prisma.conductorCall.findMany({ where: { workspaceId: f.workspaceId }, orderBy: { createdAt: 'asc' }, select: { stage: true } })).map((c) => c.stage)).toEqual(['requirements', 'conduct'])
+    expect(await prisma.slaveRun.count({ where: { kind: 'review' } })).toBeGreaterThan(0)
+    const types = (await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId }, select: { type: true } })).map((row) => row.type)
+    for (const present of ['task_verify_passed', 'task_review_started', 'task_review_approved']) expect(types).toContain(present)
+    for (const absent of ['workspace_lead_state', 'workspace_lead_noted']) expect(types).not.toContain(absent)
+    expect(await prisma.runReport.count()).toBe(1)
+
+    // No run was a lead turn, a confirmation or a partial round, and none was spawned with the lead's extras.
+    const runs = await prisma.slaveRun.findMany({ select: { leadTurn: true, leadResumed: true, confirmsRunId: true, verificationKeys: true } })
+    expect(runs.every((run) => run.leadTurn === null && !run.leadResumed && run.confirmsRunId === null && run.verificationKeys.length === 0)).toBe(true)
+    // The run directories are still there, so an empty read means no extras file was written.
+    for (const start of f.starts) expect(existsSync(start.runDir)).toBe(true)
+    for (const start of f.starts) expect(readSpawnExtras(start.runDir)).toEqual({})
+    for (const start of f.starts) expect(start.prompt).not.toContain('you are the lead of this goal')
+
+    const row = await delivery(f, 1)
+    expect([row?.leadState, row?.stopReason, row?.leadProgress]).toEqual([null, null, null])
   })
 
   it('sends a partitioned goal whose smoke fails back to integration, then accepts it with RUN verified', async (): Promise<void> => {

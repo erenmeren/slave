@@ -85,6 +85,12 @@ export interface StartRunInput {
    * `tokenHash` it cannot match, which denies every tool call rather than allowing one.
    */
   readonly runToken?: string
+  /**
+   * Lead-flow plan A L4: the session this FIRST spawn continues (`--resume <id>`). A turn of a
+   * lead's session is a new run on an old session; `resume()` is for a paused run of the same row.
+   * Absent on every other run, whose argv is unchanged.
+   */
+  readonly resumeSessionId?: string
 }
 
 /**

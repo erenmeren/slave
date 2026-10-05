@@ -396,6 +396,17 @@ function titleFor(
       const packageKey = payload['packageKey']
       return `goal v${typeof version === 'number' ? String(version) : '?'}: ${typeof packageKey === 'string' ? packageKey : 'a package'} left a note`
     }
+    // Lead flow: the state word, and a report line (its words are the detail).
+    case 'workspace.lead_state': {
+      const version = payload['version']
+      const state = payload['state']
+      return `goal v${typeof version === 'number' ? String(version) : '?'}: ${typeof state === 'string' ? state.replaceAll('_', ' ') : 'state changed'}`
+    }
+    case 'workspace.lead_noted': {
+      const version = payload['version']
+      const kind = payload['kind']
+      return `goal v${typeof version === 'number' ? String(version) : '?'}: ${typeof kind === 'string' ? kind.replaceAll('_', ' ') : 'noted'}`
+    }
     // M48 R5/R7: a runbook adopted, or stopped. The payload's `title` is not a field this event
     // carries, so without a case of its own it would read as its own type name on the PLAN CHANGE
     // lane -- and this is the one entry that says how the project decided to work.
@@ -531,6 +542,10 @@ function detailFor(type: DomainEventType, payload: Record<string, unknown>): str
   }
   // Human cards plan B D9: a note's own words, as a JSX child like every other quoted detail.
   if (type === 'workspace.package_noted' && typeof payload['note'] === 'string' && payload['note'] !== '') return payload['note']
+  // Lead flow: a report line's own words, as a package note's are.
+  if (type === 'workspace.lead_noted' && typeof payload['detail'] === 'string' && payload['detail'] !== '') return payload['detail']
+  // Lead flow: the stop reason in words -- the field loop below would print `no_progress` raw.
+  if (type === 'workspace.lead_state') return typeof payload['reason'] === 'string' ? payload['reason'].replaceAll('_', ' ') : null
   for (const field of ['goal', 'body', 'reason', 'branch', 'summary'] as const) {
     const value = payload[field]
     if (typeof value === 'string' && value !== '') return value

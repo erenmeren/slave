@@ -74,6 +74,18 @@ export function resolveRuntime(levels: RuntimeLevels, workspaceDefault: Provider
 }
 
 /**
+ * Lead flow (C5): the runtime of a lead-flow system seat -- the lead, the verifier, the confirmer.
+ * Always Claude Code (the flow runs on nothing else, `setFlow` checks it), with the seat's own model
+ * when `set-flow --model` / `set-lead --model` named one and NONE otherwise: no `--model` flag, so
+ * the installed CLI's own default -- "the most capable available" as the operator set it up -- is
+ * used. Not through the chain above: a seat with no model would fall to the workspace default,
+ * which a second `ProviderConfiguration` row turns into a refusal.
+ */
+export function leadRuntime(seat: { readonly model: string | null }): ResolvedRuntime {
+  return { provider: 'claude_code', model: seat.model ?? undefined }
+}
+
+/**
  * The workspace's default runtime -- the chain's last link (M12 §5), read from
  * `ProviderConfiguration` (`schema.prisma`'s table, added at M3 and unread by any production code
  * until this function).

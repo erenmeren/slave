@@ -182,6 +182,12 @@ describe('buildChildEnv (M52 R3: an allow list, never an inheritance)', () => {
     const env = buildChildEnv({ ...base, brokerCliPath: '/opt/slaveofai/dist/cli.js' })
     expect(env['SLAVEOFAI_BROKER_CLI']).toBe('/opt/slaveofai/dist/cli.js')
   })
+
+  it('sets the print-mode background wait ceiling to 0 only when asked (lead flow B6)', () => {
+    const base = { gitIdentity: { name: 'a', email: 'a@b' }, pauseFlagPath: '/r/pause.flag', permissionsFilePath: '/r/permissions.json' }
+    expect(buildChildEnv(base)['CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS']).toBeUndefined()
+    expect(buildChildEnv({ ...base, keepAliveForSubordinates: true })['CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS']).toBe('0')
+  })
 })
 
 describe('the run directory\u2019s file channels (M52 R3/R4)', () => {

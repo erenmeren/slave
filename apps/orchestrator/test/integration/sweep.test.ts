@@ -525,6 +525,46 @@ describe('sweep and reconcileOrphans', () => {
     expect(cancelled).toEqual([run.id])
   })
 
+  it('applies neither the run timeout, nor the tool-call ceiling, nor the breaker to a lead turn (lead flow B4)', async (): Promise<void> => {
+    const run = await givenRun({ status: 'working', pid: process.pid, toolCalls: 500, startedAt: hoursAgo(2) })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { leadTurn: 'build', lastOutputAt: new Date() } })
+    noteSweepAt(deps.workspaceId, secondsAgo(1).getTime())
+
+    const report = await sweep(deps)
+
+    expect([report.timedOut, report.overToolCap, report.stalled]).toEqual([[], [], []])
+    expect(cancelled).toEqual([])
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect([after.status, after.breakerBeatAt]).toEqual(['working', null])
+  })
+
+  it('restarts a lead turn whose stream said nothing for 30 minutes, tool call open or not (lead flow B5)', async (): Promise<void> => {
+    const run = await givenRun({ status: 'working', pid: process.pid, startedAt: hoursAgo(2) })
+    await prisma.slaveRun.update({
+      where: { id: run.id },
+      data: { leadTurn: 'build', lastOutputAt: new Date(Date.now() - 31 * 60_000), toolCallOpenSince: new Date(Date.now() - 40 * 60_000) },
+    })
+    noteSweepAt(deps.workspaceId, secondsAgo(1).getTime())
+
+    const report = await sweep(deps)
+
+    expect(report.stalled).toEqual([run.id])
+    expect(cancelled).toEqual([run.id])
+    const tripped = await prisma.executionEvent.findFirstOrThrow({ where: { runId: run.id, type: 'guardrail_tripped' } })
+    expect(tripped.payload).toMatchObject({ guardrail: 'run_stalled' })
+    expect((tripped.payload as { detail: string }).detail).toMatch(/silent for 31 min \(a lead turn/)
+  })
+
+  it('leaves a lead turn silent for 29 minutes alone, where any other run with no tool call open is stalled at 15', async (): Promise<void> => {
+    const lead = await givenRun({ status: 'working', pid: process.pid })
+    await prisma.slaveRun.update({ where: { id: lead.id }, data: { leadTurn: 'rework', lastOutputAt: new Date(Date.now() - 29 * 60_000) } })
+    noteSweepAt(deps.workspaceId, secondsAgo(1).getTime())
+    expect((await sweep(deps)).stalled).toEqual([])
+
+    await prisma.slaveRun.update({ where: { id: lead.id }, data: { leadTurn: null } })
+    expect((await sweep(deps)).stalled).toEqual([lead.id])
+  })
+
   it('does not cancel the same run twice while it is dying', async (): Promise<void> => {
     await givenRun({ status: 'working', pid: process.pid, startedAt: hoursAgo(2) })
 

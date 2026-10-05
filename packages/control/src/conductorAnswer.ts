@@ -44,6 +44,15 @@ export async function lockGoalDecisions(tx: Prisma.TransactionClient, workspaceI
 }
 
 /**
+ * A shared decision's title as {@link writeGoalDecisionIn} stores it -- storable, defused, bounded.
+ * Its `decisionTitleKey` is the key a version's titles are unique by; exported so a caller that
+ * must tell a known title from a new one before writing (`recordLeadDecisions`) computes the same key.
+ */
+export function storedDecisionTitle(title: string): string {
+  return trimToFit(sanitisePersonText(storableText(title)).trim(), SHARED_DECISION_TITLE_MAX_CHARS)
+}
+
+/**
  * Spec C3, human cards H2.5 (plan B D6): one shared decision, written inside `tx` under the version's
  * advisory lock ({@link lockGoalDecisions}; re-taken as a no-op by a caller that holds it) -- the cap
  * re-counted, the title's key looked up (not caught as a unique violation, which would poison `tx`).
@@ -57,13 +66,13 @@ export async function writeGoalDecisionIn(
     readonly goalVersion: number
     readonly title: string
     readonly decision: string
-    readonly source: 'conductor_answer' | 'person'
+    readonly source: 'conductor_answer' | 'person' | 'lead'
     readonly questionId: string | null
     readonly decisionId: string | null
   },
 ): Promise<void> {
   const { workspaceId, goalVersion } = input
-  const title = trimToFit(sanitisePersonText(storableText(input.title)).trim(), SHARED_DECISION_TITLE_MAX_CHARS)
+  const title = storedDecisionTitle(input.title)
   const text = trimToFit(sanitisePersonText(storableText(input.decision)).trim(), SHARED_DECISION_TEXT_MAX_CHARS)
   if (title === '' || text === '') throw new GoalDecisionRefused('empty', 'a shared decision needs a title and a decision')
   await lockGoalDecisions(tx, workspaceId, goalVersion)

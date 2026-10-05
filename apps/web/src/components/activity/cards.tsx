@@ -967,6 +967,31 @@ function WorkspacePackageNotedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+/** Lead flow: the version's state word moved. A stop is the one a person acts on. */
+function WorkspaceLeadStateCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; state: string; reason: string | null }
+  const state = payload.state.replaceAll('_', ' ')
+  return (
+    <ActivityCard {...props}>
+      <Transition tone={payload.state === 'awaiting_decision' ? 'warn' : 'working'} label={`goal v${String(payload.version)}: ${state}`}>
+        {payload.reason !== null && <span data-testid="lead-stop-reason">{payload.reason.replaceAll('_', ' ')}</span>}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+/** Lead flow: a line for the report. Information, never a card to decide. */
+function WorkspaceLeadNotedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; kind: string; detail: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="working" label={`goal v${String(payload.version)}: ${payload.kind.replaceAll('_', ' ')}`}>
+        <span data-testid="lead-note">{payload.detail}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 const QUESTION_CLOSED_WORDS: Readonly<Record<string, string>> = {
   answered: 'answered',
   decided: 'decided on a card',
@@ -1867,6 +1892,8 @@ export const ACTIVITY_CARDS = {
   'workspace.package_handed_off': WorkspacePackageHandedOffCard,
   'slave.question_closed': SlaveQuestionClosedCard,
   'workspace.package_noted': WorkspacePackageNotedCard,
+  'workspace.lead_state': WorkspaceLeadStateCard,
+  'workspace.lead_noted': WorkspaceLeadNotedCard,
   'workspace.plan_created': WorkspacePlanCreatedCard,
   'workspace.replan_started': WorkspaceReplanStartedCard,
   'workspace.replanned': WorkspaceReplannedCard,

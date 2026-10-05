@@ -9,6 +9,7 @@ import {
   SKILL_TOOL,
   estimateCostUsd,
   hasSlaveReportBlock,
+  isBudgetCapReason,
   providerRunsSkills,
   type GuardrailKind,
   type SlaveId,
@@ -400,6 +401,24 @@ async function writeCheckpoint(input: {
  */
 const CURSOR_PAUSE_REASON =
   'paused by cancelling the process (cursor has no mid-run gate; canPauseMidRun: false)'
+
+/**
+ * Lead flow C2 (final review): what ONE lead turn spent. A resumed session's result line reports the
+ * SESSION's running total (M(a)), every earlier turn of it included, and every reader of
+ * `SlaveRun.costUsd` but the lead's own sums the rows -- so the row stores the reported total less
+ * what the session's earlier turns of this task already hold. An earlier turn that ended with no
+ * cost holds nothing, so its spend lands in this turn's figure, which is where it belongs. A turn
+ * with no session line, or the first of its session, is the reported total; never below zero.
+ * Rounded to the micro-dollar, as the spend sums are, so 24.00 - 19.20 is stored as 4.8.
+ */
+async function leadTurnOwnCostUsd(run: { readonly id: string; readonly taskId: string | null; readonly startedAt: Date }, sessionId: string | null, reportedUsd: number | null): Promise<number | null> {
+  if (reportedUsd === null || sessionId === null || run.taskId === null) return reportedUsd
+  const earlier = await prisma.slaveRun.aggregate({
+    where: { taskId: run.taskId, leadTurn: { not: null }, sessionId, id: { not: run.id }, startedAt: { lt: run.startedAt } },
+    _sum: { costUsd: true },
+  })
+  return Math.max(0, Math.round((reportedUsd - (earlier._sum.costUsd ?? 0)) * 1e6) / 1e6)
+}
 
 /** Plan A D9: a run whose denials may be excused -- an implementation run of a package task. */
 async function isPackageImplementationRun(runId: RunId): Promise<boolean> {
@@ -826,13 +845,15 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
           summary: event.summary,
           toolUseId: event.toolUseId,
           argsHash: event.argsHash,
+          ...(event.subagent === undefined ? {} : { subagent: event.subagent }),
+          ...(event.parentToolUseId === undefined ? {} : { parentToolUseId: event.parentToolUseId }),
         })
         break
       }
 
       case 'tool_result': {
-        // M51 R1. One row per completed call, and the four fields are the whole of it -- no
-        // content, no stdout, no diff. This is what makes "a tool call with no result yet is never
+        // M51 R1. One row per completed call, and the four fields (plus lead-flow C1's optional
+        // parent call id) are the whole of it -- no content, no stdout, no diff. This is what makes "a tool call with no result yet is never
         // a trip" decidable from the log months later, and what makes an api-error storm visible at
         // all.
         //
@@ -854,6 +875,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
           toolName: event.toolName !== '' ? event.toolName : (toolNames.get(event.toolUseId) ?? 'unknown'),
           outcome: event.outcome,
           errorClass: event.errorClass,
+          ...(event.parentToolUseId === undefined ? {} : { parentToolUseId: event.parentToolUseId }),
         })
         if (openToolUses.delete(event.toolUseId) && openToolUses.size === 0) {
           await prisma.slaveRun.updateMany({ where: { id: runId, endedAt: null }, data: { toolCallOpenSince: null } })
@@ -1412,7 +1434,11 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         `(${nonMatrixDeniedToolUseIds.join(', ')}) are recorded and do not fail it`,
     )
   }
-  const failed = outcome.isError || failingDenials.length > 0
+  // Lead flow C3 (final review): a lead turn that ended on its `--max-budget-usd` cap is read by its
+  // terminal reason, which is what M(c) measured -- `is_error` was not. It concludes `failed` so its
+  // conclusion takes the cap's path (the wrap-up, or the end of the lead), never "succeeded".
+  const leadCapped = startingRow.leadTurn !== null && isBudgetCapReason(outcome.terminalReason)
+  const failed = outcome.isError || failingDenials.length > 0 || leadCapped
 
   // M36 t2: a run that ended by asking another slave a question stops here instead of concluding.
   //
@@ -1426,7 +1452,10 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // one whose run reported an error or an unexcused denial, did not deliberately stop to ask: its
   // text may be half a message, and treating it as an ask would turn a failure into an
   // indefinite wait with no attempt charged. Those runs conclude below exactly as they always have.
-  if (!failed) {
+  // Lead flow (spec R-6, plan A L10): a lead is never parked on a question and answers nobody's --
+  // its conclusion (`concludeLeadTurn`) reads the block and tells it to decide. `leadTurn` is null
+  // on every other run, which takes the hook exactly as before.
+  if (!failed && startingRow.leadTurn === null) {
     // M36 t3: any questions this run answered, written BEFORE the ask hook below -- a slave that
     // answers somebody and then asks a question of its own does both, in that order. Nothing here
     // touches this run's outcome (see `answer.ts`): the state that moves is the ASKER's, on the
@@ -1467,12 +1496,15 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // already marked `platform` (see `sweep.ts`) and that then succeeded after all reads as the
   // success it is.
   const refused = failed && isProviderRefusal(outcome)
+  // Lead flow C2 (final review): a lead turn's row holds its OWN spend, not the session's running
+  // total the result line reports. Every other run stores what it reported, as before.
+  const costUsd = startingRow.leadTurn === null ? outcome.costUsd : await leadTurnOwnCostUsd(startingRow, sessionId, outcome.costUsd)
   const terminalNow = new Date()
   const concluded = await prisma.slaveRun.updateMany({
     where: { id: runId, endedAt: null },
     data: {
       status: failed ? 'failed' : 'succeeded',
-      costUsd: outcome.costUsd,
+      costUsd,
       terminalAt: terminalNow,
       endedAt: terminalNow,
       failureClass: failed ? (refused ? 'platform' : 'worker') : null,
@@ -1493,7 +1525,8 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         : ''
     await emit('run.failed', 'system', { reason: `${outcome.terminalReason}.${denied}`.trim() })
   } else {
-    await emit('run.succeeded', 'system', { numTurns: outcome.numTurns, costUsd: outcome.costUsd })
+    // The row's figure: for a lead turn, its own spend (the timeline must not repeat a session's total).
+    await emit('run.succeeded', 'system', { numTurns: outcome.numTurns, costUsd })
   }
 
   // M53 R3: the fourth and last of this file's terminal transitions. Below the `concluded.count ===

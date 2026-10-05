@@ -35,6 +35,7 @@
       "BashOutput",
       "KillShell",
       "Task",
+      "Agent",
       "TaskStop",
       "Skill",
       "Workflow",

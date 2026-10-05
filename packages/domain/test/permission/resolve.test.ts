@@ -26,6 +26,7 @@ describe('resolveGrants', () => {
       { tool: 'BashOutput', kind: 'run_commands' },
       { tool: 'KillShell', kind: 'run_commands' },
       { tool: 'Task', kind: 'run_commands' },
+      { tool: 'Agent', kind: 'run_commands' },
       { tool: 'TaskStop', kind: 'run_commands' },
       { tool: 'Skill', kind: 'run_commands' },
       { tool: 'Workflow', kind: 'run_commands' },
@@ -124,7 +125,7 @@ describe('resolveGrants', () => {
       'claude_code',
       'implementation',
     ).map((entry) => entry.tool)
-    expect(tools).toHaveLength(36)
+    expect(tools).toHaveLength(37)
   })
 
   it('ignores a row whose kind is not one of the six -- the column is typed, a hand-written row is not', () => {

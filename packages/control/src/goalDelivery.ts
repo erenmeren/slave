@@ -98,7 +98,7 @@ export async function goalEventSaid(
 export async function goalEventWith(
   tx: Prisma.TransactionClient,
   workspaceId: string,
-  type: 'workspace_verified' | 'workspace_goal_retried' | 'workspace_goal_needs_human' | 'task_rework' | 'workspace_smoke_run' | 'workspace_smoke_handed_off',
+  type: 'workspace_verified' | 'workspace_goal_retried' | 'workspace_goal_needs_human' | 'task_rework' | 'workspace_smoke_run' | 'workspace_smoke_handed_off' | 'workspace_lead_state',
   fields: Readonly<Record<string, string | number>>,
   options: { readonly taskId?: string; readonly since?: bigint } = {},
 ): Promise<boolean> {

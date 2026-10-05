@@ -36,3 +36,9 @@ Since then one digest has been re-pinned on purpose: Conductor Plan 3 (2026-09-2
 `scripts/lib/permissions.sh` so a package run is denied a write to a file another worker owns, and
 `hook-plane-sha256.json` carries that file's new digest. The other four scripts are still as `cff28066`
 left them. Any later hook-plane change re-pins its digest in the commit that makes it.
+
+Lead-flow Plan A (2026-10-04) re-pinned the eight Claude `permissions-*` files and `tools-by-kind.json`
+on purpose: the subordinate-session tool's current name joined `run_commands` beside its older name
+`Task` (spec B2). They were written by `writePermissionsFile` with the gate's fixed run id and token (the
+command is in `docs/superpowers/plans/2026-10-04-lead-flow-a.md`, Task 3); the eight Cursor files and the
+hook-plane digests did not change.

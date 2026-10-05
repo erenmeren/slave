@@ -586,6 +586,7 @@ describe('tick', () => {
       'BashOutput',
       'KillShell',
       'Task',
+      'Agent',
       'TaskStop',
       'Skill',
       'Workflow',

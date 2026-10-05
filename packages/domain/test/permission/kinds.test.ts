@@ -97,6 +97,7 @@ describe('TOOLS_BY_KIND', () => {
           'BashOutput',
           'KillShell',
           'Task',
+          'Agent',
           'TaskStop',
           'Skill',
           'Workflow',
@@ -128,6 +129,16 @@ describe('TOOLS_BY_KIND', () => {
     // that does not mean what it says (fix round 1, the C1 classification).
     expect(TOOL_VOCABULARY.claude_code['Task']).toBe('run_commands')
     expect(TOOL_VOCABULARY.claude_code['Skill']).toBe('run_commands')
+  })
+
+  it('governs the subordinate-session tool under both of its names, beside each other (lead flow B2)', () => {
+    // The installed CLI names the tool `Agent`; its older name `Task` is what the recorded fixture
+    // advertises. Ungoverned, the newer name is denied `ungoverned_tool` under `all-tools`.
+    expect(TOOL_VOCABULARY.claude_code['Agent']).toBe('run_commands')
+    expect(toolKindFor('claude_code', 'Agent')).toBe('run_commands')
+    const shell = TOOLS_BY_KIND.run_commands.claude_code
+    expect(shell.indexOf('Agent')).toBe(shell.indexOf('Task') + 1)
+    expect(toolKindFor('cursor', 'Agent')).toBeNull()
   })
 
   it('gives the two BROKER-ONLY kinds no vendor tool on either provider, which is why `deploy prod` could never be a tool deny', () => {

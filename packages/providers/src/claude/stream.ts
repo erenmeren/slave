@@ -1,3 +1,4 @@
+import { SUBORDINATE_TOOLS } from '@slave-of-ai/domain'
 import { z } from 'zod'
 import { hashToolInput } from '../hash.js'
 import { CLAUDE_SUMMARY_ARG_KEYS, isRecord, summaryFor } from '../runtime/summary.js'
@@ -102,11 +103,16 @@ const initSchema = z.object({
   type: z.literal('system'),
   subtype: z.literal('init'),
   session_id: z.string(),
+  // Lead-flow C1: declared so zod keeps it; read by `parentOf`, as on the assistant envelope.
+  parent_tool_use_id: z.unknown().optional(),
 })
 
 function parseInitLine(raw: unknown, line: string): RuntimeEvent {
   const result = initSchema.safeParse(raw)
   if (!result.success) return { kind: 'unparsable', line }
+  // Lead-flow C1: a subordinate session's init is never the session's own -- taken, it would
+  // replace the session id `--resume` needs.
+  if (parentOf(result.data.parent_tool_use_id) !== null) return { kind: 'ignored', line }
   return { kind: 'session_started', sessionId: result.data.session_id }
 }
 
@@ -293,12 +299,18 @@ const resultSchema = z.object({
     })
     .passthrough()
     .optional(),
+  // Lead-flow C1: declared so zod keeps it; read by `parentOf`, as on the assistant envelope.
+  parent_tool_use_id: z.unknown().optional(),
 })
 
 function parseResultLine(raw: unknown, line: string): RuntimeEvent {
   const result = resultSchema.safeParse(raw)
   if (!result.success) return { kind: 'unparsable', line }
   const data = result.data
+  // Lead-flow C1: a subordinate session's result is never the session's own -- taken, it would
+  // replace the session's outcome. The rule below that a `result` line always terminates is about
+  // the session's own line.
+  if (parentOf(data.parent_tool_use_id) !== null) return { kind: 'ignored', line }
 
   // A `result` line must always produce `terminated` -- the alternative is
   // the orchestrator waiting on a process that has already exited, and no
@@ -385,6 +397,11 @@ const assistantEnvelopeSchema = z.object({
   message: z.object({
     content: z.array(z.unknown()),
   }),
+  // Lead-flow C1: set on a line a subordinate session wrote; null or absent otherwise. `unknown`,
+  // not `string | null`: a value of another shape must not make the whole line unparsable (before
+  // this field was declared, zod dropped the key); `parentOf` reads anything but a non-empty
+  // string as none.
+  parent_tool_use_id: z.unknown().optional(),
 })
 
 const toolUseContentSchema = z.object({
@@ -404,6 +421,24 @@ const textContentSchema = z.object({
   text: z.string(),
 })
 
+/**
+ * Lead-flow plan A L16 / C1: which session definition a subordinate call names, or null -- for the
+ * subordinate tool only, only a non-blank string, and only on a call the session made itself
+ * (`parent` null): a subordinate that starts a session of its own did not pick from the roster.
+ * It is the one argument of that call the log keeps beside the summary: it says which roster
+ * person did the work.
+ */
+/** Lead-flow C1: the line's parent call id, or null for anything but a non-empty string. */
+function parentOf(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null
+}
+
+function subordinateOf(toolName: string, input: unknown, parent: string | null): string | null {
+  if (parent !== null || !SUBORDINATE_TOOLS.includes(toolName) || !isRecord(input)) return null
+  const named = input['subagent_type']
+  return typeof named === 'string' && named.trim() !== '' ? named.trim().slice(0, 200) : null
+}
+
 function parseAssistantLine(raw: unknown, line: string): RuntimeEvent {
   const envelope = assistantEnvelopeSchema.safeParse(raw)
   if (!envelope.success) return { kind: 'unparsable', line }
@@ -422,6 +457,10 @@ function parseAssistantLine(raw: unknown, line: string): RuntimeEvent {
   if (toolUseBlock !== undefined) {
     const result = toolUseContentSchema.safeParse(toolUseBlock)
     if (!result.success) return { kind: 'unparsable', line }
+    // ONE reading of the parent for both fields below, so a call is never nested for one and
+    // top-level for the other.
+    const parent = parentOf(envelope.data.parent_tool_use_id)
+    const subagent = subordinateOf(result.data.name, result.data.input, parent)
     return {
       kind: 'tool_call',
       toolUseId: result.data.id,
@@ -431,6 +470,8 @@ function parseAssistantLine(raw: unknown, line: string): RuntimeEvent {
       // `summary` is derived from it just above and the input is then dropped, so the pump could
       // never compute this itself.
       argsHash: hashToolInput(result.data.input),
+      ...(subagent === null ? {} : { subagent }),
+      ...(parent === null ? {} : { parentToolUseId: parent.slice(0, 200) }),
     }
   }
 
@@ -455,6 +496,8 @@ const userEnvelopeSchema = z.object({
   message: z.object({
     content: z.array(z.unknown()),
   }),
+  // Lead-flow C1: read by `parentOf`, as on the assistant envelope.
+  parent_tool_use_id: z.unknown().optional(),
 })
 
 const toolResultContentSchema = z.object({
@@ -475,7 +518,7 @@ type ToolResultEvent = Extract<RuntimeEvent, { readonly kind: 'tool_result' }>
  * The ONE place a block becomes an event, shared by {@link parseStreamLine}'s `user` arm and by
  * {@link parseStreamResults}, so the two can never come to disagree about the same block.
  */
-function toolResultEventOf(block: unknown): ToolResultEvent | null {
+function toolResultEventOf(block: unknown, parent: string | null): ToolResultEvent | null {
   const result = toolResultContentSchema.safeParse(block)
   if (!result.success) return null
   // The runtime's OWN boolean, never an inference from the text: a result whose body happens to
@@ -492,6 +535,7 @@ function toolResultEventOf(block: unknown): ToolResultEvent | null {
     toolName: '',
     outcome: failed ? 'error' : 'ok',
     errorClass: failed ? classifyToolError(typeof result.data.content === 'string' ? result.data.content : null) : null,
+    ...(parent === null ? {} : { parentToolUseId: parent.slice(0, 200) }),
   }
 }
 
@@ -515,7 +559,7 @@ function parseUserLine(raw: unknown, line: string): RuntimeEvent {
   if (!envelope.success) return { kind: 'ignored', line }
   const block = envelope.data.message.content.find(isToolResultBlock)
   if (block === undefined) return { kind: 'ignored', line }
-  return toolResultEventOf(block) ?? { kind: 'unparsable', line }
+  return toolResultEventOf(block, parentOf(envelope.data.parent_tool_use_id)) ?? { kind: 'unparsable', line }
 }
 
 /**
@@ -547,10 +591,11 @@ export function parseStreamResults(line: string): readonly ToolResultEvent[] {
   }
   const envelope = userEnvelopeSchema.safeParse(raw)
   if (!envelope.success) return []
+  const parent = parentOf(envelope.data.parent_tool_use_id)
   const events: ToolResultEvent[] = []
   for (const block of envelope.data.message.content) {
     if (!isToolResultBlock(block)) continue
-    const event = toolResultEventOf(block)
+    const event = toolResultEventOf(block, parent)
     if (event !== null) events.push(event)
   }
   return events

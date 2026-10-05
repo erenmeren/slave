@@ -10,6 +10,8 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { runTokenHash, type AdapterRegistry } from '@slave-of-ai/providers'
+import { refreshLeadProofSpawn } from './lead/proofRun.js'
+import { refreshLeadSpawn } from './lead/turn.js'
 import { permissionOwnership, verificationOwnership } from './ownership.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
@@ -121,6 +123,12 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
           ? undefined
           : await permissionOwnership(run.taskId, checkpoint.worktreePath),
   })
+
+  // Lead flow (plan A L6): a paused lead turn continues under what is left of its budget leg, and a
+  // paused verification run of a lead-flow version under what the goal has left (task 9 review).
+  // `leadTurn` is null on every other run; the second call is a no-op outside the lead flow.
+  if (run.leadTurn !== null) await refreshLeadSpawn(run.id, runDir)
+  else if (run.kind === 'verification') await refreshLeadProofSpawn(run.id, runDir)
 
   // The checkpoint is the whole point of `resume`'s signature: this process may never have called
   // `start()` for that run, so the settings file, the hook path and the git identity exist nowhere

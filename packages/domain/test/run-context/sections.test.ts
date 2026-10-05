@@ -353,3 +353,11 @@ describe('runContextManifestSchema -- verification_goal and verification_protoco
     }
   })
 })
+
+describe('runContextManifestSchema -- the lead kind', () => {
+  it('reads a lead manifest and refuses a brief source missing a field', () => {
+    const source = { kind: 'lead_brief', goalVersion: 1, turn: 'rework', resumed: true, requirements: 3, roster: 2 }
+    expect(runContextManifestSchema.safeParse({ kind: 'lead', sections: [source] }).success).toBe(true)
+    expect(runContextManifestSchema.safeParse({ kind: 'lead', sections: [{ kind: 'lead_brief', goalVersion: 1 }] }).success).toBe(false)
+  })
+})

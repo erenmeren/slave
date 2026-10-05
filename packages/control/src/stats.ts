@@ -182,10 +182,15 @@ export async function workspaceStats(
     consecutiveFailures += 1
   }
 
+  // Lead flow (plan A L6/L9): the budget and the stop rules belong to the goal version there. A
+  // workspace halt for either would return from the tick before the goal pass, which is what ends a
+  // lead-flow version and raises its one card -- so neither is reported for such a project.
+  const leadFlow = workspace.flow === 'lead'
+
   return {
     limits: {
       maxConcurrentRuns: workspace.maxConcurrentRuns,
-      budgetUsd: workspace.budgetUsd,
+      budgetUsd: leadFlow ? null : workspace.budgetUsd,
       runTimeoutMs: workspace.runTimeoutMs,
       maxToolCallsPerRun: workspace.maxToolCallsPerRun,
       maxAttempts: workspace.maxAttempts,
@@ -201,7 +206,7 @@ export async function workspaceStats(
       activeRuns,
       globalActiveRuns,
       spentUsd: spend.spentUsd,
-      consecutiveFailures,
+      consecutiveFailures: leadFlow ? 0 : consecutiveFailures,
       // Not hardcoded: a pause gate failure sets `Workspace.haltedReason` (spec §13.1), and M8's
       // human-facing emergency stop is deliberately built on this same column rather than a second
       // one. Reading it live is what lets a persistent halt survive a daemon restart -- there is no

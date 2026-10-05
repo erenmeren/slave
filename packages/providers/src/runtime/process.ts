@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /**
@@ -132,6 +132,63 @@ export function verifyDirIfPresent(runDir: string): { readonly verifyDir?: strin
 }
 
 /**
+ * Lead-flow plan A (L4/L6/L16): what a spawn carries beyond the contract every run has -- the
+ * roster as session definitions (`--agents`), the leg's budget cap (`--max-budget-usd`), and
+ * whether the child must wait for its background subordinates before ending (spec B6: a session is
+ * never ended while its subordinates work).
+ */
+export interface SpawnExtras {
+  /** The `--agents` value: the roster as session definitions, one JSON object. */
+  readonly sessionDefinitions?: string
+  readonly maxBudgetUsd?: number
+  readonly keepAliveForSubordinates?: boolean
+}
+
+/** `<runDir>/spawn-extras.json` -- the ONE definition of the name, for `permissionsFilePathFor`'s reason. */
+export function spawnExtrasPathFor(runDir: string): string {
+  return join(runDir, 'spawn-extras.json')
+}
+
+/** Written by the orchestrator before a spawn; 0600 like every file of a run directory. */
+export function writeSpawnExtras(runDir: string, extras: SpawnExtras): void {
+  writeFileSync(spawnExtrasPathFor(runDir), JSON.stringify(extras), { mode: 0o600 })
+}
+
+/** Whether `value` is text that parses to one plain JSON object -- the only shape `--agents` takes. */
+function isJsonObjectText(value: unknown): value is string {
+  if (typeof value !== 'string' || value === '') return false
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The run's extras, or `{}`: the file's presence is the declaration (the `verifyDirIfPresent`
+ * idiom), so a resume -- which has only the run directory -- spawns with what the start did. A
+ * missing file, an unreadable one, and any field of the wrong shape (session definitions that are
+ * not one JSON object among them) all read as absent: an extras file may never be the reason a run
+ * cannot spawn.
+ */
+export function readSpawnExtras(runDir: string): SpawnExtras {
+  let raw: unknown
+  try {
+    raw = JSON.parse(readFileSync(spawnExtrasPathFor(runDir), 'utf8'))
+  } catch {
+    return {}
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {}
+  const { sessionDefinitions, maxBudgetUsd, keepAliveForSubordinates } = raw as Record<string, unknown>
+  return {
+    ...(isJsonObjectText(sessionDefinitions) ? { sessionDefinitions } : {}),
+    ...(typeof maxBudgetUsd === 'number' && Number.isFinite(maxBudgetUsd) && maxBudgetUsd > 0 ? { maxBudgetUsd } : {}),
+    ...(keepAliveForSubordinates === true ? { keepAliveForSubordinates: true } : {}),
+  }
+}
+
+/**
  * The ONLY environment variables a worker's child inherits from this process (M52 R3).
  *
  * An explicit NAME list -- never a prefix rule, never a denylist. The denylist was tried in the
@@ -251,6 +308,13 @@ export function buildChildEnv(input: {
   readonly brokerCliPath?: string
   /** Conductor Plan 4b: `SLAVEOFAI_VERIFY_DIR`, absent unless given, for `toolResultsPath`'s reason. */
   readonly verifyDir?: string
+  /**
+   * Lead-flow spec B6: `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`. A print-mode session otherwise
+   * ends 600 s after its turn while a background subordinate still works (measured 2026-10-04).
+   * Set here by name, NOT added to `CHILD_ENV_ALLOW`: that list is what a child inherits from this
+   * process, and this is a value this process chooses for one kind of run.
+   */
+  readonly keepAliveForSubordinates?: boolean
 }): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const name of CHILD_ENV_ALLOW) {
@@ -272,6 +336,7 @@ export function buildChildEnv(input: {
     ...(input.brokerChannelPath === undefined ? {} : { SLAVEOFAI_BROKER_CHANNEL: input.brokerChannelPath }),
     ...(input.brokerCliPath === undefined ? {} : { SLAVEOFAI_BROKER_CLI: input.brokerCliPath }),
     ...(input.verifyDir === undefined ? {} : { SLAVEOFAI_VERIFY_DIR: input.verifyDir }),
+    ...(input.keepAliveForSubordinates === true ? { CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: '0' } : {}),
   }
 }
 

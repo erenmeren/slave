@@ -1,3 +1,4 @@
+import { LEAD_RULES } from '../lead/rules.js'
 import { REPLAN_INSTRUCTIONS } from '../planning/delta.js'
 import type { Manifest, Section, SectionKind } from './sections.js'
 
@@ -55,6 +56,10 @@ export const SECTION_ORDER: Readonly<Record<Manifest['kind'], readonly SectionKi
   // `package`/`report_protocol` follow on the implementation order. `VERIFICATION_INSTRUCTIONS`
   // is the trailer, appended after both by `renderRunContext` below.
   verification: ['profile', 'verification_goal', 'verification_protocol'],
+  // Lead-flow spec B3: the lead's brief and nothing else of the worker's order -- no roster of
+  // seats, no inbox, no ask protocol (spec R-6), no package contract, no report protocol.
+  // `LEAD_RULES` is the trailer.
+  lead: ['profile', 'lead_brief'],
 }
 
 // The markers and their defusing live in `./markers.js` (M48 t1) and are re-exported here, so
@@ -204,8 +209,8 @@ export const RUN_PROMPT_MAX_BYTES = 110_000
  * review and planning kinds append their fixed instruction text ({@link REVIEW_VERDICT_INSTRUCTIONS},
  * {@link PLANNING_GRAPH_INSTRUCTIONS}, or `REPLAN_INSTRUCTIONS` when the planning run carries a
  * `replan` section) after their sections, the verification kind appends
- * {@link VERIFICATION_INSTRUCTIONS}, and the implementation kind appends
- * {@link IMPLEMENTATION_WORK_RULES}; that text is not itself a section and carries no manifest
+ * {@link VERIFICATION_INSTRUCTIONS}, the lead kind appends `LEAD_RULES` (lead-flow spec B3), and
+ * the implementation kind appends {@link IMPLEMENTATION_WORK_RULES}; that text is not itself a section and carries no manifest
  * entry -- it is fixed and static, not something a debugger needs a provenance record for.
  */
 export function renderRunContext(
@@ -238,7 +243,9 @@ export function renderRunContext(
           : PLANNING_GRAPH_INSTRUCTIONS
         : kind === 'verification'
           ? VERIFICATION_INSTRUCTIONS
-          : IMPLEMENTATION_WORK_RULES
+          : kind === 'lead'
+            ? LEAD_RULES
+            : IMPLEMENTATION_WORK_RULES
 
   const parts = present.map((section) => section.text)
   const prompt = [...parts, trailer].join('\n\n')

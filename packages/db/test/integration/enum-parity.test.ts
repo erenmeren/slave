@@ -10,6 +10,8 @@ import {
   EXTERNAL_SOURCES,
   INTAKE_ROLES,
   INTAKE_STATUSES,
+  LEAD_STATES,
+  LEAD_TURNS,
   MEMORY_SCOPES,
   MEMORY_SOURCE_KINDS,
   MEMORY_STATUSES,
@@ -22,6 +24,7 @@ import {
   SKILL_GRANT_MODES,
   SLAVE_LIFECYCLES,
   TIERS,
+  WORKSPACE_FLOWS,
   executionEventSchema,
 } from '@slave-of-ai/domain'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -223,5 +226,11 @@ describe('database enums match the domain unions', () => {
 
   it('SmokeOutcome matches SMOKE_OUTCOMES, member for member', async () => {
     expect(await enumValues('SmokeOutcome')).toEqual([...SMOKE_OUTCOMES].sort())
+  })
+
+  it('WorkspaceFlow, LeadState and LeadTurn match their domain lists, member for member', async () => {
+    expect(await enumValues('WorkspaceFlow')).toEqual([...WORKSPACE_FLOWS].sort())
+    expect(await enumValues('LeadState')).toEqual([...LEAD_STATES].sort())
+    expect(await enumValues('LeadTurn')).toEqual([...LEAD_TURNS].sort())
   })
 })

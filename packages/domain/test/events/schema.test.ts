@@ -1287,6 +1287,13 @@ describe('run.tool_result (the 54th type)', () => {
     ).toBe(true)
   })
 
+  it('takes the parent call a subordinate session\u2019s result was made under (lead flow C1), bounded like run.tool_call\u2019s', () => {
+    const payload = { toolUseId: 't', toolName: 'Bash', outcome: 'ok' as const, errorClass: null }
+    expect(parseExecutionEvent({ ...base, payload: { ...payload, parentToolUseId: 'tu_parent' } }).ok).toBe(true)
+    expect(parseExecutionEvent({ ...base, payload: { ...payload, parentToolUseId: '' } }).ok).toBe(false)
+    expect(parseExecutionEvent({ ...base, payload: { ...payload, parentToolUseId: 'x'.repeat(201) } }).ok).toBe(false)
+  })
+
   it('is strict -- the result TEXT must never find a way in', () => {
     expect(
       parseExecutionEvent({

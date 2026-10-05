@@ -447,6 +447,22 @@ describe('pumpRun', () => {
     expect(payload.summary).not.toBe('toolu_01UCoRZm85rNxfupNQPToZXL')
   })
 
+  it('carries the session definition a subordinate call named on run.tool_call, and the parent call on a subordinate\'s own call (lead flow L16, C1)', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Agent', summary: 'subordinate: build the API', argsHash: testArgsHash('a'), subagent: 'backend-developer' },
+        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Bash', summary: 'Bash ls', argsHash: testArgsHash('b'), parentToolUseId: 'tu_1' },
+        { kind: 'terminated', outcome: okOutcome },
+      ]),
+    })
+    const rows = await prisma.executionEvent.findMany({ where: { runId: ids.runId, type: 'run_tool_call' }, orderBy: { seq: 'asc' }, select: { payload: true } })
+    expect(rows.map((row) => (row.payload as { subagent?: string }).subagent)).toEqual(['backend-developer', undefined])
+    // C1: the subordinate's own call carries the call that started its session.
+    expect(rows.map((row) => (row.payload as { parentToolUseId?: string }).parentToolUseId)).toEqual([undefined, 'tu_1'])
+  })
+
   it('carries the slave text through to run.output, split across rows rather than cut short', async (): Promise<void> => {
     const long = 'x'.repeat(OUTPUT_CAP + 100)
 

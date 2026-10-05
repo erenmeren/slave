@@ -103,6 +103,8 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'workspace.package_handed_off': { version: 1, handOffId: 'h1', source: 'report', fromPackage: 'report', toPackage: 'integration', path: null, package: 'integration', delivery: 'prompt', change: 'expose GET /api/v1/reports' },
   'slave.question_closed': { messageId: 'm1', reason: 'timed_out', by: 'system', decisionId: null, note: 'No answer came in 2 hours.' },
   'workspace.package_noted': { version: 1, packageKey: 'identity-access', runId: 'r1', note: 'VENDOR_LICENSE_PUBLIC_KEYS is a placeholder.' },
+  'workspace.lead_state': { version: 1, state: 'awaiting_decision', reason: 'no_progress' },
+  'workspace.lead_noted': { version: 1, kind: 'turn', detail: 'turn 2 (rework): the same session was resumed', runId: 'r1' },
   'workspace.smoke_handed_off': { version: 1, round: 1, attemptId: 'a1', fromPackage: 'integration', toPackage: 'skeleton', path: 'backend/package.json', change: 'add a "start" script' },
   'workspace.plan_created': {
     goal: 'Ship the checkout flow',

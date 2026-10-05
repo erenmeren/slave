@@ -6,6 +6,8 @@ import { appendEvent } from '@slave-of-ai/events'
 import { mergeOrAbort, primaryCheckoutReady } from './gitMerge.js'
 import { integrationWorktreePath } from './goalBranch.js'
 import { passedSmokeAtTip, settleStrandedSmoke, smokeErrorsInRound, startSmoke } from './smoke.js'
+import { leadTakeBaseIn } from './lead/base.js'
+import { enforceLeadLimits, syncLeadStates } from './lead/pass.js'
 import type { TickDeps } from './tick.js'
 import { dispatchVerification, lastVerificationFailure, settleStrandedClaim } from './verification.js'
 import { gitIn } from './worktree.js'
@@ -27,7 +29,7 @@ export interface GoalPassOptions {
  */
 export async function runGoalPass(deps: TickDeps, options: GoalPassOptions): Promise<void> {
   const workspaceId = deps.workspaceId
-  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId }, select: { autoMerge: true, repoPath: true, baseBranch: true } })
+  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId }, select: { autoMerge: true, repoPath: true, baseBranch: true, flow: true } })
   // A hand merge confirmed from the CLI leaves the integration worktree behind (`packages/control`
   // does not know where worktrees live); it is spent once the branch is in the base branch.
   //
@@ -90,16 +92,30 @@ export async function runGoalPass(deps: TickDeps, options: GoalPassOptions): Pro
       console.error(`[goal] goal delivery ${id} could not be moved on this pass:`, error)
     }
   }
+  // Lead flow (plan A L14): the state word follows whatever this pass moved. Wrapped: a failure here
+  // must not fail the pass.
+  await syncLeadStates(workspaceId).catch((error: unknown) => {
+    console.error(`[goal] the lead state of workspace ${workspaceId} could not be synced:`, error)
+  })
 }
 
 /** One open delivery's step of {@link runGoalPass}. */
 async function advanceDelivery(
   deps: TickDeps,
   options: GoalPassOptions,
-  workspace: { readonly autoMerge: boolean; readonly repoPath: string; readonly baseBranch: string },
+  workspace: { readonly autoMerge: boolean; readonly repoPath: string; readonly baseBranch: string; readonly flow: 'packages' | 'lead' },
   id: string,
 ): Promise<void> {
   const workspaceId = deps.workspaceId
+  // Lead flow (spec B4, plan A L6/L7): the goal's own limits come first -- an ended lead is settled
+  // or cancelled before anything below reads the version. Logged, not thrown, like the two steps below.
+  if (workspace.flow === 'lead') {
+    try {
+      await enforceLeadLimits(deps, id)
+    } catch (error) {
+      console.error(`[goal] goal delivery ${id}: enforceLeadLimits failed on this pass --`, error)
+    }
+  }
   // Supervisor-as-conductor plan A D4: a hand-off to a finished package reopens it before this pass
   // can start a smoke on a tip that lacks it; under the delivery's lock, and only while `integrating`
   // with no claim. An accepted version's undelivered hand-offs expire here. It is also where a
@@ -171,6 +187,10 @@ async function advanceDelivery(
   // verified again, whether or not this pass would merge it -- never handed to a person to merge.
   if (await withDeliveryLock(delivery.id, async (tx) => reopenIfMovedInLock(tx, delivery.id))) return
   if (workspace.autoMerge) {
+    // Lead flow (spec D3, plan A L15): a base branch that moved is taken into the work branch first
+    // -- by a clean merge, or by a turn for the lead -- and the merged tree is verified again.
+    // `unmoved` leaves the merge step below to decide, as for every other workspace.
+    if (workspace.flow === 'lead' && (await leadTakeBaseIn(delivery.id)) !== 'unmoved') return
     await mergeGoalIntoBase(delivery.id)
   } else {
     // Final wave I2: the version waits for the person, and so does every later version (D6) --
@@ -389,6 +409,15 @@ export async function mergeGoalIntoBase(deliveryId: string): Promise<'merged' | 
     // checked is ever landed. A branch that moved since (or a row accepted before verification
     // existed) goes back to `integrating` and is verified again -- a wait, never a hand merge.
     if (delivery.verifiedCommit === null || integrationTip !== delivery.verifiedCommit) {
+      // A lead-flow version accepted as it is is not sent round again (final review): only what the
+      // person accepted may land, so the move waits for their hand merge, said once.
+      if (isAcceptedAsIs(delivery) && delivery.verifiedCommit !== null) {
+        await tripOnce(
+          delivery.workspaceId,
+          `goal v${String(version)} was accepted as it is at ${delivery.verifiedCommit.slice(0, 12)}, and ${delivery.integrationBranch} has moved since, so it is not merged automatically. ${handMerge}`,
+        )
+        return 'waiting'
+      }
       await reopenIfMovedInLock(tx, deliveryId)
       return 'waiting'
     }
@@ -432,9 +461,16 @@ export async function mergeGoalIntoBase(deliveryId: string): Promise<'merged' | 
  * system retry; its `(version, round)` is unique, because a version is accepted in a later round
  * than any retry before it), then the guarded move. Returns whether it moved.
  */
+const isAcceptedAsIs = (delivery: { readonly leadState: string | null; readonly stopReason: string | null }): boolean =>
+  delivery.leadState !== null && delivery.stopReason === 'accepted_as_is'
+
 async function reopenIfMovedInLock(tx: Prisma.TransactionClient, deliveryId: string): Promise<boolean> {
   const delivery = await tx.goalDelivery.findUniqueOrThrow({ where: { id: deliveryId }, include: { workspace: { select: { repoPath: true } } } })
   if (delivery.status !== 'accepted' || delivery.mergedAt !== null || delivery.mergeError !== null) return false
+  // Lead flow (final review): a version a person accepted as it is was not proven, and its lead's
+  // task was cancelled -- sent round again it would wait on a lead that never works. What the person
+  // accepted (`verifiedCommit`) stands, and a branch that moved since is left to the hand merge.
+  if (isAcceptedAsIs(delivery)) return false
   const tip = await integrationTipOrTrip(delivery.workspace.repoPath, delivery)
   // A branch that is gone is not a branch that moved: there is nothing to verify again.
   if (tip === null) return false

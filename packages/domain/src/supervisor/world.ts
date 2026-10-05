@@ -566,7 +566,7 @@ export interface SupervisorConductorPlan {
   readonly decisions: readonly {
     readonly title: string
     readonly decision: string
-    readonly source: 'conductor_plan' | 'conductor_answer' | 'person'
+    readonly source: 'conductor_plan' | 'conductor_answer' | 'person' | 'lead'
   }[]
   /**
    * The newest `CONDUCTOR_EARLIER_ANSWERS_MAX` answers to conductor questions of this version, oldest

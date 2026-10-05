@@ -103,8 +103,8 @@ export const PERMISSION_LABEL: Record<PermissionKind, string> = {
  *       `ToolSearch`, `TaskOutput`, `ListAgents`, `Monitor`, `LSP` and the three MCP-resource
  *       readers, beside `Read`/`Glob`/`Grep`/`NotebookRead`/`TodoWrite`.
  *   (b) **A tool that can DO work, or spawn work that can, is `run_commands`.** It is the same power
- *       `Bash` is and it gets the same grant: `Task` and `Skill` (a subagent has a shell; a skill is
- *       instructions about what to run) -- both MOVED out of `read_repo`, where the first cut put
+ *       `Bash` is and it gets the same grant: `Task` (its current name `Agent`, lead-flow plan A) and
+ *       `Skill` (a subagent has a shell; a skill is instructions about what to run) -- both MOVED out of `read_repo`, where the first cut put
  *       them -- plus `Workflow`, `SendMessage`, `TaskStop`, the `Cron*` family, `ScheduleWakeup`,
  *       `RemoteTrigger`, `PushNotification`, `ReportFindings`, `DesignSync`, and the worktree and
  *       plan-mode transitions. The `Cron*` family travels together for `BashOutput`/`KillShell`'s

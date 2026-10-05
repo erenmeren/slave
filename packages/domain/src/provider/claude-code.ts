@@ -69,6 +69,10 @@ const CLAUDE_CODE_TOOLS: Readonly<Record<PermissionKind, readonly string[]>> = {
     'BashOutput',
     'KillShell',
     'Task',
+    // Lead-flow spec B2: the installed CLI names its subordinate-session tool `Agent`; `Task` is
+    // the same tool's older name, kept for the CLI versions that still advertise it. Rule (b), as
+    // for `Task`: it starts something that can run a command.
+    'Agent',
     'TaskStop',
     'Skill',
     'Workflow',

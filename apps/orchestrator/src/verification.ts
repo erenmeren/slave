@@ -40,11 +40,12 @@ import {
   type VerificationItem,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
-import { checkpointRunFiles, runTokenHash, verifyDirPathFor, type RunHandle, type SlaveRuntimeAdapter } from '@slave-of-ai/providers'
+import { checkpointRunFiles, runTokenHash, verifyDirPathFor, writeSpawnExtras, type RunHandle, type SlaveRuntimeAdapter } from '@slave-of-ai/providers'
 import { tripConductor } from './conductor.js'
 import { acceptInLock, needsHumanInLock, type NeedsHumanCause } from './goal.js'
+import { concludeLeadVerification, leadProofScope } from './lead/proofRun.js'
 import { workerLeads } from './leads.js'
-import { resolveRuntime, workspaceDefaultProvider } from './model.js'
+import { leadRuntime, resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { verificationOwnership } from './ownership.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
@@ -340,6 +341,14 @@ async function eligibleVerifier(
   return live > 0 ? 'busy' : seat
 }
 
+/** Lead flow (spec P3): a named seat -- the confirmer -- or `'busy'` while it holds a live run. */
+async function namedSeat(seatId: string): Promise<VerifierSeat | 'busy' | null> {
+  const seat = await prisma.slave.findUnique({ where: { id: seatId }, include: seatInclude })
+  if (seat === null) return null
+  const live = await prisma.slaveRun.count({ where: { slaveId: seat.id, status: { in: [...NON_TERMINAL_RUN_STATUSES] } } })
+  return live > 0 ? 'busy' : seat
+}
+
 /**
  * Starts the verification run of a goal version, or does nothing and returns `null`. A version
  * that needs a smoke (`smokeRequired`) is verified only with the passing attempt handed in as
@@ -372,8 +381,15 @@ export async function dispatchVerification(
     if (tipNow !== smoked.tip) return null
   }
 
+  // Lead flow (spec P3/P5, B4; plan A L6/L11): which keys this run checks, whose failures it
+  // confirms, the seat that takes it and what it may spend. `hold`: no verification can be paid, and
+  // the version has been stopped. Null for every other workspace, whose dispatch is unchanged.
+  const scope = workspace.flow === 'lead' ? await leadProofScope(delivery, workspace.budgetUsd) : null
+  if (scope?.kind === 'hold') return null
+  const lead = scope?.kind === 'run' ? scope : null
+
   const excluded = await implementersOf(workspace.id, delivery.goalVersion)
-  const seat = await eligibleVerifier(workspace.id, delivery, excluded)
+  const seat = lead?.seatId != null ? await namedSeat(lead.seatId) : await eligibleVerifier(workspace.id, delivery, excluded)
   if (seat === 'busy' || seat === null) return null
 
   // M27 §8 (ruling R15): `null` is an archived workspace -- nothing attempted, nothing counted.
@@ -382,6 +398,7 @@ export async function dispatchVerification(
     kind: 'verification',
     status: 'starting',
     goalDeliveryId: delivery.id,
+    ...(lead === null ? {} : { verificationKeys: [...lead.keys], confirmsRunId: lead.confirmsRunId }),
   })
   if (run === null) return null
   const runId = brandRunId(run.id)
@@ -397,7 +414,9 @@ export async function dispatchVerification(
     // Skeleton spec S7: a smoke check holding the version (`activeSmokeId`) is as much a claim as a run.
     if (now.status !== delivery.status || now.round !== delivery.round || now.activeRunId !== null || now.activeSmokeId !== null) return { count: 0 }
     // Task 5 review I1: as in `startSmoke` -- a hand-off reopen since the pass's unlocked check wins.
-    if (newRound && !(await everyPackageIntegrated(now.workspaceId, now.goalVersion, tx))) return { count: 0 }
+    // Lead flow: the same round again (a confirmation) is checked too -- no proof run of a lead-flow
+    // version starts while the lead's task is not `done` and integrated.
+    if ((newRound || lead !== null) && !(await everyPackageIntegrated(now.workspaceId, now.goalVersion, tx))) return { count: 0 }
     return tx.goalDelivery.updateMany({
       where: { id: delivery.id, status: delivery.status, activeRunId: null, activeSmokeId: null },
       data: newRound ? { status: 'verifying', activeRunId: run.id, round, roundRunFailures: 0 } : { activeRunId: run.id },
@@ -419,14 +438,19 @@ export async function dispatchVerification(
 
   try {
     const workspaceDefault = await workspaceDefaultProvider(workspace.id)
-    const resolved = resolveRuntime(
-      {
-        model: seat.model,
-        provider: seat.provider,
-        person: { model: seat.person.model, provider: seat.person.provider, template: seat.person.template },
-      },
-      workspaceDefault,
-    )
+    // Lead flow (C5): the verifier and the confirmer run on Claude Code with their seat's model or
+    // none -- no `--model`, the installed CLI's own default.
+    const resolved =
+      lead !== null
+        ? leadRuntime(seat)
+        : resolveRuntime(
+            {
+              model: seat.model,
+              provider: seat.provider,
+              person: { model: seat.person.model, provider: seat.person.provider, template: seat.person.template },
+            },
+            workspaceDefault,
+          )
     if (resolved.provider === null) {
       throw new Error(
         'no runtime could be resolved for this run: either this workspace has no configured ' +
@@ -487,6 +511,8 @@ export async function dispatchVerification(
       where: { workspaceId_goalVersion: { workspaceId: workspace.id, goalVersion: delivery.goalVersion } },
     })
     const requirements = requirementItemsSchema.parse(requirementSet.items)
+    // Lead flow (spec P3/P5): a confirmation, or a round after rework, checks only the keys it was given.
+    const asked = lead === null || lead.keys.length === 0 ? requirements : requirements.filter((requirement) => lead.keys.includes(requirement.key))
     const leads = await workerLeads(workspace.id, delivery.goalVersion)
     // Skeleton spec S8: the passing smoke on the tip this run checks, handed over as evidence. The
     // goal pass hands the attempt it smoked; any other caller gets the latest pass on this exact tip.
@@ -516,7 +542,7 @@ export async function dispatchVerification(
       verification: {
         goalVersion: delivery.goalVersion,
         round,
-        requirements,
+        requirements: asked,
         diffStat: stat.text,
         diffCapped: stat.capped,
         verifyDir,
@@ -534,6 +560,8 @@ export async function dispatchVerification(
       payload: { version: delivery.goalVersion, round, runId: run.id },
     })
 
+    // Lead flow (spec B4): the run may spend what the goal has left, and no more.
+    if (lead !== null && lead.capUsd !== null) writeSpawnExtras(runDir, { maxBudgetUsd: lead.capUsd })
     handle = await runAdapter.start({
       runId,
       prompt: built.prompt,
@@ -621,7 +649,7 @@ export async function dispatchVerification(
  * released it -- the one caller that may then fail the run (ruling Q2), so two concluders racing
  * cannot both announce the failure.
  */
-async function releaseClaim(deliveryId: string, runId: string): Promise<boolean> {
+export async function releaseClaim(deliveryId: string, runId: string): Promise<boolean> {
   return withDeliveryLock(deliveryId, async (tx) => {
     const released = await tx.goalDelivery.updateMany({
       where: { id: deliveryId, activeRunId: runId },
@@ -723,7 +751,7 @@ const TAMPER_PATHS_NAMED = 10
  * when it is. Compares the baseline dispatch recorded after setup with the checkout now, and names
  * what changed: a moved HEAD, tracked paths whose status changed, new untracked non-artifact paths.
  */
-async function tamperedReason(worktreePath: string | null, stored: unknown): Promise<string | null> {
+export async function tamperedReason(worktreePath: string | null, stored: unknown): Promise<string | null> {
   if (worktreePath === null || !existsSync(worktreePath)) return 'the verification worktree is gone'
   if (stored === null || typeof stored !== 'object') return 'the verification run has no recorded baseline to compare its worktree with'
   const before = stored as VerificationBaseline
@@ -791,6 +819,13 @@ export async function concludeVerification(runId: RunId): Promise<void> {
   if (delivery.activeRunId !== run.id) {
     // A replay, or the claim was released meanwhile: nothing to decide, and the checkout is spent.
     await removeVerificationWorktree(workspace.repoPath, run.worktreePath)
+    return
+  }
+  // Lead flow (spec P3-P5/P7, plan A L11/L12): the lead flow's own loop decides what this verdict
+  // means -- confirmation, disputed, a partial round, the stop rules. Every other workspace's
+  // conclusion is below, unchanged.
+  if (workspace.flow === 'lead') {
+    await concludeLeadVerification(run.id)
     return
   }
   const set = await prisma.requirementSet.findUniqueOrThrow({

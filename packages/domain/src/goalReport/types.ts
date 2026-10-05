@@ -236,7 +236,7 @@ export interface GoalReportHandOff {
 export interface GoalReportSharedDecision {
   readonly title: string
   readonly decision: string
-  readonly source: 'conductor_plan' | 'conductor_answer' | 'person'
+  readonly source: 'conductor_plan' | 'conductor_answer' | 'person' | 'lead'
   readonly at: string
 }
 
