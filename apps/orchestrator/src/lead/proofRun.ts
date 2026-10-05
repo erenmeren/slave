@@ -1,6 +1,7 @@
 import { ensureLeadSeats, goalEventWith, goalSpend, withDeliveryLock } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  LEAD_MIN_LEG_USD,
   afterConfirm,
   afterRound,
   err,
@@ -14,6 +15,7 @@ import {
   type ProofStep,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { writeSpawnExtras } from '@slave-of-ai/providers'
 import { acceptInLock } from '../goal.js'
 import { joinRunOutput } from '../runOutput.js'
 import { failConcludedRun } from '../runs.js'
@@ -27,6 +29,9 @@ export type LeadProofScope =
   | { readonly kind: 'hold' }
   | { readonly kind: 'run'; readonly keys: readonly string[]; readonly confirmsRunId: string | null; readonly seatId: string | null; readonly capUsd: number | null }
 
+/** The deliveries whose missing confirmer seat was already logged by this process. */
+const seatlessSaid = new Set<string>()
+
 /**
  * Lead-flow spec P3/P5 and B4 (plan A L6/L11): the next proof run of a lead-flow version. Failures
  * awaiting confirmation: the confirmer seat re-checks exactly those keys. Otherwise the verifier
@@ -38,15 +43,27 @@ export async function leadProofScope(
   delivery: { readonly id: string; readonly workspaceId: string; readonly goalVersion: number; readonly leadProgress: unknown },
   budgetUsd: number | null,
 ): Promise<LeadProofScope> {
+  const progress = readLeadProgress(delivery.leadProgress)
   const capUsd = proofCapUsd(budgetUsd, (await goalSpend(delivery.workspaceId, delivery.goalVersion)).totalUsd)
   if (capUsd === 'spent') {
-    await stopLead(delivery.id, 'budget_spent', 'nothing is left of the budget to pay a verification: the result is unproven')
+    // Task 9 review: a failure awaiting its confirmation is the one verdict that stands -- named, so
+    // the card does not read as though nothing was found.
+    const pending = progress.confirm === null ? '' : `the first verifier failed ${progress.confirm.keys.join(', ')} and its confirmation could not be paid; `
+    await stopLead(delivery.id, 'budget_spent', `${pending}nothing is left of the budget to pay a verification: the result is unproven`)
     return { kind: 'hold' }
   }
-  const progress = readLeadProgress(delivery.leadProgress)
   if (progress.confirm !== null) {
+    // Spec P3: the re-check is a SECOND independent session. Without the confirmer seat it is held,
+    // never handed to the verifier that failed the keys (task 9 review); said once per version.
     const seats = await ensureLeadSeats(delivery.workspaceId)
-    return { kind: 'run', keys: progress.confirm.keys, confirmsRunId: progress.confirm.runId, seatId: seats.ok ? seats.value.confirmer : null, capUsd }
+    if (!seats.ok) {
+      if (!seatlessSaid.has(delivery.id)) {
+        seatlessSaid.add(delivery.id)
+        console.error(`[lead] goal delivery ${delivery.id}: the confirmer seat could not be found or made (${seats.error.kind}); the confirmation waits`)
+      }
+      return { kind: 'hold' }
+    }
+    return { kind: 'run', keys: progress.confirm.keys, confirmsRunId: progress.confirm.runId, seatId: seats.value.confirmer, capUsd }
   }
   return { kind: 'run', keys: progress.recheckKeys, confirmsRunId: null, seatId: null, capUsd }
 }
@@ -88,7 +105,7 @@ export async function concludeLeadVerification(runId: string): Promise<void> {
   const items = parsed.value
   const tip = await gitIn(workspace.repoPath, 'rev-parse', delivery.integrationBranch)
   const textOf = new Map(requirements.map((requirement) => [requirement.key, requirement.text] as const))
-  const outcome: { before: LeadProgress | null; step: ProofStep | null; round: number } = { before: null, step: null, round: delivery.round }
+  const outcome: { before: LeadProgress | null; step: ProofStep | null } = { before: null, step: null }
 
   try {
     await withDeliveryLock(delivery.id, async (tx) => {
@@ -113,7 +130,6 @@ export async function concludeLeadVerification(runId: string): Promise<void> {
       const step = run.confirmsRunId !== null ? afterConfirm({ items, progress: before }) : afterRound({ scope, items, progress: before, runId: run.id, tipMoved: run.verificationTip === null || run.verificationTip !== tip })
       outcome.before = before
       outcome.step = step
-      outcome.round = now.round
       const held = { id: delivery.id, status: 'verifying' as const, activeRunId: run.id }
 
       if (step.kind === 'accept') {
@@ -146,7 +162,12 @@ export async function concludeLeadVerification(runId: string): Promise<void> {
         if (!(await goalEventWith(tx, workspace.id, 'task_rework', { verificationRound: now.round }, { taskId: task.id }))) {
           await appendEvent({ type: 'task.rework', workspaceId: workspace.id, taskId: task.id, actor: 'system', payload: { reason, attempt: task.attempt, verificationRound: now.round } })
         }
-        await tx.task.updateMany({ where: { id: task.id, status: 'done' }, data: { status: 'rework', integratedAt: null, activeRunId: null, lastRejectionReason: reason } })
+        const sent = await tx.task.updateMany({ where: { id: task.id, status: 'done' }, data: { status: 'rework', integratedAt: null, activeRunId: null, lastRejectionReason: reason } })
+        if (sent.count === 0) {
+          // The task left `done` since it was read: no rework is queued for a task that is not in rework.
+          if (!(await stopLeadInLock(tx, delivery.id, 'lead_failed', step.progress, "the lead's task cannot be sent back"))) throw new NotTheClaim()
+          return
+        }
         const moved = await tx.goalDelivery.updateMany({ where: held, data: { status: 'integrating', activeRunId: null, leadProgress: progressJson({ ...step.progress, nextTurn: { kind: 'rework', note: reason } }) } })
         if (moved.count === 0) throw new NotTheClaim()
         return
@@ -167,9 +188,32 @@ export async function concludeLeadVerification(runId: string): Promise<void> {
     for (const key of outcome.step.progress.disputed.filter((one) => !before.disputed.includes(one))) {
       await noteLead({ ...at, kind: 'disputed', detail: `${key}: the first verifier said it fails and the second did not; it is not sent back to the lead` })
     }
-    for (const item of items.filter((one) => one.status === 'unverifiable')) {
+    // A confirmer's `unverifiable` is a disagreement (disputed, above), not a key nobody could verify.
+    for (const item of run.confirmsRunId === null ? items.filter((one) => one.status === 'unverifiable') : []) {
       await noteLeadOnce({ ...at, kind: 'unverifiable', detail: `${item.key} could not be verified: ${firstLine(item.reason)}` })
     }
   }
   await removeVerificationWorktree(workspace.repoPath, run.worktreePath)
+}
+
+/**
+ * Task 9 review (plan A L6, M(b)): a paused verification run of a lead-flow version that is resumed
+ * on its own row (`executeResume`) is capped again at what the goal has left NOW -- a
+ * `--max-budget-usd` counts from zero in every process, so the cap it started with would let it
+ * spend its earlier share twice. What it spent before the pause is counted while its row has no
+ * cost (the pump writes `costUsd` only at the end): the checkpoint's `cumulativeCostUsd`, as
+ * `refreshLeadSpawn` counts a paused lead turn. With nothing left it gets the smallest leg and ends
+ * on its cap at once. Nothing for any other run: a run of a project not in the lead flow keeps
+ * what it was spawned with.
+ */
+export async function refreshLeadProofSpawn(runId: string, runDir: string): Promise<void> {
+  const run = await prisma.slaveRun.findUnique({
+    where: { id: runId },
+    select: { kind: true, costUsd: true, checkpoint: { select: { cumulativeCostUsd: true } }, goalDelivery: { select: { workspaceId: true, goalVersion: true, workspace: { select: { flow: true, budgetUsd: true } } } } },
+  })
+  const delivery = run?.goalDelivery
+  if (run == null || run.kind !== 'verification' || delivery == null || delivery.workspace.flow !== 'lead') return
+  const pausedSpentUsd = run.costUsd === null ? (run.checkpoint?.cumulativeCostUsd ?? 0) : 0
+  const capUsd = proofCapUsd(delivery.workspace.budgetUsd, (await goalSpend(delivery.workspaceId, delivery.goalVersion)).totalUsd + pausedSpentUsd)
+  writeSpawnExtras(runDir, capUsd === null ? {} : { maxBudgetUsd: capUsd === 'spent' ? LEAD_MIN_LEG_USD : capUsd })
 }

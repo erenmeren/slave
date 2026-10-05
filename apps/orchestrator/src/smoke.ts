@@ -364,6 +364,12 @@ export async function applySmokeOutcome(attemptId: string): Promise<void> {
         if (!(await stopLeadInLock(tx, delivery.id, leadStep.reason, leadStep.progress, `the smoke check found ${stop}`))) throw new NotTheSmoke()
         return
       }
+      // Task 9 review: the lead's task cannot take the rework -- the lead flow's own stop, with its
+      // card and reason, never the packages path below.
+      if (task === undefined || task.status !== 'done') {
+        if (!(await stopLeadInLock(tx, delivery.id, 'lead_failed', leadStep.progress, "the lead's task cannot be sent back"))) throw new NotTheSmoke()
+        return
+      }
       await tx.goalDelivery.update({ where: { id: delivery.id }, data: { leadProgress: progressJson(leadStep.progress) } })
     }
     if (capped) {

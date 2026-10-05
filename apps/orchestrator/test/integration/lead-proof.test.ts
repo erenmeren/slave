@@ -1,9 +1,17 @@
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { goalSpend } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import { readLeadProgress } from '@slave-of-ai/domain'
+import { LEAD_MIN_LEG_USD, cents, readLeadProgress } from '@slave-of-ai/domain'
+import { readSpawnExtras, writeSpawnExtras } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { openLeadGoal } from '../../src/lead/open.js'
+import { refreshLeadProofSpawn } from '../../src/lead/proofRun.js'
+import { applySmokeOutcome } from '../../src/smoke.js'
 import { resetTickObservation } from '../../src/sweep.js'
 import { drainPumps, tick } from '../../src/tick.js'
-import { LEAD_TRUNCATE, base64, checked, cleanUpLeadRepos, leadDelivery, leadNotes, leadTaskOf, merged, seedLead, tickUntil, type LeadFixture, type LeadSeedOptions } from './lead-helpers.js'
+import { LEAD_TRUNCATE, base64, checked, cleanUpLeadRepos, git, leadDelivery, leadNotes, leadTaskOf, merged, seedLead, tickUntil, type LeadFixture, type LeadSeedOptions } from './lead-helpers.js'
 
 const ALL = ['R1', 'R2', 'RUN']
 const leadTurns = (f: LeadFixture) => f.starts.filter((s) => s.kind === 'implementation')
@@ -147,5 +155,81 @@ describe('the lead flow: proof gates', () => {
     const delivery = await leadDelivery(broke)
     expect(delivery.stopReason).toBe('budget_spent')
     expect(delivery.needsHumanReason).toContain('the result is unproven')
+  })
+
+  // Task 9 review, below.
+  const cost = (usd: number): readonly string[] => ['--result-patch-base64', base64({ total_cost_usd: usd })]
+
+  it('names the failure awaiting confirmation when the budget cannot pay the confirmer (task 9 review)', async (): Promise<void> => {
+    // 29.75 for the lead and 0.02 for the requirement call leave 0.23 for the verifier, whose run
+    // (the fake reports about 0.21) leaves less than a run is worth.
+    const f = await seedLead({ budgetUsd: 30, leadArgs: () => cost(29.75), verify: script([['R1']]) })
+    await tickUntil(f, stopped(f))
+
+    expect(proofRuns(f).map((run) => [run.confirms, run.extras])).toEqual([[false, { maxBudgetUsd: 0.23 }]])
+    const delivery = await leadDelivery(f)
+    expect(delivery.stopReason).toBe('budget_spent')
+    expect(delivery.needsHumanReason).toContain('the first verifier failed R1 and its confirmation could not be paid')
+  })
+
+  it('reads a key the confirmer cannot verify as disputed, not as unverifiable (task 9 review)', async (): Promise<void> => {
+    const f = await seedLead({ verify: script([['R1'], ['?R1']]) })
+    await tickUntil(f, stopped(f))
+
+    const delivery = await leadDelivery(f)
+    expect(delivery.stopReason).toBe('not_all_proven')
+    expect(readLeadProgress(delivery.leadProgress)).toMatchObject({ disputed: ['R1'], unverifiable: [] })
+    expect(delivery.needsHumanReason).not.toContain('could not be verified')
+    expect((await leadNotes(f)).filter((line) => line.startsWith('unverifiable:'))).toEqual([])
+  })
+
+  it('stops lead_failed, with the lead flow\'s card, when a failing smoke cannot be sent back to the lead\'s task (task 9 review)', async (): Promise<void> => {
+    const f = await seedLead()
+    await tick(f.deps)
+    const set = await prisma.requirementSet.findUniqueOrThrow({ where: { workspaceId_goalVersion: { workspaceId: f.workspaceId, goalVersion: 1 } } })
+    expect(await openLeadGoal(f.workspaceId, { repoPath: f.repoPath, baseBranch: 'main', maxAttempts: 3 }, 1, set.items)).toBe('conducted')
+    // The lead's task is not `done` (here: never run) while a smoke attempt holds the version and fails.
+    const { id: deliveryId } = await leadDelivery(f)
+    const attempt = await prisma.smokeAttempt.create({
+      data: { workspaceId: f.workspaceId, goalDeliveryId: deliveryId, goalVersion: 1, round: 1, tip: git(['rev-parse', 'main'], f.repoPath), status: 'failed', exitCode: 1, output: 'the product did not start', endedAt: new Date() },
+    })
+    await prisma.goalDelivery.update({ where: { id: deliveryId }, data: { status: 'verifying', round: 1, activeSmokeId: attempt.id } })
+
+    await applySmokeOutcome(attempt.id)
+
+    const delivery = await leadDelivery(f)
+    expect([delivery.status, delivery.stopReason, delivery.leadState]).toEqual(['needs_human', 'lead_failed', 'awaiting_decision'])
+    expect(delivery.needsHumanReason).toContain("the lead's task cannot be sent back")
+    expect(delivery.needsHumanReason).toContain('failing: SMOKE')
+    expect((await leadTaskOf(f)).status).not.toBe('rework')
+  })
+
+  it('re-caps a resumed lead-flow verification run at what the goal has left, its own spend so far included (task 9 review)', async (): Promise<void> => {
+    const f = await seedLead({ budgetUsd: 30, leadArgs: () => cost(10) })
+    await tickUntil(f, merged(f))
+    const delivery = await leadDelivery(f)
+    const verifier = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: f.workspaceId }, role: 'Verifier' } })
+    // A paused verification run: no cost on its row yet, $4 by the pump's count on its checkpoint.
+    const run = await prisma.slaveRun.create({ data: { slaveId: verifier.id, kind: 'verification', status: 'paused', goalDeliveryId: delivery.id, provider: 'claude_code' } })
+    const runDir = mkdtempSync(join(tmpdir(), 'lead-proof-resume-'))
+    await prisma.checkpoint.create({
+      data: { runId: run.id, sessionId: 's', worktreePath: f.repoPath, pauseFlagPath: join(runDir, 'pause.flag'), headCommit: 'h', settingsPath: 's', hookPath: 'h', gitAuthorName: 'n', gitAuthorEmail: 'e', cumulativeCostUsd: 4 },
+    })
+    writeSpawnExtras(runDir, { maxBudgetUsd: 19.98 })
+
+    await refreshLeadProofSpawn(run.id, runDir)
+    const spent = (await goalSpend(f.workspaceId, 1)).totalUsd
+    expect(readSpawnExtras(runDir)).toEqual({ maxBudgetUsd: cents(30 - spent - 4) })
+
+    // Nothing left: the smallest leg, so it ends on its cap at once.
+    await prisma.checkpoint.update({ where: { runId: run.id }, data: { cumulativeCostUsd: 100 } })
+    await refreshLeadProofSpawn(run.id, runDir)
+    expect(readSpawnExtras(runDir)).toEqual({ maxBudgetUsd: LEAD_MIN_LEG_USD })
+
+    // Not in the lead flow: left as it was.
+    writeSpawnExtras(runDir, { maxBudgetUsd: 19.98 })
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { flow: 'packages' } })
+    await refreshLeadProofSpawn(run.id, runDir)
+    expect(readSpawnExtras(runDir)).toEqual({ maxBudgetUsd: 19.98 })
   })
 })
