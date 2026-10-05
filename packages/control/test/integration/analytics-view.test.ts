@@ -70,6 +70,24 @@ describe('analyticsView', () => {
     expect(view.work.builds).toEqual({ delivered: 0, stopped: 0, waiting: 0, running: 1 })
   })
 
+  it('reads the open sessions\u2019 estimate beside the sums and in none of them; an ended session\u2019s is not "running"', async () => {
+    const f = await leadProject('estimating')
+    const estimate = (usd: number): object => ({ usd, own: usd, byCall: {}, messages: 3, unpricedMessages: 0, models: { 'claude-opus-5': usd }, unpriced: [] })
+    const ended = await leadTurn(f, { costUsd: 4, startedAt: ago(1), endedAt: ago(1), sessionId: 's-1' })
+    const open = await leadTurn(f, { costUsd: null, startedAt: ago(0), endedAt: null, sessionId: 's-1' })
+    await prisma.slaveRun.update({ where: { id: ended.runId }, data: { costEstimate: estimate(3.6) } })
+    await prisma.slaveRun.update({ where: { id: open.runId }, data: { costEstimate: estimate(3.2) } })
+    const other = await leadProject('quiet')
+    await leadTurn(other, { costUsd: null, startedAt: ago(0), endedAt: null })
+
+    const view = await analyticsView({ days: 7, now: NOW })
+    expect(view.money).toMatchObject({ totalUsd: 4, buildingUsd: 4, liveSessions: 2, estimatedRunningUsd: 3.2 })
+    expect(view.money.byProject.map((row) => [row.name, row.totalUsd, row.estimatedRunningUsd])).toEqual([['estimating', 4, 3.2], ['quiet', 0, 0]])
+    expect(view.money.byBuild.map((row) => [row.projectName, row.spentUsd, row.estimatedRunningUsd]).sort()).toEqual([['estimating', 4, 3.2], ['quiet', 0, 0]])
+    // No day's column carries an estimate: a day is reported money only.
+    expect(view.money.byDay.reduce((total, day) => total + day.totalUsd, 0)).toBe(4)
+  })
+
   it('sums the money by what it paid for, per project and per day, a session on the day it ended', async () => {
     const a = await leadProject('alpha', { budgetUsd: 20 })
     const b = await leadProject('beta')

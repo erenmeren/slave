@@ -9,8 +9,8 @@ import { parseRunCostEstimate, type RunCostEstimate } from '@slave-of-ai/domain'
  */
 
 /** The estimate a run's row holds; null when the row holds none. */
-export function estimateOfRun(run: object): RunCostEstimate | null {
-  return parseRunCostEstimate((run as { readonly costEstimate?: unknown }).costEstimate)
+export function estimateOfRun(run: { readonly costEstimate: unknown }): RunCostEstimate | null {
+  return parseRunCostEstimate(run.costEstimate)
 }
 
 const round = (usd: number): number => Math.round(usd * 1e6) / 1e6

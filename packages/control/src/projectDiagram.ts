@@ -202,12 +202,12 @@ export async function buildDiagram(workspaceId: string, goalVersion?: number, no
     prisma.slaveRun.findMany({
       where: { leadTurn: { not: null }, task: { workspaceId, workPackage: { goalVersion: version } } },
       orderBy: { startedAt: 'asc' },
-      select: { id: true, leadTurn: true, status: true, costUsd: true, startedAt: true, endedAt: true },
+      select: { id: true, leadTurn: true, status: true, costUsd: true, costEstimate: true, startedAt: true, endedAt: true },
     }),
     prisma.slaveRun.findMany({
       where: { goalDeliveryId: delivery.id, kind: 'verification' },
       orderBy: { startedAt: 'asc' },
-      select: { id: true, status: true, costUsd: true, toolCalls: true, confirmsRunId: true, startedAt: true, endedAt: true },
+      select: { id: true, status: true, costUsd: true, costEstimate: true, toolCalls: true, confirmsRunId: true, startedAt: true, endedAt: true },
     }),
   ])
   const turnOf = new Map(turnRuns.map((run) => [run.id, run]))

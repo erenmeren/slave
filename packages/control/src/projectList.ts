@@ -91,7 +91,7 @@ export async function listProjects(): Promise<readonly ProjectListItem[]> {
     workspaces.map(async (workspace): Promise<ProjectListItem> => {
       const [working, running, total, newest, latestEvent] = await Promise.all([
         workingNowOf(workspace.id),
-        prisma.slaveRun.findMany({ where: { endedAt: null, costUsd: null, slave: { team: { workspaceId: workspace.id } } }, select: { id: true } }),
+        prisma.slaveRun.findMany({ where: { endedAt: null, costUsd: null, slave: { team: { workspaceId: workspace.id } } }, select: { costEstimate: true } }),
         workspaceSpend(workspace.id),
         prisma.goalDelivery.findFirst({
           where: { workspaceId: workspace.id },

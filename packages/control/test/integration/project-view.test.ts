@@ -133,6 +133,61 @@ describe('projectView (lead UX design section 10)', () => {
     ])
   })
 
+  it('reads no estimate where no run holds one: every figure null or zero, nothing invented', async () => {
+    const f = await leadProject()
+    const view = await projectView(f.workspaceId)
+    if (!view.ok || view.value.build === null) throw new Error('unreachable')
+    const build = view.value.build
+    expect(build.people.map((person) => [person.estimatedUsd, person.estimatedRunningUsd, person.unpricedModels])).toEqual([[null, null, []], [null, null, []], [null, null, []]])
+    expect(build.turns[0]).toMatchObject({ estimatedUsd: null, unpricedModels: [] })
+    expect(build.spend).toMatchObject({ estimatedRunningUsd: 0, estimatedRunningLeadUsd: 0, estimatedRunningProofUsd: 0, unpricedModels: [] })
+  })
+
+  it('reads the live estimate beside the reported spend: the lead\u2019s own part, each helper\u2019s by its call, and what is still running', async () => {
+    const f = await leadProject()
+    const estimate = (usd: number, own: number, byCall: Record<string, number>): object => ({ usd, own, byCall, messages: 9, unpricedMessages: 0, models: { 'claude-opus-5': usd }, unpriced: [] })
+    // An ended first turn that reported $4: its estimate stays on the row, a helper's share inside it.
+    const first = await prisma.slaveRun.create({ data: { slaveId: f.leadSeat, taskId: f.taskId, status: 'succeeded', leadTurn: 'build', sessionId: 'session-1', costUsd: 4, startedAt: new Date(Date.now() - 3_600_000), terminalAt: new Date(Date.now() - 1_800_000), endedAt: new Date(Date.now() - 1_800_000), costEstimate: estimate(3.6, 3, { 'call-old': 0.6 }) } })
+    await appendEvent({ workspaceId: f.workspaceId, taskId: f.taskId, slaveId: f.leadSeat, runId: first.id, actor: 'slave', type: 'run.tool_call', payload: { name: SUBORDINATE, summary: `${SUBORDINATE} write the routes`, toolUseId: 'call-old', subagent: 'backend-dev' } })
+    await appendEvent({ workspaceId: f.workspaceId, taskId: f.taskId, slaveId: f.leadSeat, runId: first.id, actor: 'slave', type: 'run.tool_result', payload: { toolUseId: 'call-old', toolName: SUBORDINATE, outcome: 'ok', errorClass: null } })
+    // The live turn: $3.20 so far, $1.10 of it the helper it has open (`call-1`).
+    await prisma.slaveRun.updateMany({ where: { taskId: f.taskId, leadTurn: 'rework' }, data: { costEstimate: estimate(3.2, 2.1, { 'call-1': 1.1 }) } })
+    // The finished check keeps its own estimate too; it has reported, so none of it is "running".
+    await prisma.slaveRun.updateMany({ where: { kind: 'verification' }, data: { costEstimate: estimate(1.4, 1.4, {}) } })
+
+    const view = await projectView(f.workspaceId)
+    if (!view.ok || view.value.build === null) throw new Error('unreachable')
+    const build = view.value.build
+
+    // Reported money is exactly what it was: the estimate is in none of it.
+    expect(build.spentUsd).toBe(5.5)
+    expect(build.spend).toMatchObject({ leadUsd: 4, proofUsd: 1.5, totalUsd: 5.5 })
+    expect(build.spend).toMatchObject({ estimatedRunningUsd: 3.2, estimatedRunningLeadUsd: 3.2, estimatedRunningProofUsd: 0, unpricedModels: [] })
+
+    expect(build.turns.map((turn) => [turn.turn, turn.costUsd, turn.estimatedUsd])).toEqual([['build', 4, 3.6], ['rework', null, 3.2]])
+    const [lead, helper, checker] = build.people
+    // The lead: both turns' estimates (6.8) less its helper's parts (1.7); running, the live turn's own.
+    expect(lead).toMatchObject({ id: 'lead', costUsd: 4, estimatedUsd: 5.1, estimatedRunningUsd: 2.1 })
+    // The helper: every session of it, the ended turn's too; running, the live turn's.
+    expect(helper).toMatchObject({ id: 'helper:backend-dev', costUsd: null, sessions: 2, estimatedUsd: 1.7, estimatedRunningUsd: 1.1 })
+    expect(checker).toMatchObject({ id: 'checker', costUsd: 1.5, estimatedUsd: 1.4, estimatedRunningUsd: null })
+
+    const [item] = await listProjects()
+    expect(item).toMatchObject({ spentUsd: 5.5, estimatedRunningUsd: 3.2 })
+  })
+
+  it('names a running model with no price instead of estimating it', async () => {
+    const f = await leadProject()
+    await prisma.slaveRun.updateMany({ where: { taskId: f.taskId, leadTurn: 'rework' }, data: { costEstimate: { usd: 0, own: 0, byCall: {}, messages: 4, unpricedMessages: 4, models: {}, unpriced: ['claude-new-9'] } } })
+    const view = await projectView(f.workspaceId)
+    if (!view.ok || view.value.build === null) throw new Error('unreachable')
+    const build = view.value.build
+    expect(build.turns[0]).toMatchObject({ estimatedUsd: null, unpricedModels: ['claude-new-9'] })
+    expect(build.people[0]).toMatchObject({ estimatedUsd: null, estimatedRunningUsd: null, unpricedModels: ['claude-new-9'] })
+    expect(build.spend).toMatchObject({ estimatedRunningUsd: 0, unpricedModels: ['claude-new-9'] })
+    expect((await listProjects())[0]?.estimatedRunningUsd).toBe(0)
+  })
+
   it('reads a paused lead and a helper whose call ended as not working, and counts a failed step', async () => {
     const f = await leadProject()
     const turn = await prisma.slaveRun.findFirstOrThrow({ where: { leadTurn: { not: null } } })

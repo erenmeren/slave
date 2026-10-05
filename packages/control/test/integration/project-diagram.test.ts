@@ -124,6 +124,30 @@ describe('buildDiagram: a build as a diagram', () => {
     expect(build.sessions.map((session) => session.doing).slice(0, 3)).toEqual([null, null, 'Handing work to a helper'])
   })
 
+  it('reads the live estimate on each card: the lead\u2019s own part, a helper\u2019s by its call, a checker\u2019s run, never as a reported cost', async () => {
+    const f = await leadProject()
+    const estimate = (usd: number, own: number, byCall: Record<string, number>): object => ({ usd, own, byCall, messages: 5, unpricedMessages: 0, models: { 'claude-opus-5': usd }, unpriced: [] })
+    await prisma.slaveRun.update({ where: { id: f.turnId }, data: { costEstimate: estimate(3.2, 2.1, { 'call-1': 1.1 }) } })
+    await prisma.slaveRun.update({ where: { id: f.checkId }, data: { costEstimate: estimate(1.4, 1.4, {}) } })
+    const build = await read(f)
+
+    expect(build.nodes.map((node) => [node.id, node.costUsd, node.estimatedUsd])).toEqual([
+      ['request', null, null],
+      // The first turn holds no estimate (a run older than the column): the live turn's own part.
+      ['lead', 2, 2.1],
+      ['helper:backend-dev', null, 1.1],
+      ['checker', 1.5, 1.4],
+      ['result', null, null],
+    ])
+    expect(build.sessions.map((session) => [session.label, session.costUsd, session.estimatedUsd])).toEqual([
+      ['build', 2, null],
+      ['check', 1.5, 1.4],
+      // A turn's estimate has its helpers inside it, as its reported figure will.
+      ['rework', null, 3.2],
+      ['fix the delete route', null, 1.1],
+    ])
+  })
+
   it('reads every step with when it began and when its result came', async () => {
     const f = await leadProject()
     const build = await read(f)

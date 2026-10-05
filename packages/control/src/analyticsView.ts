@@ -394,6 +394,7 @@ export async function analyticsView(filter: AnalyticsFilter = {}): Promise<Analy
         leadTurn: true,
         sessionId: true,
         costUsd: true,
+        costEstimate: true,
         startedAt: true,
         endedAt: true,
         slave: { select: { team: { select: { workspaceId: true } } } },

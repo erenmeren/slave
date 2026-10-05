@@ -138,12 +138,12 @@ export async function buildPeople(input: {
     prisma.slaveRun.findMany({
       where: { leadTurn: { not: null }, task: { workspaceId: input.workspaceId, workPackage: { goalVersion: input.goalVersion } } },
       orderBy: { startedAt: 'asc' },
-      select: { id: true, leadTurn: true, status: true, leadResumed: true, costUsd: true, toolCalls: true, tokensIn: true, tokensOut: true, observedWorkingMs: true, startedAt: true, endedAt: true, pausedAt: true },
+      select: { id: true, leadTurn: true, status: true, leadResumed: true, costUsd: true, costEstimate: true, toolCalls: true, tokensIn: true, tokensOut: true, observedWorkingMs: true, startedAt: true, endedAt: true, pausedAt: true },
     }),
     prisma.slaveRun.findMany({
       where: { goalDeliveryId: input.deliveryId, kind: 'verification' },
       orderBy: { startedAt: 'asc' },
-      select: { id: true, status: true, costUsd: true, toolCalls: true, confirmsRunId: true, startedAt: true, endedAt: true },
+      select: { id: true, status: true, costUsd: true, costEstimate: true, toolCalls: true, confirmsRunId: true, startedAt: true, endedAt: true },
     }),
   ])
   // Live cost: each run's estimate, read once. A helper's part of a turn is under the id of the
