@@ -229,7 +229,7 @@ nothing about them resumes automatically.
 Rebuilt on 2026-10-05 around the lead flow, on shadcn/ui with a light and a dark theme
 (`docs/superpowers/specs/2026-10-05-lead-ux-design.md` is the design, `docs/ia.md` the map). One
 frame: a sidebar of projects -- each with its state, and an amber count when a build is waiting for
-you -- plus **New project**, **Helpers** and **Settings**. The count also leads the browser tab's title.
+you -- plus **New project**, **People** and **Settings**. The count also leads the browser tab's title.
 
 | Page | What it answers |
 |---|---|
@@ -237,7 +237,7 @@ you -- plus **New project**, **Helpers** and **Settings**. The count also leads 
 | **New project** `/new` | What do I want built, and how much may it spend? The intake conversation beside a project card: name, where the code lives, and the spending cap chosen explicitly -- a budget, a working-time limit, both, or no limit (which you must confirm) -- then **Start building**. `?intake=<id>` reopens a conversation. |
 | **Project** `/w/<id>` | What is happening, and does it need me? One screen: **Stop** / **Continue**; the amber decision card when a build stopped (**Accept as it is**, **Check again**, **Leave it unmerged**) or waits for your merge (**I merged it**, **Merge automatically from now on**); what you asked for and **Ask for a change**; who is working (the lead, its helpers, the checker, each with what it is doing now); the proof per requirement; the result; spend and working time against the limits; the builds and the lead's notes. **Settings** opens a sheet with the limits, the lead's model, the helpers the lead may call, automatic merge, how the project is built, Archive and Delete. A project still in the older packages flow opens here read-only. |
 | **Report** `/w/<id>/goals/<n>` | What exactly was asked, checked, decided and spent for one build, with **Download as Markdown** for the full record. |
-| **Helpers** `/helpers` | The catalogue of specialists a lead may call on, read-only. |
+| **People** `/people` | Who can a lead call on? Three tabs. **People**: everybody, as cards or a list, searched and filtered by division, skill and project; **New person** makes one from a persona; a person opens in a sheet with their profile, their skills (give, take away, give back), their own instructions, the projects whose lead may call them, and Delete. **Personas**: the kinds of specialist people are made from; each field of a persona's profile -- the Workflow among them -- has its own Edit and Reset to catalogue, beside its default skills, Active, and Delete; **New persona** writes one by hand. **Skills**: every skill with who has it. `?person=<id>` and `?persona=<id>` open one directly. |
 | **Settings** `/settings` | Runtimes found on this machine, where new repositories go, appearance, account, and reset demo data (development only). |
 
 Old addresses (`/workforce`, `/sim`, `/analytics`, a project's old tabs) redirect to the nearest new

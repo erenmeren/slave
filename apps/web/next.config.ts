@@ -8,9 +8,10 @@ const config: NextConfig = {
   // bookmark is not a dead end. `permanent: false` (307): a 308 is cached by the browser forever.
   async redirects() {
     return [
-      { source: '/slaves', destination: '/helpers', permanent: false },
-      { source: '/skills', destination: '/helpers', permanent: false },
-      { source: '/workforce', destination: '/helpers', permanent: false },
+      { source: '/helpers', destination: '/people', permanent: false },
+      { source: '/slaves', destination: '/people', permanent: false },
+      { source: '/skills', destination: '/people?tab=skills', permanent: false },
+      { source: '/workforce', destination: '/people', permanent: false },
       { source: '/analytics', destination: '/', permanent: false },
       { source: '/sim', destination: '/', permanent: false },
       { source: '/sim/:path*', destination: '/', permanent: false },

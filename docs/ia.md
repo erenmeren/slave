@@ -21,7 +21,7 @@ map (rail, seven project tabs, right panel, two modes) is in this file's git his
 ## The frame
 
 A left sidebar (`components/app/AppSidebar.tsx`): the product mark, **New project**, every project with its
-state dot and an amber count when something waits, **Helpers**, **Settings**, and at the bottom the theme switch
+state dot and an amber count when something waits, **People**, **Settings**, and at the bottom the theme switch
 and, with accounts on, Sign out. Below 768 px it slides in behind a menu button. Sign in has no sidebar (the
 frame is the `(app)` route group's layout).
 
@@ -33,7 +33,7 @@ frame is the `(app)` route group's layout).
 | `/new` | New project | What do I want built, and how much may it spend? |
 | `/w/:id` | Project | What is happening to this project, and does it need me? |
 | `/w/:id/goals/:n` | Report | What exactly was asked, checked, decided and spent for this build? |
-| `/helpers` | Helpers | Who can the lead call on? |
+| `/people` | People | Who can the lead call on, what kind of specialist is each, and what can they be handed? |
 | `/settings` | Settings | How is this installation set up? |
 | `/login` | Sign in | -- |
 
@@ -43,5 +43,5 @@ flow opens on the same screen, read-only.
 
 ## Old addresses
 
-`/workforce`, `/slaves`, `/skills` go to `/helpers`; `/analytics` and `/sim/*` go to `/`;
+`/helpers`, `/workforce`, `/slaves`, `/skills` go to `/people`; `/analytics` and `/sim/*` go to `/`;
 `/w/:id/{tasks,activity,graph,office,knowledge,organization,settings}` go to `/w/:id` (307, `next.config.ts`).

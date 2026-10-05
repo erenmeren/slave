@@ -41,7 +41,7 @@ export function titleWithCount(title: string, waiting: number): string {
 
 /**
  * Lead UX design U-2: the one frame. The product mark, New project, every project with its state
- * dot and -- when a build waits for the person -- an amber count; then Helpers and Settings; at the
+ * dot and -- when a build waits for the person -- an amber count; then People and Settings; at the
  * bottom the theme switch and, with accounts on, who is signed in. Re-read every ten seconds, and
  * the count also leads the browser tab's title so a waiting build is seen from another tab.
  */
@@ -111,10 +111,10 @@ export function AppSidebar({ initial, username }: { readonly initial: readonly P
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={pathname.startsWith('/helpers')}>
-                  <Link href="/helpers" data-testid="nav-helpers">
+                <SidebarMenuButton asChild isActive={pathname.startsWith('/people')}>
+                  <Link href="/people" data-testid="nav-people">
                     <UsersIcon />
-                    Helpers
+                    People
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
