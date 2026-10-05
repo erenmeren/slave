@@ -355,8 +355,8 @@ export async function applySmokeOutcome(attemptId: string): Promise<void> {
       return
     }
     const stop = smokeStopReason({ outcome: failure, output: attempt.output })
-    // Lead flow: the stop, or the failing set recorded before the rework below sends the smoke's
-    // evidence back exactly as it sends a package's. Nothing was written in this transaction before
+    // Lead flow: the stop here; otherwise the failing set is recorded with the rework below, which
+    // sends the smoke's evidence back exactly as it sends a package's. Nothing was written in this transaction before
     // the stop, but a stop that did not move the row still throws (house rule: a refusal in a
     // transaction throws).
     if (leadStep !== null) {
@@ -370,7 +370,6 @@ export async function applySmokeOutcome(attemptId: string): Promise<void> {
         if (!(await stopLeadInLock(tx, delivery.id, 'lead_failed', leadStep.progress, "the lead's task cannot be sent back"))) throw new NotTheSmoke()
         return
       }
-      await tx.goalDelivery.update({ where: { id: delivery.id }, data: { leadProgress: progressJson(leadStep.progress) } })
     }
     if (capped) {
       await needsHumanInLock(tx, delivery.id, null, `the verification round cap (${String(cap)}) was reached on a failing smoke check: ${stop}`)
@@ -384,6 +383,11 @@ export async function applySmokeOutcome(attemptId: string): Promise<void> {
     }
     const executable = failure === 'missing' ? !attempt.output.startsWith(NOT_EXECUTABLE_OUTPUT) : undefined
     const reason = renderSmokeRework({ round: attempt.round, outcome: failure, output: attempt.output, ...(executable === undefined ? {} : { executable }) })
+    // Lead flow: the failing set is recorded, and the smoke's evidence is queued as the lead's next
+    // turn -- a `rework` with this reason as its note, as a verification's rework is (final review).
+    if (leadStep !== null) {
+      await tx.goalDelivery.update({ where: { id: delivery.id }, data: { leadProgress: progressJson({ ...leadStep.progress, nextTurn: { kind: 'rework', note: reason } }) } })
+    }
     if (!(await goalEventWith(tx, delivery.workspaceId, 'task_rework', { verificationRound: attempt.round }, { taskId: task.id }))) {
       await appendEvent({
         type: 'task.rework',

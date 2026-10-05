@@ -143,6 +143,21 @@ describe('the lead flow: proof gates', () => {
     expect(smokeRuns.map((row) => (row.payload as { reworkedPackage: string | null }).reworkedPackage)).toEqual(['main', null])
   })
 
+  it('queues the smoke\'s rework as the lead\'s next turn, with the smoke\'s evidence as its note (final review)', async (): Promise<void> => {
+    const queued: unknown[] = []
+    const f = await seedLead({
+      smokeFailures: 1,
+      onStart: async (start) => {
+        // Before the turn is recorded as started, what was queued for it is still on the version.
+        if (start.kind === 'implementation' && start.ordinal === 2) queued.push(readLeadProgress((await prisma.goalDelivery.findFirstOrThrow()).leadProgress).nextTurn)
+      },
+    })
+    await tickUntil(f, merged(f))
+
+    expect(queued).toEqual([{ kind: 'rework', note: expect.stringContaining('the product did not start') }])
+    expect(leadTurns(f)[1]?.prompt).toContain('the product did not start')
+  })
+
   it('caps a verification at what the goal has left, and stops unproven when nothing is left to pay one', async (): Promise<void> => {
     const cost = (usd: number): readonly string[] => ['--result-patch-base64', base64({ total_cost_usd: usd })]
     const paid = await seedLead({ budgetUsd: 30, leadArgs: () => cost(10) })

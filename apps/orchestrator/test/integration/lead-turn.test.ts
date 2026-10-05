@@ -11,7 +11,7 @@ import { openLeadGoal } from '../../src/lead/open.js'
 import { endLead, noteLeadOnce } from '../../src/lead/record.js'
 import { reconcileOrphans, resetTickObservation } from '../../src/sweep.js'
 import { drainPumps, tick } from '../../src/tick.js'
-import { LEAD_TRUNCATE, base64, cleanUpLeadRepos, leadDelivery, leadNotes, leadTaskOf, merged, seedLead, tickUntil, type LeadFixture } from './lead-helpers.js'
+import { LEAD_TRUNCATE, base64, checked, cleanUpLeadRepos, leadDelivery, leadNotes, leadTaskOf, merged, seedLead, tickUntil, type LeadFixture } from './lead-helpers.js'
 
 let DEAD_PID = 0
 const leadTurns = (f: LeadFixture) => f.starts.filter((s) => s.kind === 'implementation')
@@ -118,6 +118,24 @@ describe('the lead flow: one session, whatever interrupts it', () => {
     expect(await prisma.slaveMessage.count({ where: { workspaceId: f.workspaceId } })).toBe(0)
     expect((await leadNotes(f)).filter((line) => line.startsWith('ask_refused:'))).toHaveLength(2)
     expect((await leadTaskOf(f)).attempt).toBe(0)
+  })
+
+  it('does not hand an answer turn the verifier\'s evidence of an earlier rework (final review)', async (): Promise<void> => {
+    const ask = base64('<slave-ask>\n{"role":"conductor","body":"Which database should I use?"}\n</slave-ask>')
+    const f = await seedLead({
+      // The rework turn asks a question; the turn after it is the answer.
+      leadArgs: (ordinal) => (ordinal === 2 ? ['--final-text-base64', ask] : []),
+      // The first verifier and the confirmer fail R1; then everything passes.
+      verify: (ordinal, run) => (run.keys.length === 0 ? ['R1', 'R2', 'RUN'] : run.keys).map((key) => checked(key, ordinal <= 2 && key === 'R1' ? 'fail' : 'pass')),
+    })
+    await tickUntil(f, merged(f), 120)
+
+    const turns = leadTurns(f)
+    expect(turns.map((t) => t.leadTurn)).toEqual(['build', 'rework', 'answer'])
+    expect(turns[1]?.prompt).toContain('R1 answers 404')
+    expect(turns[2]?.prompt).toContain('Nobody answers questions in this flow')
+    expect(turns[2]?.prompt).not.toContain('R1 answers 404')
+    expect(turns[2]?.prompt).not.toContain('independent verification')
   })
 
   it('reads docs/DECISIONS.md into decision records with the source lead, once each', async (): Promise<void> => {

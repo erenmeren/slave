@@ -54,7 +54,8 @@ function sessionToResume(newestFirst: readonly { readonly sessionId: string | nu
  * (`endLead`) and holds. Otherwise: the first turn is `build` with the whole brief; a later one is
  * what was queued for it (`leadProgress.nextTurn`), else `rework` when the task carries a
  * rejection, else `continue` -- and it resumes the newest session of the task, unless the newest
- * turn was a resume that never reached its session line (the transcript is gone).
+ * turn was a resume that never reached its session line (the transcript is gone). The task's
+ * rejection is the note of a `rework` turn only.
  */
 export async function planLeadTurn(input: {
   readonly task: { readonly id: string; readonly lastRejectionReason: string | null }
@@ -99,9 +100,11 @@ export async function planLeadTurn(input: {
   const queued = progress.nextTurn
   const wrapUp = leg.wrapUp || queuedWrapUp
   const turn: LeadTurn = first ? 'build' : wrapUp ? 'wrap_up' : (queued?.kind ?? (input.task.lastRejectionReason !== null ? 'rework' : 'continue'))
-  // What came back for this turn: what was queued, else the rejection the task carries (a
-  // verifier's evidence survives a turn that crashed before it could act on it).
-  const note = first ? null : queued !== null && queued.note !== '' ? queued.note : input.task.lastRejectionReason
+  // What came back for this turn: what was queued, else -- for a rework only -- the rejection the
+  // task carries (a verifier's evidence survives a turn that crashed before it could act on it).
+  // Any other turn never inherits it (final review): an `answer` queued with no note after a
+  // rework turn asked a question is told to decide, not handed the old evidence again.
+  const note = first ? null : queued !== null && queued.note !== '' ? queued.note : turn === 'rework' ? input.task.lastRejectionReason : null
 
   const built = buildRosterDefinitions(await loadLeadRoster(delivery.workspace.leadRoster))
   const definitions = built.json === null ? {} : (JSON.parse(built.json) as Record<string, { readonly description: string }>)
