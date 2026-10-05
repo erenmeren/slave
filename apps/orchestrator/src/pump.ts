@@ -9,6 +9,7 @@ import {
   SKILL_TOOL,
   estimateCostUsd,
   hasSlaveReportBlock,
+  isBudgetCapReason,
   providerRunsSkills,
   type GuardrailKind,
   type SlaveId,
@@ -1432,7 +1433,11 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         `(${nonMatrixDeniedToolUseIds.join(', ')}) are recorded and do not fail it`,
     )
   }
-  const failed = outcome.isError || failingDenials.length > 0
+  // Lead flow C3 (final review): a lead turn that ended on its `--max-budget-usd` cap is read by its
+  // terminal reason, which is what M(c) measured -- `is_error` was not. It concludes `failed` so its
+  // conclusion takes the cap's path (the wrap-up, or the end of the lead), never "succeeded".
+  const leadCapped = startingRow.leadTurn !== null && isBudgetCapReason(outcome.terminalReason)
+  const failed = outcome.isError || failingDenials.length > 0 || leadCapped
 
   // M36 t2: a run that ended by asking another slave a question stops here instead of concluding.
   //

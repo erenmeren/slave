@@ -64,6 +64,18 @@ describe('the lead flow: limits belong to the goal', () => {
     expect(await prisma.supervisorDecision.count({ where: { workspaceId: f.workspaceId, situationKind: { not: 'conduct' } } })).toBe(0)
   })
 
+  it('reads a turn that ended on its cap as the cap even when its result line says it did not err (final review)', async (): Promise<void> => {
+    // M(c) measured the terminal reason only: a capped result line with `is_error: false` is still the cap.
+    const quietCap = ['--result-patch-base64', base64({ is_error: false, terminal_reason: 'budget_exhausted', total_cost_usd: 19.2 })]
+    const f = await seedLead({ budgetUsd: 30, leadArgs: (ordinal) => (ordinal === 1 ? quietCap : cost(20.2)) })
+    await tickUntil(f, merged(f))
+
+    expect(leadTurns(f).map((t) => [t.leadTurn, t.extras.maxBudgetUsd])).toEqual([['build', 19.2], ['wrap_up', 4.8]])
+    const first = await prisma.slaveRun.findFirstOrThrow({ where: { leadTurn: 'build' } })
+    expect(first.status).toBe('failed')
+    expect((await leadTaskOf(f)).attempt).toBe(0)
+  })
+
   it('ends the lead at 100% of its share and proves what is committed, with a subordinate still at work', async (): Promise<void> => {
     const f = await seedLead({
       budgetUsd: 30,
