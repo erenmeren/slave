@@ -42,6 +42,11 @@ each push.
   phone, the header squeezed on a phone, "--" in sentences, a ready-to-merge card that said "automatic merge
   is off" when it was on, the sidebar lagging behind a delete, and a conversation lost on reload (it is now
   in the address, `/new?intake=<id>`). This is not a test run: no vitest, no gate.
+- Web tests (`test(web)`), written and not run: `apps/web/test/{format,api,tokens,pure-screens}.test.ts`,
+  `apps/web/test/{theme,home-view,decision-card,project-screen,report-view,helpers-login-delete,new-project,
+  app-sidebar}.test.tsx`, with the fixtures `apps/web/test/fixtures/{project,dom}.ts` (`stubBrowser` gives jsdom
+  `matchMedia`, `ResizeObserver` and `scrollIntoView`, which Radix asks for). `vitest.config.ts` maps `@/` to
+  `apps/web/src/` for both projects.
 
 ## Rulings
 
@@ -107,3 +112,4 @@ each push.
 - Before the interface push (`feat(web)`): typecheck exit 0; web:build exit 0 (14 routes, `/w/[workspaceId]` 287 kB
   first load); vocabulary PASS after two test lines were moved to the quoted tool name.
 - Before the QA-fix push (`fix(web)`): typecheck exit 0; web:build exit 0; vocabulary PASS.
+- Before the web-tests push (`test(web)`): typecheck exit 0; web:build exit 0; vocabulary PASS.
