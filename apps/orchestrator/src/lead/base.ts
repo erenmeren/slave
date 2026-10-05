@@ -6,19 +6,13 @@ import { appendEvent } from '@slave-of-ai/events'
 import { emailLocalPart } from '../tick.js'
 import { gitIn } from '../worktree.js'
 import { noteLead, noteLeadOnce, progressJson, updateLeadProgress } from './record.js'
+import { gitError } from './text.js'
 
 const isAncestor = (repoPath: string, ancestor: string, of: string): Promise<boolean> =>
   gitIn(repoPath, 'merge-base', '--is-ancestor', ancestor, of).then(
     () => true,
     () => false,
   )
-
-/** The first line of what a failed git call said: its stderr, else the error's own message. */
-function gitError(error: unknown): string {
-  const stderr = typeof error === 'object' && error !== null ? (error as { readonly stderr?: unknown }).stderr : undefined
-  const text = typeof stderr === 'string' && stderr.trim() !== '' ? stderr : error instanceof Error ? error.message : String(error)
-  return text.trim().split('\n')[0] ?? ''
-}
 
 /** `git rev-parse` of `ref` in `cwd`, or null when git cannot name it. */
 const revParse = (cwd: string, ref: string): Promise<string | null> => gitIn(cwd, 'rev-parse', '--verify', '--quiet', ref).catch(() => null)

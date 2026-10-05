@@ -22,12 +22,14 @@ import { commitUncommittedWork } from '../wipCommit.js'
 import { gitIn } from '../worktree.js'
 import { endLead, noteLead, noteLeadOnce, updateLeadProgress } from './record.js'
 import { stopLead } from './stop.js'
+import { firstLine, gitError } from './text.js'
 
 const runInclude = { task: { include: { workspace: true } }, slave: { select: { id: true, person: { select: { name: true } } } } } as const
 export type LeadRunRow = Prisma.SlaveRunGetPayload<{ include: typeof runInclude }>
 export type LeadTaskRow = NonNullable<LeadRunRow['task']>
 
-const firstLine = (text: string): string => (text.split('\n')[0] ?? '').slice(0, 300)
+/** How much of a failed turn's reason a note or the card carries. */
+const FAILURE_LINE_MAX_CHARS = 300
 
 /**
  * C6: bounds the refused-calls list a continue note carries, so the note (and the instruction that
@@ -150,10 +152,10 @@ export async function concludeLeadTurn(runId: RunId): Promise<void> {
     }
     // Any other failure (an error result, a stall, a crash, a provider refusal): charged unless
     // `platform`; at the attempt cap the version stops `lead_failed`.
-    await releaseLeadTurn(task, run.id, { platform: run.failureClass === 'platform', deliveryId: delivery.id, detail: reason === '' ? null : firstLine(reason) })
+    await releaseLeadTurn(task, run.id, { platform: run.failureClass === 'platform', deliveryId: delivery.id, detail: reason === '' ? null : firstLine(reason, FAILURE_LINE_MAX_CHARS) })
     if (run.providerError) {
       // Spec B7: a line for the report, not a card. The scheduler holds the task for the backoff.
-      await noteLead({ ...at, kind: 'limit_wait', detail: `the provider refused the turn (${firstLine(reason)}); the goal waits and continues in the same session` })
+      await noteLead({ ...at, kind: 'limit_wait', detail: `the provider refused the turn (${firstLine(reason, FAILURE_LINE_MAX_CHARS)}); the goal waits and continues in the same session` })
     }
     return
   }
@@ -191,13 +193,6 @@ type Followed =
   | { readonly kind: 'moved' | 'rewritten' | 'lost' }
   /** `update-ref` failed while the ref stayed where it was (a stale lock, a full disk): git's reason. */
   | { readonly kind: 'stuck'; readonly error: string }
-
-/** The first line of what a failed git call said: its stderr, else the error's own message. */
-function gitError(error: unknown): string {
-  const stderr = typeof error === 'object' && error !== null ? (error as { readonly stderr?: unknown }).stderr : undefined
-  const text = typeof stderr === 'string' && stderr.trim() !== '' ? stderr : error instanceof Error ? error.message : String(error)
-  return text.trim().split('\n')[0] ?? ''
-}
 
 /**
  * Task 6 review: moves the goal's work branch to the lead's tip, never throwing. The work branch is

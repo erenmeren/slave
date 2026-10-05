@@ -23,6 +23,7 @@ import { releaseClaim, removeVerificationWorktree, tamperedReason } from '../ver
 import { gitIn } from '../worktree.js'
 import { noteLead, noteLeadOnce, progressJson } from './record.js'
 import { stopLead, stopLeadInLock } from './stop.js'
+import { firstLine } from './text.js'
 
 /** What a lead-flow version's next proof run checks, who takes it and what it may spend. */
 export type LeadProofScope =
@@ -70,8 +71,6 @@ export async function leadProofScope(
 
 /** Thrown inside the lock when the run no longer holds the claim (a refusal in a transaction throws). */
 class NotTheClaim extends Error {}
-
-const firstLine = (text: string): string => (text.split('\n')[0] ?? '').slice(0, 200)
 
 /**
  * Lead-flow spec P3-P5/P7 (plan A L11/L12): the conclusion of a `succeeded` verification run of a
@@ -194,7 +193,7 @@ export async function concludeLeadVerification(runId: string): Promise<void> {
     }
     // A confirmer's `unverifiable` is a disagreement (disputed, above), not a key nobody could verify.
     for (const item of run.confirmsRunId === null ? items.filter((one) => one.status === 'unverifiable') : []) {
-      await noteLeadOnce({ ...at, kind: 'unverifiable', detail: `${item.key} could not be verified: ${firstLine(item.reason)}` })
+      await noteLeadOnce({ ...at, kind: 'unverifiable', detail: `${item.key} could not be verified: ${firstLine(item.reason, 200)}` })
     }
   }
   await removeVerificationWorktree(workspace.repoPath, run.worktreePath)

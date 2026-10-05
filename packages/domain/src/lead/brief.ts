@@ -61,13 +61,13 @@ export function renderLeadBrief(input: LeadBriefInput): string {
  *  its trailer without importing this module's imports; re-exported here, beside the brief. */
 export { LEAD_RULES } from './rules.js'
 
-const TURN_OPENING: Readonly<Record<Exclude<LeadTurn, 'build'>, string>> = {
+/** A `base` turn's opening names the base branch and a `build` turn's is its own: see {@link renderLeadTurnNote}. */
+const TURN_OPENING: Readonly<Record<Exclude<LeadTurn, 'build' | 'base'>, string>> = {
   rework: 'The independent verification of your work found what follows. Fix it on this same branch, commit, and finish with your closing report again.',
   wrap_up:
     `You have used four fifths of your share of the budget. Wrap up now: commit what works, make sure the README is exact, record every open decision in ${LEAD_DECISIONS_FILE}, and write your closing report. Say plainly what is not finished.`,
   continue: 'Your session was interrupted and is being continued. Check git status and git log first, then carry on with the goal from where you stood.',
   answer: `Nobody answers questions in this flow. Decide it yourself, record the decision and its reason in ${LEAD_DECISIONS_FILE}, and continue building.`,
-  base: '',
 }
 
 /**

@@ -58,7 +58,11 @@ export async function syncLeadStates(workspaceId: string): Promise<void> {
   }
 }
 
-/** The run statuses a live process can be in (the sweep's own set, less `stopping`). */
+/**
+ * The run statuses a live process can be in: the sweep's `SWEEPABLE` (`sweep.ts`, the non-terminal
+ * statuses less `paused` and `stopping`), which the sweep does not export. Kept in step with it by
+ * hand (final review); importing `sweep.ts` here would tie the goal pass to the sweep's module.
+ */
 const LIVE = ['starting', 'working', 'pause_requested', 'resuming'] as const
 
 /**
