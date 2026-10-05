@@ -39,6 +39,8 @@ import {
 import { findPaths, inspectPath } from './detect.js'
 import { setGoal } from './goal.js'
 import { resolveReposRoot, slugify } from './installation.js'
+import { fillLeadRoster } from './lead/autoRoster.js'
+import { workspaceFlow } from './lead/flow.js'
 import { createProjectTeam } from './org.js'
 import { selectPoolPerson, syncPersonPool } from './personPool.js'
 import { assignPerson } from './persons.js'
@@ -72,10 +74,23 @@ export interface IntakeMessageView {
   readonly createdAt: string
 }
 
+/** One persona of the draft's proposed team, as the card shows a helper: who they are in a line. */
+export interface IntakePersona {
+  readonly templateId: string
+  readonly name: string
+  readonly role: string
+  readonly division: string | null
+  /** One line on when to use them: the persona's description, empty when it has none. */
+  readonly description: string
+}
+
 export interface IntakeView {
   readonly id: string
   readonly status: IntakeStatus
   readonly draft: IntakeDraft | null
+  /** The personas the draft's team names, in its order, each once; one the catalogue no longer
+   *  has is left out. Empty without a draft. */
+  readonly team: readonly IntakePersona[]
   readonly messages: readonly IntakeMessageView[]
   readonly stepLog: readonly IntakeStepEntry[]
   readonly workspaceId: string | null
@@ -117,10 +132,20 @@ export async function readIntake(intakeId: string): Promise<Result<IntakeView, C
     (found, message) => parseFacts(message.facts) ?? found,
     null,
   )
+  const draft = parseDraft(row.draft)
+  const proposed = [...new Set((draft?.team ?? []).map((seat) => seat.templateId))]
+  const personas =
+    proposed.length === 0
+      ? []
+      : await prisma.slaveTemplate.findMany({ where: { id: { in: proposed } }, select: { id: true, name: true, role: true, sourceDivision: true, description: true } })
   return ok({
     id: row.id,
     status: row.status,
-    draft: parseDraft(row.draft),
+    draft,
+    team: proposed.flatMap((templateId) => {
+      const persona = personas.find((one) => one.id === templateId)
+      return persona === undefined ? [] : [{ templateId, name: persona.name, role: persona.role, division: persona.sourceDivision, description: persona.description.trim() }]
+    }),
     messages: messages.map((message) => ({
       seq: message.seq,
       role: message.role,
@@ -807,8 +832,18 @@ export async function acceptIntake(
     //    with half the team the person approved is worse than one that says it stopped, and the
     //    resume path re-runs `staff` from the beginning, `alreadyOpen`'s count picking up exactly
     //    where it left off.
+    //
+    //    THE LEAD FLOW HIRES NOBODY HERE. A project born in the lead flow is built by its lead and
+    //    the helper sessions the lead starts, and checked on its own system seats (`ensureLeadSeatsIn`
+    //    made them with the row; `openLeadGoal` records the verifier seat on the delivery and the
+    //    confirmer is named by seat). Nothing in that flow dispatches a department's seat, and an
+    //    extra open seat holding `verifier` is one `staffVerifier` could pick instead of the
+    //    project's own. The people the card proposed are the lead's helpers: step 3b.
     currentStep = 'staff'
-    if (done.get('staff') === undefined) {
+    const leadFlow = (await workspaceFlow(workspaceId)) === 'lead'
+    if (done.get('staff') === undefined && leadFlow) {
+      await appendStep(intakeId, { step: 'staff', status: 'skipped', at: now(), detail: 'the lead flow hires no seats: the proposed people are the lead\'s helpers' })
+    } else if (done.get('staff') === undefined) {
       // The live catalogue, for `claimIntakes`' reason: the division heuristic that decides WHICH
       // seat carries manager and reviewer reads it, and a conversation that never named a path has
       // no `fact` row to take it from.
@@ -909,6 +944,23 @@ export async function acceptIntake(
       }
     }
 
+    // 3b. roster -- lead flow only: the personas the card named become the helpers the lead may call
+    //     on, one person of each (`fillLeadRoster`), BEFORE the goal is set, because setting the
+    //     goal is what starts the build and the lead's first turn reads the roster. Safe to run
+    //     again: a persona that has a person gets no second one, and a roster already written is
+    //     kept as it is -- a crash between the write and this log line resumes into "kept".
+    currentStep = 'roster'
+    if (leadFlow && done.get('roster') === undefined) {
+      const filled = await fillLeadRoster(workspaceId, draft.team.map((seat) => seat.templateId))
+      if (!filled.ok) return fail('roster', filled.error)
+      await appendStep(intakeId, {
+        step: 'roster',
+        status: filled.value.roster.length === 0 ? 'skipped' : 'done',
+        at: now(),
+        detail: filled.value.roster.length === 0 ? 'the draft named no helpers' : `${String(filled.value.roster.length)} helper(s)${filled.value.written ? '' : ', as already chosen'}`,
+      })
+    }
+
     // 4. set_goal -- with the person's own words as the request.
     currentStep = 'set_goal'
     if (done.get('set_goal') === undefined) {
@@ -932,7 +984,7 @@ export async function acceptIntake(
   }
 }
 
-/** The five steps, exported as data for the surfaces that render a log with the steps that have
+/** The steps, exported as data for the surfaces that render a log with the steps that have
  *  not run yet greyed out. `INTAKE_STEPS` is the domain's copy and this is a re-export rather than
  *  a second list. */
 export { INTAKE_STEPS }

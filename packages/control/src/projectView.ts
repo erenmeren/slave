@@ -23,6 +23,7 @@ import {
 } from '@slave-of-ai/domain'
 import { loadGoalReport } from './goalReport.js'
 import { goalSpend, goalWorkedMs } from './lead/spend.js'
+import { proposedPersonas } from './lead/autoRoster.js'
 import { loadLeadRoster } from './lead/roster.js'
 import { leadStatus } from './lead/status.js'
 import { buildPeople, type ActivityLine, type BuildSpend, type PersonRow, type TurnRow } from './projectPeople.js'
@@ -103,6 +104,18 @@ export interface OlderTask {
   readonly status: string
 }
 
+/** One helper the lead may call on, as the Project screen lists the roster. */
+export interface RosterRow {
+  readonly id: string
+  readonly name: string
+  /** The persona's role; null for a person with no persona. */
+  readonly role: string | null
+  /** What they are good at, as the catalogue groups it (the persona's source division). */
+  readonly division: string | null
+  /** One line on when to use them: the persona's description, empty when it has none. */
+  readonly description: string
+}
+
 /** The Project screen's one read model (lead UX design section 10). */
 export interface ProjectView {
   readonly id: string
@@ -118,7 +131,10 @@ export interface ProjectView {
   readonly timeLimitMs: number | null
   /** The lead's model; null is the runtime's own default (C5). */
   readonly leadModel: string | null
-  readonly roster: readonly { readonly id: string; readonly name: string; readonly role: string | null }[]
+  readonly roster: readonly RosterRow[]
+  /** How many people the conversation that created the project proposed, while the roster of a
+   *  lead-flow project is empty (they can be put on it in one go); 0 otherwise. */
+  readonly rosterProposed: number
   /** The newest build's goal text; null before anything was asked for. */
   readonly goal: string | null
   /** The newest build's number (`Workspace.goalVersion`), 0 before the first. */
@@ -320,8 +336,10 @@ export async function projectView(workspaceId: string): Promise<Result<ProjectVi
   const [deliveries, leadSeat, rosterRows] = await Promise.all([
     prisma.goalDelivery.findMany({ where: { workspaceId }, orderBy: { goalVersion: 'desc' } }),
     prisma.slave.findFirst({ where: { team: { workspaceId, name: LEAD_TEAM_NAME }, role: LEAD_SEAT_ROLES.lead, closedAt: null }, select: { model: true } }),
-    prisma.person.findMany({ where: { id: { in: workspace.leadRoster } }, select: { id: true, name: true, template: { select: { role: true } } } }),
+    prisma.person.findMany({ where: { id: { in: workspace.leadRoster } }, select: { id: true, name: true, template: { select: { role: true, sourceDivision: true, description: true } } } }),
   ])
+  // Only while there is nobody to list: this read is polled, and the conversation is read for one hint.
+  const rosterProposed = workspace.flow === 'lead' && workspace.leadRoster.length === 0 ? ((await proposedPersonas(workspaceId))?.length ?? 0) : 0
   const newest = deliveries[0] ?? null
   const phase = projectPhaseOf({
     flow: workspace.flow,
@@ -370,8 +388,9 @@ export async function projectView(workspaceId: string): Promise<Result<ProjectVi
     leadModel: leadSeat?.model ?? null,
     roster: workspace.leadRoster.flatMap((id) => {
       const row = rosterRows.find((person) => person.id === id)
-      return row === undefined ? [] : [{ id: row.id, name: row.name, role: row.template?.role ?? null }]
+      return row === undefined ? [] : [{ id: row.id, name: row.name, role: row.template?.role ?? null, division: row.template?.sourceDivision ?? null, description: (row.template?.description ?? '').trim() }]
     }),
+    rosterProposed,
     goal: workspace.goal,
     goalVersion: workspace.goalVersion,
     build,

@@ -260,7 +260,9 @@ describe('acceptIntake', () => {
    * conductor, one per package, once a goal is split. Intake staffs only the seat that checks the
    * work -- the reviewer, who also verifies -- and the project is created conducted.
    */
-  it('staffs only the reviewer seat, holding reviewer and verifier, for a conducted draft', async (): Promise<void> => {
+  // A conducted project of the packages flow (here: the cursor provider, where the lead flow cannot
+  // run). A project born in the lead flow hires no seat at all: the cases under "the lead's helpers".
+  it('staffs only the reviewer seat, holding reviewer and verifier, for a conducted draft of the packages flow', async (): Promise<void> => {
     const repo = makeRepo()
     const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')
     const qaId = await seedTemplate('QA Engineer', 'testing', 'qa')
@@ -268,6 +270,7 @@ describe('acceptIntake', () => {
     const accepted = await acceptIntake(id, {
       ...draftFor(repo, 'Conducted'),
       delivery: 'conducted',
+      provider: 'cursor',
       team: [
         { templateId: backendId, runtimeRoles: ['backend'] },
         { templateId: qaId, runtimeRoles: ['reviewer'] },
@@ -277,16 +280,169 @@ describe('acceptIntake', () => {
     if (!accepted.ok) throw new Error('unreachable')
 
     const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: accepted.value.workspaceId } })
-    expect(workspace.delivery).toBe('conducted')
-    // The seats the draft staffed: a project born in the lead flow also has its three system
-    // seats, in a team of their own.
+    expect(workspace).toMatchObject({ delivery: 'conducted', flow: 'packages', leadRoster: [] })
     const seats = await prisma.slave.findMany({
-      where: { team: { workspaceId: accepted.value.workspaceId, name: { not: LEAD_TEAM_NAME } } },
+      where: { team: { workspaceId: accepted.value.workspaceId } },
       include: { person: { select: { templateId: true } } },
     })
     expect(seats).toHaveLength(1)
     expect(seats[0]?.person.templateId).toBe(qaId)
     expect(seats[0]?.runtimeRoles).toEqual(['reviewer', 'verifier'])
+    // The packages flow has no roster, and its log says nothing of one.
+    const row = await prisma.intake.findUniqueOrThrow({ where: { id } })
+    expect((row.stepLog as { step: string; status: string }[]).map((entry) => `${entry.step}:${entry.status}`)).toEqual(['create_workspace:done', 'staff:done', 'set_goal:done', 'mark_created:done'])
+  })
+
+  describe('the lead\'s helpers: a lead-flow project is born with the proposed people on its roster', () => {
+    const leadDraft = (repo: string, name: string, team: IntakeDraft['team']): IntakeDraft => ({ ...draftFor(repo, name), delivery: 'conducted', team })
+    const stepsOf = async (id: string): Promise<readonly { step: string; status: string; detail: string | null }[]> =>
+      (await prisma.intake.findUniqueOrThrow({ where: { id } })).stepLog as { step: string; status: string; detail: string | null }[]
+
+    it('puts one person of each proposed persona on the roster, in the draft s order, and hires no seat', async (): Promise<void> => {
+      const repo = makeRepo()
+      const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+      const qaId = await seedTemplate('QA Engineer', 'testing', 'qa')
+      await seedTemplate('Never Asked For', 'design', 'design')
+      await syncPersonPool()
+      const persons = await prisma.person.count()
+      const id = await opened(`it is at ${repo}`)
+
+      const accepted = await acceptIntake(id, leadDraft(repo, 'Led', [
+        { templateId: qaId, runtimeRoles: ['reviewer'] },
+        { templateId: backendId, runtimeRoles: ['backend', 'manager'] },
+        // A second seat of one persona is one helper: a session definition is a persona's person, once.
+        { templateId: qaId, runtimeRoles: ['qa'] },
+      ]))
+      expect(accepted.ok).toBe(true)
+      if (!accepted.ok) throw new Error('unreachable')
+
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: accepted.value.workspaceId } })
+      expect(workspace.flow).toBe('lead')
+      expect(workspace.leadRoster).toHaveLength(2)
+      const roster = await prisma.person.findMany({ where: { id: { in: workspace.leadRoster } }, select: { id: true, templateId: true, poolSlot: true } })
+      // The persona's first pool person, taken as they are: nobody was created.
+      expect(workspace.leadRoster.map((personId) => roster.find((person) => person.id === personId))).toMatchObject([
+        { templateId: qaId, poolSlot: 1 },
+        { templateId: backendId, poolSlot: 1 },
+      ])
+      expect(await prisma.person.count()).toBe(persons + 3) // the project's three system persons, nobody else
+      // No department and no seat beyond the project's own three.
+      expect((await prisma.team.findMany({ where: { workspaceId: workspace.id } })).map((team) => team.name)).toEqual([LEAD_TEAM_NAME])
+      expect(await prisma.slave.count({ where: { team: { workspaceId: workspace.id } } })).toBe(3)
+
+      const steps = await stepsOf(id)
+      expect(steps.map((entry) => `${entry.step}:${entry.status}`)).toEqual(['create_workspace:done', 'staff:skipped', 'roster:done', 'set_goal:done', 'mark_created:done'])
+      expect(steps.find((entry) => entry.step === 'roster')?.detail).toBe('2 helper(s)')
+    })
+
+    it('writes the roster before the goal is set: the first build reads it', async (): Promise<void> => {
+      const repo = makeRepo()
+      const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+      const id = await opened(`it is at ${repo}`)
+
+      throwOnSetGoal = true
+      try {
+        expect((await acceptIntake(id, leadDraft(repo, 'Roster First', [{ templateId: backendId, runtimeRoles: ['backend'] }]))).ok).toBe(false)
+      } finally {
+        throwOnSetGoal = false
+      }
+      const workspace = await prisma.workspace.findFirstOrThrow({ where: { name: 'Roster First' } })
+      expect(workspace.goalVersion).toBe(0)
+      expect(workspace.leadRoster).toHaveLength(1)
+    })
+
+    it('creates a person only for a persona nobody was hired from, and a resumed accept makes no second one and keeps the roster', async (): Promise<void> => {
+      const repo = makeRepo()
+      const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+      const id = await opened(`it is at ${repo}`)
+      const draft = leadDraft(repo, 'Resumed Lead', [{ templateId: backendId, runtimeRoles: ['backend'] }])
+
+      // No pool was ever synced: the persona has nobody.
+      throwOnSetGoal = true
+      try {
+        expect((await acceptIntake(id, draft)).ok).toBe(false)
+      } finally {
+        throwOnSetGoal = false
+      }
+      const first = await prisma.workspace.findFirstOrThrow({ where: { name: 'Resumed Lead' } })
+      expect(first.leadRoster).toHaveLength(1)
+      const hired = await prisma.person.findMany({ where: { templateId: backendId } })
+      expect(hired).toMatchObject([{ id: first.leadRoster[0], name: 'Backend Developer', poolSlot: null }])
+
+      // The card is edited before the second press; the roster the first run wrote stands.
+      const otherId = await seedTemplate('QA Engineer', 'testing', 'qa')
+      const resumed = await acceptIntake(id, { ...draft, team: [{ templateId: otherId, runtimeRoles: ['qa'] }] })
+      expect(resumed.ok).toBe(true)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: first.id } })).leadRoster).toEqual(first.leadRoster)
+      expect(await prisma.person.count({ where: { templateId: { not: null } } })).toBe(1)
+      expect((await stepsOf(id)).filter((entry) => entry.step === 'roster')).toHaveLength(1)
+    })
+
+    it('resumes a roster the log never recorded: the persons are found again and the written roster is kept', async (): Promise<void> => {
+      const repo = makeRepo()
+      const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+      const id = await opened(`it is at ${repo}`)
+      const draft = leadDraft(repo, 'Lost Log Line', [{ templateId: backendId, runtimeRoles: ['backend'] }])
+      throwOnSetGoal = true
+      try {
+        await acceptIntake(id, draft)
+      } finally {
+        throwOnSetGoal = false
+      }
+      const before = await prisma.workspace.findFirstOrThrow({ where: { name: 'Lost Log Line' } })
+      // The crash between the roster's write and its log line: the line is not there.
+      const row = await prisma.intake.findUniqueOrThrow({ where: { id } })
+      await prisma.intake.update({ where: { id }, data: { stepLog: (row.stepLog as { step: string }[]).filter((entry) => entry.step !== 'roster') } })
+
+      expect((await acceptIntake(id, draft)).ok).toBe(true)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: before.id } })).leadRoster).toEqual(before.leadRoster)
+      expect(await prisma.person.count({ where: { templateId: backendId } })).toBe(1)
+      expect((await stepsOf(id)).find((entry) => entry.step === 'roster')).toMatchObject({ status: 'done', detail: '1 helper(s), as already chosen' })
+    })
+
+    it('never takes a released person, and takes one hired by hand when the persona has no pool person', async (): Promise<void> => {
+      const repo = makeRepo()
+      const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+      await prisma.person.create({ data: { name: 'Gone', templateId: backendId, releasedAt: new Date() } })
+      const byHand = await prisma.person.create({ data: { name: 'Ada', templateId: backendId } })
+      const id = await opened(`it is at ${repo}`)
+
+      const accepted = await acceptIntake(id, leadDraft(repo, 'By Hand Lead', [{ templateId: backendId, runtimeRoles: [] }]))
+      expect(accepted.ok).toBe(true)
+      if (!accepted.ok) throw new Error('unreachable')
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: accepted.value.workspaceId } })).leadRoster).toEqual([byHand.id])
+      expect(await prisma.person.count({ where: { templateId: backendId } })).toBe(2)
+    })
+
+    it('fails the roster step for a persona that does not exist, with nothing on the roster, and resumes once the card names one that does', async (): Promise<void> => {
+      const repo = makeRepo()
+      const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+      const id = await opened(`it is at ${repo}`)
+
+      const failed = await acceptIntake(id, leadDraft(repo, 'Unknown Persona', [{ templateId: backendId, runtimeRoles: [] }, { templateId: 'no-such-persona', runtimeRoles: [] }]))
+      expect(failed).toMatchObject({ ok: false, error: { kind: 'template_not_found', templateId: 'no-such-persona' } })
+      const workspace = await prisma.workspace.findFirstOrThrow({ where: { name: 'Unknown Persona' } })
+      expect(workspace).toMatchObject({ leadRoster: [], goalVersion: 0 })
+      expect((await stepsOf(id)).at(-1)).toMatchObject({ step: 'roster', status: 'failed' })
+      expect(await prisma.person.count({ where: { templateId: { not: null } } })).toBe(0)
+
+      const resumed = await acceptIntake(id, leadDraft(repo, 'Unknown Persona', [{ templateId: backendId, runtimeRoles: [] }]))
+      expect(resumed.ok).toBe(true)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })).leadRoster).toHaveLength(1)
+    })
+
+    it('leaves the roster empty for a draft that named nobody, and says skipped', async (): Promise<void> => {
+      const repo = makeRepo()
+      const id = await opened(`it is at ${repo}`)
+      const accepted = await acceptIntake(id, leadDraft(repo, 'Nobody', []))
+      expect(accepted.ok).toBe(true)
+      if (!accepted.ok) throw new Error('unreachable')
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: accepted.value.workspaceId } })).leadRoster).toEqual([])
+      expect((await stepsOf(id)).filter((entry) => entry.step === 'staff' || entry.step === 'roster')).toMatchObject([
+        { step: 'staff', status: 'skipped' },
+        { step: 'roster', status: 'skipped', detail: 'the draft named no helpers' },
+      ])
+    })
   })
 
   it('creates a planned project with every approved seat when the card chose the planner', async (): Promise<void> => {

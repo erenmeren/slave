@@ -65,6 +65,7 @@ export function projectFixture(over: Partial<ProjectView> = {}): ProjectView {
     timeLimitMs: 90 * 60_000,
     leadModel: null,
     roster: [],
+    rosterProposed: 0,
     goal: 'Build a todo app.',
     goalVersion: 2,
     build: buildFixture(),
