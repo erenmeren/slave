@@ -118,8 +118,9 @@ export type RuntimeEvent =
    * against widening for a narrow need), and moving `cursor-stream.test.ts`'s allow-list from six
    * kinds to seven is the proof.
    *
-   * FOUR fields and no fifth. There is no result text, no stdout, no diff and no stack trace: this
-   * event exists so a detector can count failures and tell a finished call from a running one, and
+   * FOUR fields and no fifth (beside lead-flow C1's optional `parentToolUseId`, which names a call,
+   * not its content). There is no result text, no stdout, no diff and no stack trace: this event
+   * exists so a detector can count failures and tell a finished call from a running one, and
    * everything beyond that would make the stream a transcript.
    *
    * `toolName` is the empty string when the line does not carry one -- Claude's `tool_result`
@@ -132,6 +133,11 @@ export type RuntimeEvent =
       readonly toolName: string
       readonly outcome: 'ok' | 'error'
       readonly errorClass: ToolErrorClass | null
+      /**
+       * Lead-flow C1: the line's `parent_tool_use_id` -- the subordinate call whose session got
+       * this result. Absent on the session's own results, as on `tool_call`.
+       */
+      readonly parentToolUseId?: string
     }
   /**
    * M51 R5: one turn's token usage, mid-run.

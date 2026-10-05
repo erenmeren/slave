@@ -852,8 +852,8 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
       }
 
       case 'tool_result': {
-        // M51 R1. One row per completed call, and the four fields are the whole of it -- no
-        // content, no stdout, no diff. This is what makes "a tool call with no result yet is never
+        // M51 R1. One row per completed call, and the four fields (plus lead-flow C1's optional
+        // parent call id) are the whole of it -- no content, no stdout, no diff. This is what makes "a tool call with no result yet is never
         // a trip" decidable from the log months later, and what makes an api-error storm visible at
         // all.
         //
@@ -875,6 +875,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
           toolName: event.toolName !== '' ? event.toolName : (toolNames.get(event.toolUseId) ?? 'unknown'),
           outcome: event.outcome,
           errorClass: event.errorClass,
+          ...(event.parentToolUseId === undefined ? {} : { parentToolUseId: event.parentToolUseId }),
         })
         if (openToolUses.delete(event.toolUseId) && openToolUses.size === 0) {
           await prisma.slaveRun.updateMany({ where: { id: runId, endedAt: null }, data: { toolCallOpenSince: null } })

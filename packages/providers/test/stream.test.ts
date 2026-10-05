@@ -924,3 +924,62 @@ describe('a subordinate call names its session definition (lead flow L16, C1)', 
     }
   })
 })
+
+describe("a subordinate's init and result lines are never the lead's (lead flow C1)", () => {
+  const init = (parent: unknown): string =>
+    JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess_inner', parent_tool_use_id: parent })
+  const result = (parent: unknown): string =>
+    JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      terminal_reason: 'completed',
+      num_turns: 1,
+      total_cost_usd: 0.01,
+      parent_tool_use_id: parent,
+    })
+  const userResult = (parent: unknown): string =>
+    JSON.stringify({
+      type: 'user',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok', is_error: false }] },
+      parent_tool_use_id: parent,
+    })
+
+  it('ignores an init line a subordinate session wrote -- it must not replace the session id `--resume` needs', () => {
+    const line = init('tu_parent')
+    expect(parseStreamLine(line)).toEqual({ kind: 'ignored', line })
+  })
+
+  it('ignores a result line a subordinate session wrote -- it must not replace the lead’s outcome', () => {
+    const line = result('tu_parent')
+    expect(parseStreamLine(line)).toEqual({ kind: 'ignored', line })
+  })
+
+  it('reads a top-level init and result exactly as before, whether the parent is null, absent or not a non-empty string', () => {
+    const absentInit = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess_inner' })
+    for (const line of [init(null), init(''), init(42), absentInit]) {
+      expect(parseStreamLine(line)).toEqual({ kind: 'session_started', sessionId: 'sess_inner' })
+    }
+    const absentResult = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, terminal_reason: 'completed', num_turns: 1, total_cost_usd: 0.01 })
+    for (const line of [result(null), result(''), absentResult]) {
+      expect(parseStreamLine(line)).toMatchObject({ kind: 'terminated', outcome: { isError: false, terminalReason: 'completed', costUsd: 0.01 } })
+    }
+  })
+
+  it('carries the parent call on a tool_result a subordinate session received, and no such key on the session’s own', () => {
+    expect(parseStreamLine(userResult('tu_parent'))).toEqual({
+      kind: 'tool_result',
+      toolUseId: 'toolu_1',
+      toolName: '',
+      outcome: 'ok',
+      errorClass: null,
+      parentToolUseId: 'tu_parent',
+    })
+    expect(parseStreamResults(userResult('tu_parent'))).toEqual([expect.objectContaining({ parentToolUseId: 'tu_parent' })])
+    expect(parseStreamResults(userResult('x'.repeat(300)))[0]?.parentToolUseId).toHaveLength(200)
+    for (const parent of [null, '', 42]) {
+      expect(parseStreamLine(userResult(parent))).not.toHaveProperty('parentToolUseId')
+      expect(parseStreamResults(userResult(parent))[0]).not.toHaveProperty('parentToolUseId')
+    }
+  })
+})

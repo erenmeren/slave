@@ -103,11 +103,16 @@ const initSchema = z.object({
   type: z.literal('system'),
   subtype: z.literal('init'),
   session_id: z.string(),
+  // Lead-flow C1: declared so zod keeps it; read by `parentOf`, as on the assistant envelope.
+  parent_tool_use_id: z.unknown().optional(),
 })
 
 function parseInitLine(raw: unknown, line: string): RuntimeEvent {
   const result = initSchema.safeParse(raw)
   if (!result.success) return { kind: 'unparsable', line }
+  // Lead-flow C1: a subordinate session's init is never the session's own -- taken, it would
+  // replace the session id `--resume` needs.
+  if (parentOf(result.data.parent_tool_use_id) !== null) return { kind: 'ignored', line }
   return { kind: 'session_started', sessionId: result.data.session_id }
 }
 
@@ -294,12 +299,18 @@ const resultSchema = z.object({
     })
     .passthrough()
     .optional(),
+  // Lead-flow C1: declared so zod keeps it; read by `parentOf`, as on the assistant envelope.
+  parent_tool_use_id: z.unknown().optional(),
 })
 
 function parseResultLine(raw: unknown, line: string): RuntimeEvent {
   const result = resultSchema.safeParse(raw)
   if (!result.success) return { kind: 'unparsable', line }
   const data = result.data
+  // Lead-flow C1: a subordinate session's result is never the session's own -- taken, it would
+  // replace the session's outcome. The rule below that a `result` line always terminates is about
+  // the session's own line.
+  if (parentOf(data.parent_tool_use_id) !== null) return { kind: 'ignored', line }
 
   // A `result` line must always produce `terminated` -- the alternative is
   // the orchestrator waiting on a process that has already exited, and no
@@ -485,6 +496,8 @@ const userEnvelopeSchema = z.object({
   message: z.object({
     content: z.array(z.unknown()),
   }),
+  // Lead-flow C1: read by `parentOf`, as on the assistant envelope.
+  parent_tool_use_id: z.unknown().optional(),
 })
 
 const toolResultContentSchema = z.object({
@@ -505,7 +518,7 @@ type ToolResultEvent = Extract<RuntimeEvent, { readonly kind: 'tool_result' }>
  * The ONE place a block becomes an event, shared by {@link parseStreamLine}'s `user` arm and by
  * {@link parseStreamResults}, so the two can never come to disagree about the same block.
  */
-function toolResultEventOf(block: unknown): ToolResultEvent | null {
+function toolResultEventOf(block: unknown, parent: string | null): ToolResultEvent | null {
   const result = toolResultContentSchema.safeParse(block)
   if (!result.success) return null
   // The runtime's OWN boolean, never an inference from the text: a result whose body happens to
@@ -522,6 +535,7 @@ function toolResultEventOf(block: unknown): ToolResultEvent | null {
     toolName: '',
     outcome: failed ? 'error' : 'ok',
     errorClass: failed ? classifyToolError(typeof result.data.content === 'string' ? result.data.content : null) : null,
+    ...(parent === null ? {} : { parentToolUseId: parent.slice(0, 200) }),
   }
 }
 
@@ -545,7 +559,7 @@ function parseUserLine(raw: unknown, line: string): RuntimeEvent {
   if (!envelope.success) return { kind: 'ignored', line }
   const block = envelope.data.message.content.find(isToolResultBlock)
   if (block === undefined) return { kind: 'ignored', line }
-  return toolResultEventOf(block) ?? { kind: 'unparsable', line }
+  return toolResultEventOf(block, parentOf(envelope.data.parent_tool_use_id)) ?? { kind: 'unparsable', line }
 }
 
 /**
@@ -577,10 +591,11 @@ export function parseStreamResults(line: string): readonly ToolResultEvent[] {
   }
   const envelope = userEnvelopeSchema.safeParse(raw)
   if (!envelope.success) return []
+  const parent = parentOf(envelope.data.parent_tool_use_id)
   const events: ToolResultEvent[] = []
   for (const block of envelope.data.message.content) {
     if (!isToolResultBlock(block)) continue
-    const event = toolResultEventOf(block)
+    const event = toolResultEventOf(block, parent)
     if (event !== null) events.push(event)
   }
   return events

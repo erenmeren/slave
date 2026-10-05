@@ -1042,6 +1042,9 @@ export const executionEventSchema = z.discriminatedUnion('type', [
         toolName: z.string().min(1),
         outcome: z.enum(['ok', 'error']),
         errorClass: z.string().min(1).max(40).nullable(),
+        // Lead-flow C1: the subordinate call whose session got this result; absent on the
+        // session's own. An id, never content, so the strictness below keeps its point.
+        parentToolUseId: z.string().min(1).max(200).optional(),
       })
       .strict(),
   }),
