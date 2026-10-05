@@ -2,7 +2,6 @@
 import { act, render, screen } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { DeleteProjectDialog } from '../src/components/app/DeleteProjectDialog'
-import { HelpersView, PAGE } from '../src/components/helpers/HelpersView'
 import { LoginForm } from '../src/components/login/LoginForm'
 import { stubBrowser, stubFetch } from './fixtures/dom'
 
@@ -20,36 +19,6 @@ async function type(element: HTMLElement, value: string): Promise<void> {
     element.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
-
-const helper = (n: number, over: Record<string, unknown> = {}): { id: string; name: string; role: string | null; description: string; speciality: string | null; skills: string[]; projects: { id: string; name: string }[] } => ({
-  id: `p${String(n)}`,
-  name: `Person ${String(n)}`,
-  role: 'Backend Architect',
-  description: 'Builds APIs.',
-  speciality: 'engineering',
-  skills: ['sql'],
-  projects: [],
-  ...over,
-})
-
-describe('Helpers (lead UX design section 6.5)', () => {
-  it('says the catalogue is empty and how to fill it', () => {
-    render(<HelpersView helpers={[]} />)
-    expect(screen.getByTestId('helpers-empty').textContent).toContain('import-catalog')
-  })
-
-  it('draws a page of cards, then more on request, and filters by a search', async () => {
-    const many = Array.from({ length: PAGE + 5 }, (_, n) => helper(n))
-    render(<HelpersView helpers={[...many, helper(999, { name: 'Zed', role: 'Designer', skills: ['figma'], speciality: 'design', projects: [{ id: 'ws-1', name: 'Todo app' }] })]} />)
-    expect(screen.getAllByTestId('helper-card')).toHaveLength(PAGE)
-    await act(async () => screen.getByTestId('helpers-more').click())
-    expect(screen.getAllByTestId('helper-card')).toHaveLength(PAGE + 6)
-    await type(screen.getByTestId('helpers-search'), 'figma')
-    const cards = screen.getAllByTestId('helper-card')
-    expect(cards).toHaveLength(1)
-    expect(cards[0]?.textContent).toContain('On the helper list of Todo app')
-  })
-})
 
 describe('Sign in (lead UX design section 6.7)', () => {
   it('keeps Sign in off until both fields are filled, then posts them', async () => {

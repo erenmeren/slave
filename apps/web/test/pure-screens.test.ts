@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { titleWithCount, waitingTotal } from '../src/components/app/AppSidebar'
 import { waitingReason } from '../src/components/home/HomeView'
-import { matches, specialitiesOf, specialityWord } from '../src/components/helpers/HelpersView'
 import { capFields } from '../src/components/new/NewProject'
+import { skillMatches } from '../src/components/people/SkillsTab'
+import { EMPTY_PEOPLE_QUERY, activeFilterCount, deleteConsequences, divisionWord, fieldPatch, linesOf, peopleHref, peopleQueryString, personaQueryString, plainLine, roleLine, rosterLine, skillSourceWord, stepText, tabOf } from '../src/components/people/words'
 import { unprovenLines } from '../src/components/project/DecisionCard'
 import { taskCounts } from '../src/components/project/OlderTasks'
 import { headerAction, projectPollMs } from '../src/components/project/ProjectScreen'
@@ -110,21 +111,74 @@ describe('Project', () => {
   })
 })
 
-describe('Helpers', () => {
-  const helper = { id: 'p', name: 'Bea', role: 'Backend Architect', description: 'Builds APIs.', speciality: 'engineering', skills: ['api-design', 'sql'], projects: [] }
-
-  it('finds a specialist by any word of their name, role, line or skills', () => {
-    expect(matches(helper, 'backend sql')).toBe(true)
-    expect(matches(helper, 'design')).toBe(true)
-    expect(matches(helper, 'frontend')).toBe(false)
-    expect(matches(helper, '  ')).toBe(true)
+describe('People', () => {
+  it('says a division, a role and where a skill comes from in words', () => {
+    expect(divisionWord('project-management')).toBe('Project management')
+    expect(divisionWord('gis')).toBe('GIS')
+    expect(divisionWord(null)).toBe('No division')
+    expect(roleLine('design', 'design')).toBeNull()
+    expect(roleLine('Tester', null)).toBe('Tester')
+    expect(roleLine('backend-engineer', 'engineering')).toBe('Backend engineer')
+    expect(skillSourceWord('library:ecc')).toBe('ecc')
+    expect(skillSourceWord('personal')).toBe('personal')
   })
 
-  it('orders the specialities busiest first and says them in words', () => {
-    expect(specialitiesOf([helper, { ...helper, id: 'q', speciality: 'design' }, { ...helper, id: 'r' }, { ...helper, id: 's', speciality: null }])).toEqual([
-      { key: 'engineering', count: 2 },
-      { key: 'design', count: 1 },
+  it('builds the list\'s query from the filters, and nothing from no filter', () => {
+    expect(peopleQueryString(EMPTY_PEOPLE_QUERY)).toBe('')
+    expect(peopleQueryString({ q: '  api design ', division: 'none', skillId: 's1', templateId: 't1', onRoster: true, noSkills: true })).toBe('q=api+design&division=none&skill=s1&persona=t1&roster=1&noSkills=1')
+    expect(activeFilterCount(EMPTY_PEOPLE_QUERY)).toBe(0)
+    expect(activeFilterCount({ ...EMPTY_PEOPLE_QUERY, q: 'x', onRoster: true })).toBe(2)
+    expect(personaQueryString({ q: '', division: null, active: null })).toBe('')
+    expect(personaQueryString({ q: 'ux', division: 'design', active: false })).toBe('q=ux&division=design&active=0')
+  })
+
+  it('keeps what is open in the address', () => {
+    expect(peopleHref({ tab: 'people', personId: null, personaId: null, skillId: null, templateId: null })).toBe('/people')
+    expect(peopleHref({ tab: 'personas', personId: null, personaId: 't1', skillId: null, templateId: null })).toBe('/people?tab=personas&persona=t1')
+    expect(peopleHref({ tab: 'people', personId: 'p1', personaId: null, skillId: 's1', templateId: 't1' })).toBe('/people?person=p1&skill=s1&from=t1')
+    expect(tabOf('skills')).toBe('skills')
+    expect(tabOf('nonsense')).toBe('people')
+    expect(tabOf(undefined)).toBe('people')
+  })
+
+  it('turns an editor\'s text into the field it saves, or says why it cannot', () => {
+    expect(linesOf('1. Ask\n\n- Build\n  * Prove it  \n2) Ship')).toEqual(['Ask', 'Build', 'Prove it', 'Ship'])
+    expect(fieldPatch('workflow', 'Ask\nBuild')).toEqual({ value: ['Ask', 'Build'] })
+    expect(fieldPatch('mission', '  Ship it.  ')).toEqual({ value: 'Ship it.' })
+    expect(fieldPatch('mission', 'x'.repeat(241))).toEqual({ problem: 'Keep this to 240 characters (it has 241).' })
+    expect(fieldPatch('body', 'x'.repeat(5000))).toEqual({ value: 'x'.repeat(5000) })
+    expect(fieldPatch('workflow', `ok\n${'y'.repeat(241)}`)).toEqual({ problem: 'Line 2 is longer than 240 characters.' })
+    expect(fieldPatch('capabilities', Array.from({ length: 41 }, (_, n) => `c${String(n)}`).join('\n'))).toEqual({ problem: 'At most 40 lines (there are 41).' })
+  })
+
+  it('draws a step and a line without the catalogue\'s own marks', () => {
+    expect(stepText('Step 1: Read the request')).toBe('Read the request')
+    expect(stepText('2. Build')).toBe('Build')
+    expect(stepText('Build 3 things')).toBe('Build 3 things')
+    expect(plainLine('**Handoff**: see `notes.md`')).toBe('Handoff: see notes.md')
+  })
+
+  it('says which rosters list somebody in a few words', () => {
+    expect(rosterLine([])).toBeNull()
+    expect(rosterLine([{ name: 'Todo' }])).toBe('On Todo')
+    expect(rosterLine([{ name: 'Todo' }, { name: 'Shop' }])).toBe('On Todo and Shop')
+    expect(rosterLine([{ name: 'a' }, { name: 'b' }, { name: 'c' }])).toBe('On 3 projects')
+  })
+
+  it('lists what a delete takes, and says so when it takes nothing else', () => {
+    const skill = { skillId: 's', name: 'sql', providerName: 'local', description: '', fromPersona: false, missing: false }
+    expect(deleteConsequences({ name: 'Bea', ownInstructions: null, skills: [{ ...skill, state: 'persona' }], projects: [{ name: 'Todo', listed: false }], footprint: { projects: [], runs: 0 }, persona: null })).toEqual([
+      'Nothing else: they have no instructions, skill changes, projects or runs of their own.',
     ])
-    expect(specialityWord('project-management')).toBe('Project management')
+    expect(
+      deleteConsequences({ name: 'Bea', ownInstructions: 'Be brief.', skills: [{ ...skill, state: 'granted' }, { ...skill, skillId: 't', state: 'revoked' }], projects: [{ name: 'Todo', listed: true }, { name: 'Shop', listed: false }], footprint: { projects: ['Older'], runs: 1 }, persona: { name: 'Backend' } }),
+    ).toEqual(['Their own instructions.', '2 skill changes made for them.', 'Their place on the helper list of Todo.', 'Their seat in Older.', '1 past run of theirs, with what each recorded.'])
+  })
+
+  it('finds a skill by any word of its name, source or description', () => {
+    const skill = { name: 'api-design', providerName: 'library:ecc', description: 'REST API design patterns' }
+    expect(skillMatches(skill, 'rest ecc')).toBe(true)
+    expect(skillMatches(skill, 'graphql')).toBe(false)
+    expect(skillMatches(skill, ' ')).toBe(true)
   })
 })
