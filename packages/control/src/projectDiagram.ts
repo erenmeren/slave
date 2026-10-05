@@ -392,7 +392,10 @@ export async function buildDiagram(workspaceId: string, goalVersion?: number, no
     edges.push({ id: `lead->${id}`, source: 'lead', target: id, kind: 'helper', label: times(list.length), state })
   }
 
-  let last = lastTurn === undefined ? 'request' : 'lead'
+  // Both checkers hang off whoever built (the second one beside the first, not behind it), and the
+  // result off the last of them.
+  const builder = lastTurn === undefined ? 'request' : 'lead'
+  let last = builder
   for (const [id, name, runs] of [
     ['checker', 'Checker', checkRuns.filter((run) => run.confirmsRunId === null)],
     ['second-checker', 'Second checker', checkRuns.filter((run) => run.confirmsRunId !== null)],
@@ -417,7 +420,7 @@ export async function buildDiagram(workspaceId: string, goalVersion?: number, no
       costUsd: sumCost(runs),
       lastAt: iso(lastAt ?? newest.startedAt),
     })
-    edges.push({ id: `${last}->${id}`, source: last, target: id, kind: 'check', label: id === 'checker' ? `check ${String(runs.length)}` : `confirms check ${String(runs.length)}`, state })
+    edges.push({ id: `${builder}->${id}`, source: builder, target: id, kind: 'check', label: id === 'checker' ? `check ${String(runs.length)}` : `confirms check ${String(runs.length)}`, state })
     for (const run of runs) {
       const entry = checkTally.get(run.id)
       sessions.push({ id: run.id, nodeId: id, label: 'check', state: runState(run), doing: runState(run) === 'working' ? (entry?.doing ?? null) : null, startedAt: run.startedAt.toISOString(), endedAt: iso(run.endedAt), toolCalls: Math.max(entry?.toolCalls ?? 0, run.toolCalls), failedCalls: entry?.failedCalls ?? 0, costUsd: run.costUsd })

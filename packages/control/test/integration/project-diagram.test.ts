@@ -211,7 +211,7 @@ describe('buildDiagram: a build as a diagram', () => {
     ])
     expect(build.nodes[4]).toMatchObject({ name: 'Second checker', doing: 'Running curl /todos' })
     expect(build.edges.slice(-2).map((edge) => [edge.source, edge.target, edge.label])).toEqual([
-      ['checker', 'second-checker', 'confirms check 1'],
+      ['lead', 'second-checker', 'confirms check 1'],
       ['second-checker', 'result', null],
     ])
     // The helper's open step ended with its turn, without a result of its own.
