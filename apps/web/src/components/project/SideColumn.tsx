@@ -91,6 +91,24 @@ export function SideColumn({ project, onOpenSettings }: { readonly project: Proj
         </Card>
       )}
 
+      {build !== null && build.commits.length > 0 && (
+        <Card data-testid="commits" className="gap-3">
+          <CardHeader>
+            <CardTitle className="text-base">Recent commits</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="flex flex-col gap-1.5 text-sm">
+              {build.commits.map((commit) => (
+                <li key={commit.sha} className="flex min-w-0 gap-2">
+                  <code className="shrink-0 font-mono text-xs text-muted-foreground">{commit.sha.slice(0, 7)}</code>
+                  <span className="truncate" title={commit.subject}>{commit.subject}</span>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
       {build !== null && build.notes.length > 0 && (
         <Card data-testid="notes" className="gap-3">
           <CardHeader>

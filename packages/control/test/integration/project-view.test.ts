@@ -105,6 +105,50 @@ describe('projectView (lead UX design section 10)', () => {
     ])
   })
 
+  it('reads everybody on the build: the lead, its helper and the checker, with steps, sessions and cost', async () => {
+    const f = await leadProject()
+    const view = await projectView(f.workspaceId)
+    if (!view.ok) throw new Error('unreachable')
+    const build = view.value.build
+    if (build === null) throw new Error('unreachable')
+
+    expect(build.people.map((person) => [person.id, person.state, person.sessions, person.running, person.toolCalls])).toEqual([
+      ['lead', 'working', 1, 1, 2],
+      ['helper:backend-dev', 'working', 1, 1, 1],
+      ['checker', 'done', 1, 0, 0],
+    ])
+    expect(build.people[0]).toMatchObject({ doing: 'Waiting for its helpers', costUsd: null })
+    // A helper's cost is inside the lead's; the finished check reported its own.
+    expect(build.people[1]).toMatchObject({ name: 'backend-dev', doing: 'Running npm test', costUsd: null })
+    expect(build.people[2]).toMatchObject({ name: 'Checker', costUsd: 1.5 })
+    expect(build.workingNow).toBe(2)
+    expect(build.toolCalls).toBe(3)
+    expect(build.turns).toMatchObject([{ turn: 'rework', status: 'working', costUsd: null, endedAt: null }])
+    expect(build.spend).toMatchObject({ leadUsd: 0, proofUsd: 1.5, totalUsd: build.spentUsd })
+    // Newest first: the helper's open call, the lead's hand-off (open), the lead's finished edit.
+    expect(build.activity.map((line) => [line.who, line.kind, line.outcome])).toEqual([
+      ['backend-dev', 'helper', null],
+      ['Lead', 'lead', null],
+      ['Lead', 'lead', 'ok'],
+    ])
+  })
+
+  it('reads a paused lead and a helper whose call ended as not working, and counts a failed step', async () => {
+    const f = await leadProject()
+    const turn = await prisma.slaveRun.findFirstOrThrow({ where: { leadTurn: { not: null } } })
+    const base = { workspaceId: f.workspaceId, taskId: f.taskId, slaveId: f.leadSeat, runId: turn.id, actor: 'slave' as const }
+    await appendEvent({ ...base, type: 'run.tool_result', payload: { toolUseId: 'call-2', toolName: 'Bash', outcome: 'error', errorClass: null, parentToolUseId: 'call-1' } })
+    await appendEvent({ ...base, type: 'run.tool_result', payload: { toolUseId: 'call-1', toolName: SUBORDINATE, outcome: 'ok', errorClass: null } })
+    await prisma.slaveRun.update({ where: { id: turn.id }, data: { status: 'paused' } })
+
+    const view = await projectView(f.workspaceId)
+    if (!view.ok) throw new Error('unreachable')
+    const people = view.value.build?.people ?? []
+    expect(people[0]).toMatchObject({ id: 'lead', state: 'paused', doing: null })
+    expect(people[1]).toMatchObject({ id: 'helper:backend-dev', state: 'done', running: 0, doing: null, failedCalls: 1 })
+    expect(view.value.build?.workingNow).toBe(0)
+  })
+
   it('lets a helper go once its call has a result, and shows a live check as the checker', async () => {
     const f = await leadProject()
     const turn = await prisma.slaveRun.findFirstOrThrow({ where: { leadTurn: { not: null } } })

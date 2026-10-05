@@ -14,9 +14,13 @@ import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { usePoll } from '@/hooks/usePoll'
 import { api, notifyProjectsChanged } from '@/lib/api'
+import { ActivityFeed } from './ActivityFeed'
+import { BuildStats } from './BuildStats'
+import { CostSection } from './CostSection'
 import { DecisionCard } from './DecisionCard'
 import { GoalSection } from './GoalSection'
 import { OlderTasks } from './OlderTasks'
+import { PeopleTable } from './PeopleTable'
 import { ProofSection } from './ProofSection'
 import { ResultSection } from './ResultSection'
 import { SettingsSheet } from './SettingsSheet'
@@ -161,10 +165,15 @@ export function ProjectScreen({ initial }: { readonly initial: ProjectView }): R
 
       <DecisionCard project={project} onDone={refresh} />
 
+      {lead && <BuildStats project={project} />}
+
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="flex min-w-0 flex-col gap-6">
           <GoalSection project={project} onDone={refresh} />
-          {lead && working && <WhoIsWorking build={build} paused={project.phase === 'paused'} />}
+          {lead && working && (build === null || build.people.length === 0) && <WhoIsWorking build={build} paused={project.phase === 'paused'} />}
+          {lead && build !== null && <PeopleTable build={build} />}
+          {lead && build !== null && <ActivityFeed build={build} />}
+          {lead && build !== null && <CostSection build={build} />}
           {lead && build !== null && <ProofSection build={build} />}
           {lead && <ResultSection project={project} />}
           <OlderTasks project={project} />

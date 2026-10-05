@@ -25,6 +25,7 @@ import { loadGoalReport } from './goalReport.js'
 import { goalSpend, goalWorkedMs } from './lead/spend.js'
 import { loadLeadRoster } from './lead/roster.js'
 import { leadStatus } from './lead/status.js'
+import { buildPeople, type ActivityLine, type PersonRow, type TurnRow } from './projectPeople.js'
 import type { ControlRefusal } from './refusal.js'
 import { workspaceSpend } from './spend.js'
 
@@ -78,6 +79,18 @@ export interface BuildView {
   /** Part of the spend was not measured: the figure is "at least" (lead-flow C7). */
   readonly spendUnmeasured: boolean
   readonly workedMs: number
+  /** Everybody who worked on the build -- the lead, each helper, the checkers -- finished ones included. */
+  readonly people: readonly PersonRow[]
+  /** The lead's turns, oldest first. */
+  readonly turns: readonly TurnRow[]
+  /** The newest tool calls of the build, newest first, each with who made it. */
+  readonly activity: readonly ActivityLine[]
+  /** People with a session open right now. */
+  readonly workingNow: number
+  /** Every tool call of the build. */
+  readonly toolCalls: number
+  /** The spend by who spent it; `unmeasuredRuns` counts runs that ended without a figure. */
+  readonly spend: { readonly leadUsd: number; readonly proofUsd: number; readonly conductorUsd: number; readonly totalUsd: number; readonly unmeasuredRuns: number }
 }
 
 /** A task of an older (packages-flow) project: section 8 of the design. */
@@ -237,6 +250,14 @@ async function buildView(workspaceId: string, delivery: { readonly id: string; r
     })
   }
 
+  const team = await buildPeople({
+    workspaceId,
+    goalVersion: version,
+    deliveryId: delivery.id,
+    spend,
+    helper: (definition) => ({ name: definition === 'general-purpose' ? 'General helper' : helperName(definition), personId: slugs.get(definition) ?? null }),
+  })
+
   const merge = report.ok ? report.value.delivery?.merge ?? null : null
   return {
     version,
@@ -264,6 +285,7 @@ async function buildView(workspaceId: string, delivery: { readonly id: string; r
     spentUsd: spend.totalUsd,
     spendUnmeasured: spend.unmeasuredRuns > 0,
     workedMs,
+    ...team,
   }
 }
 

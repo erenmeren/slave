@@ -28,6 +28,23 @@ export function buildFixture(over: Partial<BuildView> = {}): BuildView {
     spentUsd: 4.2,
     spendUnmeasured: false,
     workedMs: 38 * 60_000,
+    people: [
+      { id: 'lead', kind: 'lead', name: 'Lead', personId: null, state: 'working', doing: 'Running npm test', sessions: 2, running: 1, toolCalls: 40, failedCalls: 1, costUsd: 3.9, lastAt: '2026-10-05T10:01:00.000Z' },
+      { id: 'helper:bea', kind: 'helper', name: 'Bea', personId: 'person-bea', state: 'working', doing: 'Editing src/app.ts', sessions: 1, running: 1, toolCalls: 12, failedCalls: 0, costUsd: null, lastAt: '2026-10-05T10:02:00.000Z' },
+      { id: 'checker', kind: 'checker', name: 'Checker', personId: null, state: 'done', doing: null, sessions: 1, running: 0, toolCalls: 9, failedCalls: 0, costUsd: 0.25, lastAt: '2026-10-05T09:40:00.000Z' },
+    ],
+    turns: [
+      { runId: 'run-0', turn: 'build', status: 'succeeded', resumed: false, costUsd: 3.9, toolCalls: 31, tokensIn: 1200, tokensOut: 9000, workedMs: 30 * 60_000, startedAt: '2026-10-05T09:00:00.000Z', endedAt: '2026-10-05T09:30:00.000Z' },
+      { runId: 'run-1', turn: 'rework', status: 'working', resumed: true, costUsd: null, toolCalls: 9, tokensIn: null, tokensOut: null, workedMs: 8 * 60_000, startedAt: '2026-10-05T09:54:00.000Z', endedAt: null },
+    ],
+    activity: [
+      { id: 'ev-3', at: '2026-10-05T10:02:00.000Z', who: 'Bea', kind: 'helper', text: 'Editing src/app.ts', outcome: null },
+      { id: 'ev-2', at: '2026-10-05T10:01:00.000Z', who: 'Lead', kind: 'lead', text: 'Running npm test', outcome: 'error' },
+      { id: 'ev-1', at: '2026-10-05T10:00:00.000Z', who: 'Lead', kind: 'lead', text: 'Reading package.json', outcome: 'ok' },
+    ],
+    workingNow: 2,
+    toolCalls: 61,
+    spend: { leadUsd: 3.9, proofUsd: 0.25, conductorUsd: 0.05, totalUsd: 4.2, unmeasuredRuns: 0 },
     ...over,
   }
 }
