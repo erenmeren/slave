@@ -37,10 +37,10 @@ describe('listPeople', () => {
     const ids = await seed()
     const page = await listPeople()
     expect(page.people).toEqual([
-      { id: ids.bea, name: 'Bea', role: 'Backend Architect', division: 'engineering', description: 'Builds APIs.', templateId: ids.backend, skillCount: 2, ownInstructions: true, projects: [{ id: ids.todo, name: 'Todo' }], working: false },
-      { id: ids.cem, name: 'Cem', role: 'Backend Architect', division: 'engineering', description: 'Builds APIs.', templateId: ids.backend, skillCount: 2, ownInstructions: false, projects: [], working: false },
-      { id: ids.dee, name: 'Dee', role: 'Designer', division: 'design', description: 'Draws screens.', templateId: ids.designer, skillCount: 1, ownInstructions: false, projects: [], working: false },
-      { id: ids.free, name: 'Free Person', role: null, division: null, description: '', templateId: null, skillCount: 0, ownInstructions: false, projects: [], working: false },
+      { id: ids.bea, name: 'Bea', personaName: 'Backend Architect', role: 'Backend Architect', division: 'engineering', description: 'Builds APIs.', templateId: ids.backend, skillCount: 2, ownInstructions: true, projects: [{ id: ids.todo, name: 'Todo' }], working: false },
+      { id: ids.cem, name: 'Cem', personaName: 'Backend Architect', role: 'Backend Architect', division: 'engineering', description: 'Builds APIs.', templateId: ids.backend, skillCount: 2, ownInstructions: false, projects: [], working: false },
+      { id: ids.dee, name: 'Dee', personaName: 'UI Designer', role: 'Designer', division: 'design', description: 'Draws screens.', templateId: ids.designer, skillCount: 1, ownInstructions: false, projects: [], working: false },
+      { id: ids.free, name: 'Free Person', personaName: null, role: null, division: null, description: '', templateId: null, skillCount: 0, ownInstructions: false, projects: [], working: false },
     ])
     expect(page).toMatchObject({ total: 4, all: 4, offset: 0, limit: 48 })
     expect(page.divisions).toEqual([{ key: 'engineering', count: 2 }, { key: 'design', count: 1 }, { key: null, count: 1 }])

@@ -41,7 +41,9 @@ export interface PeopleFilters {
 export interface PersonCard {
   readonly id: string
   readonly name: string
-  /** The persona's role; null for a person made from nothing. */
+  /** The name of the persona they were made from ("Backend Architect"); null for a person made from nothing. */
+  readonly personaName: string | null
+  /** The persona's role, as the scheduler of an older project matches it; null with no persona. */
   readonly role: string | null
   readonly division: string | null
   /** The persona's one line; empty when it has none. */
@@ -191,6 +193,7 @@ export async function listPeople(filters: PeopleFilters = {}, page: PageRequest 
     people: shown.map((person) => ({
       id: person.id,
       name: person.name,
+      personaName: person.templateName,
       role: person.role,
       division: person.division,
       description: person.description,
