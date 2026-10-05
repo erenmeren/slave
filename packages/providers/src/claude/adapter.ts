@@ -462,7 +462,7 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         // its `tool_use` block, and that parser returns exactly one event per line. Pushed AFTER
         // the line's own event: the meter reports on the turn that just happened.
         const usage = parseStreamUsage(line)
-        if (usage !== null) queue.push({ kind: 'usage', input: usage.input, output: usage.output })
+        if (usage !== null) queue.push({ kind: 'usage', input: usage.input, output: usage.output, ...(usage.message === undefined ? {} : { message: usage.message }) })
       })
       lines.once('close', () => {
         // One last drain before the queue closes: the tap's final line may still be in flight

@@ -84,6 +84,31 @@ export function isProviderRefusal(outcome: RunOutcome): boolean {
  * not act on -- it is distinct from `unparsable`, which means the line
  * could not be understood at all.
  */
+/**
+ * One assistant message's usage as its stream line reports it (live cost estimate).
+ *
+ * The SAME message is emitted on several lines -- one per content block -- and every one repeats
+ * the message's usage, so these figures are per MESSAGE and a reader must count an id once. That is
+ * the whole difference from the `usage` event's `{ input, output }` floor, which is summed per line
+ * and therefore leaves the cache counters out.
+ *
+ * `output` is what the line says, which on every recording is the count at the START of the message
+ * and far under what the message was billed; `contentChars` is how much THIS line's content says
+ * (text, a tool call's arguments, shown thinking), the other evidence of output a live reader has.
+ * `parentToolUseId` is the helper call whose session wrote the message; null for the session's own.
+ */
+export interface MessageUsage {
+  readonly id: string
+  readonly model: string | null
+  readonly input: number
+  readonly output: number
+  readonly cacheRead: number
+  readonly cacheWrite5m: number
+  readonly cacheWrite1h: number
+  readonly parentToolUseId: string | null
+  readonly contentChars: number
+}
+
 export type RuntimeEvent =
   | { readonly kind: 'session_started'; readonly sessionId: string }
   | {
@@ -164,7 +189,16 @@ export type RuntimeEvent =
    * Claude only: Cursor's stream carries no per-turn usage at all (`reportsCost: false`, and its
    * `result` line's `usage` is the only figure it has).
    */
-  | { readonly kind: 'usage'; readonly input: number; readonly output: number }
+  | {
+      readonly kind: 'usage'
+      readonly input: number
+      readonly output: number
+      /**
+       * Live cost: the line's own MESSAGE, for a reader that counts each message once by its id.
+       * Absent when the line names no message. Never summed per line -- see {@link MessageUsage}.
+       */
+      readonly message?: MessageUsage
+    }
   | { readonly kind: 'text'; readonly text: string }
   /**
    * A `PreToolUse` hook began for the most recent `tool_use` (M21 C1). Emitted for `PreToolUse`

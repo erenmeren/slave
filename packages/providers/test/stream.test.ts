@@ -983,3 +983,70 @@ describe("a subordinate's init and result lines are never the lead's (lead flow 
     }
   })
 })
+
+describe('parseStreamUsage: the message behind a line (live cost)', () => {
+  const line = (over: Record<string, unknown>, message: Record<string, unknown>): string =>
+    JSON.stringify({ type: 'assistant', parent_tool_use_id: null, ...over, message: { id: 'msg_1', model: 'claude-opus-5', content: [], ...message } })
+
+  it('reads the id, the model, all five counters and both cache-write tiers', () => {
+    const raw = line({}, {
+      content: [{ type: 'text', text: 'hello' }],
+      usage: { input_tokens: 2, output_tokens: 7, cache_creation_input_tokens: 300, cache_read_input_tokens: 900, cache_creation: { ephemeral_5m_input_tokens: 100, ephemeral_1h_input_tokens: 200 } },
+    })
+    expect(parseStreamUsage(raw)).toEqual({
+      input: 2,
+      output: 7,
+      message: { id: 'msg_1', model: 'claude-opus-5', input: 2, output: 7, cacheRead: 900, cacheWrite5m: 100, cacheWrite1h: 200, parentToolUseId: null, contentChars: 5 },
+    })
+  })
+
+  it('leaves the floor exactly as it was: raw input and output, no cache counter in it', () => {
+    const raw = line({}, { usage: { input_tokens: 2, output_tokens: 7, cache_creation_input_tokens: 100, cache_read_input_tokens: 900 } })
+    const usage = parseStreamUsage(raw)
+    expect(usage?.input).toBe(2)
+    expect(usage?.output).toBe(7)
+  })
+
+  it('names the helper call a line belongs to, and null for the session\u2019s own', () => {
+    const usage = { input_tokens: 1, output_tokens: 1 }
+    expect(parseStreamUsage(line({ parent_tool_use_id: 'toolu_helper' }, { usage }))?.message?.parentToolUseId).toBe('toolu_helper')
+    expect(parseStreamUsage(line({ parent_tool_use_id: null }, { usage }))?.message?.parentToolUseId).toBeNull()
+    expect(parseStreamUsage(line({ parent_tool_use_id: '' }, { usage }))?.message?.parentToolUseId).toBeNull()
+    expect(parseStreamUsage(JSON.stringify({ type: 'assistant', message: { id: 'msg_1', usage } }))?.message?.parentToolUseId).toBeNull()
+  })
+
+  it('repeats the same message on each of its lines, so a reader can count it once by id', () => {
+    // The CLI emits one line per content block; every one carries the message's usage again.
+    const usage = { input_tokens: 2, output_tokens: 2, cache_read_input_tokens: 15_900 }
+    const first = parseStreamUsage(line({}, { content: [{ type: 'thinking', thinking: '', signature: 'abc' }], usage }))?.message
+    const second = parseStreamUsage(line({}, { content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' } }], usage }))?.message
+    expect(first?.id).toBe('msg_1')
+    expect(second?.id).toBe('msg_1')
+    expect(first?.cacheRead).toBe(15_900)
+    expect(second?.cacheRead).toBe(15_900)
+    // What each line SAYS differs: hidden thinking says nothing, a tool call says its arguments.
+    expect(first?.contentChars).toBe(0)
+    expect(second?.contentChars).toBe(JSON.stringify({ command: 'ls' }).length)
+  })
+
+  it('reads a cache write with no split as the 5-minute tier, the cheaper of the two', () => {
+    const message = parseStreamUsage(line({}, { usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 500 } }))?.message
+    expect(message?.cacheWrite5m).toBe(500)
+    expect(message?.cacheWrite1h).toBe(0)
+  })
+
+  it('carries no message when the line names none, or names no model', () => {
+    const usage = { input_tokens: 1, output_tokens: 1 }
+    expect(parseStreamUsage(JSON.stringify({ type: 'assistant', message: { content: [], usage } }))).toEqual({ input: 1, output: 1 })
+    expect(parseStreamUsage(JSON.stringify({ type: 'assistant', message: { id: 'msg_1', content: [], usage } }))?.message?.model).toBeNull()
+  })
+
+  it('reads every assistant line of the recorded run, each with its own message id and a 1-hour write', () => {
+    const lines = readFileSync(new URL('./fixtures/complete.ndjson', import.meta.url), 'utf8').split('\n').filter((one) => one !== '')
+    const messages = lines.flatMap((one) => parseStreamUsage(one)?.message ?? [])
+    expect(messages.map((message) => message.id)).toEqual(['msg_011CeAiWoz1djsMBzDUS5dbS', 'msg_011CeAiag4dNRiwmXJazfUmd', 'msg_011CeAiaTgjj94PzKoDjh1am', 'msg_011CeAiXQJWZ8SCmdiqGqE5h'])
+    expect(messages.every((message) => message.model === 'claude-opus-5' && message.parentToolUseId === null && message.cacheWrite5m === 0)).toBe(true)
+    expect(messages.map((message) => message.cacheWrite1h)).toEqual([15_148, 1_114, 15_114, 1_584])
+    expect(messages.map((message) => message.cacheRead)).toEqual([15_900, 31_014, 15_900, 31_048])
+  })
+})

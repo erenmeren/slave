@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { hashToolInput } from '../hash.js'
 import { CLAUDE_SUMMARY_ARG_KEYS, isRecord, summaryFor } from '../runtime/summary.js'
 import { classifyToolError } from '../tool-result.js'
-import type { RuntimeEvent } from '../types.js'
+import type { MessageUsage, RuntimeEvent } from '../types.js'
 
 /**
  * `parseStreamLine` is a pure, total function: one NDJSON line from the
@@ -603,10 +603,18 @@ export function parseStreamResults(line: string): readonly ToolResultEvent[] {
 
 const assistantUsageSchema = z.object({
   type: z.literal('assistant'),
+  // Live cost: declared so zod keeps it; read by `parentOf`, as on the tool-call envelope.
+  parent_tool_use_id: z.unknown().optional(),
   message: z.object({
-    // The two cache counters are deliberately NOT read here (fix round 1, review Important 1) --
-    // they belong to the terminal `result` line's billed figure, not to a per-turn floor. They are
-    // still present on the real line and `.passthrough()` lets them through unread.
+    // Live cost: the message's own id and model. One message is emitted on SEVERAL lines (one per
+    // content block), each repeating the same usage, so the id is what a reader dedupes by.
+    id: z.unknown().optional(),
+    model: z.unknown().optional(),
+    content: z.unknown().optional(),
+    // The two cache counters are deliberately NOT part of the `{ input, output }` floor (fix round
+    // 1, review Important 1) -- they belong to the terminal `result` line's billed figure, not to a
+    // per-turn floor. They are read only into `message`, the per-message figure the live cost
+    // estimate dedupes by id.
     usage: z
       .object({
         input_tokens: z.number().optional(),
@@ -616,6 +624,27 @@ const assistantUsageSchema = z.object({
       .optional(),
   }),
 })
+
+const count = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0)
+
+/**
+ * How much a line's content blocks SAY, in characters: text, a tool call's arguments, and any
+ * thinking text the line shows. The stream's `output_tokens` on an assistant line is the count at
+ * the START of the message (measured: 2 and 3 against the result line's 741 on
+ * `test/fixtures/complete.ndjson`), so what was visibly written is the only other evidence of
+ * output a live reader has. Hidden thinking is not on the line and is not counted.
+ */
+function contentCharsOf(content: unknown): number {
+  if (!Array.isArray(content)) return 0
+  let chars = 0
+  for (const block of content) {
+    if (!isRecord(block)) continue
+    if (block['type'] === 'text' && typeof block['text'] === 'string') chars += block['text'].length
+    else if (block['type'] === 'thinking' && typeof block['thinking'] === 'string') chars += block['thinking'].length
+    else if (block['type'] === 'tool_use') chars += JSON.stringify(block['input'] ?? null).length
+  }
+  return chars
+}
 
 /**
  * One assistant line's token usage, or null (M51 R5).
@@ -642,8 +671,13 @@ const assistantUsageSchema = z.object({
  * What this figure is NOT: the run's total. It is a FLOOR in BOTH halves -- 8 against 63,684 in,
  * 27 against 741 out (plan erratum E4, and both directions pinned in `test/stream.test.ts`) -- that
  * the pump may show while the run is live, and the terminal write replaces it.
+ *
+ * `message` (live cost) is a SEPARATE reading of the same line and changes nothing above: the
+ * message's id, model, all five token counters, the helper call the line belongs to, and how much
+ * its content says. It is for a reader that counts each message ONCE by id -- which is what makes
+ * the cache counters safe to read at all -- and it is absent on a line that names no message.
  */
-export function parseStreamUsage(line: string): { readonly input: number; readonly output: number } | null {
+export function parseStreamUsage(line: string): { readonly input: number; readonly output: number; readonly message?: MessageUsage } | null {
   let raw: unknown
   try {
     raw = JSON.parse(line)
@@ -655,5 +689,31 @@ export function parseStreamUsage(line: string): { readonly input: number; readon
   const usage = parsed.data.message.usage
   if (usage === undefined) return null
   if (typeof usage.input_tokens !== 'number' || typeof usage.output_tokens !== 'number') return null
-  return { input: usage.input_tokens, output: usage.output_tokens }
+  const floor = { input: usage.input_tokens, output: usage.output_tokens }
+  // Live cost: the per-MESSAGE figure, only when the line names its message -- without an id there
+  // is nothing to dedupe by, and a figure counted once per line is the double count the floor above
+  // exists to avoid.
+  const id = parsed.data.message.id
+  if (typeof id !== 'string' || id === '') return floor
+  const model = parsed.data.message.model
+  const creation = usage['cache_creation']
+  const written = count(usage['cache_creation_input_tokens'])
+  const write1h = isRecord(creation) ? count(creation['ephemeral_1h_input_tokens']) : 0
+  // A line with no split says only how much was written: read as the 5-minute tier, the cheaper of
+  // the two, so an unknown never raises the figure.
+  const write5m = isRecord(creation) ? count(creation['ephemeral_5m_input_tokens']) : written
+  return {
+    ...floor,
+    message: {
+      id: id.slice(0, 200),
+      model: typeof model === 'string' && model !== '' ? model.slice(0, 200) : null,
+      input: count(usage.input_tokens),
+      output: count(usage.output_tokens),
+      cacheRead: count(usage['cache_read_input_tokens']),
+      cacheWrite5m: write5m,
+      cacheWrite1h: write1h,
+      parentToolUseId: parentOf(parsed.data.parent_tool_use_id)?.slice(0, 200) ?? null,
+      contentChars: contentCharsOf(parsed.data.message.content),
+    },
+  }
 }
