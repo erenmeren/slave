@@ -27,8 +27,9 @@
  * List prices per MILLION tokens for the Anthropic first-party API, as published at the pin date
  * 2026-06-24. They are pinned BY HAND, the way `packages/providers/src/models.ts`'s
  * `CLAUDE_CODE_MODELS` is pinned by hand, and they are updated with it -- `source: 'static'` is the
- * honest word for both. Cache-tier rates are deliberately NOT modelled: see the billed-input note
- * below.
+ * honest word for both. Cache-tier rates are deliberately NOT modelled by {@link estimateCostUsd}:
+ * see the billed-input note below. {@link estimateMessageCostUsd}, at the foot of this file, is the
+ * one function that models them, for a single message whose counters are known apart.
  *
  * ## Which token figure this multiplies, said out loud
  *
@@ -114,4 +115,91 @@ export function estimateCostUsd(
   if (price === undefined) return null
   if (!Number.isFinite(tokens.input) || !Number.isFinite(tokens.output)) return null
   return (tokens.input * price.inputPerMTok + tokens.output * price.outputPerMTok) / 1_000_000
+}
+
+/**
+ * Prices for models a session's own STREAM names that {@link MODEL_PRICES} does not carry (live
+ * cost estimate).
+ *
+ * A separate table on purpose. `MODEL_PRICES` is pinned to the roster a person can pick from
+ * (`packages/providers/test/models.test.ts` holds the two together), and what the CLI actually runs
+ * when nobody picked is its own choice: MEASURED 2026-10-05, a lead session started with no model
+ * wrote `"model": "claude-opus-5-5"` on every assistant line, an id the roster does not offer. An
+ * estimate that prices by what the stream SAYS needs that id priced; the roster does not need it
+ * selectable.
+ *
+ * Anthropic first-party list prices per MILLION tokens, as published at the pin date 2026-09-25,
+ * pinned by hand like the table above.
+ */
+export const STREAM_MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
+  'claude-opus-5-5': { inputPerMTok: 4, outputPerMTok: 20 },
+  'claude-sonnet-5-5': { inputPerMTok: 2, outputPerMTok: 10 },
+}
+
+/**
+ * The cache tiers, as multiples of a model's input price.
+ *
+ * MEASURED, not read off a page: `packages/providers/test/fixtures/complete.ndjson`'s result line
+ * reports, for claude-opus-5, input 4, output 741, cache read 46,948 and a one-hour cache write of
+ * 16,732 at a cost of 0.209339 -- which is input x $5/M + output x $25/M + read x 0.1 x $5/M +
+ * write x 2 x $5/M to the last digit. The five-minute write tier is the published 1.25.
+ */
+export const CACHE_READ_MULTIPLIER = 0.1
+export const CACHE_WRITE_5M_MULTIPLIER = 1.25
+export const CACHE_WRITE_1H_MULTIPLIER = 2
+
+/**
+ * Models whose cache READ price is not {@link CACHE_READ_MULTIPLIER} of their input price, per
+ * million tokens (published at the pin date 2026-09-25).
+ */
+export const CACHE_READ_PER_MTOK: Readonly<Record<string, number>> = {
+  'claude-fable-5-1': 0.25,
+  'claude-opus-5-5': 0.2,
+}
+
+/** One message's five token counters, as its stream line reports them. */
+export interface MessageTokens {
+  readonly input: number
+  readonly output: number
+  readonly cacheRead: number
+  readonly cacheWrite5m: number
+  readonly cacheWrite1h: number
+}
+
+/** The price row a stream's model id names, or null: suffix and alias resolved, then a dated snapshot's date dropped. */
+export function streamModelPrice(model: string | null): { readonly id: string; readonly price: ModelPrice } | null {
+  const id = normaliseModelId(model)
+  if (id === null) return null
+  for (const candidate of [id, id.replace(/-\d{8}$/, '')]) {
+    const price = MODEL_PRICES[candidate] ?? STREAM_MODEL_PRICES[candidate]
+    if (price !== undefined) return { id: candidate, price }
+  }
+  return null
+}
+
+/**
+ * What ONE message would cost on this model, cache tiers included, or `null` when the model has no
+ * price (live cost estimate).
+ *
+ * `null` and never a guess, for the reason {@link estimateCostUsd} gives: a figure is believed. A
+ * caller counts such a message as unpriced and says so.
+ *
+ * AN ESTIMATE, under the rule at the top of this file: it is shown beside a reported figure and is
+ * never written over one or added into one. No guardrail, budget or limit reads it.
+ */
+export function estimateMessageCostUsd(model: string | null, tokens: MessageTokens): number | null {
+  const found = streamModelPrice(model)
+  if (found === null) return null
+  const counters = [tokens.input, tokens.output, tokens.cacheRead, tokens.cacheWrite5m, tokens.cacheWrite1h]
+  if (counters.some((value) => !Number.isFinite(value) || value < 0)) return null
+  const { inputPerMTok, outputPerMTok } = found.price
+  const readPerMTok = CACHE_READ_PER_MTOK[found.id] ?? inputPerMTok * CACHE_READ_MULTIPLIER
+  return (
+    (tokens.input * inputPerMTok +
+      tokens.output * outputPerMTok +
+      tokens.cacheRead * readPerMTok +
+      tokens.cacheWrite5m * inputPerMTok * CACHE_WRITE_5M_MULTIPLIER +
+      tokens.cacheWrite1h * inputPerMTok * CACHE_WRITE_1H_MULTIPLIER) /
+    1_000_000
+  )
 }
