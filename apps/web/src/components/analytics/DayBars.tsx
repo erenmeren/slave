@@ -4,7 +4,8 @@ import { dayWord, labelledDays, niceCeiling, type Column } from './words'
 /**
  * A column per day, hand-made from plain boxes -- no chart library. A column's parts are stacked
  * bottom first; the scale runs to a round number at or above the busiest day, so days are compared
- * against each other. A day with nothing is an empty slot, never left out. With no figure on any
+ * against each other. A part grows by its share of the day (a grow factor under one would fill only
+ * that fraction of the column). A day with nothing is an empty slot, never left out. With no figure on any
  * day the frame still stands, and `empty` says why it is bare.
  */
 export function DayBars({ id, label, columns, format, empty }: { readonly id: string; readonly label: string; readonly columns: readonly Column[]; readonly format: (value: number) => string; readonly empty: string }): React.JSX.Element {
@@ -50,7 +51,7 @@ export function DayBars({ id, label, columns, format, empty }: { readonly id: st
                 {column.total > 0 && (
                   <div className="flex w-full max-w-10 flex-col-reverse overflow-hidden rounded-t-sm transition-opacity group-hover:opacity-80" style={{ height: `${String((column.total / ceiling) * 100)}%`, minHeight: 3 }}>
                     {column.segments.map((segment) => (
-                      <div key={segment.id} data-series={segment.id} className={cn('min-h-px w-full border-t border-background first:border-t-0', segment.tone)} style={{ flex: `${String(segment.value)} 0 0` }} />
+                      <div key={segment.id} data-series={segment.id} className={cn('min-h-px w-full border-t border-background first:border-t-0', segment.tone)} style={{ flex: `${String((segment.value / column.total) * 100)} 0 0` }} />
                     ))}
                   </div>
                 )}
