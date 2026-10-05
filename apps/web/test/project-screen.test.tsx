@@ -13,7 +13,9 @@ beforeAll(() => stubBrowser())
 afterEach(() => vi.unstubAllGlobals())
 
 function show(project: ProjectView): ReturnType<typeof stubFetch> {
-  const fetchMock = stubFetch(() => ({ body: { project } }))
+  // The Continue route answers with its own envelope (how many paused runs resume); every other
+  // call here is the screen's refresh.
+  const fetchMock = stubFetch((url) => (url.endsWith('/continue') ? { body: { ok: true, cleared: true, requested: [], refused: [] } } : { body: { project } }))
   render(<ProjectScreen initial={project} />)
   return fetchMock
 }

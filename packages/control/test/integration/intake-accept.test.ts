@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from '
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
-import { INTAKE_BOOTSTRAP_VERIFY_COMMAND, INTAKE_MAX_SEATS_PER_TEMPLATE, type IntakeDraft } from '@slave-of-ai/domain'
+import { INTAKE_BOOTSTRAP_VERIFY_COMMAND, INTAKE_MAX_SEATS_PER_TEMPLATE, LEAD_TEAM_NAME, type IntakeDraft } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { acceptIntake, openIntake, sendIntakeMessage } from '../../src/intake.js'
 import { setInstallationSettings } from '../../src/installation.js'
@@ -278,8 +278,10 @@ describe('acceptIntake', () => {
 
     const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: accepted.value.workspaceId } })
     expect(workspace.delivery).toBe('conducted')
+    // The seats the draft staffed: a project born in the lead flow also has its three system
+    // seats, in a team of their own.
     const seats = await prisma.slave.findMany({
-      where: { team: { workspaceId: accepted.value.workspaceId } },
+      where: { team: { workspaceId: accepted.value.workspaceId, name: { not: LEAD_TEAM_NAME } } },
       include: { person: { select: { templateId: true } } },
     })
     expect(seats).toHaveLength(1)

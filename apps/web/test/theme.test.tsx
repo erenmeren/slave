@@ -16,8 +16,26 @@ function Resolved(): React.JSX.Element {
   return <span data-testid="resolved" data-theme={theme}>{resolved}</span>
 }
 
+/**
+ * A store of its own for every test: under Node 25 and later the runtime's own `localStorage`
+ * global (undefined without `--localstorage-file`) stands where jsdom's would be.
+ */
+function memoryStorage(): Storage {
+  const items = new Map<string, string>()
+  return {
+    get length() { return items.size },
+    clear: () => items.clear(),
+    getItem: (key) => items.get(key) ?? null,
+    key: (index) => [...items.keys()][index] ?? null,
+    removeItem: (key) => void items.delete(key),
+    setItem: (key, value) => void items.set(key, String(value)),
+  }
+}
+
 beforeEach(() => {
-  window.localStorage.clear()
+  const storage = memoryStorage()
+  vi.stubGlobal('localStorage', storage)
+  Object.defineProperty(window, 'localStorage', { configurable: true, value: storage })
   document.documentElement.classList.remove('dark')
 })
 
