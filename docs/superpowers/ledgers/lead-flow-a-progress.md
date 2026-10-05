@@ -144,7 +144,12 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
   confirm itself. Adapted, not weakened: `lead-open`'s `failR1Once` now fails R1 for the confirmer too.
   Deviations, accepted: the smoke step is decided before `workspace.smoke_run` so a stop records
   `reworkedPackage: null`; a lead-flow confirmation re-checks `everyPackageIntegrated` in its locked claim.
-- Task 10 -- reviewed: `b801c64` (+ review fixes). Review: CLEAN with six minors (all being fixed). Deviations,
+- Task 10 -- done, reviewed: `b801c64` + review fixes `cf92a15`, `d0d2c34`, `5b1b05e`. Review: CLEAN with six
+  minors, all fixed: Approve on a version whose work branch is gone is refused with the reason (was a throw
+  after the card was claimed); the packages flow's Approve of a card whose row is gone is `none` as before;
+  the state sync does not overwrite a `left` written meanwhile; the time limit also ends a base turn of an
+  accepted version; a moved base is not merged into a dirty lead worktree, and each non-conflict reason is
+  said once. Deviations,
   accepted: `leadTakeBaseIn` never throws on git (null-safe reads; a conflict told apart by `MERGE_HEAD`; the
   worktree must exist and be on the lead's branch; a lost compare-and-swap is `unmoved`); `baseCommit` and the
   reopened progress written in one locked write; a failed or cancelled lead task is `unmoved` (the plan's text
