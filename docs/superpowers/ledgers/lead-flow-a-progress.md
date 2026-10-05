@@ -154,6 +154,12 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
   worktree must exist and be on the lead's branch; a lost compare-and-swap is `unmoved`); `baseCommit` and the
   reopened progress written in one locked write; a failed or cancelled lead task is `unmoved` (the plan's text
   would have waited for ever); `confirm` cleared with `recheckKeys`/`failing` on reopen.
+- Task 11 -- done: `5ae2959` (tests only). Every assertion of the plan held against Tasks 1-10 as built; no
+  product fix was needed. Two test-only adjustments: `new Set<string>` (the plan's snippet failed typecheck), and
+  a check that each run directory still exists before reading its (absent) extras file.
+- Task 12 -- typecheck clean; vocabulary gate PASS; no `agency-agent[s]` added (the 15 hits are older plan files,
+  the same on main); drift check "No difference detected"; `web:build` passes; hook-plane scripts unchanged
+  since the spec commit. Whole suite and gates: see Results.
 
 ## Deferred minor findings
 
