@@ -12,7 +12,6 @@ const config: NextConfig = {
       { source: '/slaves', destination: '/people', permanent: false },
       { source: '/skills', destination: '/people?tab=skills', permanent: false },
       { source: '/workforce', destination: '/people', permanent: false },
-      { source: '/analytics', destination: '/', permanent: false },
       { source: '/sim', destination: '/', permanent: false },
       { source: '/sim/:path*', destination: '/', permanent: false },
       { source: '/w/:workspaceId/:tab(tasks|activity|graph|office|knowledge|organization|settings)', destination: '/w/:workspaceId', permanent: false },

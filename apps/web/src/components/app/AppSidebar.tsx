@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect } from 'react'
-import { LogOutIcon, PlusIcon, SettingsIcon, UsersIcon } from 'lucide-react'
+import { ChartColumnIcon, LogOutIcon, PlusIcon, SettingsIcon, UsersIcon } from 'lucide-react'
 import { PROJECT_PHASE_LABEL } from '@slave-of-ai/domain'
 import type { ProjectListItem } from '@slave-of-ai/control'
 import { PhaseDot } from '@/components/app/phase'
@@ -41,7 +41,7 @@ export function titleWithCount(title: string, waiting: number): string {
 
 /**
  * Lead UX design U-2: the one frame. The product mark, New project, every project with its state
- * dot and -- when a build waits for the person -- an amber count; then People and Settings; at the
+ * dot and -- when a build waits for the person -- an amber count; then People, Analytics and Settings; at the
  * bottom the theme switch and, with accounts on, who is signed in. Re-read every ten seconds, and
  * the count also leads the browser tab's title so a waiting build is seen from another tab.
  */
@@ -115,6 +115,14 @@ export function AppSidebar({ initial, username }: { readonly initial: readonly P
                   <Link href="/people" data-testid="nav-people">
                     <UsersIcon />
                     People
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={pathname.startsWith('/analytics')}>
+                  <Link href="/analytics" data-testid="nav-analytics">
+                    <ChartColumnIcon />
+                    Analytics
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>

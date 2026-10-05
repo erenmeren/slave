@@ -48,4 +48,12 @@ describe('the sidebar (lead UX design U-2, U-3)', () => {
     show('meren')
     expect(screen.getByTestId('signed-in-as').textContent).toBe('Signed in as meren')
   })
+
+  it('offers People, Analytics and Settings, in that order', () => {
+    stubFetch(() => ({ body: { projects: [] } }))
+    show()
+    expect(['nav-people', 'nav-analytics', 'nav-settings'].map((id) => screen.getByTestId(id).getAttribute('href'))).toEqual(['/people', '/analytics', '/settings'])
+    expect(screen.getByTestId('nav-people').compareDocumentPosition(screen.getByTestId('nav-analytics')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByTestId('nav-analytics').compareDocumentPosition(screen.getByTestId('nav-settings')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
 })

@@ -25,7 +25,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <SidebarProvider defaultOpen={open}>
       <AppSidebar initial={projects} username={principal?.username ?? null} />
-      <SidebarInset>
+      {/* `min-w-0`: a row's item is never narrower than its content unless told so, and one long
+          unbroken line on a screen (a feed's step, a table) would push the page wider than the window. */}
+      <SidebarInset className="min-w-0">
         <TopBar />
         <main id="main" className="flex-1">
           {children}
