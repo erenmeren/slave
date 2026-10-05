@@ -252,6 +252,9 @@ export async function settleLeadWork(run: LeadRunRow, task: LeadTaskRow, options
   const claim = idle ? { id: task.id, activeRunId: null, status: { in: ['ready' as const, 'rework' as const] } } : { id: task.id, activeRunId: run.id }
   const target = await integrationTargetFor(task.id)
   if (target === null || run.worktreePath === null || task.branch === null) {
+    // Unreachable after a spawn (final review): a lead turn is spawned only with its goal version,
+    // its worktree and its task's branch recorded. Were it reached, the claim stays held and the
+    // sweep's stranded-claim pass releases it; an idle settle is retried by the next goal pass.
     console.warn(`[lead] run ${run.id} has no ${target === null ? 'goal version' : run.worktreePath === null ? 'worktree' : 'branch'} recorded: not settling`)
     return 'unreadable'
   }
@@ -267,8 +270,39 @@ export async function settleLeadWork(run: LeadRunRow, task: LeadTaskRow, options
   if (wip.kind === 'committed') console.warn(`[lead] run ${run.id} left uncommitted work; committed it for the lead as ${wip.sha.slice(0, 12)}`)
   if (wip.kind === 'skipped' || wip.kind === 'failed') console.warn(`[lead] run ${run.id} left uncommitted work that could not be committed (${wip.kind}): ${wip.reason}`)
 
-  const tip = await gitIn(repoPath, 'rev-parse', `refs/heads/${task.branch}`)
-  const workTip = await gitIn(repoPath, 'rev-parse', `refs/heads/${target.branch}`)
+  /**
+   * A fault on the two branches that the next turn would meet again (`stuck`): this turn is
+   * charged like a failed one, so the attempt cap ends a fault that would otherwise cost a paid turn
+   * forever. An idle settle has no claim to charge and no turn to come: the version stops under the
+   * reason the lead was ended for, and the card says why (task 8 review).
+   */
+  const stuck = async (detail: string, cause: string): Promise<'unreadable'> => {
+    console.warn(`[lead] run ${run.id}: ${detail}`)
+    const note = { workspaceId: task.workspaceId, version: target.goalVersion, kind: 'turn' as const, detail, runId: run.id }
+    if (idle) {
+      await noteLeadOnce(note)
+      await stopLead(delivery.id, readLeadProgress(delivery.leadProgress).leadEnded ?? 'lead_failed', cause)
+      return 'unreadable'
+    }
+    await noteLead(note)
+    await releaseLeadTurn(task, run.id, { platform: false, deliveryId: delivery.id, detail: cause })
+    return 'unreadable'
+  }
+
+  // Final review: a branch somebody deleted (or git cannot read) is a `stuck` fault with git's
+  // reason, never a throw -- a throw left the claim held, the sweep released it uncharged, and a
+  // paid turn followed, for ever.
+  const readTip = (branch: string): Promise<{ readonly tip: string } | { readonly error: string }> =>
+    gitIn(repoPath, 'rev-parse', `refs/heads/${branch}`).then(
+      (tip) => ({ tip }),
+      (error: unknown) => ({ error: gitError(error) }),
+    )
+  const lead = await readTip(task.branch)
+  if ('error' in lead) return stuck(`the lead's branch could not be read (${task.branch}): ${lead.error}`, `the lead's branch could not be read: ${lead.error}`)
+  const work = await readTip(target.branch)
+  if ('error' in work) return stuck(`the work branch could not be read (${target.branch}): ${work.error}`, `the work branch could not be read: ${work.error}`)
+  const tip = lead.tip
+  const workTip = work.tip
   // Nothing built: the lead's branch AND the work branch are still at the cut. A later turn that
   // reset its branch to the cut while earlier work is on the work branch rewrote its branch instead.
   if (tip === delivery.baseCommit && workTip === delivery.baseCommit) {
@@ -279,27 +313,9 @@ export async function settleLeadWork(run: LeadRunRow, task: LeadTaskRow, options
   }
   if (tip !== workTip) {
     const followed = await followLeadBranch(repoPath, target.branch, tip, workTip)
+    // The ref is where it was and git cannot move it.
     if (followed.kind === 'stuck') {
-      // The ref is where it was and git cannot move it: this turn is charged like a failed one, so
-      // the attempt cap ends a fault that would otherwise cost a paid turn forever.
-      console.warn(`[lead] run ${run.id}: the work branch ${target.branch} could not be moved to ${tip.slice(0, 12)}: ${followed.error}`)
-      const stuck = {
-        workspaceId: task.workspaceId,
-        version: target.goalVersion,
-        kind: 'turn' as const,
-        detail: `the work branch could not be moved to the lead's tip ${tip.slice(0, 12)} (${target.branch}): ${followed.error}`,
-        runId: run.id,
-      }
-      // An idle settle has no claim to charge and no turn to come: the version stops, and the card
-      // says why (task 8 review).
-      if (idle) {
-        await noteLeadOnce(stuck)
-        await stopLead(delivery.id, readLeadProgress(delivery.leadProgress).leadEnded ?? 'lead_failed', `the work branch could not be moved: ${followed.error}`)
-        return 'unreadable'
-      }
-      await noteLead(stuck)
-      await releaseLeadTurn(task, run.id, { platform: false, deliveryId: delivery.id, detail: `the work branch could not be moved: ${followed.error}` })
-      return 'unreadable'
+      return stuck(`the work branch could not be moved to the lead's tip ${tip.slice(0, 12)} (${target.branch}): ${followed.error}`, `the work branch could not be moved: ${followed.error}`)
     }
     if (followed.kind === 'lost') {
       // The work branch kept moving under two compare-and-swaps: nothing is integrated, and the

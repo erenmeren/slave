@@ -202,6 +202,28 @@ describe('the lead flow: a goal is built by one lead turn', () => {
     expect(stuck[0]).toContain('.lock')
   })
 
+  it('charges a turn whose work branch was deleted, says git\'s reason, and stops the version lead_failed at the attempt cap (final review)', async (): Promise<void> => {
+    // Somebody deletes the goal's work branch while the lead's turn runs, every turn.
+    const f = await seedLead({
+      onStart: async (start) => {
+        if (start.kind !== 'implementation') return
+        const delivery = await prisma.goalDelivery.findFirstOrThrow({ include: { workspace: { select: { repoPath: true } } } })
+        git(['update-ref', '-d', `refs/heads/${delivery.integrationBranch}`], delivery.workspace.repoPath)
+      },
+    })
+    await tickUntil(f, async () => (await leadDelivery(f)).status === 'needs_human')
+
+    const delivery = await leadDelivery(f)
+    expect([delivery.stopReason, delivery.leadState]).toEqual(['lead_failed', 'awaiting_decision'])
+    const task = await leadTaskOf(f)
+    expect([task.status, task.attempt, task.integratedAt]).toEqual(['failed', 3, null])
+    expect(f.starts.filter((s) => s.kind === 'implementation')).toHaveLength(3)
+    const stuck = (await leadNotes(f)).filter((line) => line.startsWith('turn: the work branch could not be read'))
+    expect(stuck).toHaveLength(3)
+    expect(stuck[0]).toContain(delivery.integrationBranch)
+    expect(delivery.needsHumanReason).toContain('could not be read')
+  })
+
   /** A version opened in the lead flow with no turn run yet: the requirement tick, then the plan by hand. */
   async function opened(f: LeadFixture): Promise<{ readonly taskId: string; readonly seatId: string; readonly deliveryId: string }> {
     await tick(f.deps)
