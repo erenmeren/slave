@@ -26,7 +26,10 @@ export async function acceptLeadGoalAsIs(workspaceId: string, goalVersion: numbe
   })
   if (found === null) return err({ kind: 'goal_version_not_found', workspaceId, goalVersion })
   if (found.leadState === null || found.status !== 'needs_human') return ok('none')
-  const tip = await gitIn(found.workspace.repoPath, 'rev-parse', `refs/heads/${found.integrationBranch}`)
+  // Task 10 review: a work branch somebody deleted is a refusal, before any write -- the card's
+  // decision is then recorded failed with this reason, instead of a throw after it was claimed.
+  const tip = await gitIn(found.workspace.repoPath, 'rev-parse', '--verify', '--quiet', `refs/heads/${found.integrationBranch}^{commit}`).catch(() => null)
+  if (tip === null) return err({ kind: 'base_branch_not_found', path: found.workspace.repoPath, branch: found.integrationBranch })
 
   const cancelled = await withDeliveryLock(found.id, async (tx): Promise<readonly string[] | null> => {
     // The guarded move is the first write: a version something else moved meanwhile is left alone.

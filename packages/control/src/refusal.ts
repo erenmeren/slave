@@ -445,7 +445,8 @@ export type ControlRefusal =
   | { readonly kind: 'repo_not_found'; readonly path: string }
   /** `repoPath` exists but is not a git work tree (`GitProbe.isRepository` said so). */
   | { readonly kind: 'not_a_git_repository'; readonly path: string }
-  /** The requested (or default `main`) base branch does not exist in the repository. */
+  /** The requested (or default `main`) base branch does not exist in the repository. Also (lead
+   *  flow, task 10 review) a goal version's work branch that is gone when a person accepts it as it is. */
   | { readonly kind: 'base_branch_not_found'; readonly path: string; readonly branch: string }
   /** Spec §10: a workspace with no verify command can never reach `done` on its own. */
   | { readonly kind: 'verify_commands_empty' }

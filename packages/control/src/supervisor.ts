@@ -864,8 +864,9 @@ async function carryOut(
         const version = decision.situation.facts['goalVersion']
         if (typeof version === 'number') {
           const accepted = await acceptLeadGoalAsIs(decision.workspaceId, version, principal)
-          if (!accepted.ok) return accepted
-          if (accepted.value === 'applied') return ok('applied')
+          // Task 10 review: a card whose version row is gone carries nothing out, as it always did.
+          if (!accepted.ok && accepted.error.kind !== 'goal_version_not_found') return accepted
+          if (accepted.ok && accepted.value === 'applied') return ok('applied')
         }
       }
       return ok('none')
