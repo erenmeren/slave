@@ -4,7 +4,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { formatMinutes, formatUsd, plural } from '@/lib/format'
 
-const TURN_WORD: Readonly<Record<string, string>> = {
+/** The lead's turns in a person's words; the diagram's side panel and timeline say them the same way. */
+export const TURN_WORD: Readonly<Record<string, string>> = {
   build: 'Building',
   rework: 'Fixing what failed',
   wrap_up: 'Wrapping up',
