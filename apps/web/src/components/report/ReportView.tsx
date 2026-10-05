@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { formatMinutes, formatUsd } from '@/lib/format'
+import { formatMinutes, formatUsd, plural } from '@/lib/format'
 
 /** A build's state as the report's header says it (lead UX design section 6.4). */
 export const REPORT_STATE_WORDS: Readonly<Record<GoalReportState, string>> = {
@@ -108,7 +108,7 @@ export function ReportView({ report }: { readonly report: GoalReport }): React.J
       <Card data-testid="report-requirements">
         <CardHeader>
           <CardTitle className="text-base">Requirements</CardTitle>
-          {report.rounds.length > 0 && <CardDescription>Checked {report.rounds.length} time(s) on the running product.</CardDescription>}
+          {report.rounds.length > 0 && <CardDescription>Checked {plural(report.rounds.length, 'time')} on the running product.</CardDescription>}
         </CardHeader>
         <CardContent>
           {requirements === null ? (
@@ -213,7 +213,7 @@ export function ReportView({ report }: { readonly report: GoalReport }): React.J
         </CardContent>
       </Card>
 
-      <p className="text-xs text-muted-foreground print:hidden">The full record -- every step, every check and what it cannot vouch for -- is in the Markdown download.</p>
+      <p className="text-xs text-muted-foreground print:hidden">The full record (every step, every check, and what it cannot vouch for) is in the Markdown download.</p>
     </article>
   )
 }

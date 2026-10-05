@@ -25,3 +25,11 @@ export async function api<T>(url: string, init: { readonly method?: 'GET' | 'POS
     return { ok: false, error: cause instanceof Error ? cause.message : String(cause), status: 0 }
   }
 }
+
+/** The event a screen sends when it changed the list of projects (created, deleted, archived,
+ *  restored, stopped), so the sidebar re-reads at once instead of on its next tick. */
+export const PROJECTS_CHANGED = 'slave:projects-changed'
+
+export function notifyProjectsChanged(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(PROJECTS_CHANGED))
+}

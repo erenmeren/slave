@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { usePoll } from '@/hooks/usePoll'
-import { api } from '@/lib/api'
+import { api, notifyProjectsChanged } from '@/lib/api'
 import { formatAgo, percentOf, spendLine } from '@/lib/format'
 
 /** How often Home re-reads (lead UX design U-9). */
@@ -42,6 +42,7 @@ export function HomeView({ initial }: { readonly initial: readonly ProjectListIt
     const result = await api(`/api/w/${project.id}/restore`, { method: 'POST' })
     if (result.ok) toast.success(`${project.name} is back in the list`)
     else toast.error(result.error)
+    notifyProjectsChanged()
     await refresh()
   }
 
@@ -92,7 +93,7 @@ export function HomeView({ initial }: { readonly initial: readonly ProjectListIt
                   <p className="font-medium">{project.name}</p>
                   <p className="text-sm text-muted-foreground">
                     {waitingReason(project)}
-                    {project.waitingSince !== null && <span> · waiting {formatAgo(project.waitingSince).replace(' ago', '')}</span>}
+                    {project.waitingSince !== null && <span suppressHydrationWarning> · waiting {formatAgo(project.waitingSince).replace(' ago', '')}</span>}
                   </p>
                 </div>
                 <Button asChild size="sm">
@@ -122,7 +123,7 @@ export function HomeView({ initial }: { readonly initial: readonly ProjectListIt
                 <CardContent className="mt-auto flex flex-col gap-2 text-sm">
                   <div className="flex items-center justify-between text-muted-foreground">
                     <span>Spent {spendLine(project.spentUsd, project.spendUnmeasured, project.budgetUsd)}</span>
-                    <span>updated {formatAgo(project.updatedAt)}</span>
+                    <span suppressHydrationWarning>updated {formatAgo(project.updatedAt)}</span>
                   </div>
                   <LimitBar percent={percentOf(project.spentUsd, project.budgetUsd)} label="Spent of the budget" />
                 </CardContent>

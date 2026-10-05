@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CheckIcon, ChevronDownIcon, Loader2Icon, PlusIcon, RocketIcon, SendIcon, XIcon } from 'lucide-react'
 import {
@@ -26,7 +26,7 @@ import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { api } from '@/lib/api'
+import { api, notifyProjectsChanged } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 /** How often the conversation is re-read while the assistant thinks. */
@@ -108,6 +108,7 @@ function Bubble({ message }: { readonly message: IntakeMessageView }): React.JSX
  */
 export function NewProject(): React.JSX.Element {
   const router = useRouter()
+  const params = useSearchParams()
   const [intakeId, setIntakeId] = useState<string | null>(null)
   const [view, setView] = useState<IntakeView | null>(null)
   const [text, setText] = useState('')
@@ -140,15 +141,23 @@ export function NewProject(): React.JSX.Element {
       return
     }
     setIntakeId(result.data.id)
+    // The conversation's id in the address, so a reload or a second tab picks it up again.
+    router.replace(`/new?intake=${encodeURIComponent(result.data.id)}`)
     await refresh(result.data.id)
-  }, [refresh])
+  }, [refresh, router])
 
   useEffect((): void => {
     if (opened.current) return
     opened.current = true
-    void open()
+    const resume = params.get('intake')
+    if (resume !== null && resume !== '') {
+      setIntakeId(resume)
+      void refresh(resume)
+    } else {
+      void open()
+    }
     void api<{ resolved: string }>('/api/installation').then((result) => setRoot(result.ok ? result.data.resolved : null))
-  }, [open])
+  }, [open, params, refresh])
 
   const thinking = view !== null && THINKING.includes(view.status)
   useEffect((): (() => void) | undefined => {
@@ -222,8 +231,8 @@ export function NewProject(): React.JSX.Element {
       body: { draft: { ...edited, budgetUsd: capped.budgetUsd, timeLimitMs: lead ? capped.timeLimitMs : null, delivery: 'conducted' } },
     })
     if (result.ok) {
+      notifyProjectsChanged()
       router.push(`/w/${result.data.workspaceId}`)
-      router.refresh()
       return
     }
     setStarting(false)
@@ -245,7 +254,7 @@ export function NewProject(): React.JSX.Element {
         <Card className="flex-1 gap-0 py-0">
           <div className="flex max-h-[60vh] min-h-[320px] flex-1 flex-col gap-3 overflow-y-auto p-4" data-testid="intake-conversation">
             <p className="max-w-[85%] self-start rounded-2xl rounded-bl-sm bg-muted px-4 py-2 text-sm">
-              What do you want built? Say it the way you would to a person -- what it does, who uses it, and where the code is if it exists.
+              What do you want built? Say it the way you would to a person: what it does, who uses it, and where the code is if it exists.
             </p>
             {(view?.messages ?? []).map((message) => (
               <Bubble key={message.seq} message={message} />
@@ -293,7 +302,7 @@ export function NewProject(): React.JSX.Element {
           <Alert>
             <AlertDescription>
               This conversation has used all its turns without a draft.{' '}
-              <Button variant="link" className="h-auto p-0" onClick={() => window.location.reload()}>
+              <Button variant="link" className="h-auto p-0" onClick={() => window.location.assign('/new')}>
                 Start a new one
               </Button>
             </AlertDescription>

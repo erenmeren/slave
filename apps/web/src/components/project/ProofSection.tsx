@@ -41,27 +41,35 @@ export function ResultBadge({ result }: { readonly result: RequirementResult }):
 
 function Row({ row }: { readonly row: ProofRow }): React.JSX.Element {
   const [open, setOpen] = useState(false)
+  const toggle =
+    row.check === null ? null : (
+      <Button variant="link" size="sm" className="h-auto px-0 text-xs" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {open ? <ChevronDownIcon /> : <ChevronRightIcon />}
+        {open ? 'Hide how it was checked' : 'Show how it was checked'}
+      </Button>
+    )
   return (
     <Fragment>
       <TableRow data-testid="proof-row" data-key={row.key} data-result={row.result}>
         <TableCell className="align-top font-mono text-xs text-muted-foreground">{row.key}</TableCell>
-        <TableCell className="align-top whitespace-normal">{row.text}</TableCell>
+        <TableCell className="align-top whitespace-normal">
+          {row.text}
+          <span className="mt-1 block text-xs text-muted-foreground md:hidden">
+            {row.reason}
+            {toggle !== null && <span className="block">{toggle}</span>}
+          </span>
+        </TableCell>
         <TableCell className="align-top">
           <ResultBadge result={row.result} />
         </TableCell>
-        <TableCell className="align-top whitespace-normal text-muted-foreground">
+        <TableCell className="hidden align-top whitespace-normal text-muted-foreground md:table-cell">
           {row.reason ?? '—'}
-          {row.check !== null && (
-            <Button variant="link" size="sm" className="ml-1 h-auto px-0 text-xs" onClick={() => setOpen(!open)} aria-expanded={open}>
-              {open ? <ChevronDownIcon /> : <ChevronRightIcon />}
-              {open ? 'Hide how it was checked' : 'Show how it was checked'}
-            </Button>
-          )}
+          {toggle !== null && <span className="block">{toggle}</span>}
         </TableCell>
       </TableRow>
       {open && row.check !== null && (
         <TableRow data-testid="proof-detail">
-          <TableCell />
+          <TableCell className="hidden md:table-cell" />
           <TableCell colSpan={3} className="whitespace-normal">
             <p className="mb-1 text-xs font-medium text-muted-foreground">What the checker ran</p>
             <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap">{row.check}</pre>
@@ -111,7 +119,7 @@ export function ProofSection({ build }: { readonly build: BuildView }): React.JS
                 <TableHead className="w-12">#</TableHead>
                 <TableHead>Requirement</TableHead>
                 <TableHead className="w-36">Result</TableHead>
-                <TableHead>Why</TableHead>
+                <TableHead className="hidden md:table-cell">Why</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

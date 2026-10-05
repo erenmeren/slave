@@ -8,7 +8,7 @@ import type { ProjectView } from '@slave-of-ai/control'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
-import { api } from '@/lib/api'
+import { api, notifyProjectsChanged } from '@/lib/api'
 
 /** Past this many characters the goal is folded to three lines with "Show all". */
 const FOLD_AT = 280
@@ -40,6 +40,7 @@ export function GoalSection({ project, onDone }: { readonly project: ProjectView
       return
     }
     setText('')
+    notifyProjectsChanged()
     toast.success(empty ? 'Build 1 is starting.' : `Build ${String(result.data.version)} is asked for.`)
     await onDone()
   }

@@ -16,7 +16,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
-import { api } from '@/lib/api'
+import { api, notifyProjectsChanged } from '@/lib/api'
 import { formatMinutes, spendLine } from '@/lib/format'
 
 /** One line per thing that is not proven (design section 6.3), the smoke check first. */
@@ -25,7 +25,7 @@ export function unprovenLines(build: BuildView): readonly string[] {
   if (build.failing.includes(SMOKE_FAILING_KEY)) lines.push("The product's own smoke check failed: it did not start, or its script failed.")
   for (const row of build.proof ?? []) {
     if (row.result === 'pass' || row.result === 'unchecked') continue
-    const because = row.reason === null || row.reason.trim() === '' ? '' : ` -- ${row.reason.trim()}`
+    const because = row.reason === null || row.reason.trim() === '' ? '' : ` — ${row.reason.trim()}`
     lines.push(`Requirement ${row.key.replace(/^R/u, '')}: ${REQUIREMENT_RESULT_LABEL[row.result]}${because}`)
   }
   return lines
@@ -56,7 +56,7 @@ const STOPPED_CHOICES: readonly Choice[] = [
     label: 'Leave it unmerged',
     hint: 'Keep the branch, merge nothing. You can ask for a change later.',
     icon: XIcon,
-    variant: 'ghost',
+    variant: 'outline',
     confirm: { title: 'Leave this build unmerged?', body: 'Nothing is merged and the build is closed. Its branch stays in the repository.' },
   },
 ]
@@ -80,6 +80,7 @@ export function DecisionCard({ project, onDone }: { readonly project: ProjectVie
     setConfirming(null)
     if (result.ok) toast.success({ accept: 'Accepted. Slave merges it next.', retry: 'Checking again.', leave: 'Left unmerged.', merged: 'Recorded as merged.' }[decision])
     else toast.error(result.error)
+    notifyProjectsChanged()
     await onDone()
   }
 
@@ -127,7 +128,6 @@ export function DecisionCard({ project, onDone }: { readonly project: ProjectVie
                   variant={choice.variant}
                   data-testid={`decide-${choice.decision}`}
                   disabled={busy !== null}
-                  className={choice.variant === 'ghost' ? 'border border-transparent hover:border-border' : ''}
                   onClick={() => (choice.confirm === null ? void send(choice.decision) : setConfirming(choice))}
                 >
                   <choice.icon />
@@ -143,7 +143,7 @@ export function DecisionCard({ project, onDone }: { readonly project: ProjectVie
           <h2 id="decision-title" className="text-lg font-semibold">
             Build {build.version} is ready to merge
           </h2>
-          <p className="mt-1 text-sm">{build.mergeError !== null ? `Slave could not merge it: ${build.mergeError}` : 'Automatic merge is off for this project.'}</p>
+          <p className="mt-1 text-sm">{build.mergeError !== null ? `Slave could not merge it: ${build.mergeError}` : project.autoMerge ? 'Slave merges it on its next pass. You can also merge it yourself.' : 'Automatic merge is off for this project.'}</p>
           <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
             <span className="text-muted-foreground">Merge</span>
             <code data-testid="merge-branch" className="rounded bg-background px-2 py-1 font-mono text-xs">

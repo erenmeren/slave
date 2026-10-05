@@ -19,7 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Separator } from '@/components/ui/separator'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
-import { api } from '@/lib/api'
+import { api, notifyProjectsChanged } from '@/lib/api'
 
 /** The most helpers a lead may be given (lead-flow plan A L16, `LEAD_ROSTER_MAX`). */
 const ROSTER_MAX = 15
@@ -219,6 +219,7 @@ export function SettingsSheet({ project, open, onOpenChange, onDone }: { readonl
       return
     }
     toast.success(`${project.name} is archived. Restore it from Projects.`)
+    notifyProjectsChanged()
     router.push('/')
   }
 

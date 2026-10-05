@@ -15,6 +15,7 @@ export function spendLine(spentUsd: number, unmeasured: boolean, budgetUsd: numb
 /** Working time: "38 min", "1 h 5 min", "under a minute". */
 export function formatMinutes(ms: number): string {
   const minutes = Math.floor(ms / 60_000)
+  if (ms <= 0) return '0 min'
   if (minutes < 1) return 'under a minute'
   if (minutes < 60) return `${String(minutes)} min`
   const hours = Math.floor(minutes / 60)

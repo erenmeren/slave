@@ -10,6 +10,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 
 /** A mark per speciality, so a long catalogue scans by what people are good at. Decorative. */
+/** How many cards are drawn at once; a catalogue of hundreds is shown a page at a time. */
+export const PAGE = 60
+
 const SPECIALITY_MARK: Readonly<Record<string, string>> = {
   engineering: '💻',
   design: '🎨',
@@ -55,6 +58,7 @@ export function matches(helper: HelperRow, query: string): boolean {
 export function HelpersView({ helpers }: { readonly helpers: readonly HelperRow[] }): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [speciality, setSpeciality] = useState<string | null>(null)
+  const [limit, setLimit] = useState(PAGE)
   const specialities = useMemo(() => specialitiesOf(helpers), [helpers])
   const shown = helpers.filter((helper) => (speciality === null || helper.speciality === speciality) && matches(helper, query))
 
@@ -100,7 +104,7 @@ export function HelpersView({ helpers }: { readonly helpers: readonly HelperRow[
             <p className="text-sm text-muted-foreground">No specialist matches.</p>
           ) : (
             <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {shown.map((helper) => (
+              {shown.slice(0, limit).map((helper) => (
                 <li key={helper.id}>
                   <Card className="h-full gap-3" data-testid="helper-card">
                     <CardHeader className="gap-1">
@@ -140,6 +144,11 @@ export function HelpersView({ helpers }: { readonly helpers: readonly HelperRow[
                 </li>
               ))}
             </ul>
+          )}
+          {shown.length > limit && (
+            <Button variant="outline" className="self-center" onClick={() => setLimit(limit + PAGE)} data-testid="helpers-more">
+              Show more ({shown.length - limit} left)
+            </Button>
           )}
         </>
       )}

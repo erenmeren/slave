@@ -52,8 +52,8 @@ export function SideColumn({ project, onOpenSettings }: { readonly project: Proj
           {project.flow === 'lead' && (
             <div className="flex flex-col gap-1.5">
               <div className="flex justify-between gap-2">
-                <span className="text-muted-foreground">Working time</span>
-                <span data-testid="limits-time" className="font-medium tabular-nums">
+                <span className="whitespace-nowrap text-muted-foreground">Working time</span>
+                <span data-testid="limits-time" className="text-right font-medium tabular-nums">
                   {timeLine(worked, project.timeLimitMs)}
                 </span>
               </div>
@@ -101,7 +101,9 @@ export function SideColumn({ project, onOpenSettings }: { readonly project: Proj
               {build.notes.map((note) => (
                 <li key={`${note.at}-${note.kind}`} data-kind={note.kind} title={note.detail} className="flex flex-col">
                   <span>{LEAD_NOTE_WORDS[note.kind]}</span>
-                  <span className="text-xs text-muted-foreground">{formatAgo(note.at)}</span>
+                  <span className="text-xs text-muted-foreground" suppressHydrationWarning>
+                    {formatAgo(note.at)}
+                  </span>
                 </li>
               ))}
             </ul>

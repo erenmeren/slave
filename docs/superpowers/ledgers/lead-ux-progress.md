@@ -34,6 +34,14 @@ each push.
   files that tested them. New thin routes: `/api/projects`, `/api/helpers`, `/api/w/:id` (DELETE),
   `/api/w/:id/{project,continue,flow,lead}`, `/api/w/:id/goals/:n/{accept,leave,retry,merged}`; test
   `apps/web/test/integration/lead-routes.test.ts`, and `packages/control/test/integration/helpers.test.ts`.
+- Looked at, not tested (`fix(web)`): a scratch Postgres 16 in the container, the migrations, the demo seed and
+  six lead-flow projects in every phase, `next dev`, and Playwright screenshots of every screen in light, dark
+  and at 390 px. Pressed through by hand: Start building from a drafted conversation (it created the
+  repository, the project with its 90-minute limit and build 1), Accept as it is, Stop, Continue and Delete.
+  Fixed from what was seen: a hydration warning on relative times, the Proof table's "Why" column clipped on a
+  phone, the header squeezed on a phone, "--" in sentences, a ready-to-merge card that said "automatic merge
+  is off" when it was on, the sidebar lagging behind a delete, and a conversation lost on reload (it is now
+  in the address, `/new?intake=<id>`). This is not a test run: no vitest, no gate.
 
 ## Rulings
 
@@ -98,3 +106,4 @@ each push.
 - Before the control push (`feat(control)`): typecheck exit 0; web:build exit 0; vocabulary PASS.
 - Before the interface push (`feat(web)`): typecheck exit 0; web:build exit 0 (14 routes, `/w/[workspaceId]` 287 kB
   first load); vocabulary PASS after two test lines were moved to the quoted tool name.
+- Before the QA-fix push (`fix(web)`): typecheck exit 0; web:build exit 0; vocabulary PASS.

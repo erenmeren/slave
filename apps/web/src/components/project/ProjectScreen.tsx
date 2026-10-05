@@ -13,7 +13,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { usePoll } from '@/hooks/usePoll'
-import { api } from '@/lib/api'
+import { api, notifyProjectsChanged } from '@/lib/api'
 import { DecisionCard } from './DecisionCard'
 import { GoalSection } from './GoalSection'
 import { OlderTasks } from './OlderTasks'
@@ -58,6 +58,7 @@ export function ProjectScreen({ initial }: { readonly initial: ProjectView }): R
     setBusy(false)
     if (result.ok) toast.success('Stopped. Everything running is being paused.')
     else toast.error(result.error)
+    notifyProjectsChanged()
     await refresh()
   }
 
@@ -67,6 +68,7 @@ export function ProjectScreen({ initial }: { readonly initial: ProjectView }): R
     setBusy(false)
     if (result.ok) toast.success(result.data.requested.length === 0 ? 'Continuing.' : `Continuing: ${String(result.data.requested.length)} paused session(s) resume.`)
     else toast.error(result.error)
+    notifyProjectsChanged()
     await refresh()
   }
 
@@ -77,6 +79,7 @@ export function ProjectScreen({ initial }: { readonly initial: ProjectView }): R
       return
     }
     toast.success(`${project.name} is archived. Restore it from Projects.`)
+    notifyProjectsChanged()
     router.push('/')
   }
 
@@ -84,7 +87,7 @@ export function ProjectScreen({ initial }: { readonly initial: ProjectView }): R
 
   return (
     <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-6 px-4 py-6 md:px-8" data-testid="project-screen" data-phase={project.phase}>
-      <header className="flex flex-wrap items-start justify-between gap-4">
+      <header className="flex flex-col items-start justify-between gap-4 sm:flex-row">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="truncate text-2xl font-semibold tracking-tight">{project.name}</h1>

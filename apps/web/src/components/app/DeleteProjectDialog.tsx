@@ -14,7 +14,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { api } from '@/lib/api'
+import { api, notifyProjectsChanged } from '@/lib/api'
 
 /**
  * Lead UX design section 6.3, "Delete…": what goes, what stays, and the project's name typed to
@@ -47,6 +47,7 @@ export function DeleteProjectDialog({
     }
     toast.success(`Deleted ${project.name}`, { description: `The code in ${project.repoPath} was not touched.` })
     onOpenChange(false)
+    notifyProjectsChanged()
     onDeleted()
   }
 

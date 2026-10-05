@@ -23,7 +23,7 @@ import {
   SidebarMenuItem,
 } from '@/components/ui/sidebar'
 import { usePoll } from '@/hooks/usePoll'
-import { api } from '@/lib/api'
+import { PROJECTS_CHANGED, api } from '@/lib/api'
 
 /** How often the sidebar re-reads the projects (lead UX design U-9). */
 export const SIDEBAR_POLL_MS = 10_000
@@ -48,9 +48,15 @@ export function titleWithCount(title: string, waiting: number): string {
 export function AppSidebar({ initial, username }: { readonly initial: readonly ProjectListItem[]; readonly username: string | null }): React.JSX.Element {
   const pathname = usePathname()
   const router = useRouter()
-  const { data } = usePoll<{ readonly projects: readonly ProjectListItem[] }>('/api/projects', { projects: initial }, () => SIDEBAR_POLL_MS)
+  const { data, refresh } = usePoll<{ readonly projects: readonly ProjectListItem[] }>('/api/projects', { projects: initial }, () => SIDEBAR_POLL_MS)
   const projects = data.projects.filter((project) => !project.archived)
   const waiting = waitingTotal(data.projects)
+
+  useEffect((): (() => void) => {
+    const onChange = (): void => void refresh()
+    window.addEventListener(PROJECTS_CHANGED, onChange)
+    return (): void => window.removeEventListener(PROJECTS_CHANGED, onChange)
+  }, [refresh])
 
   useEffect((): void => {
     document.title = titleWithCount(document.title, waiting)
