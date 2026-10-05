@@ -37,7 +37,8 @@ const reopened = (progress: LeadProgress): LeadProgress => ({ ...progress, reche
  * - `turn`: the merge conflicted and was aborted; the lead's task went back with the turn `base`.
  * - `waiting`: that turn is pending or running.
  *
- * At most `LEAD_BASE_MERGES_MAX` per version, clean or not. An ended lead gets no base turn.
+ * At most `LEAD_BASE_MERGES_MAX` per version, clean or not. An ended lead gets no base turn, and a
+ * base turn a person cancelled is not started again.
  *
  * Called from the goal pass, so it never throws on what git says: a branch git cannot read, a
  * worktree that is gone, not on the lead's branch or not clean, a merge that failed for any reason
@@ -66,6 +67,9 @@ export async function leadTakeBaseIn(deliveryId: string): Promise<'unmoved' | 't
   const progress = readLeadProgress(delivery.leadProgress)
   // A lead whose base turn ran out of attempts, or a task taken off the board: the verified work stands.
   if (task.status === 'failed' || task.status === 'cancelled') return 'unmoved'
+  // Final review: a person cancelled the base turn (`requestStop` leaves the task `blocked`): nothing
+  // will run it again, so the verified work stands and the person merges by hand, said once.
+  if (task.status === 'blocked') return notTaken("a person cancelled the lead's turn that was taking it in")
   if (task.status !== 'done') {
     if (task.activeRunId !== null || progress.leadEnded === null) return 'waiting'
     // The lead was ended before it could take the base in: its verified work stands, and a person merges by hand.

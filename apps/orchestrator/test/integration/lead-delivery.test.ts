@@ -1,6 +1,6 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { approveDecision, rejectDecision, setGoal } from '@slave-of-ai/control'
+import { approveDecision, rejectDecision, requestStop, setGoal } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { LEAD_BASE_MERGES_MAX, readLeadProgress } from '@slave-of-ai/domain'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -144,6 +144,37 @@ describe('the lead flow: delivery', () => {
     expect((await leadDelivery(f)).mergedAt).toBeNull()
     expect((await leadTaskOf(f)).status).toBe('done')
     expect(leadTurns(f)).toHaveLength(1 + LEAD_BASE_MERGES_MAX)
+  })
+
+  it('falls back to the hand merge, said once, when a person cancels the lead\'s base turn (final review)', async (): Promise<void> => {
+    let repo = ''
+    let cancelled = false
+    const move = moveBaseOnce(() => repo, 'lead-work-1.txt', 'somebody else\'s content\n')
+    const f = await seedLead({
+      onStart: async (start) => {
+        await move(start)
+        if (cancelled || start.leadTurn !== 'base') return
+        cancelled = true
+        expect((await requestStop(start.runId, 'ada')).ok).toBe(true)
+      },
+    })
+    repo = f.repoPath
+    const waitsForAHandMerge = async (): Promise<boolean> =>
+      (await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'guardrail_tripped' }, select: { payload: true } })).some((row) =>
+        (row.payload as { detail: string }).detail.includes('has moved since the goal was cut'),
+      )
+    await tickUntil(f, waitsForAHandMerge, 100)
+    for (let i = 0; i < 3; i += 1) {
+      await tick(f.deps)
+      await drainPumps()
+    }
+
+    expect(leadTurns(f).filter((turn) => turn.leadTurn === 'base')).toHaveLength(1)
+    expect((await leadTaskOf(f)).status).toBe('blocked')
+    const delivery = await leadDelivery(f)
+    expect([delivery.status, delivery.mergedAt]).toEqual(['accepted', null])
+    const said = (await leadNotes(f)).filter((line) => line.startsWith('base_taken: main was not taken into the work branch: a person cancelled'))
+    expect(said).toHaveLength(1)
   })
 
   it('leaves a moved base to the hand merge when the lead\'s worktree is gone, and says why once (task 10 review)', async (): Promise<void> => {
