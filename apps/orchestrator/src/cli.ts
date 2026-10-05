@@ -430,7 +430,7 @@ const USAGE = `usage: orchestrator <command> [options]
                                        never recorded, and it starts nothing.
   create-workspace --name <n> --repo <abs path> [--base main] --verify "<cmd>" [--verify "<cmd>" ...]
                    [--setup "<cmd>" ...] [--budget <usd> | --no-budget] [--provider claude_code|cursor]
-                   [--auto-merge] [--delivery conducted|planned]
+                   [--auto-merge] [--delivery conducted|planned] [--flow lead|packages]
                                        attach an existing local clone as a workspace. The path
                                        must be absolute and a git work tree, the base branch must
                                        exist, and at least one verify command is required -- a
@@ -441,7 +441,11 @@ const USAGE = `usage: orchestrator <command> [options]
                                        changes it later either way). New projects are
                                        conducted (the conductor splits each goal into packages
                                        and verifies the result); --delivery planned keeps the
-                                       planner instead (set-delivery changes it later).
+                                       planner instead (set-delivery changes it later). With
+                                       --provider claude_code and conducted delivery the project
+                                       is born in the lead flow (one lead builds a goal version,
+                                       Slave proves it; automatic merge on); --flow packages
+                                       keeps the packages flow (set-flow changes it later).
   archive-workspace --workspace <id>   archive a project: every row stays, nothing runs until
                                        restore-workspace. Refused while a run is live.
   restore-workspace --workspace <id>   bring an archived project back
@@ -2776,6 +2780,8 @@ export async function main(argv: readonly string[]): Promise<number> {
       // `--delivery planned` keeps the planner. Read before anything is written, so a mistyped
       // word refuses with the list and creates nothing.
       const delivery = oneOfFlag(flags, 'delivery', ['conducted', 'planned'] as const)
+      // Absent, `createWorkspace` picks the lead flow wherever it can run; `--flow packages` opts out.
+      const flow = oneOfFlag(flags, 'flow', ['packages', 'lead'] as const)
       const result = await createWorkspace({
         name,
         repoPath,
@@ -2789,6 +2795,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         // CLI stays hand-merge unless the operator asks for the other thing.
         ...('auto-merge' in flags ? { autoMerge: true } : {}),
         ...(delivery !== undefined ? { delivery } : {}),
+        ...(flow !== undefined ? { flow } : {}),
       })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`workspace ${result.value.id} created\n`)

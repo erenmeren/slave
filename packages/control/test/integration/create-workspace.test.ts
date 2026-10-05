@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '@slave-of-ai/db/client'
+import { LEAD_SEAT_ROLES, LEAD_TEAM_NAME } from '@slave-of-ai/domain'
 import { createWorkspace } from '../../src/workspace.js'
 import { refusalText } from '../../src/refusal.js'
 
@@ -39,6 +40,50 @@ describe('createWorkspace', () => {
     expect(events).toHaveLength(1)
     expect(events[0]?.payload).toEqual({ name: 'Billing', repoPath: dir, baseBranch: 'main', verifyCommands: ['npm test'], provider: 'claude_code' })
     expect(events[0]?.actor).toBe('human')
+  })
+
+  /**
+   * The operator's ruling of 2026-10-05: a new project is born in the lead flow wherever that flow
+   * can run -- the `claude_code` provider and conducted delivery -- with what `setFlow` would have
+   * written: automatic merge on and the three system seats.
+   */
+  it('is born in the lead flow with the claude_code provider: automatic merge on and the three system seats', async () => {
+    const result = await createWorkspace({ ...valid(repo()), provider: 'claude_code' })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const row = await prisma.workspace.findUniqueOrThrow({ where: { id: result.value.id } })
+    expect(row).toMatchObject({ flow: 'lead', delivery: 'conducted', autoMerge: true })
+    const seats = await prisma.slave.findMany({ where: { team: { workspaceId: row.id, name: LEAD_TEAM_NAME }, closedAt: null }, select: { role: true, model: true, provider: true } })
+    expect(seats.map((seat) => seat.role).sort()).toEqual(Object.values(LEAD_SEAT_ROLES).sort())
+    expect(seats.every((seat) => seat.model === null && seat.provider === null)).toBe(true)
+  })
+
+  it('keeps an explicit automatic-merge choice in the lead flow', async () => {
+    const result = await createWorkspace({ ...valid(repo()), provider: 'claude_code', autoMerge: false })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(await prisma.workspace.findUniqueOrThrow({ where: { id: result.value.id } })).toMatchObject({ flow: 'lead', autoMerge: false })
+  })
+
+  it.each([
+    ['no provider', {}],
+    ['the cursor provider', { provider: 'cursor' as const }],
+    ['the planner', { provider: 'claude_code' as const, delivery: 'planned' as const }],
+    ['the packages flow named', { provider: 'claude_code' as const, flow: 'packages' as const }],
+  ])('stays in the packages flow with %s, and makes no system seat', async (_label, extra) => {
+    const result = await createWorkspace({ ...valid(repo()), ...extra })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(await prisma.workspace.findUniqueOrThrow({ where: { id: result.value.id } })).toMatchObject({ flow: 'packages', autoMerge: false })
+    expect(await prisma.slave.count({ where: { team: { workspaceId: result.value.id } } })).toBe(0)
+  })
+
+  it('refuses the lead flow named where it cannot run, and writes nothing', async () => {
+    const result = await createWorkspace({ ...valid(repo()), flow: 'lead' })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.kind).toBe('lead_setting_invalid')
+    expect(await prisma.workspace.count()).toBe(0)
   })
 
   it('no provider means no ProviderConfiguration row and a null in the payload', async () => {

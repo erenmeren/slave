@@ -54,7 +54,7 @@ async function openLeadSeats(client: Prisma.TransactionClient, workspaceId: stri
  * workspace row lock already: the team and any missing seat are made, and `model`, when given,
  * moves all three.
  */
-async function ensureLeadSeatsIn(tx: Prisma.TransactionClient, workspaceId: string, model: string | undefined): Promise<LeadSeats> {
+export async function ensureLeadSeatsIn(tx: Prisma.TransactionClient, workspaceId: string, model: string | undefined): Promise<LeadSeats> {
   const team =
     (await tx.team.findUnique({ where: { workspaceId_name: { workspaceId, name: LEAD_TEAM_NAME } } })) ??
     (await tx.team.create({ data: { workspaceId, name: LEAD_TEAM_NAME } }))

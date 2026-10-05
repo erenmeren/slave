@@ -5,6 +5,7 @@ import {
   NON_TERMINAL_RUN_STATUSES,
   isWorkspaceLimitAllowed,
   type Result,
+  type WorkspaceFlow,
   type WorkspaceLimitField,
   err,
   ok,
@@ -12,6 +13,7 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import type { ProviderKind } from '@slave-of-ai/providers'
 import { realGitProbe, type GitProbe } from './git-probe.js'
+import { ensureLeadSeatsIn } from './lead/flow.js'
 import { isProviderKind } from './org.js'
 import type { Principal } from './principal.js'
 import { isUniqueConstraintViolation } from './prisma-errors.js'
@@ -285,6 +287,14 @@ export interface CreateWorkspaceInput {
    * `--delivery planned`, the intake card's choice) for a project that wants the planner.
    */
   readonly delivery?: 'conducted' | 'planned'
+  /**
+   * Lead-flow spec R-1, the operator's ruling of 2026-10-05: a new project is born in the lead
+   * flow. Absent means `lead` whenever the lead flow can run -- the project is given the
+   * `claude_code` provider and did not ask for the planner (`delivery: 'planned'`) -- and
+   * `packages` otherwise; `packages` is the opt-out (the CLI's `--flow packages`). Naming `lead`
+   * where it cannot run is refused, as `setFlow` refuses it.
+   */
+  readonly flow?: WorkspaceFlow
 }
 
 let probe: GitProbe = realGitProbe
@@ -327,6 +337,11 @@ export async function createWorkspace(
   }
   const provider = input.provider ?? null
   if (provider !== null && !isProviderKind(provider)) return err({ kind: 'invalid_provider', provider })
+  const leadCanRun = provider === 'claude_code' && input.delivery !== 'planned'
+  if (input.flow === 'lead' && !leadCanRun) {
+    return err({ kind: 'lead_setting_invalid', field: 'flow', rule: 'a project is created in the lead flow only with the claude_code provider and conducted delivery' })
+  }
+  const flow: WorkspaceFlow = input.flow ?? (leadCanRun ? 'lead' : 'packages')
 
   let id: string
   try {
@@ -342,7 +357,10 @@ export async function createWorkspace(
           // Spread, not `autoMerge: input.autoMerge ?? false`: restating a column's default in
           // TypeScript is how the two drift apart, and "the caller said nothing" has exactly one
           // right answer here -- let Postgres answer it.
-          ...(input.autoMerge === undefined ? {} : { autoMerge: input.autoMerge }),
+          // In the lead flow automatic merge is on unless the caller said otherwise (spec D1's
+          // default, as `setFlow` writes it).
+          ...(input.autoMerge === undefined ? (flow === 'lead' ? { autoMerge: true } : {}) : { autoMerge: input.autoMerge }),
+          ...(flow === 'lead' ? { flow } : {}),
           ...(input.supervisorAutonomy === undefined ? {} : { supervisorAutonomy: input.supervisorAutonomy }),
           // Conductor Plan 4b (spec §5, D11): new projects are conducted. Written here, not as the
           // column's default: the column stays `planned` so every row inserted outside this
@@ -354,6 +372,8 @@ export async function createWorkspace(
       if (provider !== null) {
         await tx.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: provider, settings: {} } })
       }
+      // The three system seats `setFlow` would make, in the same transaction as the row.
+      if (flow === 'lead') await ensureLeadSeatsIn(tx, workspace.id, undefined)
       return workspace.id
     })
   } catch (cause) {
