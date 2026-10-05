@@ -47,7 +47,7 @@ export function NodeCard({ data, width, height, onToggle }: { readonly data: Car
         <p className="mt-auto flex min-w-0 items-center gap-1 text-[11px] whitespace-nowrap text-muted-foreground tabular-nums">
           <span className="text-foreground">{data.steps}</span>
           {data.failed !== null && <span className="text-destructive">· {data.failed}</span>}
-          {data.cost !== null && data.group === null && <span className="truncate">· {data.cost}</span>}
+          {data.cost !== null && data.group === null && <span data-testid="diagram-cost" className="truncate" title={data.costTitle ?? undefined}>· {data.cost}</span>}
           {data.group !== null && onToggle !== undefined && (
             <button
               type="button"

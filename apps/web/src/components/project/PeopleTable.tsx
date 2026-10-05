@@ -3,6 +3,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { ESTIMATE_TITLE, aboutUsd, unpricedWord } from '@/lib/estimate'
 import { formatAgo, formatUsd } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { initialsOf, toneOf } from './WhoIsWorking'
@@ -15,16 +16,31 @@ const STATE_TONE: Readonly<Record<PersonRow['state'], string>> = {
   done: 'bg-muted text-muted-foreground',
 }
 
-/** What a person cost, or why there is no figure of their own. */
+/**
+ * What a person cost, or why there is no figure of their own. A reported figure is said plainly; an
+ * estimate always says "about": a helper's (its cost is inside the lead's, so an estimate is all
+ * there is), and the lead's or a checker's for a session that has not reported yet.
+ */
 export function costWord(person: PersonRow): string {
-  if (person.costUsd !== null) return formatUsd(person.costUsd)
-  return person.kind === 'helper' ? "in the lead's" : 'when it ends'
+  if (person.kind === 'helper') return person.estimatedUsd !== null ? aboutUsd(person.estimatedUsd) : "in the lead's"
+  const running = person.estimatedRunningUsd
+  if (person.costUsd !== null) return running !== null ? `${formatUsd(person.costUsd)} + ${aboutUsd(running)} so far` : formatUsd(person.costUsd)
+  if (running !== null) return `${aboutUsd(running)} so far`
+  if (person.running > 0 && person.unpricedModels.length > 0) return unpricedWord(person.unpricedModels)
+  return 'when it ends'
+}
+
+/** The small print under an estimate; null when the cell holds none. */
+export function costNote(person: PersonRow): string | null {
+  if (person.kind === 'helper') return person.estimatedUsd !== null ? "estimate · in the lead's cost" : null
+  return person.estimatedRunningUsd !== null ? 'estimate' : null
 }
 
 /**
  * Everybody who worked on the build, finished or not: the lead, each helper it called and the
  * checkers -- what each is doing now, how many sessions and steps it took, and what it cost. A
- * helper has no figure of its own: the runtime reports one cost per lead turn, helpers included.
+ * helper has no reported figure of its own: the runtime reports one cost per lead turn, helpers
+ * included, so a helper's is an estimate from the tokens its sessions used, and says so.
  */
 export function PeopleTable({ build }: { readonly build: BuildView }): React.JSX.Element | null {
   if (build.people.length === 0) return null
@@ -78,7 +94,10 @@ export function PeopleTable({ build }: { readonly build: BuildView }): React.JSX
                   {person.toolCalls}
                   {person.failedCalls > 0 && <span className="text-destructive" title="Steps that failed"> · {person.failedCalls} failed</span>}
                 </TableCell>
-                <TableCell className={cn('text-right tabular-nums', person.costUsd === null && 'text-xs text-muted-foreground')}>{costWord(person)}</TableCell>
+                <TableCell data-testid="person-cost" className={cn('text-right tabular-nums', person.costUsd === null && person.estimatedUsd === null && 'text-xs text-muted-foreground')} title={costNote(person) === null ? undefined : ESTIMATE_TITLE}>
+                  {costWord(person)}
+                  {costNote(person) !== null && <span className="block text-xs font-normal text-muted-foreground">{costNote(person)}</span>}
+                </TableCell>
                 <TableCell className="text-right text-xs text-muted-foreground" suppressHydrationWarning>
                   {person.lastAt === null ? '—' : formatAgo(person.lastAt)}
                 </TableCell>

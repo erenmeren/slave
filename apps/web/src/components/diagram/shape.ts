@@ -1,4 +1,5 @@
 import type { BuildDiagram, DiagramNode, DiagramSession, DiagramState } from '@slave-of-ai/control'
+import { aboutUsd } from '@/lib/estimate'
 import { formatUsd, plural } from '@/lib/format'
 import { RESULT_WORD, STATE_WORD, toneOfResult, toneOfState, type Tone } from './words'
 
@@ -25,6 +26,8 @@ export interface CardData {
   readonly steps: string | null
   readonly failed: string | null
   readonly cost: string | null
+  /** What to say on hover when `cost` is an estimate; null when it is not one. */
+  readonly costTitle: string | null
   /** How many sessions a grouped helper's card stands for; null when the card is not a group. */
   readonly group: number | null
   readonly expanded: boolean
@@ -59,12 +62,24 @@ const idle = (state: DiagramState): string => (state === 'paused' ? 'Paused unti
 const sentenceOf = (state: DiagramState, doing: string | null): string => (state === 'working' ? (doing ?? 'Starting…') : idle(state))
 const failedOf = (count: number): string | null => (count === 0 ? null : `${String(count)} failed`)
 
-/** A person's cost in words: their own figure, or where it is. */
-export function costOf(kind: DiagramNode['kind'], costUsd: number | null, open: boolean): string | null {
+/**
+ * A person's cost in words: their own reported figure, or where it is. Where there is no reported
+ * figure and an estimate exists, the estimate, always as "about": a helper's (its cost is inside
+ * the lead's), and an open session's so far.
+ */
+export function costOf(kind: DiagramNode['kind'], costUsd: number | null, open: boolean, estimatedUsd: number | null = null): string | null {
   if (kind === 'request' || kind === 'result') return null
-  if (kind === 'helper') return "cost in the lead's"
+  if (kind === 'helper') return estimatedUsd === null ? "cost in the lead's" : aboutUsd(estimatedUsd)
   if (costUsd !== null) return open ? `${formatUsd(costUsd)} so far` : formatUsd(costUsd)
-  return open ? 'cost when it ends' : 'cost not reported'
+  if (open) return estimatedUsd === null ? 'cost when it ends' : `${aboutUsd(estimatedUsd)} so far`
+  return 'cost not reported'
+}
+
+/** The hover text of a cost that is an estimate; null when `costOf` said a reported figure or none. */
+export function costTitleOf(kind: DiagramNode['kind'], costUsd: number | null, open: boolean, estimatedUsd: number | null): string | null {
+  if (estimatedUsd === null || kind === 'request' || kind === 'result') return null
+  if (kind === 'helper') return "An estimate from the tokens its sessions used. Its cost is inside the lead's."
+  return costUsd === null && open ? 'An estimate from the tokens used so far. The cost is reported when the session ends.' : null
 }
 
 function personCard(node: DiagramNode, group: number | null, expanded: boolean): CardSpec {
@@ -85,7 +100,8 @@ function personCard(node: DiagramNode, group: number | null, expanded: boolean):
       sentence: sentenceOf(node.state, node.doing),
       steps: plural(node.toolCalls, 'step'),
       failed: failedOf(node.failedCalls),
-      cost: costOf(node.kind, node.costUsd, node.running > 0),
+      cost: costOf(node.kind, node.costUsd, node.running > 0, node.estimatedUsd),
+      costTitle: costTitleOf(node.kind, node.costUsd, node.running > 0, node.estimatedUsd),
       group,
       expanded,
     },
@@ -109,7 +125,8 @@ function sessionCard(node: DiagramNode, session: DiagramSession, index: number, 
       sentence: sentenceOf(session.state, session.doing),
       steps: plural(session.toolCalls, 'step'),
       failed: failedOf(session.failedCalls),
-      cost: costOf('helper', null, false),
+      cost: costOf('helper', null, false, session.estimatedUsd),
+      costTitle: costTitleOf('helper', null, false, session.estimatedUsd),
       group: null,
       expanded: false,
     },
@@ -128,10 +145,10 @@ export function diagramShape(build: BuildDiagram, expanded: ReadonlySet<string> 
   const nodeOf = new Map(build.nodes.map((node) => [node.id, node]))
   for (const node of build.nodes) {
     if (node.kind === 'request') {
-      cards.push({ id: node.id, ...CARD_SIZE.end, data: { kind: 'request', nodeId: node.id, sessionId: null, name: node.name, role: `asked for build ${String(build.version)}`, badge: '', tone: 'muted', working: false, asked: null, sentence: build.goal === '' ? 'The request has no text.' : build.goal, steps: null, failed: null, cost: null, group: null, expanded: false } })
+      cards.push({ id: node.id, ...CARD_SIZE.end, data: { kind: 'request', nodeId: node.id, sessionId: null, name: node.name, role: `asked for build ${String(build.version)}`, badge: '', tone: 'muted', working: false, asked: null, sentence: build.goal === '' ? 'The request has no text.' : build.goal, steps: null, failed: null, cost: null, costTitle: null, group: null, expanded: false } })
     } else if (node.kind === 'result') {
       const tone = toneOfResult(build.result)
-      cards.push({ id: node.id, ...CARD_SIZE.end, data: { kind: 'result', nodeId: node.id, sessionId: null, name: node.name, role: `of build ${String(build.version)}`, badge: RESULT_WORD[build.result], tone, working: false, asked: null, sentence: RESULT_SENTENCE[build.result], steps: null, failed: null, cost: null, group: null, expanded: false } })
+      cards.push({ id: node.id, ...CARD_SIZE.end, data: { kind: 'result', nodeId: node.id, sessionId: null, name: node.name, role: `of build ${String(build.version)}`, badge: RESULT_WORD[build.result], tone, working: false, asked: null, sentence: RESULT_SENTENCE[build.result], steps: null, failed: null, cost: null, costTitle: null, group: null, expanded: false } })
     } else if (node.kind === 'helper') {
       const sessions = build.sessions.filter((session) => session.nodeId === node.id)
       const grouped = sessions.length > GROUP_OVER

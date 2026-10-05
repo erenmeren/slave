@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { BuildDiagram } from '@slave-of-ai/control'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { ESTIMATE_TITLE, aboutUsd } from '@/lib/estimate'
 import { formatUsd, plural } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { sessionName } from './NodeSheet'
@@ -143,7 +144,7 @@ export function Timeline({ build, onSelect }: { readonly build: BuildDiagram; re
                     <div style={{ height: BAND }} className="overflow-clip border-b border-info/20 text-[11px] leading-6 whitespace-nowrap text-info-foreground">
                       <span className="sticky left-0 inline-block px-1.5 font-medium">
                         {String(index + 1)}. {sessionName(turn, index)}
-                        <span className="font-normal text-muted-foreground"> · {turn.costUsd === null ? (turn.endedAt === null ? 'cost when it ends' : 'cost not reported') : formatUsd(turn.costUsd)}</span>
+                        <span className="font-normal text-muted-foreground" title={turn.costUsd === null && turn.endedAt === null && turn.estimatedUsd !== null ? ESTIMATE_TITLE : undefined}> · {turn.costUsd === null ? (turn.endedAt === null ? (turn.estimatedUsd === null ? 'cost when it ends' : `${aboutUsd(turn.estimatedUsd)} so far (estimate)`) : 'cost not reported') : formatUsd(turn.costUsd)}</span>
                       </span>
                     </div>
                   </div>

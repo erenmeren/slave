@@ -1,14 +1,15 @@
 import type { ProjectView } from '@slave-of-ai/control'
 import { LimitBar } from '@/components/app/LimitBar'
+import { ESTIMATE_TITLE, runningEstimateLine } from '@/lib/estimate'
 import { formatMinutes, formatUsd, percentOf, plural } from '@/lib/format'
 
-function Stat({ id, label, value, detail, children }: { readonly id: string; readonly label: string; readonly value: string; readonly detail: string | null; readonly children?: React.ReactNode }): React.JSX.Element {
+function Stat({ id, label, value, detail, detailTitle, children }: { readonly id: string; readonly label: string; readonly value: string; readonly detail: string | null; readonly detailTitle?: string | undefined; readonly children?: React.ReactNode }): React.JSX.Element {
   return (
     <div data-testid={`stat-${id}`} className="flex min-w-0 flex-col gap-1 rounded-lg border bg-card p-3">
       <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{label}</span>
       <span className="truncate text-xl font-semibold tabular-nums">{value}</span>
       {children}
-      {detail !== null && <span className="truncate text-xs text-muted-foreground" title={detail}>{detail}</span>}
+      {detail !== null && <span data-testid={`stat-${id}-detail`} className="truncate text-xs text-muted-foreground" title={detailTitle ?? detail}>{detail}</span>}
     </div>
   )
 }
@@ -16,7 +17,8 @@ function Stat({ id, label, value, detail, children }: { readonly id: string; rea
 /**
  * The figures of a build, always in sight at the top of the Project screen: what was spent against
  * the budget, the working time against its limit, how many are working right now and who, and how
- * much work was done.
+ * much work was done. "Spent" is what was REPORTED; while a session runs, about what it has used
+ * so far is said on a line of its own and drawn as a lighter piece of the bar, never added in.
  */
 export function BuildStats({ project }: { readonly project: ProjectView }): React.JSX.Element | null {
   const build = project.build
@@ -25,15 +27,17 @@ export function BuildStats({ project }: { readonly project: ProjectView }): Reac
   const helpers = build.people.filter((person) => person.kind === 'helper')
   const spent = `${build.spendUnmeasured ? 'at least ' : ''}${formatUsd(build.spentUsd)}`
   const liveTurn = build.turns.some((turn) => turn.endedAt === null)
+  const running = runningEstimateLine(build.spend.estimatedRunningUsd, build.spend.unpricedModels)
   return (
     <section data-testid="build-stats" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
       <Stat
         id="spent"
         label="Spent"
         value={project.budgetUsd === null ? spent : `${spent} of ${formatUsd(project.budgetUsd)}`}
-        detail={liveTurn ? 'The running turn is added when it ends' : project.budgetUsd === null ? 'No budget set' : null}
+        detail={running ?? (liveTurn ? 'The running turn is added when it ends' : project.budgetUsd === null ? 'No budget set' : null)}
+        detailTitle={running === null ? undefined : ESTIMATE_TITLE}
       >
-        <LimitBar percent={percentOf(build.spentUsd, project.budgetUsd)} label="Spent of the budget" />
+        <LimitBar percent={percentOf(build.spentUsd, project.budgetUsd)} label="Spent of the budget" estimatePercent={percentOf(build.spend.estimatedRunningUsd, project.budgetUsd)} estimateTitle={running ?? undefined} />
       </Stat>
       <Stat
         id="time"

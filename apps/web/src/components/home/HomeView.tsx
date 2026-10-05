@@ -17,6 +17,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { usePoll } from '@/hooks/usePoll'
 import { api, notifyProjectsChanged } from '@/lib/api'
+import { ESTIMATE_TITLE, aboutUsd } from '@/lib/estimate'
 import { formatAgo, formatUsd, percentOf, plural, spendLine } from '@/lib/format'
 
 /** How often Home re-reads (lead UX design U-9). */
@@ -61,12 +62,12 @@ function WaitingDecision({ project, onAnswered, children }: { readonly project: 
   )
 }
 
-function Figure({ id, label, value, detail }: { readonly id: string; readonly label: string; readonly value: string; readonly detail: string }): React.JSX.Element {
+function Figure({ id, label, value, detail, detailTitle }: { readonly id: string; readonly label: string; readonly value: string; readonly detail: string; readonly detailTitle?: string | undefined }): React.JSX.Element {
   return (
     <div data-testid={`home-${id}`} className="flex min-w-0 flex-col gap-1 rounded-lg border bg-card p-3">
       <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{label}</span>
       <span className="text-xl font-semibold tabular-nums">{value}</span>
-      <span className="truncate text-xs text-muted-foreground" title={detail}>{detail}</span>
+      <span data-testid={`home-${id}-detail`} className="truncate text-xs text-muted-foreground" title={detailTitle ?? detail}>{detail}</span>
     </div>
   )
 }
@@ -85,6 +86,8 @@ export function HomeView({ initial, happening = [] }: { readonly initial: readon
   const busy = live.filter((project) => project.workingNow > 0)
   const workingNow = live.reduce((total, project) => total + project.workingNow, 0)
   const totalSpent = live.reduce((total, project) => total + project.totalSpentUsd, 0)
+  // An estimate, said beside the reported sum and never added into it.
+  const totalRunning = live.reduce((total, project) => total + project.estimatedRunningUsd, 0)
 
   const restore = async (project: ProjectListItem): Promise<void> => {
     const result = await api(`/api/w/${project.id}/restore`, { method: 'POST' })
@@ -133,7 +136,7 @@ export function HomeView({ initial, happening = [] }: { readonly initial: readon
         <section data-testid="home-figures" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Figure id="working" label="Working now" value={plural(workingNow, 'person', 'people')} detail={busy.length === 0 ? 'Nothing is running' : `on ${busy.map((project) => project.name).join(', ')}`} />
           <Figure id="waiting" label="Waiting for you" value={String(waiting.length)} detail={waiting.length === 0 ? 'Nothing needs you' : waiting.map((project) => project.name).join(', ')} />
-          <Figure id="spent" label="Spent in all" value={`${live.some((project) => project.spendUnmeasured) ? 'at least ' : ''}${formatUsd(totalSpent)}`} detail={`across ${plural(live.length, 'project')}`} />
+          <Figure id="spent" label="Spent in all" value={`${live.some((project) => project.spendUnmeasured) ? 'at least ' : ''}${formatUsd(totalSpent)}`} detail={totalRunning > 0 ? `+ ${aboutUsd(totalRunning)} running (estimate)` : `across ${plural(live.length, 'project')}`} detailTitle={totalRunning > 0 ? ESTIMATE_TITLE : undefined} />
           <Figure id="projects" label="Projects" value={String(live.length)} detail={`${String(busy.length)} running · ${String(archived.length)} archived`} />
         </section>
       )}
@@ -193,7 +196,12 @@ export function HomeView({ initial, happening = [] }: { readonly initial: readon
                     <span>Spent {spendLine(project.spentUsd, project.spendUnmeasured, project.budgetUsd)}</span>
                     <span suppressHydrationWarning>updated {formatAgo(project.updatedAt)}</span>
                   </div>
-                  <LimitBar percent={percentOf(project.spentUsd, project.budgetUsd)} label="Spent of the budget" />
+                  {project.estimatedRunningUsd > 0 && (
+                    <p data-testid="card-running" className="text-xs text-muted-foreground tabular-nums" title={ESTIMATE_TITLE}>
+                      + {aboutUsd(project.estimatedRunningUsd)} running (estimate)
+                    </p>
+                  )}
+                  <LimitBar percent={percentOf(project.spentUsd, project.budgetUsd)} label="Spent of the budget" estimatePercent={percentOf(project.estimatedRunningUsd, project.budgetUsd)} estimateTitle={`+ ${aboutUsd(project.estimatedRunningUsd)} running (estimate)`} />
                 </CardContent>
               </Card>
             </Link>

@@ -6,6 +6,7 @@ import { TURN_WORD } from '@/components/project/CostSection'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { aboutUsd } from '@/lib/estimate'
 import { formatAgo, plural } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { costOf } from './shape'
@@ -87,7 +88,7 @@ export function NodeSheet({ build, workspaceId, subject, onClose }: { readonly b
                   <div className="grid grid-cols-3 gap-2">
                     <Figure label="Steps" value={String(total)} />
                     <Figure label="Failed" value={String(one?.failedCalls ?? node.failedCalls)} />
-                    <Figure label="Cost" value={(costOf(node.kind, one === null ? node.costUsd : one.costUsd, state === 'working' || state === 'paused') ?? '').replace(/^cost /u, '')} />
+                    <Figure label={node.kind === 'helper' && (one ?? node).estimatedUsd !== null ? 'Cost (estimate)' : 'Cost'} value={(costOf(node.kind, one === null ? node.costUsd : one.costUsd, state === 'working' || state === 'paused', (one ?? node).estimatedUsd) ?? '').replace(/^cost /u, '')} />
                   </div>
                   {state === 'working' && <p className="text-sm">{one?.doing ?? node.doing ?? 'Starting…'}</p>}
                   {node.personId !== null && (
@@ -110,7 +111,8 @@ export function NodeSheet({ build, workspaceId, subject, onClose }: { readonly b
                             <span className="text-xs text-muted-foreground tabular-nums" suppressHydrationWarning>
                               {formatClock(from, true)}{session.endedAt === null ? (session.state === 'paused' ? ', paused' : ' to now') : ` to ${formatClock(to, true)}`} · {formatDuration(to - from)} · {plural(session.toolCalls, 'step')}
                               {session.failedCalls > 0 && ` · ${String(session.failedCalls)} failed`}
-                              {node.kind !== 'helper' && ` · ${(costOf(node.kind, session.costUsd, session.endedAt === null) ?? '').replace(/^cost /u, 'cost ')}`}
+                              {node.kind !== 'helper' && ` · ${(costOf(node.kind, session.costUsd, session.endedAt === null, session.estimatedUsd) ?? '').replace(/^cost /u, 'cost ')}${session.costUsd === null && session.endedAt === null && session.estimatedUsd !== null ? ' (estimate)' : ''}`}
+                              {node.kind === 'helper' && session.estimatedUsd !== null && ` · ${aboutUsd(session.estimatedUsd)} (estimate)`}
                             </span>
                           </li>
                         )

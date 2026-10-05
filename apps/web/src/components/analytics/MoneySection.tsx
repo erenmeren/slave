@@ -4,6 +4,7 @@ import { LimitBar } from '@/components/app/LimitBar'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { ESTIMATE_TITLE, aboutUsd } from '@/lib/estimate'
 import { formatMinutes, formatUsd, percentOf, plural } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { DayBars, Figure, Legend } from './DayBars'
@@ -31,14 +32,15 @@ export function MoneySection({ view }: { readonly view: AnalyticsView }): React.
     <section aria-labelledby="money-heading" data-testid="analytics-money" className="flex min-w-0 flex-col gap-4">
       <h2 id="money-heading" className="text-lg font-semibold tracking-tight">Money</h2>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Figure id="spent" label="Spent" value={moneyWord(money.totalUsd, money)} detail={gaps === null ? `Every session ${periodWord(view.days)} reported its cost` : 'Some sessions are missing from this sum'} />
+        <Figure id="spent" label="Spent" value={moneyWord(money.totalUsd, money)} detail={money.estimatedRunningUsd > 0 ? `+ ${aboutUsd(money.estimatedRunningUsd)} running (estimate)` : gaps === null ? `Every session ${periodWord(view.days)} reported its cost` : 'Some sessions are missing from this sum'} />
         <Figure id="building" label="Building" value={partWord(money.buildingUsd)} detail="The leads' turns, their helpers inside them" tone="bg-info" />
         <Figure id="checking" label="Checking" value={partWord(money.checkingUsd)} detail="The checkers' runs" tone="bg-checking" />
         <Figure id="steering" label="Reading and steering" value={partWord(money.steeringUsd)} detail="Turning requests into requirements, and deciding" tone="bg-warning" />
       </div>
       {gaps !== null && (
-        <p data-testid="money-gaps" className="text-sm text-muted-foreground">
+        <p data-testid="money-gaps" className="text-sm text-muted-foreground" title={money.estimatedRunningUsd > 0 ? ESTIMATE_TITLE : undefined}>
           {gaps}
+          {money.estimatedRunningUsd > 0 && <span data-testid="money-running"> The open sessions have used {aboutUsd(money.estimatedRunningUsd)} so far: an estimate, in none of these sums.</span>}
         </p>
       )}
 
@@ -104,7 +106,7 @@ export function MoneySection({ view }: { readonly view: AnalyticsView }): React.
                         )}
                       </TableCell>
                       <TableCell className="text-right text-xs text-muted-foreground">
-                        {row.unmeasuredSessions === 0 && row.liveSessions === 0 ? '—' : [row.liveSessions > 0 ? `${String(row.liveSessions)} open` : null, row.unmeasuredSessions > 0 ? `${String(row.unmeasuredSessions)} without a cost` : null].filter((word) => word !== null).join(' · ')}
+                        {row.unmeasuredSessions === 0 && row.liveSessions === 0 ? '—' : [row.liveSessions > 0 ? `${String(row.liveSessions)} open${row.estimatedRunningUsd > 0 ? `, ${aboutUsd(row.estimatedRunningUsd)} so far (estimate)` : ''}` : null, row.unmeasuredSessions > 0 ? `${String(row.unmeasuredSessions)} without a cost` : null].filter((word) => word !== null).join(' · ')}
                       </TableCell>
                     </TableRow>
                   )
@@ -156,7 +158,10 @@ export function MoneySection({ view }: { readonly view: AnalyticsView }): React.
                     <TableCell className="text-right tabular-nums">{row.helperSessions}</TableCell>
                     <TableCell className="text-right tabular-nums">{row.steps}</TableCell>
                     <TableCell className="text-right whitespace-nowrap tabular-nums">{formatMinutes(row.workedMs)}</TableCell>
-                    <TableCell className={cn('text-right whitespace-nowrap tabular-nums', row.spentUsd === 0 && 'text-xs text-muted-foreground')}>{moneyWord(row.spentUsd, row)}</TableCell>
+                    <TableCell className={cn('text-right whitespace-nowrap tabular-nums', row.spentUsd === 0 && 'text-xs text-muted-foreground')}>
+                      {moneyWord(row.spentUsd, row)}
+                      {row.estimatedRunningUsd > 0 && <span data-testid="build-running" className="block text-xs font-normal text-muted-foreground" title={ESTIMATE_TITLE}>+ {aboutUsd(row.estimatedRunningUsd)} running (estimate)</span>}
+                    </TableCell>
                     <TableCell className="text-right whitespace-nowrap tabular-nums">{perStepWord(row.spentUsd, row.steps, row)}</TableCell>
                   </TableRow>
                 ))}

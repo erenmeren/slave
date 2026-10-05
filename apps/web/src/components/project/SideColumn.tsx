@@ -4,6 +4,7 @@ import type { ProjectView } from '@slave-of-ai/control'
 import { LimitBar } from '@/components/app/LimitBar'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { ESTIMATE_TITLE, runningEstimateLine } from '@/lib/estimate'
 import { formatAgo, percentOf, spendLine, timeLine } from '@/lib/format'
 
 /** A build's state in a person's words, for the Builds list. */
@@ -33,6 +34,8 @@ export function SideColumn({ project, onOpenSettings }: { readonly project: Proj
   const build = project.build
   const spent = build?.spentUsd ?? project.projectSpentUsd
   const worked = build?.workedMs ?? 0
+  // Beside the spend the budget is measured against, never in it: what the open sessions used so far.
+  const running = build === null ? null : runningEstimateLine(build.spend.estimatedRunningUsd, build.spend.unpricedModels)
   return (
     <div className="flex flex-col gap-4">
       <Card data-testid="limits" className="gap-4">
@@ -47,7 +50,8 @@ export function SideColumn({ project, onOpenSettings }: { readonly project: Proj
                 {spendLine(spent, build?.spendUnmeasured ?? false, project.budgetUsd)}
               </span>
             </div>
-            <LimitBar percent={percentOf(spent, project.budgetUsd)} label="Spent of the budget" />
+            <LimitBar percent={percentOf(spent, project.budgetUsd)} label="Spent of the budget" estimatePercent={percentOf(build?.spend.estimatedRunningUsd ?? 0, project.budgetUsd)} estimateTitle={running ?? undefined} />
+            {running !== null && <span data-testid="limits-running" className="text-right text-xs text-muted-foreground tabular-nums" title={ESTIMATE_TITLE}>{running}</span>}
           </div>
           {project.flow === 'lead' && (
             <div className="flex flex-col gap-1.5">
