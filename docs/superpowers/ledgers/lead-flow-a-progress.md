@@ -238,3 +238,30 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
     and not in the operator's known-red list -- the operator's run decides.
   - Not run: m44 m46 m47 m48 m49 m50 m54 m55 m57 m58 (known red on main), and the gates outside ci.yml other
     than the plan's m12/m13.
+
+## Reconciliation with the operator's patched plan (2026-10-05)
+
+The operator's own "Controller answers" were compared with the branch code; two points differed, and both
+are now closed. The plan's C1 and C6 and its provenance paragraph are amended to match.
+
+- C1 (`a8c0b77`): in the claude stream parser a `system`/`init` line or a `result` line whose
+  `parent_tool_use_id` is a non-empty string (read by the existing `parentOf`) returns `ignored`: a
+  subordinate's init must not replace the session id `--resume` needs, and its result must not replace the
+  lead's outcome. A `tool_result` event (from `parseStreamLine` and `parseStreamResults` alike) carries the
+  optional `parentToolUseId` (present only when non-null, cut at 200), and `RuntimeEvent`'s type says so.
+  Recorded fixtures carry `parent_tool_use_id: null` on every line, so no existing run changes. Tests first,
+  in `packages/providers/test/stream.test.ts` (3 red before the change, green after).
+- Ruling: the persisted `run.tool_result` payload takes the same optional `parentToolUseId` (bounded 1-200,
+  as `run.tool_call`'s), and the pump writes it when the event has it -- the payload is persisted with
+  explicit fields under `.strict()`, so without the field the value would be dropped, and adding it is purely
+  additive (old rows parse unchanged) -- if wrong, one optional field nobody reads yet. One schema test case.
+- C6 (`375ea8b`): `LEAD_DENIAL_CONTINUES_MAX` is 3 (the operator's ruling, was 2). The lead-turn test that
+  listed the turns by hand now derives them from the constant.
+- Verification, as actually run in this cloud session: `npm run typecheck` exit 0; `npm run
+  gate:m26-vocabulary` PASS; the four affected test files (`packages/providers/test/stream.test.ts`,
+  `packages/domain/test/events/schema.test.ts`, `packages/domain/test/lead/state.test.ts`,
+  `apps/orchestrator/test/integration/lead-turn.test.ts`) 220/220 passed.
+- The whole suite was NOT run in the cloud, on the operator's instruction: a run was started and stopped
+  before it finished, with no result taken from it. The operator runs it locally.
+- Pushed with `--no-verify`, on the operator's instruction for this push only: the pre-push hook runs the
+  whole suite.
