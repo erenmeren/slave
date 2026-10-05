@@ -47,6 +47,22 @@ describe('Home (lead UX design section 6.1)', () => {
     expect(document.body.textContent).not.toMatch(/needs_decision|awaiting_decision|goal version/u)
   })
 
+  it('says how many are working, what waits, and what was spent in all, and each card who works on it', () => {
+    const projects = [
+      listItemFixture({ id: 'a', name: 'Invoice service', workingNow: 3, doing: 'Editing src/api.ts', totalSpentUsd: 10 }),
+      listItemFixture({ id: 'b', name: 'Todo app', phase: 'delivered', workingNow: 0, doing: null, totalSpentUsd: 2.5 }),
+    ]
+    stubFetch(() => ({ body: { projects } }))
+    render(<HomeView initial={projects} />)
+    expect(screen.getByTestId('home-working').textContent).toContain('3 people')
+    expect(screen.getByTestId('home-working').textContent).toContain('Invoice service')
+    expect(screen.getByTestId('home-spent').textContent).toContain('$12.50')
+    expect(screen.getByTestId('home-waiting').textContent).toContain('Nothing needs you')
+    const working = screen.getAllByTestId('card-working')
+    expect(working).toHaveLength(1)
+    expect(working[0]?.textContent).toBe('3 people working · Editing src/api.ts')
+  })
+
   it('folds the archived projects away with Restore and Delete', () => {
     const projects = [listItemFixture({ archived: true, name: 'Old one' })]
     stubFetch(() => ({ body: { projects } }))

@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { phaseNeedsPerson, projectPhaseOf, type LeadState, type ProjectPhase, type StopReason, type WorkspaceFlow } from '@slave-of-ai/domain'
+import { SUBORDINATE_TOOLS, doingSentence, phaseNeedsPerson, projectPhaseOf, type LeadState, type ProjectPhase, type StopReason, type WorkspaceFlow } from '@slave-of-ai/domain'
 import { goalSpend } from './lead/spend.js'
 import { workspaceSpend } from './spend.js'
 
@@ -30,6 +30,36 @@ export interface ProjectListItem {
   readonly budgetUsd: number | null
   /** The newest event of the project, else its creation. */
   readonly updatedAt: string
+  /** People working right now: the live sessions, and the helpers a live lead turn has open. */
+  readonly workingNow: number
+  /** The newest step of a live session, in words; null when nothing runs. */
+  readonly doing: string | null
+  /** Everything the project spent, every build of it (the lead flow's `spentUsd` is the newest build's). */
+  readonly totalSpentUsd: number
+}
+
+const RUNNING = ['starting', 'working', 'resuming'] as const
+
+/** Who works on a project right now, and the newest thing a live session did. */
+async function workingNowOf(workspaceId: string): Promise<{ readonly people: number; readonly doing: string | null }> {
+  const live = await prisma.slaveRun.findMany({ where: { status: { in: [...RUNNING] }, slave: { team: { workspaceId } } }, select: { id: true, leadTurn: true } })
+  if (live.length === 0) return { people: 0, doing: null }
+  const events = await prisma.executionEvent.findMany({
+    where: { runId: { in: live.map((run) => run.id) }, type: { in: ['run_tool_call', 'run_tool_result'] } },
+    orderBy: { seq: 'desc' },
+    take: 600,
+    select: { type: true, runId: true, payload: true },
+  })
+  interface Call { readonly name?: string; readonly summary?: string; readonly toolUseId?: string; readonly parentToolUseId?: string }
+  const finished = new Set(events.filter((event) => event.type === 'run_tool_result').map((event) => (event.payload as Call).toolUseId))
+  const calls = events.filter((event) => event.type === 'run_tool_call')
+  const leadTurns = new Set(live.filter((run) => run.leadTurn !== null).map((run) => run.id))
+  const openHelpers = calls.filter((event) => {
+    const call = event.payload as Call
+    return event.runId !== null && leadTurns.has(event.runId) && call.parentToolUseId === undefined && call.name !== undefined && SUBORDINATE_TOOLS.includes(call.name) && !finished.has(call.toolUseId)
+  }).length
+  const newest = calls[0]?.payload as Call | undefined
+  return { people: live.length + openHelpers, doing: newest?.name === undefined ? null : doingSentence(newest.name, newest.summary ?? newest.name) }
 }
 
 /**
@@ -45,7 +75,9 @@ export async function listProjects(): Promise<readonly ProjectListItem[]> {
   })
   return Promise.all(
     workspaces.map(async (workspace): Promise<ProjectListItem> => {
-      const [newest, latestEvent] = await Promise.all([
+      const [working, total, newest, latestEvent] = await Promise.all([
+        workingNowOf(workspace.id),
+        workspaceSpend(workspace.id),
         prisma.goalDelivery.findFirst({
           where: { workspaceId: workspace.id },
           orderBy: { goalVersion: 'desc' },
@@ -108,6 +140,9 @@ export async function listProjects(): Promise<readonly ProjectListItem[]> {
         spendUnmeasured,
         budgetUsd: workspace.budgetUsd,
         updatedAt: (latestEvent?.ts ?? workspace.createdAt).toISOString(),
+        workingNow: working.people,
+        doing: working.doing,
+        totalSpentUsd: Math.max(total.spentUsd, spentUsd),
       }
     }),
   )

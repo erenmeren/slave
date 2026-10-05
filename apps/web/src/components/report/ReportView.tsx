@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { ArrowLeftIcon, DownloadIcon } from 'lucide-react'
-import type { GoalReport, GoalReportSharedDecision, GoalReportSmoke, GoalReportState } from '@slave-of-ai/domain'
+import { reportCaveats, type GoalReport, type GoalReportSharedDecision, type GoalReportSmoke, type GoalReportState } from '@slave-of-ai/domain'
 import { ResultBadge } from '@/components/project/ProofSection'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -51,6 +51,7 @@ export function ReportView({ report }: { readonly report: GoalReport }): React.J
   const delivery = report.delivery
   const requirements = report.requirements
   const merge = delivery?.merge ?? null
+  const caveats = reportCaveats(report)
   return (
     <article className="mx-auto flex w-full max-w-[900px] flex-col gap-6 px-4 py-6 md:px-8 print:max-w-none" data-testid="report" data-state={report.state}>
       <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
@@ -93,6 +94,21 @@ export function ReportView({ report }: { readonly report: GoalReport }): React.J
           </nav>
         )}
       </header>
+
+      {caveats.length > 0 && (
+        <Card data-testid="report-caveats" className="border-warning/60">
+          <CardHeader>
+            <CardTitle className="text-base">What to know before relying on this</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="flex list-disc flex-col gap-1 pl-5 text-sm">
+              {caveats.map((caveat) => (
+                <li key={caveat}>{caveat}</li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
 
       {report.goal !== null && (
         <Card>
@@ -196,7 +212,137 @@ export function ReportView({ report }: { readonly report: GoalReport }): React.J
         </Card>
       )}
 
-      <Card>
+      {report.rounds.length > 0 && (
+        <Card data-testid="report-rounds">
+          <CardHeader>
+            <CardTitle className="text-base">Every check</CardTitle>
+            <CardDescription>Each time the running product was checked, and what the checker found.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-12">#</TableHead>
+                  <TableHead>When</TableHead>
+                  <TableHead>Commit</TableHead>
+                  <TableHead className="text-right">Works</TableHead>
+                  <TableHead className="text-right">Doesn&apos;t work</TableHead>
+                  <TableHead className="text-right">Couldn&apos;t check</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {report.rounds.map((round) => (
+                  <TableRow key={round.runId}>
+                    <TableCell className="tabular-nums">{round.round}</TableCell>
+                    <TableCell>{when(round.at)}</TableCell>
+                    <TableCell className="font-mono text-xs">{round.commit?.slice(0, 7) ?? '—'}</TableCell>
+                    <TableCell className="text-right tabular-nums">{round.pass}</TableCell>
+                    <TableCell className="text-right tabular-nums">{round.fail}</TableCell>
+                    <TableCell className="text-right tabular-nums">{round.unverifiable}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {report.questions.length > 0 && (
+        <Card data-testid="report-questions">
+          <CardHeader>
+            <CardTitle className="text-base">Questions</CardTitle>
+            <CardDescription>What was asked while building, and what was answered.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="flex flex-col gap-3 text-sm">
+              {report.questions.map((question) => (
+                <li key={question.id}>
+                  <p className="font-medium whitespace-pre-wrap">{question.question}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {question.askedBy ?? 'Somebody'} asked · {when(question.at)}
+                  </p>
+                  {question.answer !== null ? (
+                    <p className="mt-1 text-muted-foreground whitespace-pre-wrap">
+                      {question.answer.by === 'person' ? 'You' : 'Slave'} answered: {question.answer.text}
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-warning-foreground">{question.closed === null ? 'Not answered yet.' : 'Closed without an answer.'}</p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
+      {report.personDecisions.length > 0 && (
+        <Card data-testid="report-person-decisions">
+          <CardHeader>
+            <CardTitle className="text-base">What you decided</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="flex flex-col gap-2 text-sm">
+              {report.personDecisions.map((decision) => (
+                <li key={`${decision.at}-${decision.questionId}`}>
+                  {decision.summary} <span className="text-xs text-muted-foreground">· {when(decision.at)}</span>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
+      {report.deniedToolCalls.length > 0 && (
+        <Card data-testid="report-denied">
+          <CardHeader>
+            <CardTitle className="text-base">Steps that were refused</CardTitle>
+            <CardDescription>
+              Things somebody tried to do and was not allowed to.
+              {report.deniedToolCallsOmitted > 0 && ` ${String(report.deniedToolCallsOmitted)} more are in the download.`}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="flex flex-col gap-2 text-sm">
+              {report.deniedToolCalls.map((denial, index) => (
+                <li key={`${denial.at}-${String(index)}`}>
+                  <span className="font-mono text-xs">{denial.detail}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {' '}
+                    · {denial.kind === 'permission_mode' ? 'the session may not do this' : 'this seat may not do this'} · {when(denial.at)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
+      {report.trail.length > 0 && (
+        <Card data-testid="report-trail">
+          <CardHeader>
+            <CardTitle className="text-base">Step by step</CardTitle>
+            <CardDescription>
+              What happened, in order.
+              {report.trailOmitted > 0 && ` ${String(report.trailOmitted)} earlier steps are in the download.`}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ol className="flex flex-col gap-2 text-sm">
+              {report.trail.map((entry, index) => (
+                <li key={`${entry.at}-${String(index)}`} className="flex gap-3">
+                  <span className="w-36 shrink-0 text-xs text-muted-foreground tabular-nums">{when(entry.at)}</span>
+                  <span className="min-w-0">
+                    {entry.text}
+                    {entry.detail !== null && <span className="block text-xs text-muted-foreground whitespace-pre-wrap">{entry.detail}</span>}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </CardContent>
+        </Card>
+      )}
+
+      <Card data-testid="report-spend">
         <CardHeader>
           <CardTitle className="text-base">Spend</CardTitle>
         </CardHeader>
@@ -206,6 +352,16 @@ export function ReportView({ report }: { readonly report: GoalReport }): React.J
             {formatUsd(report.spend.versionUsd)}
             {report.spend.runsLive > 0 && <span className="text-muted-foreground"> (still running)</span>}
           </p>
+          <ul className="ml-4 list-disc text-muted-foreground">
+            <li>
+              The lead, its helpers and the checks: {formatUsd(report.spend.runsMeasuredUsd)}
+              {report.spend.runsUnmeasured > 0 && ` (${plural(report.spend.runsUnmeasured, 'session')} reported no cost)`}
+            </li>
+            <li>
+              Reading the request and steering the build: {formatUsd(report.spend.conductorMeasuredUsd + report.spend.supervisorMeasuredUsd)}
+              {report.spend.conductorUnmeasuredCalls + report.spend.supervisorUnmeasuredCalls > 0 && ` (${plural(report.spend.conductorUnmeasuredCalls + report.spend.supervisorUnmeasuredCalls, 'call')} reported no cost)`}
+            </li>
+          </ul>
           <p className="text-muted-foreground">
             The whole project: {formatUsd(report.spend.projectSpentUsd)}
             {report.spend.projectBudgetUsd !== null && ` of ${formatUsd(report.spend.projectBudgetUsd)}`}
@@ -213,7 +369,7 @@ export function ReportView({ report }: { readonly report: GoalReport }): React.J
         </CardContent>
       </Card>
 
-      <p className="text-xs text-muted-foreground print:hidden">The full record (every step, every check, and what it cannot vouch for) is in the Markdown download.</p>
+      <p className="text-xs text-muted-foreground print:hidden">The same record, complete and in one file, is in the Markdown download.</p>
     </article>
   )
 }

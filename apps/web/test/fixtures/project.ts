@@ -97,6 +97,9 @@ export function listItemFixture(over: Partial<ProjectListItem> = {}): ProjectLis
     spendUnmeasured: false,
     budgetUsd: 20,
     updatedAt: '2026-10-05T10:00:00.000Z',
+    workingNow: 2,
+    doing: 'Running npm test',
+    totalSpentUsd: 6.2,
     ...over,
   }
 }
