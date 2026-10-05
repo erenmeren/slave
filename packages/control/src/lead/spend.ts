@@ -3,7 +3,7 @@ import { prisma, type Prisma } from '@slave-of-ai/db/client'
 /** What one goal version spent, by who spent it. */
 export interface GoalSpend {
   readonly totalUsd: number
-  /** The lead's sessions, each at its running total (C2); its subordinate sessions' cost is inside it. */
+  /** The lead's turns, each at its own spend (C2, final review), summed; its subordinate sessions' cost is inside it. */
   readonly leadUsd: number
   /** The verification and confirmation runs. */
   readonly proofUsd: number
@@ -26,11 +26,12 @@ interface LeadTurnCost {
 }
 
 /**
- * Lead-flow C2 (measured 2026-10-04): a resumed session reports its RUNNING total, so a lead
- * turn's `costUsd` already holds every earlier turn of its session. What the lead spent is each
- * session's largest reported total, summed over its sessions; a turn with no session line is a
- * session of its own. A concluded turn with no cost is unmeasured only when no later turn of the
- * same session reported -- a later total includes it.
+ * Lead-flow C2 (measured 2026-10-04, final review): a resumed session reports its RUNNING total, and
+ * the pump stores on each lead turn's row only its OWN part of it -- the reported total less the
+ * earlier turns of the session (`leadTurnOwnCostUsd`) -- so the rows are summed, as every other
+ * reader of `SlaveRun.costUsd` sums them. A turn with no session line is a session of its own. A
+ * concluded turn with no cost is unmeasured only when no later turn of the same session reported:
+ * that later turn's figure holds its spend.
  */
 function leadSpendOf(turns: readonly LeadTurnCost[]): { readonly usd: number; readonly unmeasured: number } {
   const bySession = new Map<string, LeadTurnCost[]>()
@@ -41,7 +42,7 @@ function leadSpendOf(turns: readonly LeadTurnCost[]): { readonly usd: number; re
   let usd = 0
   let unmeasured = 0
   for (const session of bySession.values()) {
-    usd += Math.max(0, ...session.map((turn) => turn.costUsd ?? 0))
+    usd += sum(session)
     unmeasured += session.filter(
       (turn) => turn.endedAt !== null && turn.costUsd === null && !session.some((later) => later.costUsd !== null && later.startedAt > turn.startedAt),
     ).length
@@ -63,9 +64,10 @@ const runsOf = (workspaceId: string, goalVersion: number): GoalRunFilters => ({
 /**
  * Lead-flow spec B4 (plan A L6, C2): the goal version's spend -- the lead's sessions, the proof
  * runs and the conductor's calls for that version. A proof run is a session of its own, so its
- * cost is its own; a lead turn's is its session's running total ({@link leadSpendOf}). A run's
- * cost is known only once it concluded with a result line; one that ended without, and that no
- * later total covers, is counted in `unmeasuredRuns` and adds nothing.
+ * cost is its own; a lead turn's row holds its own part of its session's running total
+ * ({@link leadSpendOf}). A run's cost is known only once it concluded with a result line; one that
+ * ended without, and that no later turn of its session covers, is counted in `unmeasuredRuns` and
+ * adds nothing.
  */
 export async function goalSpend(workspaceId: string, goalVersion: number): Promise<GoalSpend> {
   const where = runsOf(workspaceId, goalVersion)

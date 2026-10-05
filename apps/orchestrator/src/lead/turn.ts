@@ -154,7 +154,10 @@ export async function noteLeadTurnStarted(plan: LeadTurnRun, runId: string): Pro
  * process's cap counts from zero (M(b)): without it every resume would get the whole leg again.
  * The pump's own figure for the run so far is the checkpoint's `cumulativeCostUsd` (reported, else
  * estimated from the tokens it watched across every process of this row); it is added only while
- * the row carries no cost, so nothing is counted twice.
+ * the row carries no cost, so nothing is counted twice. That figure is this row's own (final
+ * review, C2): a paused run has no result line yet, so it is the estimate from the usage lines this
+ * row's own processes streamed, never the session's running total -- nothing of the earlier turns,
+ * whose own spend `goalSpend` already sums, is in it.
  */
 export async function refreshLeadSpawn(runId: string, runDir: string): Promise<void> {
   const run = await prisma.slaveRun.findUnique({ where: { id: runId }, select: { taskId: true, costUsd: true, checkpoint: { select: { cumulativeCostUsd: true } } } })

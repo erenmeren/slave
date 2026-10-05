@@ -74,6 +74,8 @@ describe('the lead flow, end to end', () => {
     if (!status.ok) throw new Error('lead-status was refused')
     expect(status.value.subordinates).toEqual([{ name: 'ada-backend', personId: ada.id, calls: 1, running: 0 }])
     expect(status.value.spend).toMatchObject({ leadUsd: 7.5 })
+    // Final review: each turn's row holds its own spend -- the rework's 7.50 total less the build's 6.00.
+    expect(status.value.turns.map((t) => t.costUsd)).toEqual([6, 1.5])
     expect((await leadNotes(f)).filter((line) => line.startsWith('turn:'))).toEqual(['turn: turn 1 (build): a new session was started', 'turn: turn 2 (rework): the same session was resumed'])
     const states = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'workspace_lead_state' }, orderBy: { seq: 'asc' }, select: { payload: true } })
     expect(states.map((row) => (row.payload as { state: string }).state)).toEqual(['building', 'proving', 'building', 'proving', 'delivered'])

@@ -401,6 +401,24 @@ async function writeCheckpoint(input: {
 const CURSOR_PAUSE_REASON =
   'paused by cancelling the process (cursor has no mid-run gate; canPauseMidRun: false)'
 
+/**
+ * Lead flow C2 (final review): what ONE lead turn spent. A resumed session's result line reports the
+ * SESSION's running total (M(a)), every earlier turn of it included, and every reader of
+ * `SlaveRun.costUsd` but the lead's own sums the rows -- so the row stores the reported total less
+ * what the session's earlier turns of this task already hold. An earlier turn that ended with no
+ * cost holds nothing, so its spend lands in this turn's figure, which is where it belongs. A turn
+ * with no session line, or the first of its session, is the reported total; never below zero.
+ * Rounded to the micro-dollar, as the spend sums are, so 24.00 - 19.20 is stored as 4.8.
+ */
+async function leadTurnOwnCostUsd(run: { readonly id: string; readonly taskId: string | null; readonly startedAt: Date }, sessionId: string | null, reportedUsd: number | null): Promise<number | null> {
+  if (reportedUsd === null || sessionId === null || run.taskId === null) return reportedUsd
+  const earlier = await prisma.slaveRun.aggregate({
+    where: { taskId: run.taskId, leadTurn: { not: null }, sessionId, id: { not: run.id }, startedAt: { lt: run.startedAt } },
+    _sum: { costUsd: true },
+  })
+  return Math.max(0, Math.round((reportedUsd - (earlier._sum.costUsd ?? 0)) * 1e6) / 1e6)
+}
+
 /** Plan A D9: a run whose denials may be excused -- an implementation run of a package task. */
 async function isPackageImplementationRun(runId: RunId): Promise<boolean> {
   const row = await prisma.slaveRun.findUnique({ where: { id: runId }, select: { kind: true, task: { select: { workPackageId: true } } } })
@@ -1472,12 +1490,15 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // already marked `platform` (see `sweep.ts`) and that then succeeded after all reads as the
   // success it is.
   const refused = failed && isProviderRefusal(outcome)
+  // Lead flow C2 (final review): a lead turn's row holds its OWN spend, not the session's running
+  // total the result line reports. Every other run stores what it reported, as before.
+  const costUsd = startingRow.leadTurn === null ? outcome.costUsd : await leadTurnOwnCostUsd(startingRow, sessionId, outcome.costUsd)
   const terminalNow = new Date()
   const concluded = await prisma.slaveRun.updateMany({
     where: { id: runId, endedAt: null },
     data: {
       status: failed ? 'failed' : 'succeeded',
-      costUsd: outcome.costUsd,
+      costUsd,
       terminalAt: terminalNow,
       endedAt: terminalNow,
       failureClass: failed ? (refused ? 'platform' : 'worker') : null,
@@ -1498,7 +1519,8 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         : ''
     await emit('run.failed', 'system', { reason: `${outcome.terminalReason}.${denied}`.trim() })
   } else {
-    await emit('run.succeeded', 'system', { numTurns: outcome.numTurns, costUsd: outcome.costUsd })
+    // The row's figure: for a lead turn, its own spend (the timeline must not repeat a session's total).
+    await emit('run.succeeded', 'system', { numTurns: outcome.numTurns, costUsd })
   }
 
   // M53 R3: the fourth and last of this file's terminal transitions. Below the `concluded.count ===

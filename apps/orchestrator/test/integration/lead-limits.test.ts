@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { leadStatus } from '@slave-of-ai/control'
+import { goalSpend, leadStatus, workspaceSpend } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { readLeadProgress } from '@slave-of-ai/domain'
 import type { SlaveRuntimeAdapter } from '@slave-of-ai/providers'
@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { runGoalPass } from '../../src/goal.js'
 import { resetTickObservation, sweep } from '../../src/sweep.js'
 import { drainPumps, tick } from '../../src/tick.js'
-import { LEAD_TRUNCATE, base64, cleanUpLeadRepos, git, leadDelivery, leadNotes, leadTaskOf, merged, seedLead, tickUntil, type LeadFixture } from './lead-helpers.js'
+import { LEAD_TRUNCATE, base64, checked, cleanUpLeadRepos, git, leadDelivery, leadNotes, leadTaskOf, merged, seedLead, tickUntil, type LeadFixture } from './lead-helpers.js'
 
 const leadTurns = (f: LeadFixture) => f.starts.filter((s) => s.kind === 'implementation')
 /**
@@ -20,6 +20,9 @@ const capped = (usd: number): readonly string[] => ['--result-patch-base64', bas
 /** A turn that ended normally with the session's running total at `usd`. */
 const cost = (usd: number): readonly string[] => ['--result-patch-base64', base64({ total_cost_usd: usd })]
 const children: number[] = []
+/** What each lead turn's row holds, oldest first. */
+const leadTurnCosts = async (f: LeadFixture): Promise<(number | null)[]> =>
+  (await prisma.slaveRun.findMany({ where: { leadTurn: { not: null }, task: { workspaceId: f.workspaceId } }, orderBy: { startedAt: 'asc' }, select: { costUsd: true } })).map((run) => run.costUsd)
 
 describe('the lead flow: limits belong to the goal', () => {
   beforeEach(async (): Promise<void> => {
@@ -52,6 +55,9 @@ describe('the lead flow: limits belong to the goal', () => {
     expect(turns.map((t) => [t.leadTurn, t.extras.maxBudgetUsd])).toEqual([['build', 19.2], ['wrap_up', 4.8]])
     expect(turns[1]?.resumeSessionId).toBe('fake-session-complete')
     expect(turns[1]?.prompt).toContain('Wrap up now')
+    // Final review: each row holds what its own turn spent -- the reported running total less the
+    // earlier turns of the session.
+    expect(await leadTurnCosts(f)).toEqual([19.2, 1])
     expect((await leadTaskOf(f)).attempt).toBe(0)
     expect(readLeadProgress((await leadDelivery(f)).leadProgress)).toMatchObject({ wrapUpSent: true, leadEnded: null })
     expect((await leadNotes(f)).some((line) => line.startsWith('wrap_up:'))).toBe(true)
@@ -69,6 +75,7 @@ describe('the lead flow: limits belong to the goal', () => {
     expect(leadTurns(f).map((t) => t.leadTurn)).toEqual(['build', 'wrap_up'])
     expect((await leadTaskOf(f)).attempt).toBe(0)
     expect(readLeadProgress((await leadDelivery(f)).leadProgress).leadEnded).toBe('budget_spent')
+    expect(await leadTurnCosts(f)).toEqual([19.2, 4.8])
     // What both turns committed is on main: proof ran on it and passed.
     const files = git(['ls-tree', '-r', '--name-only', 'main'], f.repoPath).split('\n')
     expect(files).toEqual(expect.arrayContaining(['lead-work-1.txt', 'lead-work-2.txt']))
@@ -79,6 +86,26 @@ describe('the lead flow: limits belong to the goal', () => {
     await tick(f.deps)
     await drainPumps()
     expect(leadTurns(f)).toHaveLength(2)
+  })
+
+  it('stores each turn of one session at its own spend, so every reader that sums the rows counts the session once (final review)', async (): Promise<void> => {
+    // Three turns of one session: the build, the smoke's rework, the verification's rework. Each
+    // result line reports the session's running total (C2): 5, then 10, then 15.
+    const f = await seedLead({
+      smokeFailures: 1,
+      leadArgs: (ordinal) => cost(ordinal * 5),
+      // The first verification fails R1 and the confirmer confirms it; then everything passes.
+      verify: (ordinal, run) => (run.keys.length === 0 ? ['R1', 'R2', 'RUN'] : run.keys).map((key) => checked(key, ordinal <= 2 && key === 'R1' ? 'fail' : 'pass')),
+    })
+    await tickUntil(f, merged(f), 120)
+
+    expect(leadTurns(f).map((t) => [t.leadTurn, t.resumeSessionId])).toEqual([['build', null], ['rework', 'fake-session-complete'], ['rework', 'fake-session-complete']])
+    expect(await leadTurnCosts(f)).toEqual([5, 5, 5])
+    const spend = await goalSpend(f.workspaceId, 1)
+    expect(spend.leadUsd).toBe(15)
+    // The project's figure sums every run's row: the lead's session is in it once.
+    const project = await workspaceSpend(f.workspaceId)
+    expect(project.runsMeasuredUsd).toBeCloseTo(15 + spend.proofUsd, 6)
   })
 
   it('ends the lead when the goal\'s time is spent and proves what is committed', async (): Promise<void> => {

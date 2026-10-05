@@ -26,16 +26,17 @@ describe('what a goal version spent (lead-flow plan A L6/L7)', () => {
     await prisma.$disconnect()
   })
 
-  it('takes each lead session\'s running total once, and sums the sessions, the proof runs and the conductor\'s calls of that version (C2)', async (): Promise<void> => {
+  it('sums each lead turn\'s own spend over the sessions, with the proof runs and the conductor\'s calls of that version (C2, final review)', async (): Promise<void> => {
     const f = await seed()
     await prisma.slaveRun.createMany({
       data: [
-        // Session s1: the build reported 10; a continue crashed with no cost; the rework, resumed
-        // on s1, reported the session's running total, 12.5 -- which covers the crashed turn too.
+        // Session s1: the build spent 10; a continue crashed with no cost; the rework, resumed on
+        // s1, reported the session's running total, 12.5, and the pump stored its own part, 2.5 --
+        // which holds the crashed turn's spend too.
         { slaveId: f.leadSeat, taskId: f.taskId, kind: 'implementation', status: 'succeeded', leadTurn: 'build', sessionId: 's1', costUsd: 10, startedAt: at(0), endedAt: at(30) },
         { slaveId: f.leadSeat, taskId: f.taskId, kind: 'implementation', status: 'failed', leadTurn: 'continue', sessionId: 's1', costUsd: null, startedAt: at(31), endedAt: at(32) },
-        { slaveId: f.leadSeat, taskId: f.taskId, kind: 'implementation', status: 'succeeded', leadTurn: 'rework', sessionId: 's1', costUsd: 12.5, startedAt: at(40), endedAt: at(50), pausedMs: 120_000 },
-        // Session s2 (the transcript of s1 was lost): it reported 2, then a turn ended with no cost
+        { slaveId: f.leadSeat, taskId: f.taskId, kind: 'implementation', status: 'succeeded', leadTurn: 'rework', sessionId: 's1', costUsd: 2.5, startedAt: at(40), endedAt: at(50), pausedMs: 120_000 },
+        // Session s2 (the transcript of s1 was lost): it spent 2, then a turn ended with no cost
         // and nothing after it on s2 says what it spent.
         { slaveId: f.leadSeat, taskId: f.taskId, kind: 'implementation', status: 'succeeded', leadTurn: 'continue', sessionId: 's2', costUsd: 2, startedAt: at(51), endedAt: at(53) },
         { slaveId: f.leadSeat, taskId: f.taskId, kind: 'implementation', status: 'failed', leadTurn: 'wrap_up', sessionId: 's2', costUsd: null, startedAt: at(54), endedAt: at(55) },

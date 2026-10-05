@@ -1287,6 +1287,9 @@ model SlaveRun {
   /// mean "actually free"; now it would also mean "we never measured this," and this column must
   /// not let those two facts collide. Unknown cost is `null`; a future insert that forgets to
   /// pass one now gets `null` at the database level instead of a silently wrong `0`.
+  /// Lead-flow C2 (final review): on a lead turn (`leadTurn` set) it is that turn's OWN spend -- the
+  /// session's running total its result line reported, less the earlier turns of the session -- so
+  /// every reader sums the rows as it sums any other run's.
   costUsd           Float?
   /// `RunOutcome.tokens.input` / `.output` (M14 §4.2). Nullable, no default: `null` is UNMEASURED
   /// -- a Cursor run (keyed on the run's PROVIDER, the same rule `skillCalls` follows), or a
