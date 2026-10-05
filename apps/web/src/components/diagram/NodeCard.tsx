@@ -28,10 +28,12 @@ export function NodeCard({ data, width, height, onToggle }: { readonly data: Car
           </AvatarFallback>
         </Avatar>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm leading-tight font-medium">{data.name}</p>
+          <p className="truncate text-sm leading-tight font-medium" title={data.name}>
+            {data.name}
+          </p>
           <p className="truncate text-[11px] leading-tight text-muted-foreground">{data.role}</p>
         </div>
-        {data.badge !== '' && <Badge className={cn('shrink-0', TONE_BADGE[data.tone])}>{data.badge}</Badge>}
+        {data.badge !== '' && <Badge className={cn('shrink-0 self-start px-1.5 text-[11px]', TONE_BADGE[data.tone])}>{data.badge}</Badge>}
       </div>
       {data.asked !== null && (
         <p className="truncate text-xs font-medium" title={data.asked}>
@@ -45,7 +47,7 @@ export function NodeCard({ data, width, height, onToggle }: { readonly data: Car
         <p className="mt-auto flex min-w-0 items-center gap-1 text-[11px] whitespace-nowrap text-muted-foreground tabular-nums">
           <span className="text-foreground">{data.steps}</span>
           {data.failed !== null && <span className="text-destructive">· {data.failed}</span>}
-          {data.cost !== null && <span className="truncate">· {data.cost}</span>}
+          {data.cost !== null && data.group === null && <span className="truncate">· {data.cost}</span>}
           {data.group !== null && onToggle !== undefined && (
             <button
               type="button"

@@ -158,7 +158,7 @@ export function TeamDiagram({ build, onSelect }: { readonly build: BuildDiagram;
       ref={frame}
       data-testid="team-diagram"
       data-layout={placed.key === key ? 'placed' : 'placing'}
-      className="relative h-[460px] w-full overflow-hidden rounded-lg border bg-muted/30 sm:h-[620px] [&_.react-flow__controls]:overflow-hidden [&_.react-flow__controls]:rounded-md [&_.react-flow__controls]:border [&_.react-flow__controls]:shadow-xs [&_.react-flow__controls-button]:!border-border [&_.react-flow__controls-button]:!bg-card [&_.react-flow__controls-button]:!fill-foreground [&_.react-flow__controls-button:hover]:!bg-muted"
+      className="relative h-[460px] w-full overflow-hidden rounded-lg border bg-muted/30 sm:h-[620px]"
     >
       {failed && <p className="absolute inset-x-0 top-3 z-10 text-center text-sm text-muted-foreground">The diagram could not be laid out. It tries again on the next read.</p>}
       <ReactFlowProvider>

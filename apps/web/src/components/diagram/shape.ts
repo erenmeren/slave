@@ -53,7 +53,7 @@ export interface DiagramShape {
 }
 
 /** The cards' boxes, as the layout is told them and the canvas draws them. */
-export const CARD_SIZE = { person: { width: 264, height: 116 }, session: { width: 264, height: 136 }, end: { width: 232, height: 104 } } as const
+export const CARD_SIZE = { person: { width: 240, height: 112 }, session: { width: 240, height: 132 }, end: { width: 216, height: 104 } } as const
 
 const idle = (state: DiagramState): string => (state === 'paused' ? 'Paused until you press Continue' : state === 'failed' ? 'Stopped on a failure' : 'Not working now')
 const sentenceOf = (state: DiagramState, doing: string | null): string => (state === 'working' ? (doing ?? 'Starting…') : idle(state))

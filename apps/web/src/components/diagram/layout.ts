@@ -31,7 +31,7 @@ export async function layoutDiagram(shape: DiagramShape, direction: Direction): 
       'elk.algorithm': 'layered',
       'elk.direction': direction,
       'elk.spacing.nodeNode': '28',
-      'elk.layered.spacing.nodeNodeBetweenLayers': direction === 'RIGHT' ? '128' : '72',
+      'elk.layered.spacing.nodeNodeBetweenLayers': direction === 'RIGHT' ? '116' : '72',
       'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES',
       // A caller sits in the middle of whom it called, not level with the first of them.
       'elk.layered.nodePlacement.bk.fixedAlignment': 'BALANCED',
