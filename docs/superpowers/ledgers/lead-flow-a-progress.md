@@ -160,6 +160,24 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
 - Task 12 -- typecheck clean; vocabulary gate PASS; no `agency-agent[s]` added (the 15 hits are older plan files,
   the same on main); drift check "No difference detected"; `web:build` passes; hook-plane scripts unchanged
   since the spec commit. Whole suite and gates: see Results.
+- Whole-branch review (on the Fable model, read-only while the suite ran): FIX. The five Review Focus scenarios
+  hold through the real code. Three Important: (1) every reader except `leadSpendOf` SUMS `SlaveRun.costUsd`,
+  so a resumed lead session's running totals were counted many times on the project page, org page and goal
+  report; (2) daemon downtime was charged to the goal's time (an orphan's `endedAt` is set when the sweep finds
+  it after a restart); (3) a deleted branch threw out of `settleLeadWork`, looping paid uncharged turns. Ten
+  Minor. The suite run of Tasks 1-11 was stopped so it runs once on the fixed branch. One fix wave follows.
+- Ruling: a lead turn's row stores its OWN spend -- the reported session total less the earlier rows of the same
+  session -- and `leadSpendOf` sums -- every other reader of `costUsd` sums, and a row-level figure is what
+  they mean -- if a run's earlier rows of the session are rewritten or deleted, its figure is off by them.
+- Ruling: an orphaned or dead run (failed `platform`, no cost) counts working time up to its last output, not up
+  to when the sweep found it -- L7 says daemon downtime is not charged -- a run that worked silently until it
+  died is charged less than it worked.
+- Not fixed, recorded: an unbudgeted AND untimed lead project has no bound on alternating failures (SMOKE, then
+  R1, then SMOKE: never "the same set twice") -- plan B's spec stage always sets a budget and a time limit (S5);
+  until then a person should set one (`set-lead --time-limit-min`, the workspace budget). `proofCapUsd` lets the
+  first proof round spend the whole reserve, so spec P5's "the reserve always covers the final full
+  verification" is not guaranteed (plan L6's choice). `lead-status` prints `leadUsd` beside `unmeasuredRuns`
+  without the C7 wording (the CLI's JSON is for people who read both).
 
 ## Deferred minor findings
 
