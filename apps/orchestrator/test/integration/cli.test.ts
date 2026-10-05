@@ -2836,6 +2836,31 @@ describe('the orchestrator CLI', () => {
       expect(parsed.archived).toBeNull()
     }, 30_000)
 
+    // Lead UX design section 10: the delete the operator did by hand in SQL on 2026-10-05.
+    it('delete-workspace says what would go without --yes, and deletes the project with it', async () => {
+      const preview = await runCli(['delete-workspace', '--workspace', fixture.workspaceId])
+      expect(preview.code).toBe(1)
+      expect(preview.stderr).toContain(`refusing without --yes: this would delete project Checkout Platform (${fixture.workspaceId}): 2 departments, 1 slave, 1 task, 0 runs`)
+      expect(await prisma.workspace.count({ where: { id: fixture.workspaceId } })).toBe(1)
+
+      const result = await runCli(['delete-workspace', '--workspace', fixture.workspaceId, '--yes'])
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain(`project Checkout Platform (${fixture.workspaceId}) deleted: 1 task, 0 runs`)
+      expect(result.stdout).toContain('is untouched')
+      expect(await prisma.workspace.count({ where: { id: fixture.workspaceId } })).toBe(0)
+      expect(await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
+    }, 30_000)
+
+    it('delete-workspace refuses while a run is live', async () => {
+      await prisma.slaveRun.create({ data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'working' } })
+
+      const result = await runCli(['delete-workspace', '--workspace', fixture.workspaceId, '--yes'])
+
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain(`project ${fixture.workspaceId} has 1 live run;`)
+      expect(await prisma.workspace.count({ where: { id: fixture.workspaceId } })).toBe(1)
+    }, 30_000)
+
     it('lists every project and marks the archived ones', async () => {
       await seed({ name: 'Billing' })
       await runCli(['archive-workspace', '--workspace', fixture.workspaceId])

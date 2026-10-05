@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { Prisma, prisma } from '@slave-of-ai/db/client'
 import {
+  LEAD_TIME_LIMIT_BOUNDS_MS,
   NON_TERMINAL_RUN_STATUSES,
   isWorkspaceLimitAllowed,
   type Result,
@@ -295,6 +296,14 @@ export interface CreateWorkspaceInput {
    * where it cannot run is refused, as `setFlow` refuses it.
    */
   readonly flow?: WorkspaceFlow
+  /**
+   * Lead UX design section 10: the goal's working-time limit a project is born with (lead-flow
+   * plan A L7, `set-lead --time-limit-min`), so a project created from the conversation has its
+   * cap before its first build starts. Absent or null: no limit. Held to `setLeadSettings`' rule
+   * (whole minutes, `LEAD_TIME_LIMIT_BOUNDS_MS`), and refused outside the lead flow, where nothing
+   * reads it.
+   */
+  readonly goalTimeLimitMs?: number | null
 }
 
 let probe: GitProbe = realGitProbe
@@ -342,6 +351,14 @@ export async function createWorkspace(
     return err({ kind: 'lead_setting_invalid', field: 'flow', rule: 'a project is created in the lead flow only with the claude_code provider and conducted delivery' })
   }
   const flow: WorkspaceFlow = input.flow ?? (leadCanRun ? 'lead' : 'packages')
+  const timeLimit = input.goalTimeLimitMs ?? null
+  if (timeLimit !== null) {
+    const { min, max } = LEAD_TIME_LIMIT_BOUNDS_MS
+    if (flow !== 'lead') return err({ kind: 'lead_setting_invalid', field: 'timeLimitMs', rule: 'a time limit is read only in the lead flow' })
+    if (!(Number.isInteger(timeLimit) && timeLimit >= min && timeLimit <= max && timeLimit % 60_000 === 0)) {
+      return err({ kind: 'lead_setting_invalid', field: 'timeLimitMs', rule: `a goal's time limit must be a whole number of minutes from ${String(min / 60_000)} to ${String(max / 60_000)}` })
+    }
+  }
 
   let id: string
   try {
@@ -361,6 +378,7 @@ export async function createWorkspace(
           // default, as `setFlow` writes it).
           ...(input.autoMerge === undefined ? (flow === 'lead' ? { autoMerge: true } : {}) : { autoMerge: input.autoMerge }),
           ...(flow === 'lead' ? { flow } : {}),
+          ...(timeLimit === null ? {} : { goalTimeLimitMs: timeLimit }),
           ...(input.supervisorAutonomy === undefined ? {} : { supervisorAutonomy: input.supervisorAutonomy }),
           // Conductor Plan 4b (spec §5, D11): new projects are conducted. Written here, not as the
           // column's default: the column stays `planned` so every row inserted outside this

@@ -762,6 +762,8 @@ export async function acceptIntake(
           // Conductor Plan 4b (spec §5, D11): the card's delivery choice, conducted unless the
           // person picked the planner.
           delivery: draft.delivery,
+          // Lead UX design U-5: the card's time limit, before the first build can start.
+          goalTimeLimitMs: draft.timeLimitMs ?? null,
         },
         principal,
         { intakeId },

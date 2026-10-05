@@ -103,6 +103,14 @@ export const intakeDraftSchema = z.object({
    * `.default()` reason above.
    */
   delivery: z.enum(['conducted', 'planned']).default('conducted'),
+  /**
+   * Lead UX design section 6.2 (U-5): the working-time limit the person chose on the card, in
+   * milliseconds, or null for none. The person's call, never the model's -- the prompt does not
+   * mention it, as with `autoMerge`. Optional, and absent reads as no limit: a draft stored before
+   * this field must still parse, and every draft written before it is typed without it.
+   * `acceptIntake` hands it to `createWorkspace`, which holds it to the lead flow's bounds.
+   */
+  timeLimitMs: z.number().int().positive().nullable().optional(),
   team: z.array(intakeSeatSchema).max(12),
 })
   // The requirement the field's own `min(1)` used to carry, narrowed to the case it is true of.

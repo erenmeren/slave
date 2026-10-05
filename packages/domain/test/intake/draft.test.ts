@@ -21,6 +21,20 @@ describe('IntakeDraft', () => {
     expect(intakeDraftSchema.safeParse(draft).success).toBe(true)
   })
 
+  // Lead UX design U-5: the card's time limit, the person's call.
+  it('reads a draft with no time limit as having none, and keeps one the card set', () => {
+    const none = intakeDraftSchema.safeParse(draft)
+    expect(none.success && none.data.timeLimitMs).toBeUndefined()
+    const set = intakeDraftSchema.safeParse({ ...draft, timeLimitMs: 5_400_000 })
+    expect(set.success && set.data.timeLimitMs).toBe(5_400_000)
+    expect(intakeDraftSchema.safeParse({ ...draft, timeLimitMs: null }).success).toBe(true)
+  })
+
+  it('refuses a time limit that is not a positive whole number', () => {
+    expect(intakeDraftSchema.safeParse({ ...draft, timeLimitMs: -1 }).success).toBe(false)
+    expect(intakeDraftSchema.safeParse({ ...draft, timeLimitMs: 1.5 }).success).toBe(false)
+  })
+
   it('refuses an EXISTING repository with no verify command: there is code, so something proves it', () => {
     expect(intakeDraftSchema.safeParse({ ...draft, verifyCommands: [] }).success).toBe(false)
   })

@@ -80,6 +80,8 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   flow_refused: true,
   lead_setting_invalid: true,
   not_lead_flow: true,
+  // Lead UX design section 7: a decision for a build that moved on. 409.
+  build_not_waiting: true,
   duplicate_name: true,
   template_not_found: true,
   company_not_found: true,

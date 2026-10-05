@@ -226,6 +226,9 @@ export type ControlRefusal =
   | { readonly kind: 'lead_setting_invalid'; readonly field: string; readonly rule: string }
   /** Lead flow: the verb is for a project in the lead flow, and this one is not. */
   | { readonly kind: 'not_lead_flow'; readonly workspaceId: string }
+  /** Lead UX design section 7: a decision card's answer for a build that is no longer waiting for
+   *  that answer (it moved on, or it was not a stopped lead build). */
+  | { readonly kind: 'build_not_waiting'; readonly goalVersion: number }
   // Final wave I2: a hand merge is confirmed only for the commit the version's verification passed
   // on; the integration branch has moved past it since.
   | { readonly kind: 'goal_tip_not_verified'; readonly goalVersion: number; readonly branch: string; readonly verifiedCommit: string; readonly tip: string }
@@ -795,6 +798,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return `the flow of ${refusal.workspaceId} cannot change now: ${refusal.reason}`
     case 'lead_setting_invalid':
       return `${refusal.field}: ${refusal.rule}`
+    case 'build_not_waiting':
+      return `build ${String(refusal.goalVersion)} is not waiting for this decision any more; reload to see where it stands`
     case 'not_lead_flow':
       return `${refusal.workspaceId} is not in the lead flow; run set-flow --workspace ${refusal.workspaceId} --flow lead first`
     case 'goal_not_merged':

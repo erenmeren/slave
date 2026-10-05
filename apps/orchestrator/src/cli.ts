@@ -15,6 +15,8 @@ import {
   adoptRunbook,
   abandonIntake,
   archiveWorkspace,
+  deleteWorkspace,
+  projectFootprint,
   acceptIntake,
   backfillSlaveCapabilities,
   cancelTask,
@@ -449,6 +451,11 @@ const USAGE = `usage: orchestrator <command> [options]
   archive-workspace --workspace <id>   archive a project: every row stays, nothing runs until
                                        restore-workspace. Refused while a run is live.
   restore-workspace --workspace <id>   bring an archived project back
+  delete-workspace --workspace <id> --yes
+                                       delete a project and everything Slave holds about it
+                                       (builds, runs, events, its conversation). The repository on
+                                       disk is never touched. Without --yes it says what would go.
+                                       Refused while a run is live.
   list-workspaces                      every project, archived ones marked
   skills sync                          rescan the skill catalog from this host's disk:
                                        ~/.claude/skills, the plugin cache, and <repo>/.claude/skills
@@ -2808,6 +2815,25 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (!result.ok) throw new Error(refusalText(result.error))
       const f = result.value.footprint
       process.stdout.write(`project ${workspaceId} archived: ${plural(f.departments, 'department')}, ${plural(f.slaves, 'slave')}, ${plural(f.tasks, 'task')}, ${plural(f.runs, 'run')} stay on record\n`)
+      return 0
+    }
+
+    case 'delete-workspace': {
+      const workspaceId = requireFlag(flags, 'workspace')
+      if (!('yes' in flags)) {
+        const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { name: true, repoPath: true } })
+        if (workspace === null) throw new Error(refusalText({ kind: 'workspace_not_found', workspaceId }))
+        const f = await projectFootprint(prisma, workspaceId)
+        throw new Error(
+          `refusing without --yes: this would delete project ${workspace.name} (${workspaceId}): ${plural(f.departments, 'department')}, ${plural(f.slaves, 'slave')}, ${plural(f.tasks, 'task')}, ${plural(f.runs, 'run')} and its whole history. ${workspace.repoPath} is not touched`,
+        )
+      }
+      const result = await deleteWorkspace(workspaceId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      const f = result.value.footprint
+      process.stdout.write(
+        `project ${result.value.name} (${workspaceId}) deleted: ${plural(f.tasks, 'task')}, ${plural(f.runs, 'run')}, ${plural(result.value.events, 'event')} went with it; ${result.value.repoPath} is untouched\n`,
+      )
       return 0
     }
 

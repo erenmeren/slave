@@ -181,6 +181,30 @@ describe('acceptIntake', () => {
     expect(workspace.supervisorAutonomy).toBe('propose')
   })
 
+  // Lead UX design U-5: the card's time limit is on the project before its first build starts.
+  it('carries the card s time limit onto a lead-flow project', async (): Promise<void> => {
+    const repo = makeRepo()
+    const id = await opened(`the repository is at ${repo}`)
+
+    const accepted = await acceptIntake(id, { ...draftFor(repo, 'Timed'), delivery: 'conducted', timeLimitMs: 90 * 60_000 })
+
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) throw new Error('unreachable')
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: accepted.value.workspaceId } })
+    expect(workspace).toMatchObject({ flow: 'lead', goalTimeLimitMs: 5_400_000 })
+  })
+
+  it('fails the create step with the rule when the card s time limit is out of bounds', async (): Promise<void> => {
+    const repo = makeRepo()
+    const id = await opened(`the repository is at ${repo}`)
+
+    const accepted = await acceptIntake(id, { ...draftFor(repo, 'Too short'), delivery: 'conducted', timeLimitMs: 60_000 })
+
+    expect(accepted).toMatchObject({ ok: false, error: { kind: 'lead_setting_invalid', field: 'timeLimitMs' } })
+    expect(await prisma.workspace.count()).toBe(0)
+    expect((await prisma.intake.findUniqueOrThrow({ where: { id } })).status).toBe('failed')
+  })
+
   it('stages seats onto functional departments derived from each template s primary role, not a catch-all named after the project (Task 4)', async (): Promise<void> => {
     const repo = makeRepo()
     const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')

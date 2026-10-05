@@ -86,6 +86,32 @@ describe('createWorkspace', () => {
     expect(await prisma.workspace.count()).toBe(0)
   })
 
+  // Lead UX design section 10: the time limit a project is born with, before its first build.
+  it('writes the time limit of a lead-flow project created with one', async () => {
+    const result = await createWorkspace({ ...valid(repo()), provider: 'claude_code', goalTimeLimitMs: 90 * 60_000 })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(await prisma.workspace.findUniqueOrThrow({ where: { id: result.value.id } })).toMatchObject({ flow: 'lead', goalTimeLimitMs: 5_400_000 })
+  })
+
+  it('leaves the time limit null when none is given', async () => {
+    const result = await createWorkspace({ ...valid(repo()), provider: 'claude_code', goalTimeLimitMs: null })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: result.value.id } })).goalTimeLimitMs).toBeNull()
+  })
+
+  it.each([
+    ['below ten minutes', { provider: 'claude_code' as const, goalTimeLimitMs: 5 * 60_000 }],
+    ['past a day', { provider: 'claude_code' as const, goalTimeLimitMs: 25 * 60 * 60_000 }],
+    ['not whole minutes', { provider: 'claude_code' as const, goalTimeLimitMs: 10 * 60_000 + 1 }],
+    ['outside the lead flow', { goalTimeLimitMs: 60 * 60_000 }],
+  ])('refuses a time limit %s, writing nothing', async (_label, extra) => {
+    const result = await createWorkspace({ ...valid(repo()), ...extra })
+    expect(result).toMatchObject({ ok: false, error: { kind: 'lead_setting_invalid', field: 'timeLimitMs' } })
+    expect(await prisma.workspace.count()).toBe(0)
+  })
+
   it('no provider means no ProviderConfiguration row and a null in the payload', async () => {
     const result = await createWorkspace(valid(repo()))
     expect(result.ok).toBe(true)
