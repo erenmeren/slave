@@ -226,51 +226,23 @@ nothing about them resumes automatically.
 
 ## The web UI
 
-The console runs in **two modes**. `simple` is the default, for a person who runs a company and
-does not read code; `developer` is for the person who built it. One switch at the bottom of the
-rail (or `⌘⇧D`) moves between them, and the choice is remembered. A mode changes what is on screen
-and nothing else: **no URL moves and no destination disappears**, so a developer-only page opened
-in simple mode still answers — the tab bar just marks it as one you stepped outside your mode to
-reach. `docs/architecture.md`'s neighbour `docs/decisions/0007-two-modes.md` records the decision.
+Rebuilt on 2026-10-05 around the lead flow, on shadcn/ui with a light and a dark theme
+(`docs/superpowers/specs/2026-10-05-lead-ux-design.md` is the design, `docs/ia.md` the map). One
+frame: a sidebar of projects -- each with its state, and an amber count when a build is waiting for
+you -- plus **New project**, **Helpers** and **Settings**. The count also leads the browser tab's title.
 
-The frame is a **56 px icon rail**, a **48 px header** and the page between them. The rail holds
-the global destinations — Home, People and Settings, plus Simulations and Analytics in developer
-mode — with the live chip, the theme pill and the mode switch at its foot. The header holds the
-breadcrumb, whose project crumb opens a **switcher** listing every project, the `⌘K` search, the
-budget, and `Pause all | Stop ▾`. A project's own strip sits under it: anything that needs you,
-then its tabs — **Team**, **Work**, **Office** and **Activity**, plus **Graph** and **Knowledge**
-in developer mode — and a gear for its settings. The **Supervisor** is the right panel on every
-project page: open by default, remembered when you close it, `⌘J` to bring it back, and an overlay
-rather than a column below 1280 px.
-
-**The page itself never scrolls.** The frame is the viewport (minimum 1024 × 680, no breakpoints),
-and every list scrolls inside its own region — the board's columns, the Supervisor's messages, a
-sheet's body. The three long tables (People, Activity and Knowledge) are virtualised.
-
-Everything else is inside one of those places — `docs/ia.md` is the map, and says where anything
-that left a main path went.
-
-| Page | What it shows |
+| Page | What it answers |
 |---|---|
-| **Home** `/` | Every active project as one row — its status in one word, how many things need you, its spend and how far along it is — beside **Happening now**, a live feed of every project's events as sentences, with everything that needs you above the list and three numbers under it (developer mode adds the all-project figures the Analytics page shows); click a row to open it. **New project** attaches a repo; **show archived** also lists archived projects (an "archived" chip, no spend bar, a **restore** button); |
-| **Team** `/w/<id>` | The project in one screen, and the project's own URL: one card per person — who they are, what they are doing right now in a sentence, and how far along it is — with the goal, the work and the spend as three tiles under them, and everything that needs you above them, answerable in place. Developer mode adds each card's run line, the roster table and the staffing preferences. `/w/<id>/organization` redirects here. The Supervisor is the right panel, on this and every other page of the project, and one box in it tells the Supervisor what changed. |
-| **Work** `/w/<id>/tasks` | The board by status. Each card says its state in one word, who has it, and one line about why it is not moving. Click one for the rest — the run, its messages, what it saw, its verification attempts, its cost, its worktree and its events — which developer mode shows and simple mode leaves out. |
-| **Graph** (developer tab) `/w/<id>/graph` | Five views: the org tree, live execution, the task dependency DAG (draw or delete an edge to change it), the skill chain, and who handed work to whom. A tab in developer mode, and still answers by URL in simple mode. |
-| **Office** `/w/<id>/office` | The project's departments and slaves as a pixel office: who is working, blocked or paused, on what and how far; pause, resume or stop the focused slave's run; scroll to zoom, drag to pan, click a slave to focus. One glass toolbar above the canvas and the focused character in a card beside it; a tab in both modes. |
-| **Activity** `/w/<id>/activity` | Two views at one URL: `?view=digest` (simple mode's tab) is one section per day of plain sentences; the bare route (developer mode's) is the whole river — every event, live, filterable by kind, slave and task, with the deleted Overview's **Recent changes** under it; the filters live in the URL. Events made from the UI name the user who made them. |
-| ~~**Organization**~~ `/w/<id>/organization` | Redirects to **Team** (query preserved), which is this page's content: who is on this project, what each of them can DO, and the sentence that says why they are here — beside what the project still needs, who could cover it and the offers waiting for your answer, and the advice each worker's own profile gives about who to consult. |
-| **Knowledge** `/w/<id>/knowledge` | What this project has learnt, one row per piece, with the sentence that says where each came from — filters for kind, scope, status and title that live in the URL, and the chain (what this replaced, what replaced it, what it summarises) folded inside each row. Verify a claim a worker made, correct a memory (the old wording is kept and marked replaced), or withdraw one with a reason — nothing is ever deleted. |
-| **Settings** `/w/<id>/settings` | This project's goal, its runtime (provider, budget, and the concurrency/timeout/attempts limits), its own slave permissions, its emergency stop, and its danger zone to archive/restore the project. |
-| **People** `/workforce` | Everyone who works here. In simple mode the page IS the People table, with **Hire from catalogue** in the header opening the catalog in a sheet and a row click opening the person in one; developer mode shows four tabs — **People**, **Catalog**, **Skills & runbooks** and **Evidence**; Departments and Runbooks are segments inside the first and third, and all six `?tab=` values still work. **People**: every slave, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete with its history and a model chosen from the provider's own list inline; **+ New slave** adds one to the catalog and, optionally, to a project. **Departments**: add, rename or delete a project's department and see who is on it. **Catalog**: every slave template as one searchable catalog — filter by division, capability, skill or where it came from, and click a row for its specialist profile: who it is, what it is for, what it must never do and where all of that came from, with any field customisable in place and the raw Markdown a run is given under `Advanced ▾` — beside the companies and their department templates, with the log of catalog imports under the tab's own `Advanced ▾`. **Skills**: the skill catalog and its assignments. `/slaves` and `/skills` still work — they redirect here. |
-| **Simulations** `/sim` | Company simulation runs (M29): create one from a catalog company — a trade company on synthetic data, decided by the rules provider, no repository and no model call; step it by day, run it to a horizon, pause, halt, add customer demand or a supplier delay; the simulated company's cash and the real model cost are two separate panels; metrics are computed from the run's own journal; clone a run under another policy, let the daemon auto-run it, compare two runs side by side (no verdict); adopt a software run's organisation into a company-less project (M33). |
-| **Analytics** `/analytics` | Spend and throughput, for every project or for one (`?workspace=`). The all-project view is also a section on **Home**, in developer mode; a project's own view is one click from it. |
-| **Settings** `/settings` | Provider adapters, security, and reset demo data (development only). |
+| **Home** `/` | Is anything waiting for me, and how are my projects doing? Waiting builds first, then one card per project (its state in a word, a sentence, its spend), then the archived ones with Restore and Delete. |
+| **New project** `/new` | What do I want built, and how much may it spend? The intake conversation beside a project card: name, where the code lives, and the spending cap chosen explicitly -- a budget, a working-time limit, both, or no limit (which you must confirm) -- then **Start building**. `?intake=<id>` reopens a conversation. |
+| **Project** `/w/<id>` | What is happening, and does it need me? One screen: **Stop** / **Continue**; the amber decision card when a build stopped (**Accept as it is**, **Check again**, **Leave it unmerged**) or waits for your merge (**I merged it**, **Merge automatically from now on**); what you asked for and **Ask for a change**; who is working (the lead, its helpers, the checker, each with what it is doing now); the proof per requirement; the result; spend and working time against the limits; the builds and the lead's notes. **Settings** opens a sheet with the limits, the lead's model, the helpers the lead may call, automatic merge, how the project is built, Archive and Delete. A project still in the older packages flow opens here read-only. |
+| **Report** `/w/<id>/goals/<n>` | What exactly was asked, checked, decided and spent for one build, with **Download as Markdown** for the full record. |
+| **Helpers** `/helpers` | The catalogue of specialists a lead may call on, read-only. |
+| **Settings** `/settings` | Runtimes found on this machine, where new repositories go, appearance, account, and reset demo data (development only). |
 
-Every page updates itself over a live event stream. Interventions — **Pause**, **Resume** (with a
-message), **Stop** — live in the task panel. **Emergency stop** is the header's split button
-(`Stop ▾`, which arms on the first click and fires on the second, and reads `Clear halt` while the
-project is halted) and is also on the project Settings tab's danger zone. A pause takes effect at the
-slave's next tool call; a resume continues from the checkpoint in the same worktree.
+Old addresses (`/workforce`, `/sim`, `/analytics`, a project's old tabs) redirect to the nearest new
+screen. The screens poll their read model (every 3 s while something runs); there are no other
+streams on the page.
 
 ## CLI cheat sheet
 
@@ -296,6 +268,7 @@ npm run orchestrator -- init-repository --path <abs/path> --name <name> [--goal 
 npm run orchestrator -- settings repos-root [--set <abs/path>]
 npm run orchestrator -- archive-workspace --workspace <id>  # nothing runs until restored; refused while a run is live
 npm run orchestrator -- restore-workspace --workspace <id>
+npm run orchestrator -- delete-workspace --workspace <id> --yes  # delete a project from Slave; the repository stays
 npm run orchestrator -- list-workspaces                     # every project, archived ones marked
 npm run orchestrator -- rename-slave --slave <id> --name <n>
 npm run orchestrator -- set-role --slave <id> --role <r>    # the TITLE only; dispatch reads set-runtime-roles
