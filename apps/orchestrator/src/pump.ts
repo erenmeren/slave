@@ -7,9 +7,12 @@ import { Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   OUTPUT_BEAT_MS,
   SKILL_TOOL,
+  createCallRoots,
+  createLiveCostMeter,
   estimateCostUsd,
   hasSlaveReportBlock,
   isBudgetCapReason,
+  parseRunCostEstimate,
   providerRunsSkills,
   type GuardrailKind,
   type SlaveId,
@@ -420,6 +423,11 @@ async function leadTurnOwnCostUsd(run: { readonly id: string; readonly taskId: s
   return Math.max(0, Math.round((reportedUsd - (earlier._sum.costUsd ?? 0)) * 1e6) / 1e6)
 }
 
+/** Live cost: the estimate is written at most this often while a run works ... */
+const COST_WRITE_MS = 5_000
+/** ... or once this many usage lines have been counted since the last write, whichever is first. */
+const COST_WRITE_EVERY = 25
+
 /** Plan A D9: a run whose denials may be excused -- an implementation run of a package task. */
 async function isPackageImplementationRun(runId: RunId): Promise<boolean> {
   const row = await prisma.slaveRun.findUnique({ where: { id: runId }, select: { kind: true, task: { select: { workPackageId: true } } } })
@@ -671,6 +679,20 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
    * `run.tool_call` events, for the matrix seed's reason below.
    */
   const questionDeniedToolUseIds = new Set<string>()
+  /**
+   * The run's LIVE COST ESTIMATE (`RunCostEstimate`, `SlaveRun.costEstimate`): about what the run
+   * has cost so far, from the usage each assistant message carries, each message counted once by
+   * its id and kept by the helper it belongs to.
+   *
+   * Seeded from the row, as `usageIn` is: a resumed run is a second pump on the same row and its
+   * estimate continues. `callRoots` names the top-level call behind a helper's line -- a helper of
+   * a helper counts for the helper the session itself started.
+   *
+   * IT NEVER TOUCHES `costUsd`. That column is what the runtime REPORTED and is written at the
+   * conclusion below, from the `result` line alone; this one is its own column, written here and
+   * read only by the screens (`packages/domain/src/guardrails/pricing.ts`'s rule).
+   */
+  const callRoots = createCallRoots()
   const provider: ProviderKind = input.spawn?.provider ?? 'claude_code'
   /**
    * Skeleton spec S9 (plan A D9, Task 6 fix round 1): the subset of `denied` that is a GENUINE
@@ -711,12 +733,15 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
     }
     // H9 F6's seed: a question this run asked before the pause is excused after it too. Only the
     // runtime's own question tool is read, by the id the call was recorded under.
-    const priorCalls = await prisma.executionEvent.findMany({ where: { runId, type: 'run_tool_call' } })
+    const priorCalls = await prisma.executionEvent.findMany({ where: { runId, type: 'run_tool_call' }, orderBy: { seq: 'asc' } })
     for (const row of priorCalls) {
       const parsed = toExecutionEvent(row)
       if (!parsed.ok) throw new Error(`event log contains an unparseable run.tool_call row at seq ${String(row.seq)}: ${parsed.error}`)
       if (parsed.value.type !== 'run.tool_call') continue
       const { name, toolUseId } = parsed.value.payload
+      // Live cost: which helper a call belonged to, so a helper that outlived the pause keeps its
+      // own share of the estimate instead of starting a second one under an inner call's id.
+      if (typeof toolUseId === 'string') callRoots.call(toolUseId, parsed.value.payload.parentToolUseId ?? null)
       // `toolUseId` is optional on READ (rows older than M51 carry none); such a call has no id a
       // denial could name, so there is nothing to excuse.
       if (typeof toolUseId === 'string' && isUserQuestionTool(provider, name)) questionDeniedToolUseIds.add(toolUseId)
@@ -727,6 +752,17 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // where the *run* is, not where this pump started reading.
   const startingRow = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
   let toolCalls = startingRow.toolCalls
+  // The live cost estimate's meter, declared with `callRoots` above (which the resume seed fills).
+  const costMeter = createLiveCostMeter(parseRunCostEstimate(startingRow.costEstimate))
+  let costPending = 0
+  let lastCostWrite = 0
+  const writeCostEstimate = async (): Promise<void> => {
+    costPending = 0
+    lastCostWrite = Date.now()
+    // Not conditioned on `endedAt`: the last write lands after the stream ended, and an estimate
+    // contradicts no status.
+    await prisma.slaveRun.updateMany({ where: { id: runId }, data: { costEstimate: { ...costMeter.snapshot() } } })
+  }
   /**
    * Skills invoked during THIS pump, tallied from the `tool_call` events the loop already sees
    * (M14 §4.1, Decision 5).
@@ -827,6 +863,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // arrived without a tool name. Bounded exactly as `hookBindings` is, and by the same
         // quantity: at most one entry per tool call of this run.
         toolNames.set(event.toolUseId, event.toolName)
+        callRoots.call(event.toolUseId, event.parentToolUseId ?? null)
         openToolUses.add(event.toolUseId)
         if (openToolUses.size === 1) {
           await prisma.slaveRun.updateMany({ where: { id: runId, endedAt: null }, data: { toolCallOpenSince: new Date() } })
@@ -902,6 +939,16 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
           where: { id: runId, endedAt: null },
           data: { tokensIn: usageIn, tokensOut: usageOut },
         })
+        // Live cost: the line's MESSAGE, beside the floor above and independent of it. Counted in
+        // memory on every line and written at most every `COST_WRITE_MS` or `COST_WRITE_EVERY`
+        // lines -- a screen polls every few seconds, and a write per line would be hundreds a
+        // minute on a busy turn. The first one is written at once, so a figure appears with the
+        // first message; the last is written when the stream ends, below the loop.
+        if (event.message !== undefined) {
+          costMeter.add({ ...event.message, rootCallId: callRoots.rootOf(event.message.parentToolUseId) })
+          costPending += 1
+          if (costPending >= COST_WRITE_EVERY || Date.now() - lastCostWrite >= COST_WRITE_MS) await writeCostEstimate()
+        }
         break
       }
 
@@ -1277,6 +1324,10 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // there is no `return` above it inside the loop -- so this runs exactly once per pump, on every
   // path, which is the whole point of it being here rather than on the conclusions.
   await writeStreamUsage({ runId, tally: skillCalls, spawn: input.spawn, outcome })
+  // Live cost: whatever was counted since the last throttled write. Here for the reason the line
+  // above is: every way a stream ends passes this point once -- a result, a pause, a kill -- and
+  // the estimate of a turn that ended is what its helpers' shares are read from afterwards.
+  if (costPending > 0) await writeCostEstimate()
 
   if (gateFailed || paused) return null
 

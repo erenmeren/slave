@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs'
 import { isAlive, recordRunEvidence } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { slaveId, runId, taskId, workspaceId } from '@slave-of-ai/domain'
+import { SUBORDINATE_TOOLS, parseRunCostEstimate, slaveId, runId, taskId, workspaceId, type RunCostEstimate } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
-import { PERMISSION_DENY_REASON_PREFIX, parseStreamLine, type RunOutcome, type RuntimeEvent } from '@slave-of-ai/providers'
+import { PERMISSION_DENY_REASON_PREFIX, parseStreamLine, parseStreamUsage, type MessageUsage, type RunOutcome, type RuntimeEvent } from '@slave-of-ai/providers'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { pumpRun } from '../../src/pump.js'
 import { OUTPUT_CAP, joinRunOutput } from '../../src/runOutput.js'
@@ -2715,5 +2715,223 @@ describe('a fact at the terminal transition, and only there (M53 R3)', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]?.recordedAt).toEqual(first.recordedAt)
     expect(rows[0]?.attempt).toBe(first.attempt)
+  })
+})
+
+describe('the live cost estimate (SlaveRun.costEstimate)', () => {
+  let ids: Ids
+
+  const SPAWN = {
+    settingsPath: '/tmp/slaveofai-live-cost/settings.json',
+    pauseFlagPath: '/tmp/slaveofai-live-cost/pause.flag',
+    hookPath: '/tmp/slaveofai-live-cost/pause-gate.sh',
+    gitIdentity: { name: 'Alex', email: 'alex@slaveofai.local' },
+  } as const
+  const HELPER_TOOL = SUBORDINATE_TOOLS[0] ?? ''
+
+  /** One usage line of one message: a million raw input tokens on claude-opus-5 is $5. */
+  const usage = (id: string, over: Partial<MessageUsage> = {}): RuntimeEvent => {
+    const message: MessageUsage = { id, model: 'claude-opus-5', input: 1_000_000, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, parentToolUseId: null, contentChars: 0, ...over }
+    return { kind: 'usage', input: message.input, output: message.output, message }
+  }
+  const call = (toolUseId: string, toolName: string, parentToolUseId?: string): RuntimeEvent => ({
+    kind: 'tool_call',
+    toolUseId,
+    toolName,
+    summary: `${toolName} ${toolUseId}`,
+    argsHash: testArgsHash(toolUseId),
+    ...(parentToolUseId === undefined ? {} : { parentToolUseId }),
+  })
+  const estimateOf = async (): Promise<RunCostEstimate | null> => parseRunCostEstimate((await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })).costEstimate)
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+    ids = await seed()
+  })
+
+  it('leaves the column empty on a run whose stream carried no message usage', async (): Promise<void> => {
+    await pumpRun({ ...ids, events: fromArray([{ kind: 'session_started', sessionId: 's-1' }, { kind: 'usage', input: 10, output: 10 }, { kind: 'terminated', outcome: okOutcome }]) })
+    const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(row.costEstimate).toBeNull()
+    // The floor is untouched by any of this.
+    expect(row.tokensIn).toBe(10)
+  })
+
+  it('counts a message once however many lines repeat its id, and takes the larger reading', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        // One message on three lines: input and cache counters repeat, output grows.
+        usage('msg_1', { cacheRead: 1_000_000, output: 2 }),
+        usage('msg_1', { cacheRead: 1_000_000, output: 400_000 }),
+        usage('msg_1', { cacheRead: 1_000_000, output: 100 }),
+        usage('msg_2'),
+        { kind: 'terminated', outcome: okOutcome },
+      ]),
+    })
+    const estimate = await estimateOf()
+    expect(estimate?.messages).toBe(2)
+    // msg_1: 5 input + 0.5 cache read + 10 output; msg_2: 5. Summed per line it would be 36.5.
+    expect(estimate?.usd).toBeCloseTo(20.5, 6)
+    expect(estimate?.own).toBeCloseTo(20.5, 6)
+    expect(estimate?.byCall).toEqual({})
+    expect(estimate?.models).toEqual({ 'claude-opus-5': 20.5 })
+  })
+
+  it('keeps each helper\u2019s part under the call the lead started it with, a helper of a helper included', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        usage('lead-1'),
+        call('toolu_a', HELPER_TOOL),
+        call('toolu_b', HELPER_TOOL),
+        usage('a-1', { parentToolUseId: 'toolu_a' }),
+        call('toolu_a_step', 'Bash', 'toolu_a'),
+        usage('a-2', { parentToolUseId: 'toolu_a' }),
+        // Helper A starts a helper of its own; that one's lines name the INNER call.
+        call('toolu_inner', HELPER_TOOL, 'toolu_a'),
+        usage('inner-1', { parentToolUseId: 'toolu_inner' }),
+        call('toolu_inner_step', 'Bash', 'toolu_inner'),
+        usage('b-1', { parentToolUseId: 'toolu_b', model: 'claude-haiku-4-5' }),
+        usage('lead-2'),
+        { kind: 'terminated', outcome: okOutcome },
+      ]),
+    })
+    const estimate = await estimateOf()
+    expect(estimate?.own).toBeCloseTo(10, 6)
+    expect(estimate?.byCall).toEqual({ toolu_a: 15, toolu_b: 1 })
+    expect(estimate?.usd).toBeCloseTo(26, 6)
+    expect(estimate?.messages).toBe(6)
+    expect(estimate?.models).toEqual({ 'claude-opus-5': 25, 'claude-haiku-4-5': 1 })
+  })
+
+  it('NEVER changes costUsd: the reported figure is the result line\u2019s, the estimate stays beside it', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      events: fromArray([{ kind: 'session_started', sessionId: 's-1' }, usage('msg_1'), usage('msg_2'), { kind: 'terminated', outcome: okOutcome }]),
+    })
+    const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(row.status).toBe('succeeded')
+    // $0.05 was reported; $10 was estimated. Neither is written from the other, and the estimate
+    // is still on the row after the run ended.
+    expect(row.costUsd).toBe(0.05)
+    expect(parseRunCostEstimate(row.costEstimate)?.usd).toBeCloseTo(10, 6)
+  })
+
+  it('leaves costUsd null on a run that reported none, whatever was estimated', async (): Promise<void> => {
+    await pumpRun({ ...ids, spawn: SPAWN, events: fromArray([{ kind: 'session_started', sessionId: 's-1' }, usage('msg_1'), { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' }]) })
+    const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(row.status).toBe('paused')
+    expect(row.costUsd).toBeNull()
+    expect(parseRunCostEstimate(row.costEstimate)?.usd).toBeCloseTo(5, 6)
+  })
+
+  it('writes the first message at once while the run works, holds the next ones back, and writes the rest when the stream ends', async (): Promise<void> => {
+    let release = (): void => {}
+    const held = new Promise<void>((res) => {
+      release = res
+    })
+    async function* stalls(): AsyncIterable<RuntimeEvent> {
+      yield { kind: 'session_started', sessionId: 's-1' }
+      yield usage('msg_1')
+      // Inside the write window: counted, not written.
+      yield usage('msg_2')
+      yield usage('msg_3')
+      yield { kind: 'usage', input: 7, output: 7 }
+      await held
+      yield { kind: 'terminated', outcome: okOutcome }
+    }
+    const pumping = pumpRun({ ...ids, events: stalls() })
+    // The bare usage line after them is the marker that all three were read.
+    await until('the lines to be read', async () => (await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })).tokensIn === 3_000_007)
+    const live = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(live.status).toBe('working')
+    expect(live.costUsd).toBeNull()
+    expect(parseRunCostEstimate(live.costEstimate)).toMatchObject({ usd: 5, messages: 1 })
+    release()
+    await pumping
+    expect(await estimateOf()).toMatchObject({ usd: 15, messages: 3 })
+  })
+
+  it('writes without waiting once enough lines were counted', async (): Promise<void> => {
+    let release = (): void => {}
+    const held = new Promise<void>((res) => {
+      release = res
+    })
+    async function* stalls(): AsyncIterable<RuntimeEvent> {
+      yield { kind: 'session_started', sessionId: 's-1' }
+      for (let index = 0; index < 26; index += 1) yield usage(`msg_${String(index)}`)
+      await held
+      yield { kind: 'terminated', outcome: okOutcome }
+    }
+    const pumping = pumpRun({ ...ids, events: stalls() })
+    // The first line is written at once; the twenty-five after it fill the count.
+    await until('the counted write', async () => (await estimateOf())?.messages === 26)
+    release()
+    await pumping
+  })
+
+  it('continues on a resumed run: the second pump adds to what the row held, helpers by their call', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      spawn: SPAWN,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        usage('lead-1'),
+        call('toolu_a', HELPER_TOOL),
+        call('toolu_inner', HELPER_TOOL, 'toolu_a'),
+        usage('a-1', { parentToolUseId: 'toolu_a' }),
+        { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' },
+      ]),
+    })
+    expect(await estimateOf()).toMatchObject({ usd: 10, own: 5, byCall: { toolu_a: 5 }, messages: 2 })
+
+    await prisma.slaveRun.update({ where: { id: ids.runId }, data: { status: 'resuming' } })
+    await pumpRun({
+      ...ids,
+      spawn: SPAWN,
+      resumed: true,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        usage('lead-2'),
+        // A line of the inner helper the FIRST pump saw start: its root is read from the log.
+        usage('inner-1', { parentToolUseId: 'toolu_inner' }),
+        call('toolu_c', HELPER_TOOL),
+        usage('c-1', { parentToolUseId: 'toolu_c' }),
+        { kind: 'terminated', outcome: okOutcome },
+      ]),
+    })
+    const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(parseRunCostEstimate(row.costEstimate)).toMatchObject({ usd: 25, own: 10, byCall: { toolu_a: 10, toolu_c: 5 }, messages: 5 })
+    expect(row.costUsd).toBe(0.05)
+  })
+
+  it('counts a message of a model with no price, names the model, and puts no figure on it', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      events: fromArray([{ kind: 'session_started', sessionId: 's-1' }, usage('msg_1', { model: 'some-model-nobody-priced' }), usage('msg_2'), { kind: 'terminated', outcome: okOutcome }]),
+    })
+    expect(await estimateOf()).toMatchObject({ usd: 5, messages: 2, unpricedMessages: 1, unpriced: ['some-model-nobody-priced'] })
+  })
+
+  it('estimates a recorded run a little under what its result line then reported', async (): Promise<void> => {
+    // The real lines through the real parser, as the adapter queues them: each line's own event,
+    // then its usage. `claude/skill-tool-use` is a genuine capture whose result line reported $0.422696.
+    const lines = readFileSync(new URL('../../../../packages/providers/test/fixtures/claude/skill-tool-use.ndjson', import.meta.url), 'utf8').split('\n').filter((line) => line.length > 0)
+    const events = lines.flatMap((line): RuntimeEvent[] => {
+      const parsed = parseStreamUsage(line)
+      return [parseStreamLine(line), ...(parsed === null ? [] : [{ kind: 'usage' as const, input: parsed.input, output: parsed.output, ...(parsed.message === undefined ? {} : { message: parsed.message }) }])]
+    })
+    await pumpRun({ ...ids, events: fromArray(events) })
+    const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    const estimate = parseRunCostEstimate(row.costEstimate)
+    expect(row.costUsd).toBeCloseTo(0.422696, 6)
+    expect(estimate?.messages).toBe(2)
+    expect((estimate?.usd ?? 0) / (row.costUsd ?? 1)).toBeGreaterThan(0.97)
+    expect((estimate?.usd ?? 0) / (row.costUsd ?? 1)).toBeLessThan(1)
   })
 })

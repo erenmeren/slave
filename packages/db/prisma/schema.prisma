@@ -1291,6 +1291,15 @@ model SlaveRun {
   /// session's running total its result line reported, less the earlier turns of the session -- so
   /// every reader sums the rows as it sums any other run's.
   costUsd           Float?
+  /// Live cost estimate: about what the run has cost so far, from the usage each assistant message
+  /// carries on the stream, each message counted once (`RunCostEstimate` in
+  /// `packages/domain/src/guardrails/liveCost.ts`, validated at read by `parseRunCostEstimate`):
+  /// `{ usd, own, byCall, messages, unpricedMessages, models, unpriced }`. Written by the pump every
+  /// few seconds while the run works and once when its stream ends, and LEFT on the row afterwards
+  /// -- a helper's share of a lead turn is only ever known from here. Null until the first message
+  /// with usage, and on every run recorded before this column. AN ESTIMATE: it never touches
+  /// `costUsd`, and no guardrail, budget or limit reads it.
+  costEstimate      Json?
   /// `RunOutcome.tokens.input` / `.output` (M14 §4.2). Nullable, no default: `null` is UNMEASURED
   /// -- a Cursor run (keyed on the run's PROVIDER, the same rule `skillCalls` follows), or a
   /// degraded Claude `result` line that carried no `usage`. `0` would be a measured zero the
