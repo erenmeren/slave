@@ -138,7 +138,11 @@ export async function concludeLeadVerification(runId: string): Promise<void> {
         return
       }
       if (step.kind === 'stop') {
-        if (!(await stopLeadInLock(tx, delivery.id, step.reason, step.progress, null))) throw new NotTheClaim()
+        // Final review: a lead already ended gets no rework, so a round's failures stop the version
+        // with no confirmation -- one verifier's word, and the card says so.
+        const unconfirmed = run.confirmsRunId === null && before.leadEnded !== null && step.reason === before.leadEnded && step.progress.failing.length > 0
+        const detail = unconfirmed ? `${step.progress.failing.join(', ')} failed by one verifier and not confirmed: the lead was ended` : null
+        if (!(await stopLeadInLock(tx, delivery.id, step.reason, step.progress, detail))) throw new NotTheClaim()
         return
       }
       if (step.kind === 'confirm') {

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { goalSpend, leadStatus, workspaceSpend } from '@slave-of-ai/control'
+import { goalSpend, leadStatus, requestStop, workspaceSpend } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { readLeadProgress } from '@slave-of-ai/domain'
 import type { SlaveRuntimeAdapter } from '@slave-of-ai/providers'
@@ -118,6 +118,40 @@ describe('the lead flow: limits belong to the goal', () => {
     // The project's figure sums every run's row: the lead's session is in it once.
     const project = await workspaceSpend(f.workspaceId)
     expect(project.runsMeasuredUsd).toBeCloseTo(15 + spend.proofUsd, 6)
+  })
+
+  it('says on the card that a failure which stopped an ended lead\'s version was one verifier\'s and not confirmed (final review)', async (): Promise<void> => {
+    const f = await seedLead({
+      budgetUsd: 30,
+      leadArgs: (ordinal) => (ordinal === 1 ? capped(19.2) : capped(24)),
+      verify: (ordinal) => (ordinal === 1 ? ['R1', 'R2', 'RUN'].map((key) => checked(key, key === 'R1' ? 'fail' : 'pass')) : undefined),
+    })
+    await tickUntil(f, async () => (await leadDelivery(f)).status === 'needs_human')
+
+    const delivery = await leadDelivery(f)
+    expect(delivery.stopReason).toBe('budget_spent')
+    expect(delivery.needsHumanReason).toContain('R1 failed by one verifier and not confirmed: the lead was ended')
+    expect(f.starts.filter((s) => s.kind === 'verification')).toHaveLength(1)
+  })
+
+  it('stops the version with one card when a person cancels the lead\'s turn (final review)', async (): Promise<void> => {
+    let cancelled = false
+    const f = await seedLead({
+      onStart: async (start) => {
+        if (cancelled || start.kind !== 'implementation') return
+        cancelled = true
+        expect((await requestStop(start.runId, 'ada')).ok).toBe(true)
+      },
+    })
+    await tickUntil(f, async () => (await leadDelivery(f)).status === 'needs_human')
+
+    const delivery = await leadDelivery(f)
+    expect([delivery.stopReason, delivery.leadState]).toEqual(['lead_failed', 'awaiting_decision'])
+    expect(delivery.needsHumanReason).toContain("a person cancelled the lead's turn")
+    expect((await leadTaskOf(f)).status).toBe('blocked')
+    await tickUntil(f, async () => (await prisma.supervisorDecision.count({ where: { workspaceId: f.workspaceId, status: 'pending' } })) > 0)
+    expect(await prisma.supervisorDecision.findMany({ where: { workspaceId: f.workspaceId, status: 'pending' }, select: { situationKind: true } })).toEqual([{ situationKind: 'goal_needs_human' }])
+    expect(leadTurns(f)).toHaveLength(1)
   })
 
   it('ends the lead when the goal\'s time is spent and proves what is committed', async (): Promise<void> => {

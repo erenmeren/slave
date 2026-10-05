@@ -103,6 +103,13 @@ export async function enforceLeadLimits(deps: TickDeps, deliveryId: string): Pro
     await stopLead(delivery.id, ended ?? 'lead_failed', task.lastRejectionReason)
     return
   }
+  // Final review: a person cancelled the lead's turn (`requestStop` leaves the task `blocked`, and
+  // the lead flow raises no `task_blocked_human` card) -- nothing will run the lead again, so the
+  // version stops with its one card instead of sitting silently in `integrating`.
+  if (task.status === 'blocked' && !accepted) {
+    await stopLead(delivery.id, ended ?? 'lead_failed', "a person cancelled the lead's turn")
+    return
+  }
   if (ended === null) return
 
   if (task.activeRunId !== null) {
