@@ -94,15 +94,23 @@ export async function goalSpend(workspaceId: string, goalVersion: number): Promi
  * proof runs from start to end (or to `now` while live), less the time it sat paused (closed spans
  * in `pausedMs`, and one still open at its end or now). The gaps
  * between runs (a wait for the provider, a halt, the daemon down) are not charged.
+ *
+ * Final review (L7): neither is the downtime INSIDE a run the daemon lost. A run the sweep found
+ * dead after a restart (`reconcileOrphans`, `concludeDeadRun`) is concluded `failed`, `platform`,
+ * with no cost, and its `endedAt` is when the sweep found it -- the daemon's downtime included. Such
+ * a run is counted up to the last sign of life it gave (`lastOutputAt`, else the sweep's last
+ * observation, else its start), never past its `endedAt`.
  */
 export async function goalWorkedMs(workspaceId: string, goalVersion: number, now: Date = new Date()): Promise<number> {
   const where = runsOf(workspaceId, goalVersion)
   const runs = await prisma.slaveRun.findMany({
     where: { OR: [where.lead, where.proof] },
-    select: { startedAt: true, endedAt: true, pausedMs: true, pausedAt: true },
+    select: { startedAt: true, endedAt: true, pausedMs: true, pausedAt: true, status: true, failureClass: true, costUsd: true, lastOutputAt: true, observedAt: true },
   })
   return runs.reduce((total, run) => {
-    const end = run.endedAt ?? now
+    const lost = run.endedAt !== null && run.status === 'failed' && run.failureClass === 'platform' && run.costUsd === null
+    const lastSign = run.lastOutputAt ?? run.observedAt ?? run.startedAt
+    const end = run.endedAt === null ? now : lost && lastSign < run.endedAt ? lastSign : run.endedAt
     // A pause still open on the row is not working time, to the run's end or to now -- the sweep's
     // own rule. A resume claim folds the span into `pausedMs` and clears `pausedAt`, so nothing is
     // subtracted twice; a stop (`requestStop`) ends a paused run and leaves `pausedAt` set.

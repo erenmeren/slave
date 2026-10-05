@@ -65,6 +65,15 @@ describe('what a goal version spent (lead-flow plan A L6/L7)', () => {
     expect(await goalWorkedMs(f.workspaceId, 1, at(60))).toBe(10 * 60_000)
   })
 
+  it('does not charge the daemon\'s downtime: an orphaned turn counts up to its last output, not to when the sweep found it (L7, final review)', async (): Promise<void> => {
+    const f = await seed()
+    // The daemon died ten minutes into the turn; the restarted sweep failed it `platform` ten hours later.
+    await prisma.slaveRun.create({
+      data: { slaveId: f.leadSeat, taskId: f.taskId, kind: 'implementation', status: 'failed', failureClass: 'platform', leadTurn: 'build', costUsd: null, startedAt: at(0), lastOutputAt: at(10), endedAt: at(600) },
+    })
+    expect(await goalWorkedMs(f.workspaceId, 1, at(700))).toBe(10 * 60_000)
+  })
+
   it('builds a roster member from the person\'s profile and their persona\'s one line, in the roster\'s order', async (): Promise<void> => {
     await prisma.slaveTemplate.deleteMany({ where: { id: 't-lead-roster' } })
     await prisma.slaveTemplate.create({ data: { id: 't-lead-roster', name: 'Lead Roster Backend', role: 'backend', description: 'Builds and tests HTTP APIs', profile: 'You are a backend developer.', active: true } })
