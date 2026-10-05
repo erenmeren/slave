@@ -130,6 +130,7 @@ import {
   setFlow,
   setGoal,
   setLeadSettings,
+  fillLeadRosterFromIntake,
   setPassword,
   setSupervisorSettings,
   setWorkspaceIntegration,
@@ -359,6 +360,10 @@ const USAGE = `usage: orchestrator <command> [options]
                                        a lead-flow project's settings: the goal's working-time
                                        limit, the persons its subordinate sessions are defined
                                        from, and the model of its lead, verifier and confirmer.
+  set-lead --workspace <id> --roster-from-intake
+                                       fills an EMPTY roster with one person of each persona the
+                                       conversation that created the project proposed; refused
+                                       when the roster names somebody or nobody was proposed.
   lead-status --workspace <id> [--version <n>]
                                        a lead-flow goal version as JSON: its state word, why it
                                        stopped, spend and time against the limits, the lead's
@@ -433,6 +438,7 @@ const USAGE = `usage: orchestrator <command> [options]
   create-workspace --name <n> --repo <abs path> [--base main] --verify "<cmd>" [--verify "<cmd>" ...]
                    [--setup "<cmd>" ...] [--budget <usd> | --no-budget] [--provider claude_code|cursor]
                    [--auto-merge] [--delivery conducted|planned] [--flow lead|packages]
+                   [--roster <personId,personId,...>]
                                        attach an existing local clone as a workspace. The path
                                        must be absolute and a git work tree, the base branch must
                                        exist, and at least one verify command is required -- a
@@ -448,6 +454,8 @@ const USAGE = `usage: orchestrator <command> [options]
                                        is born in the lead flow (one lead builds a goal version,
                                        Slave proves it; automatic merge on); --flow packages
                                        keeps the packages flow (set-flow changes it later).
+                                       --roster names the persons a lead-flow project's lead may
+                                       call on from its first build (set-lead changes it later).
   archive-workspace --workspace <id>   archive a project: every row stays, nothing runs until
                                        restore-workspace. Refused while a run is live.
   restore-workspace --workspace <id>   bring an archived project back
@@ -1010,6 +1018,8 @@ const VALUELESS: ReadonlySet<string> = new Set([
   // instruction, which is E3's rule for every bare flag a milestone adds.
   'clear-provider',
   'clear-model',
+  // `set-lead --roster-from-intake --workspace <id>` otherwise records the workspace flag as its value.
+  'roster-from-intake',
   // R1: `goal-report --json --version <n>` otherwise swallows --version as --json's own value.
   'json',
 ])
@@ -2365,7 +2375,16 @@ export async function main(argv: readonly string[]): Promise<number> {
       const limitText = flagText(flags, 'time-limit-min')
       const rosterText = flagText(flags, 'roster')
       const model = flagText(flags, 'model')
-      if (limitText === undefined && rosterText === undefined && model === undefined) throw new Error('one of --time-limit-min, --roster or --model is required')
+      // The one-off for a project created before its roster filled itself: on its own, never beside
+      // another setting, so what it answers is what it did.
+      if ('roster-from-intake' in flags) {
+        if (limitText !== undefined || rosterText !== undefined || model !== undefined) throw new Error('--roster-from-intake is used on its own')
+        const filled = await fillLeadRosterFromIntake(workspaceId)
+        if (!filled.ok) throw new Error(refusalText(filled.error))
+        process.stdout.write(`${JSON.stringify({ roster: filled.value.roster })}\n`)
+        return 0
+      }
+      if (limitText === undefined && rosterText === undefined && model === undefined) throw new Error('one of --time-limit-min, --roster, --roster-from-intake or --model is required')
       // Handed on as a number and NOT checked here: `setLeadSettings` owns the bounds and the sentence.
       const result = await setLeadSettings(workspaceId, {
         ...(limitText === undefined ? {} : { timeLimitMs: limitText === 'none' ? null : Number(limitText) * 60_000 }),
@@ -2789,6 +2808,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       const delivery = oneOfFlag(flags, 'delivery', ['conducted', 'planned'] as const)
       // Absent, `createWorkspace` picks the lead flow wherever it can run; `--flow packages` opts out.
       const flow = oneOfFlag(flags, 'flow', ['packages', 'lead'] as const)
+      const rosterText = flagText(flags, 'roster')
       const result = await createWorkspace({
         name,
         repoPath,
@@ -2803,6 +2823,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         ...('auto-merge' in flags ? { autoMerge: true } : {}),
         ...(delivery !== undefined ? { delivery } : {}),
         ...(flow !== undefined ? { flow } : {}),
+        ...(rosterText === undefined ? {} : { roster: rosterText.split(',').map((id) => id.trim()).filter((id) => id !== '') }),
       })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`workspace ${result.value.id} created\n`)

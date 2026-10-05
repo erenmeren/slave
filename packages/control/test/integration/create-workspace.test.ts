@@ -94,6 +94,31 @@ describe('createWorkspace', () => {
     expect(await prisma.workspace.findUniqueOrThrow({ where: { id: result.value.id } })).toMatchObject({ flow: 'lead', goalTimeLimitMs: 5_400_000 })
   })
 
+  // The helpers a project is born with, when the caller names them (`create-workspace --roster`).
+  it('writes the roster of a lead-flow project created with one, and none when none is given', async () => {
+    const ada = await prisma.person.create({ data: { name: `Ada ${String(Date.now())}` } })
+    try {
+      const result = await createWorkspace({ ...valid(repo()), provider: 'claude_code', roster: [ada.id] })
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: result.value.id } })).leadRoster).toEqual([ada.id])
+      const bare = await createWorkspace({ ...valid(repo()), name: 'No roster', provider: 'claude_code' })
+      expect(bare.ok && (await prisma.workspace.findUniqueOrThrow({ where: { id: bare.value.id } })).leadRoster).toEqual([])
+    } finally {
+      await prisma.person.delete({ where: { id: ada.id } })
+    }
+  })
+
+  it.each([
+    ['naming nobody the catalogue has', { provider: 'claude_code' as const, roster: ['nobody'] }],
+    ['naming somebody twice', { provider: 'claude_code' as const, roster: ['nobody', 'nobody'] }],
+    ['outside the lead flow', { roster: ['nobody'] }],
+  ])('refuses a roster %s, writing nothing', async (_label, extra) => {
+    const result = await createWorkspace({ ...valid(repo()), ...extra })
+    expect(result).toMatchObject({ ok: false, error: { kind: 'lead_setting_invalid', field: 'roster' } })
+    expect(await prisma.workspace.count()).toBe(0)
+  })
+
   it('leaves the time limit null when none is given', async () => {
     const result = await createWorkspace({ ...valid(repo()), provider: 'claude_code', goalTimeLimitMs: null })
     expect(result.ok).toBe(true)

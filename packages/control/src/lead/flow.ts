@@ -171,6 +171,16 @@ export async function setFlow(
   })
 }
 
+/** Plan A L16: what a roster must be -- person ids, unreleased, each once, at most `LEAD_ROSTER_MAX` -- or the refusal. A read. */
+export async function leadRosterRefusal(roster: readonly string[]): Promise<ControlRefusal | null> {
+  if (roster.length > LEAD_ROSTER_MAX || new Set(roster).size !== roster.length) {
+    return { kind: 'lead_setting_invalid', field: 'roster', rule: `a roster names at most ${String(LEAD_ROSTER_MAX)} persons, each once` }
+  }
+  const known = new Set((await prisma.person.findMany({ where: { id: { in: [...roster] }, releasedAt: null }, select: { id: true } })).map((p) => p.id))
+  const unknown = roster.filter((id) => !known.has(id))
+  return unknown.length > 0 ? { kind: 'lead_setting_invalid', field: 'roster', rule: `no such person in the catalogue: ${unknown.join(', ')}` } : null
+}
+
 /**
  * Plan A L7/L16: the lead flow's own settings. `timeLimitMs` null clears the limit; `roster` is
  * person ids (unreleased, each once, at most `LEAD_ROSTER_MAX`); `model` moves the three system
@@ -191,12 +201,8 @@ export async function setLeadSettings(
   }
   if (input.model !== undefined && !MODEL_ID_PATTERN.test(input.model)) return err({ kind: 'invalid_model', detail: MODEL_SHAPE_DETAIL })
   if (input.roster !== undefined) {
-    if (input.roster.length > LEAD_ROSTER_MAX || new Set(input.roster).size !== input.roster.length) {
-      return err({ kind: 'lead_setting_invalid', field: 'roster', rule: `a roster names at most ${String(LEAD_ROSTER_MAX)} persons, each once` })
-    }
-    const known = new Set((await prisma.person.findMany({ where: { id: { in: [...input.roster] }, releasedAt: null }, select: { id: true } })).map((p) => p.id))
-    const unknown = input.roster.filter((id) => !known.has(id))
-    if (unknown.length > 0) return err({ kind: 'lead_setting_invalid', field: 'roster', rule: `no such person in the catalogue: ${unknown.join(', ')}` })
+    const refusal = await leadRosterRefusal(input.roster)
+    if (refusal !== null) return err(refusal)
   }
 
   if (input.model !== undefined) {

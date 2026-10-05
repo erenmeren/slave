@@ -14,7 +14,7 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import type { ProviderKind } from '@slave-of-ai/providers'
 import { realGitProbe, type GitProbe } from './git-probe.js'
-import { ensureLeadSeatsIn } from './lead/flow.js'
+import { ensureLeadSeatsIn, leadRosterRefusal } from './lead/flow.js'
 import { isProviderKind } from './org.js'
 import type { Principal } from './principal.js'
 import { isUniqueConstraintViolation } from './prisma-errors.js'
@@ -304,6 +304,12 @@ export interface CreateWorkspaceInput {
    * reads it.
    */
   readonly goalTimeLimitMs?: number | null
+  /**
+   * The helpers the project's lead may call on from its first build: person ids, held to
+   * `setLeadSettings`' rule (`leadRosterRefusal`) and refused outside the lead flow, where nothing
+   * reads a roster. Absent or empty: none (`set-lead --roster` names them later).
+   */
+  readonly roster?: readonly string[]
 }
 
 let probe: GitProbe = realGitProbe
@@ -359,6 +365,12 @@ export async function createWorkspace(
       return err({ kind: 'lead_setting_invalid', field: 'timeLimitMs', rule: `a goal's time limit must be a whole number of minutes from ${String(min / 60_000)} to ${String(max / 60_000)}` })
     }
   }
+  const roster = input.roster ?? []
+  if (roster.length > 0) {
+    if (flow !== 'lead') return err({ kind: 'lead_setting_invalid', field: 'roster', rule: 'a roster is read only in the lead flow' })
+    const refusal = await leadRosterRefusal(roster)
+    if (refusal !== null) return err(refusal)
+  }
 
   let id: string
   try {
@@ -379,6 +391,7 @@ export async function createWorkspace(
           ...(input.autoMerge === undefined ? (flow === 'lead' ? { autoMerge: true } : {}) : { autoMerge: input.autoMerge }),
           ...(flow === 'lead' ? { flow } : {}),
           ...(timeLimit === null ? {} : { goalTimeLimitMs: timeLimit }),
+          ...(roster.length === 0 ? {} : { leadRoster: [...roster] }),
           ...(input.supervisorAutonomy === undefined ? {} : { supervisorAutonomy: input.supervisorAutonomy }),
           // Conductor Plan 4b (spec §5, D11): new projects are conducted. Written here, not as the
           // column's default: the column stays `planned` so every row inserted outside this

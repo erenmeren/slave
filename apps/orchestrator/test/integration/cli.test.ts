@@ -464,6 +464,36 @@ describe('the orchestrator CLI', () => {
     expect(`${busy.stdout}${busy.stderr}`).toMatch(/1 task\(s\) are still open/)
   })
 
+  it('set-lead --roster-from-intake fills an empty roster from the conversation that created the project, once', async (): Promise<void> => {
+    const workspaceId = await bareProject('Lead flow project')
+    expect((await runCli(['set-flow', '--workspace', workspaceId, '--flow', 'lead'])).code).toBe(0)
+    const persona = await prisma.slaveTemplate.create({ data: { name: `Roster Persona ${workspaceId.slice(0, 8)}`, role: 'backend', description: '', active: true } })
+    const draft = { name: 'x', goal: 'x', repo: { mode: 'new', path: null }, baseBranch: 'main', verifyCommands: [], setupCommands: [], budgetUsd: null, provider: null, team: [{ templateId: persona.id, runtimeRoles: ['backend'] }] }
+    const intake = await prisma.intake.create({ data: { status: 'created', workspaceId, draft } })
+    try {
+      // The bare switch first: it must not take `--workspace` as its value.
+      const filled = await runCli(['set-lead', '--roster-from-intake', '--workspace', workspaceId])
+      expect(`${filled.stdout}${filled.stderr}`).toContain('roster')
+      expect(filled.code).toBe(0)
+      const roster = (JSON.parse(filled.stdout) as { roster: string[] }).roster
+      expect(roster).toHaveLength(1)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })).leadRoster).toEqual(roster)
+      expect(await prisma.person.findUniqueOrThrow({ where: { id: roster[0] as string } })).toMatchObject({ templateId: persona.id })
+
+      const again = await runCli(['set-lead', '--workspace', workspaceId, '--roster-from-intake'])
+      expect(again.code).not.toBe(0)
+      expect(`${again.stdout}${again.stderr}`).toMatch(/the roster already names 1 person/)
+      const mixed = await runCli(['set-lead', '--workspace', workspaceId, '--roster-from-intake', '--time-limit-min', '90'])
+      expect(mixed.code).not.toBe(0)
+      expect(`${mixed.stdout}${mixed.stderr}`).toMatch(/used on its own/)
+    } finally {
+      await prisma.intake.delete({ where: { id: intake.id } })
+      await prisma.workspace.update({ where: { id: workspaceId }, data: { leadRoster: [] } })
+      await prisma.person.deleteMany({ where: { templateId: persona.id } })
+      await prisma.slaveTemplate.delete({ where: { id: persona.id } })
+    }
+  })
+
   it('exits non-zero for set-lead on a workspace that is not in the lead flow', async (): Promise<void> => {
     const result = await runCli(['set-lead', '--workspace', fixture.workspaceId, '--time-limit-min', '90'])
     expect(result.code).not.toBe(0)
@@ -2641,6 +2671,23 @@ describe('the orchestrator CLI', () => {
       const row = await prisma.workspace.findFirstOrThrow({ where: { name: 'Automatic' } })
       expect(row.autoMerge).toBe(true)
       expect(row.verifyCommands).toEqual(['true'])
+    })
+
+    it('names the lead\'s helpers with --roster, and refuses a roster where no lead reads one', async () => {
+      const ada = await prisma.person.create({ data: { name: `Roster Ada ${String(Date.now())}` } })
+      try {
+        const led = await runCli(['create-workspace', '--name', 'With Helpers', '--repo', makeRepo(), '--verify', 'true', '--provider', 'claude_code', '--roster', ` ${ada.id} ,`])
+        expect(led.code).toBe(0)
+        expect(await prisma.workspace.findFirstOrThrow({ where: { name: 'With Helpers' } })).toMatchObject({ flow: 'lead', leadRoster: [ada.id] })
+
+        const older = await runCli(['create-workspace', '--name', 'No Lead', '--repo', makeRepo(), '--verify', 'true', '--roster', ada.id])
+        expect(older.code).not.toBe(0)
+        expect(older.stderr).toContain('a roster is read only in the lead flow')
+        expect(await prisma.workspace.count({ where: { name: 'No Lead' } })).toBe(0)
+      } finally {
+        await prisma.workspace.updateMany({ where: { name: 'With Helpers' }, data: { leadRoster: [] } })
+        await prisma.person.delete({ where: { id: ada.id } })
+      }
     })
 
     it('creates a conducted project by default, a planned one with --delivery planned, and refuses any other word', async () => {
