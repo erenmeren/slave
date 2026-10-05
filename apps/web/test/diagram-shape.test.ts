@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { layoutDiagram } from '../src/components/diagram/layout'
 import { CARD_SIZE, GROUP_OVER, costOf, diagramShape, layoutKey } from '../src/components/diagram/shape'
-import { MAX_WIDTH, barsOf, lanesOf, scaleOf, spanOf, ticksOf, xOf } from '../src/components/diagram/timeline'
+import { MAX_BLOCK, MAX_WIDTH, barsOf, lanesOf, scaleOf, spanOf, ticksOf, xOf } from '../src/components/diagram/timeline'
 import { endOf, formatDuration, toneOfState } from '../src/components/diagram/words'
 import { viewHref, viewOf } from '../src/components/project/views'
 import { at, call, diagramFixture, manyCallsOf } from './fixtures/diagram'
@@ -139,12 +139,13 @@ describe('the timeline\'s arithmetic', () => {
     expect(lead.map((bar) => [bar.calls[0]?.id, bar.tone, bar.open, bar.row])).toEqual([
       ['1', 'ok', false, 0],
       ['2', 'ok', false, 0],
-      ['4', 'error', false, 0],
       ['8', 'running', true, 0],
+      // A failed step is drawn last, on top of its neighbours.
+      ['4', 'error', false, 0],
     ])
     expect(lead[1]?.x).toBeCloseTo(xOf(scale, Date.parse(at(100))), 5)
     expect(lead[1]?.width).toBeCloseTo(xOf(scale, Date.parse(at(400))) - xOf(scale, Date.parse(at(100))), 5)
-    expect((lead[3]?.x ?? 0) + (lead[3]?.width ?? 0)).toBeCloseTo(xOf(scale, endOf(build)), 5)
+    expect((lead[2]?.x ?? 0) + (lead[2]?.width ?? 0)).toBeCloseTo(xOf(scale, endOf(build)), 5)
     expect(barsOf(lanes[1]!, build.calls, scale, endOf(build)).map((bar) => [bar.calls[0]?.id, bar.row])).toEqual([
       ['5', 0],
       ['6', 0],
@@ -159,7 +160,10 @@ describe('the timeline\'s arithmetic', () => {
     const bars = barsOf(lanesOf(long)[0]!, long.calls, scale, endOf(long))
     expect(bars.length).toBeLessThan(200)
     expect(bars.reduce((total, bar) => total + bar.calls.length, 0)).toBe(5000)
-    expect(bars.filter((bar) => bar.tone === 'error')).toHaveLength(1)
+    expect(bars.every((bar) => bar.width <= MAX_BLOCK)).toBe(true)
+    // The one failed step is a block of its own, not folded into the ones that worked.
+    expect(bars.filter((bar) => bar.tone === 'error').map((bar) => bar.calls.map((one) => one.id))).toEqual([['m-2500']])
+    expect(bars.at(-1)?.tone).toBe('error')
     // A step called before the drawing starts and ended before it too is left out.
     const cut = { ...scale, from: Date.parse(at(250)) }
     expect(barsOf(lanesOf(long)[0]!, long.calls, cut, endOf(long)).reduce((total, bar) => total + bar.calls.length, 0)).toBeLessThan(5000)

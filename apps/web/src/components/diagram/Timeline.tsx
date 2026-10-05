@@ -133,7 +133,7 @@ export function Timeline({ build, onSelect }: { readonly build: BuildDiagram; re
             ))}
           </div>
           <div ref={scroller} data-testid="timeline-scroll" className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden">
-            <div className="relative" style={{ width: scale.width, height: AXIS + BAND + height }} onMouseLeave={() => setHover(null)}>
+            <div className="relative overflow-clip" style={{ width: scale.width, height: AXIS + BAND + height }} onMouseLeave={() => setHover(null)}>
               {/* The lead's turns: a band behind every lane, named above them. */}
               {turns.map((turn, index) => {
                 const box = spanOf(scale, Date.parse(turn.startedAt), turn.endedAt === null ? end : Date.parse(turn.endedAt))

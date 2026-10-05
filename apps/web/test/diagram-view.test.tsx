@@ -38,7 +38,7 @@ describe('the Timeline view', () => {
     const bars = screen.getAllByTestId('timeline-bar')
     expect(bars).toHaveLength(8)
     expect(bars.map((bar) => bar.getAttribute('data-tone')).sort()).toEqual(['error', 'ok', 'ok', 'ok', 'ok', 'ok', 'running', 'running'])
-    expect(bars[0]?.getAttribute('aria-label')).toBe('Lead: Reading package.json')
+    expect(bars.map((bar) => bar.getAttribute('aria-label'))).toContain('Lead: Reading package.json')
   })
 
   it('names the lead\'s turns with their cost, hatches a pause and marks now while the build runs', async () => {
@@ -72,7 +72,7 @@ describe('the Timeline view', () => {
 
   it('says a step in full when pointed at: the sentence, who, how long, how it went', async () => {
     await show('timeline')
-    fireEvent.mouseEnter(screen.getAllByTestId('timeline-bar')[2] as HTMLElement)
+    fireEvent.mouseEnter(screen.getAllByTestId('timeline-bar').find((bar) => bar.getAttribute('data-tone') === 'error') as HTMLElement)
     const tip = screen.getByTestId('timeline-tip')
     expect(tip.textContent).toContain('Running npm test')
     expect(tip.textContent).toContain('Lead')

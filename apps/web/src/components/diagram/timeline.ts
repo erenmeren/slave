@@ -87,18 +87,21 @@ export interface Bar {
   readonly open: boolean
 }
 
-const WORST: Readonly<Record<BarTone, number>> = { ok: 0, unknown: 1, running: 2, error: 3 }
 const toneOfCall = (call: DiagramCall): BarTone => call.outcome ?? (call.endedAt === null ? 'running' : 'unknown')
+/** The widest a block of narrow steps grows: past it a new block begins, so a block still says when. */
+export const MAX_BLOCK = 24
+const ORDER: Readonly<Record<BarTone, number>> = { ok: 0, unknown: 1, running: 2, error: 3 }
 
 /**
  * A lane's steps as blocks at a scale. Each step runs from its call to its result (an open one
  * to the build's end); none is drawn narrower than `MIN_BAR`. Narrow steps that touch on the same
- * row become one block, which says how many it holds and takes the worst of their outcomes -- so
- * a build of thousands of steps draws a few hundred blocks, not thousands.
+ * row and went the same way become one block, which says how many it holds -- so a build of
+ * thousands of steps draws a few hundred blocks, not thousands. A failed step is never folded
+ * into the ones that worked: it is drawn after them, on top, so it is always seen.
  */
 export function barsOf(lane: Lane, calls: readonly DiagramCall[], scale: Scale, end: number): readonly Bar[] {
   interface Block { key: string; row: number; x: number; width: number; tone: BarTone; calls: DiagramCall[]; open: boolean; narrow: boolean }
-  const lastOnRow = new Map<number, Block>()
+  const lastOf = new Map<string, Block>()
   const bars: Block[] = []
   for (const call of calls) {
     if (call.nodeId !== lane.node.id) continue
@@ -111,19 +114,19 @@ export function barsOf(lane: Lane, calls: readonly DiagramCall[], scale: Scale, 
     const width = Math.max(MIN_BAR, natural)
     const row = lane.rowOf.get(call.sessionId) ?? 0
     const tone = toneOfCall(call)
-    const before = lastOnRow.get(row)
-    if (before !== undefined && before.narrow && narrow && x <= before.x + before.width + 1) {
+    const slot = `${String(row)}:${tone}`
+    const before = lastOf.get(slot)
+    if (before !== undefined && before.narrow && narrow && x <= before.x + before.width + 1 && x + width - before.x <= MAX_BLOCK) {
       before.width = Math.max(before.width, x + width - before.x)
       before.calls.push(call)
-      if (WORST[tone] > WORST[before.tone]) before.tone = tone
       before.open ||= call.endedAt === null
       continue
     }
     const bar: Block = { key: call.id, row, x, width, tone, calls: [call], open: call.endedAt === null, narrow }
     bars.push(bar)
-    lastOnRow.set(row, bar)
+    lastOf.set(slot, bar)
   }
-  return bars
+  return bars.sort((a, b) => ORDER[a.tone] - ORDER[b.tone])
 }
 
 const STEPS = [5_000, 15_000, 30_000, 60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000, 15 * 60_000, 30 * 60_000, 3_600_000, 2 * 3_600_000, 6 * 3_600_000, 12 * 3_600_000, 24 * 3_600_000]
