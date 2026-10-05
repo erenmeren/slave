@@ -7,7 +7,7 @@ export function emptyAnalytics(over: Partial<AnalyticsView> = {}): AnalyticsView
     since: '2026-09-06T00:00:00.000Z',
     projectId: null,
     projects: [],
-    money: { buildingUsd: 0, checkingUsd: 0, steeringUsd: 0, totalUsd: 0, unmeasuredSessions: 0, liveSessions: 0, byDay: [], byProject: [], byBuild: [] },
+    money: { buildingUsd: 0, checkingUsd: 0, steeringUsd: 0, totalUsd: 0, unmeasuredSessions: 0, liveSessions: 0, estimatedRunningUsd: 0, byDay: [], byProject: [], byBuild: [] },
     work: { steps: 0, byDay: [], leadTurns: 0, helperSessions: 0, checks: 0, verdicts: { works: 0, fails: 0, unverifiable: 0 }, builds: { delivered: 0, stopped: 0, waiting: 0, running: 0 }, averageDeliveredWorkedMs: null },
     helpers: [],
     evidence: { profiles: [], models: [], records: 0, leadFlowRecords: 0 },
@@ -30,14 +30,15 @@ export function analyticsFixture(over: Partial<AnalyticsView> = {}): AnalyticsVi
       totalUsd: 14.75,
       unmeasuredSessions: 1,
       liveSessions: 1,
+      estimatedRunningUsd: 0,
       byDay: days.map((day, index) => (index === 5 ? { day, totalUsd: 10.25, byProject: [{ projectId: 'a', usd: 8 }, { projectId: 'b', usd: 2.25 }] } : index === 6 ? { day, totalUsd: 4.5, byProject: [{ projectId: 'a', usd: 4.5 }] } : { day, totalUsd: 0, byProject: [] })),
       byProject: [
-        { projectId: 'a', name: 'Invoice service', archived: false, flow: 'lead', builds: 1, buildingUsd: 10, checkingUsd: 2.5, steeringUsd: 0, totalUsd: 12.5, budgetUsd: 50, budgetSpentUsd: 12.5, unmeasuredSessions: 0, liveSessions: 0 },
-        { projectId: 'b', name: 'Todo app', archived: false, flow: 'lead', builds: 1, buildingUsd: 2, checkingUsd: 0, steeringUsd: 0.25, totalUsd: 2.25, budgetUsd: null, budgetSpentUsd: 0, unmeasuredSessions: 1, liveSessions: 1 },
+        { projectId: 'a', name: 'Invoice service', archived: false, flow: 'lead', builds: 1, buildingUsd: 10, checkingUsd: 2.5, steeringUsd: 0, totalUsd: 12.5, budgetUsd: 50, budgetSpentUsd: 12.5, unmeasuredSessions: 0, liveSessions: 0, estimatedRunningUsd: 0 },
+        { projectId: 'b', name: 'Todo app', archived: false, flow: 'lead', builds: 1, buildingUsd: 2, checkingUsd: 0, steeringUsd: 0.25, totalUsd: 2.25, budgetUsd: null, budgetSpentUsd: 0, unmeasuredSessions: 1, liveSessions: 1, estimatedRunningUsd: 0 },
       ],
       byBuild: [
-        { projectId: 'b', projectName: 'Todo app', version: 2, state: 'Building', group: 'running', turns: 2, helperSessions: 3, steps: 120, workedMs: 20 * 60_000, spentUsd: 2.25, unmeasuredSessions: 1, liveSessions: 1, startedAt: '2026-10-04T09:00:00.000Z' },
-        { projectId: 'a', projectName: 'Invoice service', version: 1, state: 'Delivered', group: 'delivered', turns: 3, helperSessions: 8, steps: 500, workedMs: 75 * 60_000, spentUsd: 12.5, unmeasuredSessions: 0, liveSessions: 0, startedAt: '2026-10-03T09:00:00.000Z' },
+        { projectId: 'b', projectName: 'Todo app', version: 2, state: 'Building', group: 'running', turns: 2, helperSessions: 3, steps: 120, workedMs: 20 * 60_000, spentUsd: 2.25, unmeasuredSessions: 1, liveSessions: 1, estimatedRunningUsd: 0, startedAt: '2026-10-04T09:00:00.000Z' },
+        { projectId: 'a', projectName: 'Invoice service', version: 1, state: 'Delivered', group: 'delivered', turns: 3, helperSessions: 8, steps: 500, workedMs: 75 * 60_000, spentUsd: 12.5, unmeasuredSessions: 0, liveSessions: 0, estimatedRunningUsd: 0, startedAt: '2026-10-03T09:00:00.000Z' },
       ],
     },
     work: {

@@ -4,8 +4,8 @@ const T0 = Date.parse('2026-10-05T09:00:00.000Z')
 /** A moment of the fixture build, `seconds` after its start. */
 export const at = (seconds: number): string => new Date(T0 + seconds * 1000).toISOString()
 
-const node = (over: Partial<DiagramNode> & Pick<DiagramNode, 'id' | 'kind' | 'name'>): DiagramNode => ({ personId: null, state: 'done', doing: null, sessions: 0, running: 0, toolCalls: 0, failedCalls: 0, costUsd: null, lastAt: null, ...over })
-const session = (over: Partial<DiagramSession> & Pick<DiagramSession, 'id' | 'nodeId' | 'label' | 'startedAt'>): DiagramSession => ({ state: 'done', doing: null, endedAt: null, toolCalls: 0, failedCalls: 0, costUsd: null, ...over })
+const node = (over: Partial<DiagramNode> & Pick<DiagramNode, 'id' | 'kind' | 'name'>): DiagramNode => ({ personId: null, state: 'done', doing: null, sessions: 0, running: 0, toolCalls: 0, failedCalls: 0, costUsd: null, estimatedUsd: null, lastAt: null, ...over })
+const session = (over: Partial<DiagramSession> & Pick<DiagramSession, 'id' | 'nodeId' | 'label' | 'startedAt'>): DiagramSession => ({ state: 'done', doing: null, endedAt: null, toolCalls: 0, failedCalls: 0, costUsd: null, estimatedUsd: null, ...over })
 export const call = (id: string, nodeId: string, sessionId: string, from: number, to: number | null, text: string, outcome: DiagramCall['outcome'] = to === null ? null : 'ok'): DiagramCall => ({ id, nodeId, sessionId, at: at(from), endedAt: to === null ? null : at(to), text, outcome })
 
 /**

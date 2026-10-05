@@ -1,5 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { SUBORDINATE_TOOLS, doingSentence, phaseNeedsPerson, projectPhaseOf, type LeadState, type ProjectPhase, type StopReason, type WorkspaceFlow } from '@slave-of-ai/domain'
+import { estimateOfRun, estimatedUsdOf } from './costEstimate.js'
 import { goalSpend } from './lead/spend.js'
 import { HELPER_QUIET_MS } from './projectDiagram.js'
 import { workspaceSpend } from './spend.js'
@@ -28,6 +29,11 @@ export interface ProjectListItem {
   readonly waitingSince: string | null
   readonly spentUsd: number
   readonly spendUnmeasured: boolean
+  /**
+   * About what the project's open sessions with no reported cost have used so far (live cost
+   * estimate): shown beside `spentUsd`, never in it, and no budget reads it. 0 when nothing runs.
+   */
+  readonly estimatedRunningUsd: number
   readonly budgetUsd: number | null
   /** The newest event of the project, else its creation. */
   readonly updatedAt: string
@@ -83,8 +89,9 @@ export async function listProjects(): Promise<readonly ProjectListItem[]> {
   })
   return Promise.all(
     workspaces.map(async (workspace): Promise<ProjectListItem> => {
-      const [working, total, newest, latestEvent] = await Promise.all([
+      const [working, running, total, newest, latestEvent] = await Promise.all([
         workingNowOf(workspace.id),
+        prisma.slaveRun.findMany({ where: { endedAt: null, costUsd: null, slave: { team: { workspaceId: workspace.id } } }, select: { id: true } }),
         workspaceSpend(workspace.id),
         prisma.goalDelivery.findFirst({
           where: { workspaceId: workspace.id },
@@ -146,6 +153,7 @@ export async function listProjects(): Promise<readonly ProjectListItem[]> {
         waitingSince: since?.toISOString() ?? null,
         spentUsd,
         spendUnmeasured,
+        estimatedRunningUsd: estimatedUsdOf(running.map(estimateOfRun)) ?? 0,
         budgetUsd: workspace.budgetUsd,
         updatedAt: (latestEvent?.ts ?? workspace.createdAt).toISOString(),
         workingNow: working.people,

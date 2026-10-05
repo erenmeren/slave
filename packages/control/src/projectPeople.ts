@@ -1,5 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { SUBORDINATE_TOOLS, doingSentence } from '@slave-of-ai/domain'
+import { awaitsCost, estimateOfRun, estimatedUsdOf, roundUsd, unpricedModelsOf } from './costEstimate.js'
 import type { GoalSpend } from './lead/spend.js'
 import { HELPER_QUIET_MS } from './projectDiagram.js'
 
@@ -27,6 +28,17 @@ export interface PersonRow {
    * theirs ended with a figure.
    */
   readonly costUsd: number | null
+  /**
+   * About what it cost, estimated from the tokens its sessions used -- every session, ended ones
+   * too. NEVER part of `costUsd`. The lead's is its own part (its helpers' taken out), a helper's
+   * is what its sessions used inside the lead's turns, a checker's is its runs'. Null when nothing
+   * was seen yet or no model of its has a price.
+   */
+  readonly estimatedUsd: number | null
+  /** The part of `estimatedUsd` from sessions that have not reported a cost yet; null when there is none. */
+  readonly estimatedRunningUsd: number | null
+  /** Models of its sessions that have no price, so no estimate; a helper's are the lead's. */
+  readonly unpricedModels: readonly string[]
   /** The newest thing it did; null when it did nothing yet. */
   readonly lastAt: string | null
 }
@@ -39,6 +51,13 @@ export interface TurnRow {
   readonly resumed: boolean
   /** Null while the turn runs: the runtime reports a turn's cost when it ends. */
   readonly costUsd: number | null
+  /**
+   * About what the turn cost, its helpers included, estimated from the tokens seen so far: the
+   * figure to show while `costUsd` is null, and kept after the turn ends. Never part of `costUsd`.
+   */
+  readonly estimatedUsd: number | null
+  /** Models the turn used that have no price, so no estimate. */
+  readonly unpricedModels: readonly string[]
   readonly toolCalls: number
   readonly tokensIn: number | null
   readonly tokensOut: number | null
@@ -66,7 +85,27 @@ export interface BuildPeople {
   readonly workingNow: number
   /** Every tool call of the build, the helpers' included. */
   readonly toolCalls: number
-  readonly spend: { readonly leadUsd: number; readonly proofUsd: number; readonly conductorUsd: number; readonly totalUsd: number; readonly unmeasuredRuns: number }
+  readonly spend: BuildSpend
+}
+
+/**
+ * The build's spend by who spent it, as REPORTED -- and, apart from it, about how much the sessions
+ * that have not reported yet have used so far. The estimate is in no total here and in no budget.
+ */
+export interface BuildSpend {
+  readonly leadUsd: number
+  readonly proofUsd: number
+  readonly conductorUsd: number
+  readonly totalUsd: number
+  readonly unmeasuredRuns: number
+  /** The estimate of the open sessions (lead turns and checks) with no reported cost yet; 0 when none. */
+  readonly estimatedRunningUsd: number
+  /** The lead's part of `estimatedRunningUsd`, its helpers included. */
+  readonly estimatedRunningLeadUsd: number
+  /** The checkers' part of `estimatedRunningUsd`. */
+  readonly estimatedRunningProofUsd: number
+  /** Models the open sessions use that have no price: their cost is in no estimate. */
+  readonly unpricedModels: readonly string[]
 }
 
 interface CallPayload {
@@ -107,6 +146,16 @@ export async function buildPeople(input: {
       select: { id: true, status: true, costUsd: true, toolCalls: true, confirmsRunId: true, startedAt: true, endedAt: true },
     }),
   ])
+  // Live cost: each run's estimate, read once. A helper's part of a turn is under the id of the
+  // call that started it, which is the key `sessions` below is built on.
+  const turnEstimates = new Map(turnRuns.map((run) => [run.id, estimateOfRun(run)]))
+  const checkEstimates = new Map(checkRuns.map((run) => [run.id, estimateOfRun(run)]))
+  const openTurnEstimates = turnRuns.filter(awaitsCost).map((run) => turnEstimates.get(run.id) ?? null)
+  const openCheckEstimates = checkRuns.filter(awaitsCost).map((run) => checkEstimates.get(run.id) ?? null)
+  const callEstimate = new Map<string, { usd: number; running: boolean }>()
+  for (const run of turnRuns) {
+    for (const [callId, usd] of Object.entries(turnEstimates.get(run.id)?.byCall ?? {})) callEstimate.set(callId, { usd: (callEstimate.get(callId)?.usd ?? 0) + usd, running: awaitsCost(run) || (callEstimate.get(callId)?.running ?? false) })
+  }
   const turnIds = new Set(turnRuns.map((run) => run.id))
   const events = await prisma.executionEvent.findMany({
     where: { runId: { in: [...turnIds, ...checkRuns.map((run) => run.id)] }, type: { in: ['run_tool_call', 'run_tool_result'] } },
@@ -216,6 +265,21 @@ export async function buildPeople(input: {
   // A helper with no session at work is no longer running, whatever its last step said.
   for (const entry of helpers.values()) if (entry.running === 0) entry.doing = null
   const waitingOnHelpers = [...helpers.values()].some((entry) => entry.running > 0)
+  // Each helper's estimate: what its sessions used, by the call that started each.
+  const helperEstimate = new Map<string, { usd: number; runningUsd: number | null }>()
+  for (const [callId, session] of sessions) {
+    const part = callEstimate.get(callId)
+    if (part === undefined) continue
+    const entry = helperEstimate.get(session.definition) ?? { usd: 0, runningUsd: null }
+    entry.usd += part.usd
+    if (part.running) entry.runningUsd = (entry.runningUsd ?? 0) + part.usd
+    helperEstimate.set(session.definition, entry)
+  }
+  const helpersUsd = [...helperEstimate.values()].reduce((total, entry) => total + entry.usd, 0)
+  const helpersRunningUsd = [...helperEstimate.values()].reduce((total, entry) => total + (entry.runningUsd ?? 0), 0)
+  // The lead's own: its turns' estimates less what its helpers used inside them.
+  const leadEstimate = estimatedUsdOf([...turnEstimates.values()])
+  const leadRunning = estimatedUsdOf(openTurnEstimates)
 
   const people: PersonRow[] = []
   if (turnRuns.length > 0) {
@@ -231,6 +295,9 @@ export async function buildPeople(input: {
       toolCalls: lead.toolCalls,
       failedCalls: lead.failedCalls,
       costUsd: sumCost(turnRuns),
+      estimatedUsd: leadEstimate === null ? null : roundUsd(Math.max(0, leadEstimate - helpersUsd)),
+      estimatedRunningUsd: leadRunning === null ? null : roundUsd(Math.max(0, leadRunning - helpersRunningUsd)),
+      unpricedModels: unpricedModelsOf([...turnEstimates.values()]),
       lastAt: lead.lastAt?.toISOString() ?? turnRuns.at(-1)?.startedAt.toISOString() ?? null,
     })
   }
@@ -248,6 +315,9 @@ export async function buildPeople(input: {
       toolCalls: entry.toolCalls,
       failedCalls: entry.failedCalls,
       costUsd: null,
+      estimatedUsd: helperEstimate.has(definition) ? roundUsd(helperEstimate.get(definition)?.usd ?? 0) : null,
+      estimatedRunningUsd: helperEstimate.get(definition)?.runningUsd == null ? null : roundUsd(helperEstimate.get(definition)?.runningUsd ?? 0),
+      unpricedModels: [],
       lastAt: entry.lastAt?.toISOString() ?? null,
     })
   }
@@ -269,6 +339,9 @@ export async function buildPeople(input: {
       toolCalls: Math.max(entry.toolCalls, runs.reduce((total, run) => total + run.toolCalls, 0)),
       failedCalls: entry.failedCalls,
       costUsd: sumCost(runs),
+      estimatedUsd: estimatedUsdOf(runs.map((run) => checkEstimates.get(run.id) ?? null)),
+      estimatedRunningUsd: estimatedUsdOf(runs.filter(awaitsCost).map((run) => checkEstimates.get(run.id) ?? null)),
+      unpricedModels: unpricedModelsOf(runs.map((run) => checkEstimates.get(run.id) ?? null)),
       lastAt: entry.lastAt?.toISOString() ?? runs.at(-1)?.startedAt.toISOString() ?? null,
     })
   }
@@ -282,6 +355,8 @@ export async function buildPeople(input: {
       status: run.status,
       resumed: run.leadResumed,
       costUsd: run.costUsd,
+      estimatedUsd: estimatedUsdOf([turnEstimates.get(run.id) ?? null]),
+      unpricedModels: unpricedModelsOf([turnEstimates.get(run.id) ?? null]),
       toolCalls: run.toolCalls,
       tokensIn: run.tokensIn,
       tokensOut: run.tokensOut,
@@ -292,6 +367,17 @@ export async function buildPeople(input: {
     activity: lines.slice(-ACTIVITY_LINES).reverse(),
     workingNow: people.filter((person) => person.state === 'working').length,
     toolCalls: lines.length,
-    spend: { leadUsd: input.spend.leadUsd, proofUsd: input.spend.proofUsd, conductorUsd: input.spend.conductorUsd, totalUsd: input.spend.totalUsd, unmeasuredRuns: input.spend.unmeasuredRuns },
+    spend: {
+      leadUsd: input.spend.leadUsd,
+      proofUsd: input.spend.proofUsd,
+      conductorUsd: input.spend.conductorUsd,
+      totalUsd: input.spend.totalUsd,
+      unmeasuredRuns: input.spend.unmeasuredRuns,
+      // BESIDE the reported sums above and in none of them: what the open sessions have used so far.
+      estimatedRunningUsd: roundUsd((estimatedUsdOf(openTurnEstimates) ?? 0) + (estimatedUsdOf(openCheckEstimates) ?? 0)),
+      estimatedRunningLeadUsd: estimatedUsdOf(openTurnEstimates) ?? 0,
+      estimatedRunningProofUsd: estimatedUsdOf(openCheckEstimates) ?? 0,
+      unpricedModels: unpricedModelsOf([...openTurnEstimates, ...openCheckEstimates]),
+    },
   }
 }

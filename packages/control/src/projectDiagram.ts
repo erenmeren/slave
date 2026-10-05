@@ -1,5 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { SUBORDINATE_TOOLS, buildRosterDefinitions, doingSentence, err, ok, type Result, type WorkspaceFlow } from '@slave-of-ai/domain'
+import { estimateOfRun, estimatedUsdOf, roundUsd } from './costEstimate.js'
 import { loadLeadRoster } from './lead/roster.js'
 import type { ControlRefusal } from './refusal.js'
 
@@ -31,6 +32,12 @@ export interface DiagramNode {
   readonly failedCalls: number
   /** A helper's cost is inside the lead's turn, so a helper's is always null. */
   readonly costUsd: number | null
+  /**
+   * About what it cost, estimated from the tokens its sessions used (`PersonRow.estimatedUsd`'s
+   * rule): the lead's own part, a helper's part inside the lead's turns, a checker's runs. Never
+   * part of `costUsd`; null when nothing was seen yet or no model of its has a price.
+   */
+  readonly estimatedUsd: number | null
   readonly lastAt: string | null
 }
 
@@ -62,6 +69,12 @@ export interface DiagramSession {
   readonly failedCalls: number
   /** A lead turn's or a check's own figure once it ended; always null for a helper. */
   readonly costUsd: number | null
+  /**
+   * About what the sitting cost, estimated from the tokens seen: a lead turn's with its helpers
+   * inside it (as its reported figure will be), one helper call's, one check's. Never part of
+   * `costUsd`; null when there is none.
+   */
+  readonly estimatedUsd: number | null
 }
 
 /** One step somebody took, with when it began and when its result came. */
@@ -198,6 +211,12 @@ export async function buildDiagram(workspaceId: string, goalVersion?: number, no
     }),
   ])
   const turnOf = new Map(turnRuns.map((run) => [run.id, run]))
+  // Live cost: each run's estimate, and each helper call's part of its turn's.
+  const turnEstimates = new Map(turnRuns.map((run) => [run.id, estimateOfRun(run)]))
+  const checkEstimates = new Map(checkRuns.map((run) => [run.id, estimateOfRun(run)]))
+  const callEstimate = new Map<string, number>()
+  for (const estimate of turnEstimates.values()) for (const [callId, usd] of Object.entries(estimate?.byCall ?? {})) callEstimate.set(callId, (callEstimate.get(callId) ?? 0) + usd)
+  const helperEstimateOf = (ids: readonly string[]): number | null => (ids.some((id) => callEstimate.has(id)) ? roundUsd(ids.reduce((total, id) => total + (callEstimate.get(id) ?? 0), 0)) : null)
   const checkOf = new Map(checkRuns.map((run) => [run.id, run]))
   const events = await prisma.executionEvent.findMany({
     where: { runId: { in: [...turnOf.keys(), ...checkOf.keys()] }, type: { in: ['run_tool_call', 'run_tool_result', 'run_paused', 'run_resumed'] } },
@@ -335,15 +354,17 @@ export async function buildDiagram(workspaceId: string, goalVersion?: number, no
       toolCalls: session.toolCalls,
       failedCalls: session.failedCalls,
       costUsd: null,
+      estimatedUsd: helperEstimateOf([session.id]),
     })
   }
   const waitingOnHelpers = [...helperSessions.values()].some((session) => session.startOpen && session.runId === liveTurn?.id)
 
-  const nodes: DiagramNode[] = [{ id: 'request', kind: 'request', name: 'You', personId: null, state: 'done', doing: null, sessions: 0, running: 0, toolCalls: 0, failedCalls: 0, costUsd: null, lastAt: iso(delivery.createdAt) }]
+  const nodes: DiagramNode[] = [{ id: 'request', kind: 'request', name: 'You', personId: null, state: 'done', doing: null, sessions: 0, running: 0, toolCalls: 0, failedCalls: 0, costUsd: null, estimatedUsd: null, lastAt: iso(delivery.createdAt) }]
   const edges: DiagramEdge[] = []
   const lastTurn = turnRuns.at(-1)
   if (lastTurn !== undefined) {
     const state = liveTurn === null ? runState(lastTurn) : runState(liveTurn)
+    const leadEstimate = estimatedUsdOf([...turnEstimates.values()])
     nodes.push({
       id: 'lead',
       kind: 'lead',
@@ -356,12 +377,13 @@ export async function buildDiagram(workspaceId: string, goalVersion?: number, no
       toolCalls: lead.toolCalls,
       failedCalls: lead.failedCalls,
       costUsd: sumCost(turnRuns),
+      estimatedUsd: leadEstimate === null ? null : roundUsd(Math.max(0, leadEstimate - (helperEstimateOf([...helperSessions.keys()]) ?? 0))),
       lastAt: iso(lead.lastAt ?? lastTurn.startedAt),
     })
     edges.push({ id: 'request->lead', source: 'request', target: 'lead', kind: 'request', label: `build ${String(version)}`, state })
     for (const run of turnRuns) {
       const entry = turnTally.get(run.id)
-      sessions.push({ id: run.id, nodeId: 'lead', label: run.leadTurn ?? '', state: runState(run), doing: runState(run) === 'working' ? (entry?.doing ?? null) : null, startedAt: run.startedAt.toISOString(), endedAt: iso(run.endedAt), toolCalls: entry?.toolCalls ?? 0, failedCalls: entry?.failedCalls ?? 0, costUsd: run.costUsd })
+      sessions.push({ id: run.id, nodeId: 'lead', label: run.leadTurn ?? '', state: runState(run), doing: runState(run) === 'working' ? (entry?.doing ?? null) : null, startedAt: run.startedAt.toISOString(), endedAt: iso(run.endedAt), toolCalls: entry?.toolCalls ?? 0, failedCalls: entry?.failedCalls ?? 0, costUsd: run.costUsd, estimatedUsd: estimatedUsdOf([turnEstimates.get(run.id) ?? null]) })
     }
   }
 
@@ -387,6 +409,7 @@ export async function buildDiagram(workspaceId: string, goalVersion?: number, no
       toolCalls: list.reduce((total, session) => total + session.toolCalls, 0),
       failedCalls: list.reduce((total, session) => total + session.failedCalls, 0),
       costUsd: null,
+      estimatedUsd: helperEstimateOf(list.map((session) => session.id)),
       lastAt: new Date(newestOf(list)).toISOString(),
     })
     edges.push({ id: `lead->${id}`, source: 'lead', target: id, kind: 'helper', label: times(list.length), state })
@@ -418,19 +441,20 @@ export async function buildDiagram(workspaceId: string, goalVersion?: number, no
       toolCalls: Math.max(entries.reduce((total, entry) => total + entry.toolCalls, 0), runs.reduce((total, run) => total + run.toolCalls, 0)),
       failedCalls: entries.reduce((total, entry) => total + entry.failedCalls, 0),
       costUsd: sumCost(runs),
+      estimatedUsd: estimatedUsdOf(runs.map((run) => checkEstimates.get(run.id) ?? null)),
       lastAt: iso(lastAt ?? newest.startedAt),
     })
     edges.push({ id: `${builder}->${id}`, source: builder, target: id, kind: 'check', label: id === 'checker' ? `check ${String(runs.length)}` : `confirms check ${String(runs.length)}`, state })
     for (const run of runs) {
       const entry = checkTally.get(run.id)
-      sessions.push({ id: run.id, nodeId: id, label: 'check', state: runState(run), doing: runState(run) === 'working' ? (entry?.doing ?? null) : null, startedAt: run.startedAt.toISOString(), endedAt: iso(run.endedAt), toolCalls: Math.max(entry?.toolCalls ?? 0, run.toolCalls), failedCalls: entry?.failedCalls ?? 0, costUsd: run.costUsd })
+      sessions.push({ id: run.id, nodeId: id, label: 'check', state: runState(run), doing: runState(run) === 'working' ? (entry?.doing ?? null) : null, startedAt: run.startedAt.toISOString(), endedAt: iso(run.endedAt), toolCalls: Math.max(entry?.toolCalls ?? 0, run.toolCalls), failedCalls: entry?.failedCalls ?? 0, costUsd: run.costUsd, estimatedUsd: estimatedUsdOf([checkEstimates.get(run.id) ?? null]) })
     }
     last = id
   }
 
   const result: DiagramResult = delivery.mergedAt !== null || delivery.leadState === 'delivered' ? 'merged' : delivery.leadState === 'stopped' ? 'left_unmerged' : delivery.leadState === 'awaiting_decision' ? 'waiting_for_you' : 'not_yet'
   const resultState: DiagramState = result === 'merged' ? 'done' : result === 'waiting_for_you' ? 'paused' : result === 'left_unmerged' ? 'failed' : 'working'
-  nodes.push({ id: 'result', kind: 'result', name: 'Result', personId: null, state: resultState, doing: null, sessions: 0, running: 0, toolCalls: 0, failedCalls: 0, costUsd: null, lastAt: iso(delivery.mergedAt) })
+  nodes.push({ id: 'result', kind: 'result', name: 'Result', personId: null, state: resultState, doing: null, sessions: 0, running: 0, toolCalls: 0, failedCalls: 0, costUsd: null, estimatedUsd: null, lastAt: iso(delivery.mergedAt) })
   // The line to the result never moves: nobody works "on" it.
   edges.push({ id: `${last}->result`, source: last, target: 'result', kind: 'result', label: null, state: result === 'not_yet' ? 'done' : resultState })
 

@@ -8,8 +8,10 @@ import {
   SUPERVISOR_PER_CALL_CAP_USD,
   projectPhaseOf,
   type LeadState,
+  type RunCostEstimate,
   type WorkspaceFlow,
 } from '@slave-of-ai/domain'
+import { awaitsCost, estimateOfRun, estimatedUsdOf } from './costEstimate.js'
 import { evidenceByModel, evidenceByProfile } from './evidence.js'
 import { GENERAL_HELPER_DEFINITION, helperIdentities } from './helperNames.js'
 import { goalWorkedMs } from './lead/spend.js'
@@ -64,6 +66,8 @@ export interface ProjectMoneyRow extends MoneyParts {
   readonly unmeasuredSessions: number
   /** Sessions still open: a session reports its cost when it ends. */
   readonly liveSessions: number
+  /** About what the open sessions with no reported cost have used so far: an estimate, in no sum above. */
+  readonly estimatedRunningUsd: number
 }
 
 export type BuildGroup = 'delivered' | 'stopped' | 'waiting' | 'running'
@@ -83,6 +87,8 @@ export interface BuildRow {
   readonly spentUsd: number
   readonly unmeasuredSessions: number
   readonly liveSessions: number
+  /** About what its open sessions with no reported cost have used so far: an estimate, not in `spentUsd`. */
+  readonly estimatedRunningUsd: number
   readonly startedAt: string
 }
 
@@ -135,6 +141,8 @@ export interface AnalyticsView {
   readonly money: MoneyParts & {
     readonly unmeasuredSessions: number
     readonly liveSessions: number
+    /** About what every open session with no reported cost has used so far: an estimate, in no sum here. */
+    readonly estimatedRunningUsd: number
     /** One entry per day of the period, empty days included; for "everything", the newest `ANALYTICS_CHART_DAYS` days from the first day with a figure. */
     readonly byDay: readonly DayMoney[]
     readonly byProject: readonly ProjectMoneyRow[]
@@ -182,6 +190,8 @@ interface RunRow {
   readonly leadTurn: string | null
   readonly sessionId: string | null
   readonly costUsd: number | null
+  /** The row's live estimate; read only for a session that has not reported a cost. */
+  readonly estimate: RunCostEstimate | null
   readonly startedAt: Date
   readonly endedAt: Date | null
   readonly workspaceId: string
@@ -404,7 +414,7 @@ export async function analyticsView(filter: AnalyticsFilter = {}): Promise<Analy
   const runs: RunRow[] = loaded.slice(0, ANALYTICS_RUN_CAP).map((run) => {
     const workspaceId = run.slave.team.workspaceId
     const version = run.goalDelivery?.goalVersion ?? run.task?.workPackage?.goalVersion ?? null
-    return { id: run.id, kind: run.kind, leadTurn: run.leadTurn, sessionId: run.sessionId, costUsd: run.costUsd, startedAt: run.startedAt, endedAt: run.endedAt, workspaceId, build: version === null ? null : `${workspaceId}:${String(version)}` }
+    return { id: run.id, kind: run.kind, leadTurn: run.leadTurn, sessionId: run.sessionId, costUsd: run.costUsd, estimate: estimateOfRun(run), startedAt: run.startedAt, endedAt: run.endedAt, workspaceId, build: version === null ? null : `${workspaceId}:${String(version)}` }
   })
   const unmeasured = unmeasuredOf(runs)
   const inPeriod = (run: RunRow): boolean => since === null || run.endedAt === null || run.endedAt >= since
@@ -432,11 +442,12 @@ export async function analyticsView(filter: AnalyticsFilter = {}): Promise<Analy
 
   // Money: a session's on the day it ended, a model call's on the day it was made.
   const moneyDays = new Map<string, Map<string, number>>()
-  const perProject = new Map<string, { buildingUsd: number; checkingUsd: number; steeringUsd: number; unmeasured: number; live: number }>()
-  const projectTally = (workspaceId: string): { buildingUsd: number; checkingUsd: number; steeringUsd: number; unmeasured: number; live: number } => {
+  interface ProjectTally { buildingUsd: number; checkingUsd: number; steeringUsd: number; unmeasured: number; live: number; running: (RunCostEstimate | null)[] }
+  const perProject = new Map<string, ProjectTally>()
+  const projectTally = (workspaceId: string): ProjectTally => {
     const found = perProject.get(workspaceId)
     if (found !== undefined) return found
-    const made = { buildingUsd: 0, checkingUsd: 0, steeringUsd: 0, unmeasured: 0, live: 0 }
+    const made: ProjectTally = { buildingUsd: 0, checkingUsd: 0, steeringUsd: 0, unmeasured: 0, live: 0, running: [] }
     perProject.set(workspaceId, made)
     return made
   }
@@ -449,6 +460,8 @@ export async function analyticsView(filter: AnalyticsFilter = {}): Promise<Analy
   for (const run of active) {
     const tally = projectTally(run.workspaceId)
     if (run.endedAt === null) tally.live += 1
+    // Kept apart from the three sums below, which are reported money only.
+    if (awaitsCost(run)) tally.running.push(run.estimate)
     if (unmeasured.has(run.id)) tally.unmeasured += 1
     if (run.costUsd === null) continue
     tally[partOf(run)] += run.costUsd
@@ -482,12 +495,13 @@ export async function analyticsView(filter: AnalyticsFilter = {}): Promise<Analy
     const workspace = workspaceOf.get(delivery.workspaceId)
     return buildStateOf({ flow: workspace?.flow ?? 'lead', haltedReason: workspace?.haltedReason ?? null, newest: newestOf.get(delivery.workspaceId) === delivery.goalVersion, delivery })
   }
-  const spendOfBuild = (key: string): { readonly usd: number; readonly unmeasured: number; readonly live: number } => {
+  const spendOfBuild = (key: string): { readonly usd: number; readonly unmeasured: number; readonly live: number; readonly estimatedRunningUsd: number } => {
     const own = runsOfBuild.get(key) ?? []
     return {
       usd: round(own.reduce((total, run) => total + (run.costUsd ?? 0), 0) + (conductorOf.get(key) ?? 0)),
       unmeasured: own.filter((run) => unmeasured.has(run.id)).length,
       live: own.filter((run) => run.endedAt === null).length,
+      estimatedRunningUsd: estimatedUsdOf(own.filter(awaitsCost).map((run) => run.estimate)) ?? 0,
     }
   }
   const byBuild = await Promise.all(
@@ -507,6 +521,7 @@ export async function analyticsView(filter: AnalyticsFilter = {}): Promise<Analy
         spentUsd: spend.usd,
         unmeasuredSessions: spend.unmeasured,
         liveSessions: spend.live,
+        estimatedRunningUsd: spend.estimatedRunningUsd,
         startedAt: delivery.createdAt.toISOString(),
       }
     }),
@@ -538,6 +553,7 @@ export async function analyticsView(filter: AnalyticsFilter = {}): Promise<Analy
           budgetSpentUsd,
           unmeasuredSessions: tally.unmeasured,
           liveSessions: tally.live,
+          estimatedRunningUsd: estimatedUsdOf(tally.running) ?? 0,
         }
       }),
     )
@@ -592,6 +608,7 @@ export async function analyticsView(filter: AnalyticsFilter = {}): Promise<Analy
       totalUsd: sumOf('totalUsd'),
       unmeasuredSessions: byProject.reduce((total, row) => total + row.unmeasuredSessions, 0),
       liveSessions: byProject.reduce((total, row) => total + row.liveSessions, 0),
+      estimatedRunningUsd: round(byProject.reduce((total, row) => total + row.estimatedRunningUsd, 0)),
       byDay: chartDays.map((day) => {
         const parts = [...(moneyDays.get(day) ?? new Map<string, number>())].map(([id, usd]) => ({ projectId: id, usd: round(usd) })).sort((a, b) => b.usd - a.usd)
         return { day, totalUsd: round(parts.reduce((total, part) => total + part.usd, 0)), byProject: parts }

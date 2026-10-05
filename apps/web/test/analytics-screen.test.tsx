@@ -90,7 +90,7 @@ describe('Analytics', () => {
   it('says a first build with its turn still open as it is: nothing reported yet, never a zero', () => {
     const view = emptyAnalytics({
       projects: [{ id: 'a', name: 'First', archived: false }],
-      money: { ...emptyAnalytics().money, liveSessions: 1, byDay: [{ day: '2026-10-05', totalUsd: 0, byProject: [] }], byProject: [{ projectId: 'a', name: 'First', archived: false, flow: 'lead', builds: 1, buildingUsd: 0, checkingUsd: 0, steeringUsd: 0, totalUsd: 0, budgetUsd: null, budgetSpentUsd: 0, unmeasuredSessions: 0, liveSessions: 1 }] },
+      money: { ...emptyAnalytics().money, liveSessions: 1, byDay: [{ day: '2026-10-05', totalUsd: 0, byProject: [] }], byProject: [{ projectId: 'a', name: 'First', archived: false, flow: 'lead', builds: 1, buildingUsd: 0, checkingUsd: 0, steeringUsd: 0, totalUsd: 0, budgetUsd: null, budgetSpentUsd: 0, unmeasuredSessions: 0, liveSessions: 1, estimatedRunningUsd: 0 }] },
     })
     stubFetch(() => ({ body: { analytics: view } }))
     render(<AnalyticsScreen initial={view} />)
