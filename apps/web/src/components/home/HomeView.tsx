@@ -5,10 +5,11 @@ import { useCallback, useEffect, useState } from 'react'
 import { ArchiveRestoreIcon, ChevronRightIcon, PlusIcon, Trash2Icon } from 'lucide-react'
 import { toast } from 'sonner'
 import { STOP_REASON_WORDS, projectPhaseSentence } from '@slave-of-ai/domain'
-import type { ProjectListItem, ProjectView } from '@slave-of-ai/control'
+import type { HappeningLine, ProjectListItem, ProjectView } from '@slave-of-ai/control'
 import { DeleteProjectDialog } from '@/components/app/DeleteProjectDialog'
 import { LimitBar } from '@/components/app/LimitBar'
 import { PhaseBadge } from '@/components/app/phase'
+import { HappeningFeed } from '@/components/home/HappeningFeed'
 import { DecisionCard } from '@/components/project/DecisionCard'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -71,10 +72,11 @@ function Figure({ id, label, value, detail }: { readonly id: string; readonly la
 }
 
 /**
- * Lead UX design section 6.1: is anything waiting for me, and how are my projects doing? Waiting
- * builds first, under an amber border; then one card per project; then the archived ones, folded.
+ * Lead UX design section 6.1: is anything waiting for me, and how are my projects doing? The
+ * figures, then what is happening right now across the projects; the waiting builds, under an
+ * amber border; then one card per project; then the archived ones, folded.
  */
-export function HomeView({ initial }: { readonly initial: readonly ProjectListItem[] }): React.JSX.Element {
+export function HomeView({ initial, happening = [] }: { readonly initial: readonly ProjectListItem[]; readonly happening?: readonly HappeningLine[] }): React.JSX.Element {
   const { data, error, refresh } = usePoll<{ readonly projects: readonly ProjectListItem[] }>('/api/projects', { projects: initial }, () => HOME_POLL_MS)
   const [deleting, setDeleting] = useState<ProjectListItem | null>(null)
   const live = data.projects.filter((project) => !project.archived)
@@ -135,6 +137,8 @@ export function HomeView({ initial }: { readonly initial: readonly ProjectListIt
           <Figure id="projects" label="Projects" value={String(live.length)} detail={`${String(busy.length)} running · ${String(archived.length)} archived`} />
         </section>
       )}
+
+      {live.length > 0 && <HappeningFeed initial={happening} />}
 
       {waiting.length > 0 && (
         <section aria-labelledby="waiting-heading" data-testid="waiting" className="rounded-xl border-2 border-warning/60 bg-warning-muted/60 p-4">
