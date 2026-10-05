@@ -120,7 +120,8 @@ describe('buildDiagram: a build as a diagram', () => {
       ['lead', 'rework', 'working', 2, null, true],
       ['helper:backend-dev', 'fix the delete route', 'working', 1, null, true],
     ])
-    expect(build.sessions[3]).toMatchObject({ id: 'call-1', startedAt: at(130).toISOString() })
+    expect(build.sessions[3]).toMatchObject({ id: 'call-1', startedAt: at(130).toISOString(), doing: 'Running npm test' })
+    expect(build.sessions.map((session) => session.doing).slice(0, 3)).toEqual([null, null, 'Handing work to a helper'])
   })
 
   it('reads every step with when it began and when its result came', async () => {

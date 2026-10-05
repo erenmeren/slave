@@ -53,6 +53,8 @@ export interface DiagramSession {
   /** The lead's turn (`build`, `rework`, ...), what a helper was asked to do, or `check`. */
   readonly label: string
   readonly state: DiagramState
+  /** What it is doing now, in words; null when it is not working. */
+  readonly doing: string | null
   readonly startedAt: string
   /** Null while it is open. */
   readonly endedAt: string | null
@@ -327,6 +329,7 @@ export async function buildDiagram(workspaceId: string, goalVersion?: number, no
       nodeId: `helper:${session.definition}`,
       label: session.label,
       state,
+      doing: state === 'working' ? (session.doing ?? 'Starting') : null,
       startedAt: session.startedAt.toISOString(),
       endedAt: open ? null : iso(turnEnd !== null && turnEnd < session.newest ? turnEnd : session.newest),
       toolCalls: session.toolCalls,
@@ -358,7 +361,7 @@ export async function buildDiagram(workspaceId: string, goalVersion?: number, no
     edges.push({ id: 'request->lead', source: 'request', target: 'lead', kind: 'request', label: `build ${String(version)}`, state })
     for (const run of turnRuns) {
       const entry = turnTally.get(run.id)
-      sessions.push({ id: run.id, nodeId: 'lead', label: run.leadTurn ?? '', state: runState(run), startedAt: run.startedAt.toISOString(), endedAt: iso(run.endedAt), toolCalls: entry?.toolCalls ?? 0, failedCalls: entry?.failedCalls ?? 0, costUsd: run.costUsd })
+      sessions.push({ id: run.id, nodeId: 'lead', label: run.leadTurn ?? '', state: runState(run), doing: runState(run) === 'working' ? (entry?.doing ?? null) : null, startedAt: run.startedAt.toISOString(), endedAt: iso(run.endedAt), toolCalls: entry?.toolCalls ?? 0, failedCalls: entry?.failedCalls ?? 0, costUsd: run.costUsd })
     }
   }
 
@@ -417,7 +420,7 @@ export async function buildDiagram(workspaceId: string, goalVersion?: number, no
     edges.push({ id: `${last}->${id}`, source: last, target: id, kind: 'check', label: id === 'checker' ? `check ${String(runs.length)}` : `confirms check ${String(runs.length)}`, state })
     for (const run of runs) {
       const entry = checkTally.get(run.id)
-      sessions.push({ id: run.id, nodeId: id, label: 'check', state: runState(run), startedAt: run.startedAt.toISOString(), endedAt: iso(run.endedAt), toolCalls: Math.max(entry?.toolCalls ?? 0, run.toolCalls), failedCalls: entry?.failedCalls ?? 0, costUsd: run.costUsd })
+      sessions.push({ id: run.id, nodeId: id, label: 'check', state: runState(run), doing: runState(run) === 'working' ? (entry?.doing ?? null) : null, startedAt: run.startedAt.toISOString(), endedAt: iso(run.endedAt), toolCalls: Math.max(entry?.toolCalls ?? 0, run.toolCalls), failedCalls: entry?.failedCalls ?? 0, costUsd: run.costUsd })
     }
     last = id
   }
