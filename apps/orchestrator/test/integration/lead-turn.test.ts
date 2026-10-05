@@ -207,8 +207,9 @@ describe('the lead flow: one session, whatever interrupts it', () => {
     const f = await seedLead({ leadArgs: () => ['--work-fixture', 'permission-denied'] })
     await tickUntil(f, async () => (await leadDelivery(f)).status === 'needs_human')
 
-    // Two continues on the house, then three charged turns: the task's attempt cap.
-    expect(leadTurns(f).map((t) => t.leadTurn)).toEqual(['build', 'continue', 'continue', 'continue', 'continue'])
+    // `LEAD_DENIAL_CONTINUES_MAX` turns on the house (the build and the first continues), then three
+    // charged turns: the task's attempt cap.
+    expect(leadTurns(f).map((t) => t.leadTurn)).toEqual(['build', ...Array<string>(LEAD_DENIAL_CONTINUES_MAX + 2).fill('continue')])
     expect(leadTurns(f).slice(1).every((t) => t.resumeSessionId === 'fake-session-permission-denied')).toBe(true)
     expect((await leadNotes(f)).filter((line) => line.startsWith('denied:'))).toHaveLength(LEAD_DENIAL_CONTINUES_MAX)
     const delivery = await leadDelivery(f)

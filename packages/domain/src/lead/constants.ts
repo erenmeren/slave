@@ -88,7 +88,7 @@ export const LEAD_DECISIONS_READ_MAX = 40
  * the lead without an attempt charged. Bounded: a lead that keeps calling what is refused is
  * charged after that, and its attempt cap ends it.
  */
-export const LEAD_DENIAL_CONTINUES_MAX = 2
+export const LEAD_DENIAL_CONTINUES_MAX = 3
 
 /** Plan A L7: the goal's time limit, in milliseconds: ten minutes to a day, whole minutes. */
 export const LEAD_TIME_LIMIT_BOUNDS_MS = { min: 10 * 60_000, max: 24 * 60 * 60_000 } as const
