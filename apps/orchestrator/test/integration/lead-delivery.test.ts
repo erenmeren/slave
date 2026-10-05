@@ -69,6 +69,30 @@ describe('the lead flow: delivery', () => {
     expect(await prisma.supervisorDecision.count({ where: { workspaceId: f.workspaceId, status: 'pending' } })).toBe(0)
   })
 
+  it('does not send a version accepted as it is round again when its work branch moves after a moved base: the hand merge stands (final review)', async (): Promise<void> => {
+    const { f, cardId } = await stoppedWithACard()
+    // The base moves, so the accepted version waits for a hand merge.
+    writeFileSync(join(f.repoPath, 'elsewhere.txt'), 'not the lead\'s\n')
+    git(['add', '-A'], f.repoPath)
+    git(['commit', '-q', '-m', 'somebody else moved main'], f.repoPath)
+    expect((await approveDecision(cardId)).ok).toBe(true)
+    const accepted = await leadDelivery(f)
+    // Then somebody puts a commit on the work branch (resolving the base by hand there, say).
+    const tree = git(['rev-parse', `${accepted.integrationBranch}^{tree}`], f.repoPath)
+    const byHand = git(['commit-tree', tree, '-p', accepted.integrationBranch, '-m', 'by hand'], f.repoPath)
+    git(['update-ref', `refs/heads/${accepted.integrationBranch}`, byHand], f.repoPath)
+    for (let i = 0; i < 4; i += 1) {
+      await tick(f.deps)
+      await drainPumps()
+    }
+
+    const delivery = await leadDelivery(f)
+    expect([delivery.status, delivery.stopReason, delivery.verifiedCommit, delivery.mergedAt]).toEqual(['accepted', 'accepted_as_is', accepted.verifiedCommit, null])
+    const trips = await prisma.executionEvent.findMany({ where: { workspaceId: f.workspaceId, type: 'guardrail_tripped' }, select: { payload: true } })
+    expect(trips.some((row) => (row.payload as { detail: string }).detail.includes('was accepted as it is'))).toBe(true)
+    expect(await prisma.executionEvent.count({ where: { workspaceId: f.workspaceId, type: 'workspace_goal_retried' } })).toBe(0)
+  })
+
   it('Reject leaves the version: the branch stays, nothing is merged, and the next goal version starts', async (): Promise<void> => {
     const { f, cardId } = await stoppedWithACard()
     expect((await rejectDecision(cardId, undefined, 'not good enough')).ok).toBe(true)

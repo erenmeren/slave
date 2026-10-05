@@ -409,6 +409,15 @@ export async function mergeGoalIntoBase(deliveryId: string): Promise<'merged' | 
     // checked is ever landed. A branch that moved since (or a row accepted before verification
     // existed) goes back to `integrating` and is verified again -- a wait, never a hand merge.
     if (delivery.verifiedCommit === null || integrationTip !== delivery.verifiedCommit) {
+      // A lead-flow version accepted as it is is not sent round again (final review): only what the
+      // person accepted may land, so the move waits for their hand merge, said once.
+      if (isAcceptedAsIs(delivery) && delivery.verifiedCommit !== null) {
+        await tripOnce(
+          delivery.workspaceId,
+          `goal v${String(version)} was accepted as it is at ${delivery.verifiedCommit.slice(0, 12)}, and ${delivery.integrationBranch} has moved since, so it is not merged automatically. ${handMerge}`,
+        )
+        return 'waiting'
+      }
       await reopenIfMovedInLock(tx, deliveryId)
       return 'waiting'
     }
@@ -452,9 +461,16 @@ export async function mergeGoalIntoBase(deliveryId: string): Promise<'merged' | 
  * system retry; its `(version, round)` is unique, because a version is accepted in a later round
  * than any retry before it), then the guarded move. Returns whether it moved.
  */
+const isAcceptedAsIs = (delivery: { readonly leadState: string | null; readonly stopReason: string | null }): boolean =>
+  delivery.leadState !== null && delivery.stopReason === 'accepted_as_is'
+
 async function reopenIfMovedInLock(tx: Prisma.TransactionClient, deliveryId: string): Promise<boolean> {
   const delivery = await tx.goalDelivery.findUniqueOrThrow({ where: { id: deliveryId }, include: { workspace: { select: { repoPath: true } } } })
   if (delivery.status !== 'accepted' || delivery.mergedAt !== null || delivery.mergeError !== null) return false
+  // Lead flow (final review): a version a person accepted as it is was not proven, and its lead's
+  // task was cancelled -- sent round again it would wait on a lead that never works. What the person
+  // accepted (`verifiedCommit`) stands, and a branch that moved since is left to the hand merge.
+  if (isAcceptedAsIs(delivery)) return false
   const tip = await integrationTipOrTrip(delivery.workspace.repoPath, delivery)
   // A branch that is gone is not a branch that moved: there is nothing to verify again.
   if (tip === null) return false
