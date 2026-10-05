@@ -178,6 +178,12 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
   first proof round spend the whole reserve, so spec P5's "the reserve always covers the final full
   verification" is not guaranteed (plan L6's choice). `lead-status` prints `leadUsd` beside `unmeasuredRuns`
   without the C7 wording (the CLI's JSON is for people who read both).
+- Final fix wave: `b4b954f` (own spend per row), `d618941` (no downtime charged), `2f2b812` (a missing branch is
+  `stuck`, never a throw), `4494824` (a cap read from the terminal reason even with `is_error` false),
+  `01c5f52` (an unconfirmed failure named on the card; a person's cancel stops the version), `df2ca18` (the
+  smoke rework queues its own turn; only a rework inherits the old rejection), `11e7563` (an accepted-as-is
+  version is never reopened), `da7ad01` (helpers deduplicated), `a7e215e` (a cancelled base turn falls back to
+  the hand merge), `99e3d85` (the cancel card says how to go on). Scoped re-review: CLEAN.
 
 ## Deferred minor findings
 
@@ -206,3 +212,10 @@ Plan: `docs/superpowers/plans/2026-10-04-lead-flow-a.md`. One line per task outc
   keeps a pending `confirm`; a later `retry-goal` would open with a confirmation run. Harmless.
 
 ## Results
+
+- Whole suite, on the fixed branch (`a7e215e` + the card text), as root under the zombie reaper:
+  555 files / 9792 tests -- 9787 passed, 1 skipped, 4 failed: exactly the four root-only tests that fail on main
+  here (pause-gate and cursor-shell-gate "pause flag ... cannot be read", runContext "a copy fails part-way",
+  pause "a rollback restores the status"). Main here: 534 files / 9618 tests, the same four plus the three
+  zombie tests the reaper fixes. 49 minutes.
+- Typecheck clean; vocabulary gate PASS; drift check "No difference detected"; `web:build` passes.
