@@ -60,6 +60,7 @@ export const INTAKE_STEPS = [
   'init_repository',
   'create_workspace',
   'staff',
+  'roster',
   'set_goal',
   'mark_created',
 ] as const
@@ -70,6 +71,7 @@ export const INTAKE_STEP_LABEL: Record<IntakeStep, string> = {
   init_repository: 'Create the repository',
   create_workspace: 'Create the project',
   staff: 'Put a team on it',
+  roster: 'Give the lead its helpers',
   set_goal: 'Write the goal',
   mark_created: 'Finish',
 }

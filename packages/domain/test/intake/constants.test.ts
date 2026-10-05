@@ -45,6 +45,7 @@ describe('the intake vocabulary', () => {
       'init_repository',
       'create_workspace',
       'staff',
+      'roster',
       'set_goal',
       'mark_created',
     ])
