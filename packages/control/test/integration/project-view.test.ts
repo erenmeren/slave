@@ -139,7 +139,9 @@ describe('projectView (lead UX design section 10)', () => {
     const base = { workspaceId: f.workspaceId, taskId: f.taskId, slaveId: f.leadSeat, runId: turn.id, actor: 'slave' as const }
     await appendEvent({ ...base, type: 'run.tool_result', payload: { toolUseId: 'call-2', toolName: 'Bash', outcome: 'error', errorClass: null, parentToolUseId: 'call-1' } })
     await appendEvent({ ...base, type: 'run.tool_result', payload: { toolUseId: 'call-1', toolName: SUBORDINATE, outcome: 'ok', errorClass: null } })
-    await prisma.slaveRun.update({ where: { id: turn.id }, data: { status: 'paused' } })
+    // Paused well after the helper's last step: a helper started in the background counts as at
+    // work only while a step of its own is newer than the quiet window.
+    await prisma.slaveRun.update({ where: { id: turn.id }, data: { status: 'paused', pausedAt: new Date(Date.now() + 10 * 60_000) } })
 
     const view = await projectView(f.workspaceId)
     if (!view.ok) throw new Error('unreachable')
@@ -147,6 +149,20 @@ describe('projectView (lead UX design section 10)', () => {
     expect(people[0]).toMatchObject({ id: 'lead', state: 'paused', doing: null })
     expect(people[1]).toMatchObject({ id: 'helper:backend-dev', state: 'done', running: 0, doing: null, failedCalls: 1 })
     expect(view.value.build?.workingNow).toBe(0)
+  })
+
+  it('keeps a helper started in the background at work while its own steps are fresh', async () => {
+    const f = await leadProject()
+    const turn = await prisma.slaveRun.findFirstOrThrow({ where: { leadTurn: { not: null } } })
+    const base = { workspaceId: f.workspaceId, taskId: f.taskId, slaveId: f.leadSeat, runId: turn.id, actor: 'slave' as const }
+    // The starting call answered at once; the helper's own step ended a moment ago.
+    await appendEvent({ ...base, type: 'run.tool_result', payload: { toolUseId: 'call-1', toolName: SUBORDINATE, outcome: 'ok', errorClass: null } })
+    await appendEvent({ ...base, type: 'run.tool_result', payload: { toolUseId: 'call-2', toolName: 'Bash', outcome: 'ok', errorClass: null, parentToolUseId: 'call-1' } })
+
+    const view = await projectView(f.workspaceId)
+    if (!view.ok) throw new Error('unreachable')
+    expect(view.value.build?.people[1]).toMatchObject({ id: 'helper:backend-dev', state: 'working', running: 1 })
+    expect(view.value.build?.workingNow).toBe(2)
   })
 
   it('lets a helper go once its call has a result, and shows a live check as the checker', async () => {

@@ -1,6 +1,7 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { SUBORDINATE_TOOLS, doingSentence } from '@slave-of-ai/domain'
 import type { GoalSpend } from './lead/spend.js'
+import { HELPER_QUIET_MS } from './projectDiagram.js'
 
 /** Who worked on a build: the lead, each helper it called, and the checkers. One row each. */
 export interface PersonRow {
@@ -98,7 +99,7 @@ export async function buildPeople(input: {
     prisma.slaveRun.findMany({
       where: { leadTurn: { not: null }, task: { workspaceId: input.workspaceId, workPackage: { goalVersion: input.goalVersion } } },
       orderBy: { startedAt: 'asc' },
-      select: { id: true, leadTurn: true, status: true, leadResumed: true, costUsd: true, toolCalls: true, tokensIn: true, tokensOut: true, observedWorkingMs: true, startedAt: true, endedAt: true },
+      select: { id: true, leadTurn: true, status: true, leadResumed: true, costUsd: true, toolCalls: true, tokensIn: true, tokensOut: true, observedWorkingMs: true, startedAt: true, endedAt: true, pausedAt: true },
     }),
     prisma.slaveRun.findMany({
       where: { goalDeliveryId: input.deliveryId, kind: 'verification' },
@@ -126,6 +127,11 @@ export async function buildPeople(input: {
   interface HelperTally { sessions: number; running: number; toolCalls: number; failedCalls: number; lastAt: Date | null; doing: string | null }
   const helpers = new Map<string, HelperTally>()
   const definitionOfCall = new Map<string, string>()
+  // One helper session per starting call. A helper started in the background answers that call at
+  // once and works on, so a session is told open from its own steps too (`projectDiagram`'s rule).
+  interface HelperSession { readonly definition: string; readonly live: boolean; startOpen: boolean; open: number; toolCalls: number; newest: Date }
+  const sessions = new Map<string, HelperSession>()
+  const sessionOfCall = new Map<string, string>()
   const lead = { toolCalls: 0, failedCalls: 0, lastAt: null as Date | null, doing: null as string | null }
   const lines: ActivityLine[] = []
   const tally = (definition: string): HelperTally => {
@@ -156,24 +162,35 @@ export async function buildPeople(input: {
         if (live) lead.doing = text
         if (SUBORDINATE_TOOLS.includes(payload.name)) {
           const definition = payload.subagent ?? GENERAL_HELPER
-          if (payload.toolUseId !== undefined) definitionOfCall.set(payload.toolUseId, definition)
+          if (payload.toolUseId !== undefined) {
+            definitionOfCall.set(payload.toolUseId, definition)
+            sessionOfCall.set(payload.toolUseId, payload.toolUseId)
+            sessions.set(payload.toolUseId, { definition, live, startOpen: outcome === null, open: 0, toolCalls: 0, newest: event.ts })
+          }
           const entry = tally(definition)
           entry.sessions += 1
           entry.lastAt = event.ts
-          if (live && outcome === null) {
-            entry.running += 1
-            entry.doing = 'Starting'
-          }
+          if (live) entry.doing = 'Starting'
         }
       } else {
         // A helper's own call. A helper of a helper counts for the helper the lead started.
         const definition = definitionOfCall.get(payload.parentToolUseId) ?? GENERAL_HELPER
-        if (payload.toolUseId !== undefined) definitionOfCall.set(payload.toolUseId, definition)
+        const root = sessionOfCall.get(payload.parentToolUseId)
+        if (payload.toolUseId !== undefined) {
+          definitionOfCall.set(payload.toolUseId, definition)
+          if (root !== undefined) sessionOfCall.set(payload.toolUseId, root)
+        }
+        const session = root === undefined ? undefined : sessions.get(root)
+        if (session !== undefined) {
+          session.toolCalls += 1
+          session.newest = event.ts
+          if (outcome === null) session.open += 1
+        }
         const entry = tally(definition)
         entry.toolCalls += 1
         if (failed) entry.failedCalls += 1
         entry.lastAt = event.ts
-        if (live && entry.running > 0) entry.doing = text
+        if (live) entry.doing = text
         who = input.helper(definition).name
         kind = 'helper'
       }
@@ -189,7 +206,14 @@ export async function buildPeople(input: {
     }
     lines.push({ id: event.seq.toString(), at: event.ts.toISOString(), who, kind, text, outcome })
   }
-  // A helper whose call ended is no longer running, whatever its last nested call said.
+  // Which helper sessions are still at work: the starting call is open, a step of theirs is, or
+  // they made a step within the quiet window of now (of the pause, on a paused turn).
+  const reference = paused ? (liveTurn?.pausedAt ?? new Date()) : new Date()
+  for (const session of sessions.values()) {
+    const atWork = session.live && (session.startOpen || session.open > 0 || (session.toolCalls > 0 && reference.getTime() - session.newest.getTime() < HELPER_QUIET_MS))
+    if (atWork) tally(session.definition).running += 1
+  }
+  // A helper with no session at work is no longer running, whatever its last step said.
   for (const entry of helpers.values()) if (entry.running === 0) entry.doing = null
   const waitingOnHelpers = [...helpers.values()].some((entry) => entry.running > 0)
 

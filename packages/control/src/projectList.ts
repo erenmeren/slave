@@ -1,6 +1,7 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { SUBORDINATE_TOOLS, doingSentence, phaseNeedsPerson, projectPhaseOf, type LeadState, type ProjectPhase, type StopReason, type WorkspaceFlow } from '@slave-of-ai/domain'
 import { goalSpend } from './lead/spend.js'
+import { HELPER_QUIET_MS } from './projectDiagram.js'
 import { workspaceSpend } from './spend.js'
 
 /** One project as the sidebar and Home show it (lead UX design sections 6 and 6.1). */
@@ -48,15 +49,22 @@ async function workingNowOf(workspaceId: string): Promise<{ readonly people: num
     where: { runId: { in: live.map((run) => run.id) }, type: { in: ['run_tool_call', 'run_tool_result'] } },
     orderBy: { seq: 'desc' },
     take: 600,
-    select: { type: true, runId: true, payload: true },
+    select: { type: true, runId: true, ts: true, payload: true },
   })
   interface Call { readonly name?: string; readonly summary?: string; readonly toolUseId?: string; readonly parentToolUseId?: string }
   const finished = new Set(events.filter((event) => event.type === 'run_tool_result').map((event) => (event.payload as Call).toolUseId))
   const calls = events.filter((event) => event.type === 'run_tool_call')
   const leadTurns = new Set(live.filter((run) => run.leadTurn !== null).map((run) => run.id))
+  // A helper is at work while its starting call is open, or -- started in the background, where
+  // that call answers at once -- while a step of its own is newer than the quiet window.
+  const now = Date.now()
+  const busyParents = new Set(calls.flatMap((event) => {
+    const call = event.payload as Call
+    return call.parentToolUseId !== undefined && (now - event.ts.getTime() < HELPER_QUIET_MS || !finished.has(call.toolUseId)) ? [call.parentToolUseId] : []
+  }))
   const openHelpers = calls.filter((event) => {
     const call = event.payload as Call
-    return event.runId !== null && leadTurns.has(event.runId) && call.parentToolUseId === undefined && call.name !== undefined && SUBORDINATE_TOOLS.includes(call.name) && !finished.has(call.toolUseId)
+    return event.runId !== null && leadTurns.has(event.runId) && call.parentToolUseId === undefined && call.name !== undefined && SUBORDINATE_TOOLS.includes(call.name) && (!finished.has(call.toolUseId) || (call.toolUseId !== undefined && busyParents.has(call.toolUseId)))
   }).length
   const newest = calls[0]?.payload as Call | undefined
   return { people: live.length + openHelpers, doing: newest?.name === undefined ? null : doingSentence(newest.name, newest.summary ?? newest.name) }
