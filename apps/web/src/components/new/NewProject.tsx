@@ -16,6 +16,7 @@ import {
   type IntakeStepEntry,
   type VerifySource,
 } from '@slave-of-ai/domain'
+import type { IntakePersona } from '@slave-of-ai/control'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
@@ -28,6 +29,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { api, notifyProjectsChanged } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { HelpersField } from './HelpersField'
 
 /** How often the conversation is re-read while the assistant thinks. */
 const POLL_MS = 1_500
@@ -43,6 +45,8 @@ interface IntakeView {
   readonly id: string
   readonly status: IntakeStatus
   readonly draft: IntakeDraft | null
+  /** Who the draft's team names, as the card shows them; absent from an older server's answer. */
+  readonly team?: readonly IntakePersona[]
   readonly messages: readonly IntakeMessageView[]
   readonly stepLog: readonly IntakeStepEntry[]
   readonly workspaceId: string | null
@@ -103,8 +107,8 @@ function Bubble({ message }: { readonly message: IntakeMessageView }): React.JSX
 /**
  * Lead UX design section 6.2: what do I want built, and how much may it spend? The conversation on
  * the left; on the right the Project card, which fills in once the assistant has a draft and stays
- * editable -- name, where the code lives, the spending cap chosen explicitly (U-5), automatic merge,
- * and the rest under More options. Start building accepts the card and opens the new project.
+ * editable -- name, where the code lives, the spending cap chosen explicitly (U-5), who the lead can
+ * call on, automatic merge, and the rest under More options. Start building accepts the card and opens the new project.
  */
 export function NewProject(): React.JSX.Element {
   const router = useRouter()
@@ -240,9 +244,13 @@ export function NewProject(): React.JSX.Element {
     await refresh(intakeId)
   }
 
+  const setEditedTeam = (team: IntakeDraft['team']): void => setEdited((before) => (before === null ? before : { ...before, team }))
+
   const showComposer = view === null || view.draft === null || keepTalking
   const outOfTurns = view !== null && view.callsLeft === 0 && view.draft === null
-  const steps = (view?.stepLog ?? []).filter((entry) => entry.step !== 'staff')
+  // What was done, not what was passed over: the older flow's staffing is never listed, and a step
+  // that was skipped (a project with no helpers chosen) did nothing to show.
+  const steps = (view?.stepLog ?? []).filter((entry) => entry.step !== 'staff' && entry.status !== 'skipped')
 
   return (
     <div className="mx-auto grid w-full max-w-[1200px] gap-6 px-4 py-6 md:px-8 lg:grid-cols-[minmax(0,1fr)_400px]" data-testid="new-project">
@@ -419,6 +427,8 @@ export function NewProject(): React.JSX.Element {
                 {capped === null && effectiveCap !== 'none' && <p className="text-xs text-destructive">A budget is more than $0; a time limit is 10 to 1440 whole minutes.</p>}
                 {(effectiveCap === 'budget' || effectiveCap === 'both') && <p className="text-xs text-muted-foreground">A fifth of the budget is kept for checking the work.</p>}
               </fieldset>
+
+              {lead && <HelpersField team={edited.team} known={view?.team ?? []} onChange={(team) => setEditedTeam(team)} />}
 
               <Label className="font-normal">
                 <Switch checked={edited.autoMerge} onCheckedChange={(value) => setEdited({ ...edited, autoMerge: value })} data-testid="draft-auto-merge" />

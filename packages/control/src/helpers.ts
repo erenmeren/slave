@@ -5,6 +5,8 @@ import { LEAD_TEAM_NAME, effectiveSkills } from '@slave-of-ai/domain'
 export interface HelperRow {
   readonly id: string
   readonly name: string
+  /** The persona they were hired from, by its name; null for a person with no persona. */
+  readonly persona: string | null
   /** The persona's role ("Backend Architect"); null for a person with no persona. */
   readonly role: string | null
   /** One line on when to use them: the persona's description, empty when it has none. */
@@ -32,7 +34,7 @@ export async function listHelpers(): Promise<readonly HelperRow[]> {
         id: true,
         name: true,
         templateId: true,
-        template: { select: { role: true, description: true, sourceDivision: true } },
+        template: { select: { name: true, role: true, description: true, sourceDivision: true } },
         skills: { select: { skillId: true, mode: true } },
       },
     }),
@@ -52,6 +54,7 @@ export async function listHelpers(): Promise<readonly HelperRow[]> {
     return {
       id: person.id,
       name: person.name,
+      persona: person.template?.name ?? null,
       role: person.template?.role ?? null,
       description: (person.template?.description ?? '').trim(),
       speciality: person.template?.sourceDivision ?? null,

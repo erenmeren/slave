@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ESTIMATE_TITLE, runningEstimateLine } from '@/lib/estimate'
 import { formatAgo, percentOf, spendLine, timeLine } from '@/lib/format'
+import { HelpersCard } from './HelpersCard'
 
 /** A build's state in a person's words, for the Builds list. */
 export function buildWord(build: ProjectView['builds'][number]): string {
@@ -27,10 +28,10 @@ export function buildWord(build: ProjectView['builds'][number]): string {
 
 /**
  * Lead UX design section 6.3, the right column: Limits (spend and working time against their caps,
- * "Change limits" opening the Settings sheet), Builds (each linking to its report), and the lead's
- * Notes in words.
+ * "Change limits" opening the Settings sheet), the helpers the lead can call on, Builds (each
+ * linking to its report), and the lead's Notes in words.
  */
-export function SideColumn({ project, onOpenSettings }: { readonly project: ProjectView; readonly onOpenSettings: () => void }): React.JSX.Element {
+export function SideColumn({ project, onOpenSettings, onDone }: { readonly project: ProjectView; readonly onOpenSettings: () => void; readonly onDone: () => Promise<void> }): React.JSX.Element {
   const build = project.build
   const spent = build?.spentUsd ?? project.projectSpentUsd
   const worked = build?.workedMs ?? 0
@@ -74,6 +75,8 @@ export function SideColumn({ project, onOpenSettings }: { readonly project: Proj
           )}
         </CardContent>
       </Card>
+
+      <HelpersCard project={project} onDone={onDone} />
 
       {project.builds.length > 0 && (
         <Card data-testid="builds" className="gap-3">

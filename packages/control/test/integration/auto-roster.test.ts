@@ -100,7 +100,7 @@ describe('the roster of a project created before it filled itself', () => {
     expect(after.ok && after.value).toMatchObject({
       rosterProposed: 0,
       roster: [
-        { id: filled.value.roster[0], name: 'Backend Developer', role: 'backend', division: 'engineering', description: 'Builds APIs.' },
+        { id: filled.value.roster[0], name: 'Backend Developer', persona: 'Backend Developer', role: 'backend', division: 'engineering', description: 'Builds APIs.' },
         { id: filled.value.roster[1], name: 'QA Engineer', division: 'testing', description: '' },
       ],
     })

@@ -196,7 +196,7 @@ export function ProjectScreen({ initial, view: asked = 'overview' }: { readonly 
           {lead && <ResultSection project={project} />}
           <OlderTasks project={project} />
         </div>
-        <SideColumn project={project} onOpenSettings={() => setSettingsOpen(true)} />
+        <SideColumn project={project} onOpenSettings={() => setSettingsOpen(true)} onDone={refresh} />
       </div>
 
       <SettingsSheet project={project} open={settingsOpen} onOpenChange={setSettingsOpen} onDone={refresh} />

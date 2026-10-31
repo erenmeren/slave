@@ -13,7 +13,7 @@ afterEach(() => vi.unstubAllGlobals())
 describe('the Settings sheet\'s helpers', () => {
   it('links each helper to their page in People, and People itself, and removes one from the list', async () => {
     const fetchMock = stubFetch((url) => (url === '/api/helpers' ? { body: { helpers: [] } } : url.includes('/models') ? { body: { models: [] } } : { body: { ok: true } }))
-    const project = projectFixture({ roster: [{ id: 'p1', name: 'Bea', role: 'Backend Architect', division: 'engineering', description: 'Designs services.' }, { id: 'p2', name: 'Cem', role: null, division: null, description: '' }] })
+    const project = projectFixture({ roster: [{ id: 'p1', name: 'Bea', persona: 'Backend Architect', role: 'Backend Architect', division: 'engineering', description: 'Designs services.' }, { id: 'p2', name: 'Cem', persona: null, role: null, division: null, description: '' }] })
     render(<SettingsSheet project={project} open onOpenChange={() => undefined} onDone={async () => undefined} />)
     const links = screen.getAllByTestId('roster-member-link')
     expect(links.map((link) => [link.textContent, link.getAttribute('href')])).toEqual([

@@ -27,7 +27,7 @@ describe('listHelpers (lead UX design section 6.5)', () => {
     const project = await prisma.workspace.create({ data: { name: 'Todo', repoPath: '/tmp/todo', verifyCommands: ['true'], setupCommands: [], leadRoster: [bea.id] } })
 
     expect(await listHelpers()).toEqual([
-      { id: bea.id, name: 'Bea', role: 'Backend Architect', description: 'Builds APIs.', speciality: 'engineering', skills: ['api-design', 'sql'], projects: [{ id: project.id, name: 'Todo' }] },
+      { id: bea.id, name: 'Bea', persona: 'Backend Architect', role: 'Backend Architect', description: 'Builds APIs.', speciality: 'engineering', skills: ['api-design', 'sql'], projects: [{ id: project.id, name: 'Todo' }] },
     ])
   })
 

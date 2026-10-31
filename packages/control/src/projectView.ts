@@ -108,6 +108,8 @@ export interface OlderTask {
 export interface RosterRow {
   readonly id: string
   readonly name: string
+  /** The persona they were hired from, by its name ("Backend Architect"); null for a person with none. */
+  readonly persona: string | null
   /** The persona's role; null for a person with no persona. */
   readonly role: string | null
   /** What they are good at, as the catalogue groups it (the persona's source division). */
@@ -336,7 +338,7 @@ export async function projectView(workspaceId: string): Promise<Result<ProjectVi
   const [deliveries, leadSeat, rosterRows] = await Promise.all([
     prisma.goalDelivery.findMany({ where: { workspaceId }, orderBy: { goalVersion: 'desc' } }),
     prisma.slave.findFirst({ where: { team: { workspaceId, name: LEAD_TEAM_NAME }, role: LEAD_SEAT_ROLES.lead, closedAt: null }, select: { model: true } }),
-    prisma.person.findMany({ where: { id: { in: workspace.leadRoster } }, select: { id: true, name: true, template: { select: { role: true, sourceDivision: true, description: true } } } }),
+    prisma.person.findMany({ where: { id: { in: workspace.leadRoster } }, select: { id: true, name: true, template: { select: { name: true, role: true, sourceDivision: true, description: true } } } }),
   ])
   // Only while there is nobody to list: this read is polled, and the conversation is read for one hint.
   const rosterProposed = workspace.flow === 'lead' && workspace.leadRoster.length === 0 ? ((await proposedPersonas(workspaceId))?.length ?? 0) : 0
@@ -388,7 +390,7 @@ export async function projectView(workspaceId: string): Promise<Result<ProjectVi
     leadModel: leadSeat?.model ?? null,
     roster: workspace.leadRoster.flatMap((id) => {
       const row = rosterRows.find((person) => person.id === id)
-      return row === undefined ? [] : [{ id: row.id, name: row.name, role: row.template?.role ?? null, division: row.template?.sourceDivision ?? null, description: (row.template?.description ?? '').trim() }]
+      return row === undefined ? [] : [{ id: row.id, name: row.name, persona: row.template?.name ?? null, role: row.template?.role ?? null, division: row.template?.sourceDivision ?? null, description: (row.template?.description ?? '').trim() }]
     }),
     rosterProposed,
     goal: workspace.goal,
